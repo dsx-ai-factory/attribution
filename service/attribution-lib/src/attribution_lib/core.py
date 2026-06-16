@@ -1,0 +1,433 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: LicenseRef-NvidiaProprietary
+#
+# NVIDIA CORPORATION, its affiliates and licensors retain all intellectual
+# property and proprietary rights in and to this material, related
+# documentation and any modifications thereto. Any use, reproduction,
+# disclosure or distribution of this material and related documentation
+# without an express license agreement from NVIDIA CORPORATION or
+# its affiliates is strictly prohibited.
+
+import glob
+from collections.abc import Mapping
+from dataclasses import dataclass, field
+from datetime import timedelta
+from importlib.resources import files
+from pathlib import Path
+from typing import Any, Optional
+
+from loguru import logger
+
+import attribution_lib
+from attribution_lib import nodename_utils
+from attribution_lib.attr_types import (
+    JobNodeAttributions,
+)
+from attribution_lib.decision_trace_recorder import DecisionRecorder
+from attribution_lib.events import EventStream
+from attribution_lib.filter import run_post_outcome_refiners, run_pre_outcome_refiners, run_scrub_phase_refiners
+from attribution_lib.job_info import JobInfo
+from attribution_lib.observation.inbound import Source as ObservationSource
+from attribution_lib.observation.processing import EntrySourceBase
+from attribution_lib.outcome import (
+    OutcomeAttribution,
+    calculate_outcome,
+)
+from attribution_lib.rules_engine import (
+    SOURCE_CONFIGS,
+    RuleEngine,
+    RuleId,
+    RuleParameters,
+    SourceProcessingConfig,
+    process_observation_source,
+    register_source_config,
+)
+from attribution_lib.scrub import (
+    get_clean_bad_nodes,
+)
+from attribution_lib.sources import (
+    SourceSet,
+    SymptomSet,
+)
+from attribution_lib.symptoms import (
+    BaseSymptom,
+)
+from attribution_lib.symptoms.registry_generation import registry_from_declarations
+
+
+def _epilog_time_start(job_info: JobInfo):
+    time_start = job_info.interest_start_time
+    if job_info.last_tflops_time and job_info.last_tflops_time > time_start:
+        time_start = job_info.last_tflops_time
+    return time_start
+
+
+# Register source-type processing configs
+register_source_config(ObservationSource.APPLOG, SourceProcessingConfig(fallback_unknown_nodes=True))
+register_source_config(
+    ObservationSource.HEALTH_CHECK,
+    SourceProcessingConfig(
+        time_start=_epilog_time_start,
+        time_end=lambda ji: ji.interest_end_time + timedelta(minutes=10),
+    ),
+)
+register_source_config(
+    ObservationSource.SYSLOG,
+    SourceProcessingConfig(
+        time_start=lambda ji: ji.interest_start_time,
+        time_end=lambda ji: ji.interest_end_time,
+        requires_nodes=True,
+    ),
+)
+register_source_config(
+    ObservationSource.UFMLOG,
+    SourceProcessingConfig(
+        time_start=lambda ji: ji.job_start_time,
+        time_end=lambda ji: ji.job_end_time,
+        requires_nodes=True,
+    ),
+)
+register_source_config(
+    ObservationSource.NODE_METRICS,
+    SourceProcessingConfig(
+        time_start=lambda ji: ji.job_start_time,
+        time_end=lambda ji: ji.job_end_time,
+        requires_nodes=True,
+    ),
+)
+register_source_config(
+    ObservationSource.NVLINK_METRICS,
+    SourceProcessingConfig(
+        time_start=lambda ji: ji.interest_start_time,
+        time_end=lambda ji: ji.interest_end_time,
+        requires_nodes=True,
+    ),
+)
+register_source_config(
+    ObservationSource.CSP_EVENT,
+    SourceProcessingConfig(
+        time_start=lambda ji: ji.job_start_time,
+        time_end=lambda ji: ji.job_end_time,
+        requires_nodes=True,
+    ),
+)
+
+
+def process_check(
+    *,
+    event_stream: EventStream,
+    observation_source: EntrySourceBase,
+    job_info: JobInfo,
+    rules_engine: RuleEngine,
+    pre_filtered: bool = True,
+) -> set[str]:
+    """Backward-compat wrapper — delegates to process_observation_source with pre_filtered defaulting to True."""
+    return process_observation_source(
+        event_stream=event_stream,
+        observation_source=observation_source,
+        job_info=job_info,
+        rules_engine=rules_engine,
+        pre_filtered=pre_filtered,
+    )
+
+
+def get_bundled_rules_path() -> Path:
+    """Return the filesystem path to the bundled plugin rules shipped with this package."""
+    return Path(str(files("attribution_lib").joinpath("bundled_rules")))
+
+
+def setup_rules(
+    *,
+    node_mapping_file: Optional[str] = None,
+    ignored_hostname_prefixes: Optional[list[str]] = None,
+    rules_paths: Optional[list[Path]] = None,
+    force: bool = False,
+):
+    """
+    Initialize the attribution library rules and configuration.
+
+    Args:
+        node_mapping_file: Optional path to CSV file containing node name to cloud instance ID & IP address mappings.
+            CSV Format for node_mapping_file:
+                Required columns:
+                - id: Node hostname
+                - instanceId: Cloud instance identifier
+                - [optional] Any columns with IPv4 addresses for IP-to-node mapping
+        ignored_hostname_prefixes: Optional list of hostname prefixes to ignore during attribution
+            (e.g., ['monitor-', 'scanner-'])
+        rules_paths: Directories to scan for rule plugin files (``*.py``).
+            - ``None`` (default): loads the bundled rules shipped with this package.
+            - ``[]``: skips rule loading entirely (no rule engine).
+            - Explicit list: loads only from the given paths. Use
+              ``[get_bundled_rules_path(), my_extra_path]`` to extend the
+              bundled set with additional rules.
+        force: If True, re-initialize even if already initialized. Used for re-attribution with updated rules.
+
+    """
+    if attribution_lib.initialized and not force:
+        logger.debug("attribution_lib already initialized, skipping (use force=True to re-initialize)")
+        return
+
+    if rules_paths is None:
+        rules_paths = [get_bundled_rules_path()]
+
+    attribution_lib.initialized = True
+
+    if node_mapping_file:
+        # Configure node name mapping file if provided
+        nodename_utils.configure_node_mapping_file(node_mapping_file)
+        attribution_lib.ip_to_nodenames = nodename_utils.get_ip_to_node_name_mapping()
+
+    if ignored_hostname_prefixes:
+        attribution_lib.ignored_hostname_prefixes = ignored_hostname_prefixes
+
+    attribution_lib._rules_engine = RuleEngine()
+    for path in rules_paths:
+        rule_files = glob.glob("*.py", root_dir=path)
+        for file in rule_files:
+            attribution_lib._rules_engine.load(str(path / file))
+
+    # Compile loaded declarations into the runtime symptom registry once per
+    # initialization. Per-job attribution reads this cached snapshot; it is only
+    # rebuilt when rules are (re)loaded.
+    attribution_lib._symptom_registry = registry_from_declarations(attribution_lib._rules_engine.symptom_declarations)
+
+
+@dataclass(kw_only=True)
+class CalcBadNodesAttributionResult:
+    """The result of a calculate_bad_nodes call. Is intended to be filled incrementally, so that we could conceivably repeatedly fold new results together."""
+
+    my_bad_nodes: JobNodeAttributions = field(
+        default_factory=JobNodeAttributions
+    )  ### See JobNodeAttributions doc string for more info on how we use this
+    raw_keywords: SymptomSet[str] = field(default_factory=SymptomSet)
+    node_symptoms_base: dict[str, SymptomSet[BaseSymptom]] = field(default_factory=dict)
+    skipped_symptom_ids: set[str] = field(default_factory=set)
+
+    def raw_keywords_update(self, raw_keywords: SymptomSet[str]):
+        self.raw_keywords.update(raw_keywords)
+
+    def update(self, other: "CalcBadNodesAttributionResult") -> "CalcBadNodesAttributionResult":
+        self.my_bad_nodes.update(other.my_bad_nodes)
+        self.raw_keywords.update(other.raw_keywords)
+        self.node_symptoms_base.update(other.node_symptoms_base)
+        self.skipped_symptom_ids.update(other.skipped_symptom_ids)
+        return self
+
+
+def calculate_bad_nodes(
+    *,
+    event_stream: EventStream,
+    job_info: JobInfo,
+    applog_in: Optional[EntrySourceBase] = None,
+    epilog_in: Optional[EntrySourceBase] = None,
+    syslog_in: Optional[EntrySourceBase] = None,
+    ufmlog_in: Optional[EntrySourceBase] = None,
+    prometheus_in: Optional[EntrySourceBase] = None,
+    raw_keywords_in: Optional[EntrySourceBase] = None,
+    node_metrics_in: Optional[EntrySourceBase] = None,
+    nvlink_metrics_in: Optional[EntrySourceBase] = None,
+    csp_event_in: Optional[EntrySourceBase] = None,
+    pre_filtered_sources: Optional[set[ObservationSource]] = None,
+) -> CalcBadNodesAttributionResult:
+    result = CalcBadNodesAttributionResult()
+    if not job_info.job_start_time:
+        return result
+
+    if (raw_keywords := raw_keywords_in) is not None:
+        for item in raw_keywords:
+            result.raw_keywords.add(
+                SourceSet(item.body()).add(item.attribution_source_base(None).derived(rule="raw keywords"))
+            )
+
+    # Process all observation sources through the rules engine
+    observation_sources: list[Optional[EntrySourceBase]] = [
+        applog_in,
+        epilog_in,
+        syslog_in,
+        ufmlog_in,
+        node_metrics_in,
+        nvlink_metrics_in,
+        csp_event_in,
+    ]
+    _pre_filtered = pre_filtered_sources or set()
+    for obs_source in observation_sources:
+        if obs_source is None:
+            continue
+        source_type = obs_source.context.source
+        config = SOURCE_CONFIGS.get(source_type)
+        if config is not None and config.requires_nodes and not job_info.nodes:
+            continue
+        source_pre_filtered = source_type in _pre_filtered
+        source_raw_keywords = process_observation_source(
+            event_stream=event_stream,
+            observation_source=obs_source,
+            job_info=job_info,
+            rules_engine=attribution_lib.get_rules_engine(),
+            pre_filtered=source_pre_filtered,
+        )
+        if not source_pre_filtered:
+            for kw in source_raw_keywords:
+                result.raw_keywords.add(job_info.source_value(kw, datum=None, rule="pre-filter include"))
+
+    result.my_bad_nodes = JobNodeAttributions.from_event_stream(event_stream, job_info)
+
+    if job_info.state == "NODE_FAIL":
+        if (failed_node_by_slurm := job_info.failed_node) is not None:
+            source = job_info.source(job_info.state + failed_node_by_slurm, "Node failure reported by slurm")
+            attr = SourceSet.new_one("Node failure reported by slurm", source)
+            result.my_bad_nodes.add([failed_node_by_slurm], attr)
+
+    nodes = list(result.my_bad_nodes.attributions.keys())  # a copy so we can delete while iterating
+    for node in nodes:
+        errors = result.my_bad_nodes.attributions[node]
+        if "LustreError" in errors:
+            if len(errors) == 1 and "Lustre Client Evicted" not in errors:
+                # if LustreError is the only symptom, we can ignore it
+                errors.discard("LustreError")
+            errors.discard("Dataloader Exception")
+
+        # A heuristc to check if "IB Error" is caused by "Not responding"
+        # And uses pyslurm to fetch this data from slurmdb
+        # Because this message might be missing in the telemetry
+        check_node_status_from_scheduler = False
+        for error in errors.symptoms():
+            if "IB Error" in error:
+                check_node_status_from_scheduler = True
+                break
+
+        if check_node_status_from_scheduler:
+            if (node_info := job_info.slurm_node_infos.get(node)) is not None:
+                node_reason = node_info.get("reason")
+                # TODO: support other epilog checks
+                if node_reason and "Not responding" in node_reason:
+                    result.my_bad_nodes[node].add(
+                        SourceSet.new_one(
+                            "Not responding", job_info.source(None, "scheduler check -> node not responding")
+                        )
+                    )
+
+    return result
+
+
+@dataclass(kw_only=True)
+class AttributionResult:
+    """The result of a call to "attribute"; contains all of the outputs. Has a reporting mechanism to feed outputs to the reporting mechansim in existing FACT workloads."""
+
+    bad_nodes_attr: CalcBadNodesAttributionResult
+    symptoms: SymptomSet[str] = field(default_factory=SymptomSet)
+    outcome_attr: SourceSet[OutcomeAttribution] = field(default_factory=lambda: SourceSet(OutcomeAttribution()))
+    cancelled_by: Optional[str] = None
+    event_stream: EventStream
+    collectors: dict[str, Any] = field(default_factory=dict)
+
+
+def calculate_symptoms(
+    *,
+    event_stream: EventStream,
+    job_info: JobInfo,
+    my_bad_nodes: JobNodeAttributions,
+    raw_keywords: Optional[SymptomSet[str]] = None,
+    extract_job_metadata_from_logfile: bool = False,
+    bad_node_result: Optional["CalcBadNodesAttributionResult"] = None,
+    recorder: Optional[DecisionRecorder] = None,
+) -> SymptomSet[str]:
+    """Calculate job-level symptoms from per-node attributions and raw keywords.
+
+    Aggregates all per-node symptoms into a job-level SymptomSet, then runs
+    refiner rules (including DAG cascade pruning as the final refiner).
+    """
+    raw_keywords = raw_keywords or SymptomSet()
+
+    symptoms: SymptomSet[str] = SymptomSet()
+
+    # logic wrt job_info metadata
+    if job_info.nodelist == "None assigned":
+        symptoms.add(job_info.source_value("Job didn't start", None, "none assigned"))
+        return symptoms
+
+    if not symptoms and job_info.srun_cmd is None:
+        symptoms.add(job_info.source_value("srun didn't happen", None, "no symptoms, no srun"))
+        return symptoms
+
+    if not symptoms and job_info.state == "RUNNING":
+        symptoms.add(job_info.source_value("running without error", None, "no symptoms; status says running"))
+        return symptoms
+
+    run_scrub_phase_refiners(event_stream, job_info, my_bad_nodes=my_bad_nodes, recorder=recorder)
+
+    # Aggregate per-node symptoms into a job-level SymptomSet[str].
+    # Refiners see the full unpruned set; DAG cascade pruning runs last.
+    for _node, node_group in my_bad_nodes.items():
+        for symptom_str in list(node_group.symptoms()):
+            if "non-fatal" in symptom_str:
+                continue
+            symptoms.add(node_group.attributions[symptom_str])
+
+    node_symptoms_base, skipped_symptom_ids = run_pre_outcome_refiners(
+        event_stream,
+        job_info,
+        symptoms=symptoms,
+        my_bad_nodes=my_bad_nodes,
+        raw_keywords=raw_keywords,
+        extract_job_metadata_from_logfile=extract_job_metadata_from_logfile,
+        recorder=recorder,
+    )
+
+    # Populate the BaseSymptom view from DagCascadePruning results for reporting
+    if bad_node_result is not None and node_symptoms_base is not None:
+        bad_node_result.node_symptoms_base.update(node_symptoms_base)
+        bad_node_result.skipped_symptom_ids.update(skipped_symptom_ids or set())
+
+    return symptoms
+
+
+def attribute(
+    *,
+    event_stream: EventStream,
+    job_info: JobInfo,
+    bad_node_result: CalcBadNodesAttributionResult,
+    extract_job_metadata_from_logfile: bool,
+    recorder: Optional[DecisionRecorder] = None,
+    rule_params: Optional[Mapping[RuleId, RuleParameters]] = None,
+    run_collectors: bool = False,
+) -> AttributionResult:
+    result = AttributionResult(event_stream=event_stream, bad_nodes_attr=bad_node_result)
+
+    symp = calculate_symptoms(
+        event_stream=event_stream,
+        job_info=job_info,
+        my_bad_nodes=bad_node_result.my_bad_nodes,
+        raw_keywords=bad_node_result.raw_keywords,
+        extract_job_metadata_from_logfile=extract_job_metadata_from_logfile,
+        bad_node_result=bad_node_result,
+        recorder=recorder,
+    )
+
+    result.symptoms.update(symp)
+
+    # root_cause_symptom is just a placeholder. It will be updated later with rule engine 2.0
+    result.outcome_attr = calculate_outcome(result.symptoms, recorder=recorder)
+
+    # cleanup my_bad_nodes
+    if result.outcome_attr.value().outcome == "Incomplete Info":
+        result.bad_nodes_attr.my_bad_nodes.clear()
+
+    result.bad_nodes_attr.my_bad_nodes = get_clean_bad_nodes(bad_node_result.my_bad_nodes, job_info.cluster)
+
+    run_post_outcome_refiners(
+        event_stream,
+        job_info,
+        symptoms=result.symptoms,
+        my_bad_nodes=bad_node_result.my_bad_nodes,
+        outcome=result.outcome_attr,
+        cancelled_by=job_info.cancelled_by,
+        attribution_result=result,
+        bad_node_result=bad_node_result,
+        recorder=recorder,
+    )
+
+    if run_collectors:
+        result.collectors = attribution_lib.get_rules_engine().run_collectors(event_stream, job_info, rule_params)
+
+    return result

@@ -1,0 +1,342 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+@import "@fontsource-variable/inter/wght.css";
+@import "@fontsource-variable/jetbrains-mono/wght.css";
+
+@custom-variant dark (&:is(.dark *));
+
+/* Custom variants (shadcn / radix data-state) */
+@custom-variant data-open {
+  &:where([data-state="open"]),
+  &:where([data-open]:not([data-open="false"])) {
+    @slot;
+  }
+}
+
+@custom-variant data-closed {
+  &:where([data-state="closed"]),
+  &:where([data-closed]:not([data-closed="false"])) {
+    @slot;
+  }
+}
+
+@custom-variant data-checked {
+  &:where([data-state="checked"]),
+  &:where([data-checked]:not([data-checked="false"])) {
+    @slot;
+  }
+}
+
+@custom-variant data-unchecked {
+  &:where([data-state="unchecked"]),
+  &:where([data-unchecked]:not([data-unchecked="false"])) {
+    @slot;
+  }
+}
+
+@custom-variant data-selected {
+  &:where([data-selected="true"]) {
+    @slot;
+  }
+}
+
+@custom-variant data-disabled {
+  &:where([data-disabled="true"]),
+  &:where([data-disabled]:not([data-disabled="false"])) {
+    @slot;
+  }
+}
+
+@custom-variant data-active {
+  &:where([data-state="active"]),
+  &:where([data-active]:not([data-active="false"])) {
+    @slot;
+  }
+}
+
+@custom-variant data-horizontal {
+  &:where([data-orientation="horizontal"]) {
+    @slot;
+  }
+}
+
+@custom-variant data-vertical {
+  &:where([data-orientation="vertical"]) {
+    @slot;
+  }
+}
+
+/* Dark only — Attribution is dark-surface mandatory.
+   Tokens mirror the shared design-system globals.css */
+:root,
+.dark {
+  --background: #121212;
+  --background-secondary: #0a0a0a;
+  --background-active: #1c1c1c;
+  --background-muted: oklch(0.27 0.01 286);
+  --foreground: #ffffff;
+  --foreground-secondary: oklch(0.87 0.01 286);
+  --foreground-muted: oklch(0.71 0.01 286);
+  --border-active: oklch(0.92 0 286);
+  --card: #121212;
+  --card-foreground: #ffffff;
+  --popover: #121212;
+  --popover-foreground: #ffffff;
+  --primary: var(--color-primary-500);
+  --primary-foreground: #ffffff;
+  --secondary: var(--background-secondary);
+  --secondary-foreground: var(--foreground-secondary);
+  --muted: var(--background-active);
+  --muted-foreground: var(--foreground-secondary);
+  --accent: var(--background-active);
+  --accent-foreground: var(--foreground);
+  --destructive: var(--color-red-500);
+  --destructive-foreground: #ffffff;
+  --border: var(--color-zinc-800);
+  --input: var(--border);
+  --ring: var(--border-active);
+  --chart-1: var(--color-primary-500);
+  --chart-2: var(--color-teal-500);
+  --chart-3: var(--color-blue-500);
+  --chart-4: var(--color-yellow-500);
+  --chart-5: var(--color-purple-500);
+  --radius: 0.125rem;
+  --sidebar: var(--background-secondary);
+  --sidebar-foreground: var(--foreground-secondary);
+  --sidebar-primary: var(--color-primary-500);
+  --sidebar-primary-foreground: #ffffff;
+  --sidebar-accent: var(--background-active);
+  --sidebar-accent-foreground: var(--foreground);
+  --sidebar-border: var(--border);
+  --sidebar-ring: var(--border-active);
+
+  /* Attribution outcome semantics — map to Tailwind palette tokens for consistency */
+  --outcome-hw: var(--color-teal-400);
+  --outcome-hw-bg: color-mix(in srgb, var(--color-teal-400) 10%, transparent);
+  --outcome-sw: var(--color-blue-400);
+  --outcome-sw-bg: color-mix(in srgb, var(--color-blue-400) 10%, transparent);
+  --outcome-mix: var(--color-zinc-400);
+  --outcome-mix-bg: color-mix(in srgb, var(--color-zinc-400) 10%, transparent);
+  --outcome-usr: var(--color-yellow-400);
+  --outcome-usr-bg: color-mix(in srgb, var(--color-yellow-400) 10%, transparent);
+  --outcome-pass: var(--color-primary-500);
+  --outcome-pass-bg: color-mix(in srgb, var(--color-primary-500) 10%, transparent);
+  --outcome-primary-glow: color-mix(in srgb, var(--color-primary-500) 16%, transparent);
+}
+
+@theme inline {
+  --font-sans: 'Inter Variable', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+  --font-mono: 'JetBrains Mono Variable', ui-monospace, 'SFMono-Regular', Menlo, Consolas, monospace;
+  --spacing: 0.25rem;
+
+  /* Flat — all radius sizes collapse to --radius (Lepton style) */
+  --radius-sm: var(--radius);
+  --radius-md: var(--radius);
+  --radius-lg: var(--radius);
+  --radius-xl: var(--radius);
+  --radius-2xl: var(--radius);
+  --radius-3xl: var(--radius);
+  --radius-4xl: var(--radius);
+
+  /* Primary (NVIDIA Green) */
+  --color-primary-50: #ecfad9;
+  --color-primary-100: #d6f2ad;
+  --color-primary-200: #bfe882;
+  --color-primary-300: #a7db57;
+  --color-primary-400: #8fcb2b;
+  --color-primary-500: #76b900;
+  --color-primary-600: #57920d;
+  --color-primary-700: #407015;
+  --color-primary-800: #2f521a;
+  --color-primary-900: #23371a;
+  --color-primary-950: #192116;
+
+  /* Blue */
+  --color-blue-50: #e9f4fb;
+  --color-blue-100: #cde6fa;
+  --color-blue-200: #badef8;
+  --color-blue-300: #9accf2;
+  --color-blue-400: #3a96d9;
+  --color-blue-500: #2378ca;
+  --color-blue-600: #2a63ba;
+  --color-blue-700: #013076;
+  --color-blue-800: #00265e;
+  --color-blue-900: #001e4b;
+  --color-blue-950: #00112c;
+
+  /* Zinc */
+  --color-zinc-50: oklch(0.99 0 0);
+  --color-zinc-100: oklch(0.97 0 286);
+  --color-zinc-200: oklch(0.92 0 286);
+  --color-zinc-300: oklch(0.87 0.01 286);
+  --color-zinc-400: oklch(0.71 0.01 286);
+  --color-zinc-500: oklch(0.55 0.01 286);
+  --color-zinc-600: oklch(0.44 0.01 286);
+  --color-zinc-700: oklch(0.37 0.01 286);
+  --color-zinc-800: oklch(0.27 0.01 286);
+  --color-zinc-900: oklch(0.21 0.01 286);
+  --color-zinc-950: oklch(0.14 0 286);
+
+  /* Yellow */
+  --color-yellow-50: #f9f4ca;
+  --color-yellow-100: #f6e383;
+  --color-yellow-200: #f3d85d;
+  --color-yellow-300: #e7c32b;
+  --color-yellow-400: #c58420;
+  --color-yellow-500: #a96700;
+  --color-yellow-600: #924c00;
+  --color-yellow-700: #5a2400;
+  --color-yellow-800: #491c00;
+  --color-yellow-900: #3a1500;
+  --color-yellow-950: #220c00;
+
+  /* Red */
+  --color-red-50: #ffefed;
+  --color-red-100: #ffdad6;
+  --color-red-200: #ffceca;
+  --color-red-300: #feb3ad;
+  --color-red-400: #ec6358;
+  --color-red-500: #dc3528;
+  --color-red-600: #b6251b;
+  --color-red-700: #6c0d08;
+  --color-red-800: #570704;
+  --color-red-900: #480200;
+  --color-red-950: #2d0100;
+
+  /* Teal */
+  --color-teal-50: #e1f7f3;
+  --color-teal-100: #b7eee4;
+  --color-teal-200: #a0e6d9;
+  --color-teal-300: #7cd7c7;
+  --color-teal-400: #1fa18d;
+  --color-teal-500: #008471;
+  --color-teal-600: #006b5e;
+  --color-teal-700: #003b35;
+  --color-teal-800: #002f2b;
+  --color-teal-900: #002522;
+  --color-teal-950: #001514;
+
+  /* Purple */
+  --color-purple-500: #a05ab4;
+
+  /* === Color mappings (shadcn aliases + Layer 2 neutrals) === */
+  --color-background: var(--background);
+  --color-background-secondary: var(--background-secondary);
+  --color-background-active: var(--background-active);
+  --color-background-muted: var(--background-muted);
+  --color-foreground: var(--foreground);
+  --color-foreground-secondary: var(--foreground-secondary);
+  --color-foreground-muted: var(--foreground-muted);
+  --color-border: var(--border);
+  --color-border-active: var(--border-active);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+
+  /* Destructive ladder → Red (matches Lepton's button variants) */
+  --color-destructive-50: var(--color-red-50);
+  --color-destructive-100: var(--color-red-100);
+  --color-destructive-200: var(--color-red-200);
+  --color-destructive-300: var(--color-red-300);
+  --color-destructive-400: var(--color-red-400);
+  --color-destructive-500: var(--color-red-500);
+  --color-destructive-600: var(--color-red-600);
+  --color-destructive-700: var(--color-red-700);
+  --color-destructive-800: var(--color-red-800);
+  --color-destructive-900: var(--color-red-900);
+  --color-destructive-950: var(--color-red-950);
+
+  /* Attribution outcome semantic colors (usable as bg-hw / text-hw / border-hw etc) */
+  --color-hw: var(--outcome-hw);
+  --color-hw-bg: var(--outcome-hw-bg);
+  --color-sw: var(--outcome-sw);
+  --color-sw-bg: var(--outcome-sw-bg);
+  --color-mix: var(--outcome-mix);
+  --color-mix-bg: var(--outcome-mix-bg);
+  --color-usr: var(--outcome-usr);
+  --color-usr-bg: var(--outcome-usr-bg);
+  --color-pass: var(--outcome-pass);
+  --color-pass-bg: var(--outcome-pass-bg);
+  --color-primary-glow: var(--outcome-primary-glow);
+
+  /* Accordion (radix) keyframes */
+  @keyframes accordion-down {
+    from {
+      height: 0;
+    }
+    to {
+      height: var(
+        --radix-accordion-content-height,
+        var(--accordion-panel-height, auto)
+      );
+    }
+  }
+
+  @keyframes accordion-up {
+    from {
+      height: var(
+        --radix-accordion-content-height,
+        var(--accordion-panel-height, auto)
+      );
+    }
+    to {
+      height: 0;
+    }
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+  html {
+    @apply font-sans h-full;
+    color-scheme: dark;
+  }
+  body {
+    @apply font-sans antialiased bg-background text-foreground text-sm leading-snug;
+    font-feature-settings: 'cv11', 'ss01';
+    text-rendering: optimizeLegibility;
+  }
+  #root {
+    @apply min-h-full;
+  }
+}
+
+/* Monaco log decorations — referenced by name from log-hero */
+.attr-log-symptom {
+  background-color: color-mix(in srgb, var(--color-primary-500) 16%, transparent) !important;
+}
+.attr-log-symptom-stripe {
+  background-color: var(--color-primary-500) !important;
+  width: 2px !important;
+  margin-left: 0 !important;
+}
+.attr-log-error {
+  background-color: rgba(255, 255, 255, 0.03) !important;
+}
+.attr-log-debug {
+  opacity: 0.7;
+}
+
+@utility no-scrollbar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+
+  &::-webkit-scrollbar {
+    display: none;
+  }
+}

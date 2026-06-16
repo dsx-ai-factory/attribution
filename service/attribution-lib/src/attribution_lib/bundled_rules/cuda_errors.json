@@ -1,0 +1,1000 @@
+[
+    {
+        "driver_name": "CUDA_SUCCESS",
+        "runtime_name": "cudaSuccess",
+        "cnp_name": "CNP_SUCCESS",
+        "runtime_mapsto": null,
+        "description": "no error"
+    },
+    {
+        "driver_name": "CUDA_ERROR_INVALID_VALUE",
+        "runtime_name": "cudaErrorInvalidValue",
+        "cnp_name": "CNP_ERROR_INVALID_ARGUMENT",
+        "runtime_mapsto": null,
+        "description": "invalid argument"
+    },
+    {
+        "driver_name": "CUDA_ERROR_OUT_OF_MEMORY",
+        "runtime_name": "cudaErrorMemoryAllocation",
+        "cnp_name": "CNP_ERROR_OUT_OF_MEMORY",
+        "runtime_mapsto": null,
+        "description": "out of memory"
+    },
+    {
+        "driver_name": "CUDA_ERROR_NOT_INITIALIZED",
+        "runtime_name": "cudaErrorInitializationError",
+        "cnp_name": null,
+        "runtime_mapsto": null,
+        "description": "initialization error"
+    },
+    {
+        "driver_name": "CUDA_ERROR_DEINITIALIZED",
+        "runtime_name": "cudaErrorCudartUnloading",
+        "cnp_name": null,
+        "runtime_mapsto": null,
+        "description": "driver shutting down"
+    },
+    {
+        "driver_name": "CUDA_ERROR_PROFILER_DISABLED",
+        "runtime_name": "cudaErrorProfilerDisabled",
+        "cnp_name": null,
+        "runtime_mapsto": null,
+        "description": "profiler disabled while using external profiling tool"
+    },
+    {
+        "driver_name": "CUDA_ERROR_PROFILER_NOT_INITIALIZED",
+        "runtime_name": "cudaErrorProfilerNotInitialized",
+        "cnp_name": null,
+        "runtime_mapsto": null,
+        "description": "profiler not initialized: call cudaProfilerInitialize()"
+    },
+    {
+        "driver_name": "CUDA_ERROR_PROFILER_ALREADY_STARTED",
+        "runtime_name": "cudaErrorProfilerAlreadyStarted",
+        "cnp_name": null,
+        "runtime_mapsto": null,
+        "description": "profiler already started"
+    },
+    {
+        "driver_name": "CUDA_ERROR_PROFILER_ALREADY_STOPPED",
+        "runtime_name": "cudaErrorProfilerAlreadyStopped",
+        "cnp_name": null,
+        "runtime_mapsto": null,
+        "description": "profiler already stopped"
+    },
+    {
+        "driver_name": "CUDA_ERROR_STUB_LIBRARY",
+        "runtime_name": "cudaErrorStubLibrary",
+        "cnp_name": null,
+        "runtime_mapsto": null,
+        "description": "CUDA driver is a stub library"
+    },
+    {
+        "driver_name": "CUDA_ERROR_CALL_REQUIRES_NEWER_DRIVER",
+        "runtime_name": "cudaErrorCallRequiresNewerDriver",
+        "cnp_name": null,
+        "runtime_mapsto": null,
+        "description": "API call is not supported in the installed CUDA driver"
+    },
+    {
+        "driver_name": "CUDA_ERROR_DEVICE_UNAVAILABLE",
+        "runtime_name": "cudaErrorDevicesUnavailable",
+        "cnp_name": null,
+        "runtime_mapsto": null,
+        "description": "CUDA-capable device(s) is/are busy or unavailable"
+    },
+    {
+        "driver_name": "CUDA_ERROR_NO_DEVICE",
+        "runtime_name": "cudaErrorNoDevice",
+        "cnp_name": null,
+        "runtime_mapsto": null,
+        "description": "no CUDA-capable device is detected"
+    },
+    {
+        "driver_name": "CUDA_ERROR_INVALID_DEVICE",
+        "runtime_name": "cudaErrorInvalidDevice",
+        "cnp_name": "CNP_ERROR_INVALID_DEVICE",
+        "runtime_mapsto": null,
+        "description": "invalid device ordinal"
+    },
+    {
+        "driver_name": "CUDA_ERROR_DEVICE_NOT_LICENSED",
+        "runtime_name": "cudaErrorDeviceNotLicensed",
+        "cnp_name": null,
+        "runtime_mapsto": null,
+        "description": "device doesn't have valid Grid license"
+    },
+    {
+        "driver_name": null,
+        "runtime_name": "cudaErrorSoftwareValidityNotEstablished",
+        "cnp_name": null,
+        "runtime_mapsto": null,
+        "description": "integrity checks failed"
+    },
+    {
+        "driver_name": "CUDA_ERROR_INVALID_IMAGE",
+        "runtime_name": "cudaErrorInvalidKernelImage",
+        "cnp_name": null,
+        "runtime_mapsto": null,
+        "description": "device kernel image is invalid"
+    },
+    {
+        "driver_name": "CUDA_ERROR_INVALID_CONTEXT",
+        "runtime_name": "cudaErrorDeviceUninitialized",
+        "cnp_name": null,
+        "runtime_mapsto": null,
+        "description": "invalid device context"
+    },
+    {
+        "driver_name": "CUDA_ERROR_CONTEXT_ALREADY_CURRENT",
+        "runtime_name": null,
+        "cnp_name": null,
+        "runtime_mapsto": "cudaErrorUnknown",
+        "description": "context already current"
+    },
+    {
+        "driver_name": "CUDA_ERROR_MAP_FAILED",
+        "runtime_name": "cudaErrorMapBufferObjectFailed",
+        "cnp_name": null,
+        "runtime_mapsto": null,
+        "description": "mapping of buffer object failed"
+    },
+    {
+        "driver_name": "CUDA_ERROR_UNMAP_FAILED",
+        "runtime_name": "cudaErrorUnmapBufferObjectFailed",
+        "cnp_name": null,
+        "runtime_mapsto": null,
+        "description": "unmapping of buffer object failed"
+    },
+    {
+        "driver_name": "CUDA_ERROR_ARRAY_IS_MAPPED",
+        "runtime_name": "cudaErrorArrayIsMapped",
+        "cnp_name": null,
+        "runtime_mapsto": null,
+        "description": "array is mapped"
+    },
+    {
+        "driver_name": "CUDA_ERROR_ALREADY_MAPPED",
+        "runtime_name": "cudaErrorAlreadyMapped",
+        "cnp_name": null,
+        "runtime_mapsto": null,
+        "description": "resource already mapped"
+    },
+    {
+        "driver_name": "CUDA_ERROR_NO_BINARY_FOR_GPU",
+        "runtime_name": "cudaErrorNoKernelImageForDevice",
+        "cnp_name": null,
+        "runtime_mapsto": null,
+        "description": "no kernel image is available for execution on the device"
+    },
+    {
+        "driver_name": "CUDA_ERROR_ALREADY_ACQUIRED",
+        "runtime_name": "cudaErrorAlreadyAcquired",
+        "cnp_name": null,
+        "runtime_mapsto": null,
+        "description": "resource already acquired"
+    },
+    {
+        "driver_name": "CUDA_ERROR_NOT_MAPPED",
+        "runtime_name": "cudaErrorNotMapped",
+        "cnp_name": null,
+        "runtime_mapsto": null,
+        "description": "resource not mapped"
+    },
+    {
+        "driver_name": "CUDA_ERROR_NOT_MAPPED_AS_ARRAY",
+        "runtime_name": "cudaErrorNotMappedAsArray",
+        "cnp_name": null,
+        "runtime_mapsto": null,
+        "description": "resource not mapped as array"
+    },
+    {
+        "driver_name": "CUDA_ERROR_NOT_MAPPED_AS_POINTER",
+        "runtime_name": "cudaErrorNotMappedAsPointer",
+        "cnp_name": null,
+        "runtime_mapsto": null,
+        "description": "resource not mapped as pointer"
+    },
+    {
+        "driver_name": "CUDA_ERROR_ECC_UNCORRECTABLE",
+        "runtime_name": "cudaErrorECCUncorrectable",
+        "cnp_name": null,
+        "runtime_mapsto": null,
+        "description": "uncorrectable ECC error encountered"
+    },
+    {
+        "driver_name": "CUDA_ERROR_UNSUPPORTED_LIMIT",
+        "runtime_name": "cudaErrorUnsupportedLimit",
+        "cnp_name": "CNP_ERROR_UNSUPPORTED_LIMIT",
+        "runtime_mapsto": null,
+        "description": "limit is not supported on this architecture"
+    },
+    {
+        "driver_name": "CUDA_ERROR_CONTEXT_ALREADY_IN_USE",
+        "runtime_name": "cudaErrorDeviceAlreadyInUse",
+        "cnp_name": null,
+        "runtime_mapsto": null,
+        "description": "exclusive-thread device already in use by a different thread"
+    },
+    {
+        "driver_name": "CUDA_ERROR_PEER_ACCESS_UNSUPPORTED",
+        "runtime_name": "cudaErrorPeerAccessUnsupported",
+        "cnp_name": null,
+        "runtime_mapsto": null,
+        "description": "peer access is not supported between these two devices"
+    },
+    {
+        "driver_name": "CUDA_ERROR_INVALID_PTX",
+        "runtime_name": "cudaErrorInvalidPtx",
+        "cnp_name": null,
+        "runtime_mapsto": null,
+        "description": "a PTX JIT compilation failed"
+    },
+    {
+        "driver_name": "CUDA_ERROR_INVALID_GRAPHICS_CONTEXT",
+        "runtime_name": "cudaErrorInvalidGraphicsContext",
+        "cnp_name": null,
+        "runtime_mapsto": null,
+        "description": "invalid OpenGL or DirectX context"
+    },
+    {
+        "driver_name": "CUDA_ERROR_NVLINK_UNCORRECTABLE",
+        "runtime_name": "cudaErrorNvlinkUncorrectable",
+        "cnp_name": null,
+        "runtime_mapsto": null,
+        "description": "uncorrectable NVLink error detected during the execution"
+    },
+    {
+        "driver_name": "CUDA_ERROR_JIT_COMPILER_NOT_FOUND",
+        "runtime_name": "cudaErrorJitCompilerNotFound",
+        "cnp_name": null,
+        "runtime_mapsto": null,
+        "description": "PTX JIT compiler library not found"
+    },
+    {
+        "driver_name": "CUDA_ERROR_UNSUPPORTED_PTX_VERSION",
+        "runtime_name": "cudaErrorUnsupportedPtxVersion",
+        "cnp_name": null,
+        "runtime_mapsto": null,
+        "description": "the provided PTX was compiled with an unsupported toolchain."
+    },
+    {
+        "driver_name": "CUDA_ERROR_JIT_COMPILATION_DISABLED",
+        "runtime_name": "cudaErrorJitCompilationDisabled",
+        "cnp_name": null,
+        "runtime_mapsto": null,
+        "description": "PTX JIT compilation was disabled"
+    },
+    {
+        "driver_name": "CUDA_ERROR_UNSUPPORTED_EXEC_AFFINITY",
+        "runtime_name": "cudaErrorUnsupportedExecAffinity",
+        "cnp_name": null,
+        "runtime_mapsto": null,
+        "description": "the provided execution affinity is not supported"
+    },
+    {
+        "driver_name": "CUDA_ERROR_UNSUPPORTED_DEVSIDE_SYNC",
+        "runtime_name": "cudaErrorUnsupportedDevSideSync",
+        "cnp_name": null,
+        "runtime_mapsto": null,
+        "description": "the provided PTX contains unsupported call to cudaDeviceSynchronize"
+    },
+    {
+        "driver_name": "CUDA_ERROR_CONTAINED",
+        "runtime_name": "cudaErrorContained",
+        "cnp_name": null,
+        "runtime_mapsto": null,
+        "description": "Invalid access of peer GPU memory over nvlink or a hardware error"
+    },
+    {
+        "driver_name": "CUDA_ERROR_NVLINK_ENCRYPTION_FAILED",
+        "runtime_name": "cudaErrorNvlinkEncryptionFailed",
+        "cnp_name": null,
+        "runtime_mapsto": null,
+        "description": "NVLink encryption error detected during the execution"
+    },
+    {
+        "driver_name": "CUDA_ERROR_INVALID_SOURCE",
+        "runtime_name": "cudaErrorInvalidSource",
+        "cnp_name": null,
+        "runtime_mapsto": null,
+        "description": "device kernel image is invalid"
+    },
+    {
+        "driver_name": "CUDA_ERROR_FILE_NOT_FOUND",
+        "runtime_name": "cudaErrorFileNotFound",
+        "cnp_name": null,
+        "runtime_mapsto": null,
+        "description": "file not found"
+    },
+    {
+        "driver_name": "CUDA_ERROR_SHARED_OBJECT_SYMBOL_NOT_FOUND",
+        "runtime_name": "cudaErrorSharedObjectSymbolNotFound",
+        "cnp_name": null,
+        "runtime_mapsto": null,
+        "description": "shared object symbol not found"
+    },
+    {
+        "driver_name": "CUDA_ERROR_SHARED_OBJECT_INIT_FAILED",
+        "runtime_name": "cudaErrorSharedObjectInitFailed",
+        "cnp_name": null,
+        "runtime_mapsto": null,
+        "description": "shared object initialization failed"
+    },
+    {
+        "driver_name": "CUDA_ERROR_OPERATING_SYSTEM",
+        "runtime_name": "cudaErrorOperatingSystem",
+        "cnp_name": null,
+        "runtime_mapsto": null,
+        "description": "OS call failed or operation not supported on this OS"
+    },
+    {
+        "driver_name": "CUDA_ERROR_INVALID_HANDLE",
+        "runtime_name": "cudaErrorInvalidResourceHandle",
+        "cnp_name": null,
+        "runtime_mapsto": null,
+        "description": "invalid resource handle"
+    },
+    {
+        "driver_name": "CUDA_ERROR_ILLEGAL_STATE",
+        "runtime_name": "cudaErrorIllegalState",
+        "cnp_name": null,
+        "runtime_mapsto": null,
+        "description": "the operation cannot be performed in the present state"
+    },
+    {
+        "driver_name": "CUDA_ERROR_LOSSY_QUERY",
+        "runtime_name": "cudaErrorLossyQuery",
+        "cnp_name": null,
+        "runtime_mapsto": null,
+        "description": "attempted introspection would be semantically lossy"
+    },
+    {
+        "driver_name": "CUDA_ERROR_NOT_FOUND",
+        "runtime_name": "cudaErrorSymbolNotFound",
+        "cnp_name": null,
+        "runtime_mapsto": null,
+        "description": "named symbol not found"
+    },
+    {
+        "driver_name": "CUDA_ERROR_NOT_READY",
+        "runtime_name": "cudaErrorNotReady",
+        "cnp_name": null,
+        "runtime_mapsto": null,
+        "description": "device not ready"
+    },
+    {
+        "driver_name": "CUDA_ERROR_ILLEGAL_ADDRESS",
+        "runtime_name": "cudaErrorIllegalAddress",
+        "cnp_name": null,
+        "runtime_mapsto": null,
+        "description": "an illegal memory access was encountered"
+    },
+    {
+        "driver_name": "CUDA_ERROR_LAUNCH_OUT_OF_RESOURCES",
+        "runtime_name": "cudaErrorLaunchOutOfResources",
+        "cnp_name": null,
+        "runtime_mapsto": null,
+        "description": "too many resources requested for launch"
+    },
+    {
+        "driver_name": "CUDA_ERROR_LAUNCH_TIMEOUT",
+        "runtime_name": "cudaErrorLaunchTimeout",
+        "cnp_name": null,
+        "runtime_mapsto": null,
+        "description": "the launch timed out and was terminated"
+    },
+    {
+        "driver_name": "CUDA_ERROR_LAUNCH_INCOMPATIBLE_TEXTURING",
+        "runtime_name": "cudaErrorLaunchIncompatibleTexturing",
+        "cnp_name": null,
+        "runtime_mapsto": null,
+        "description": "launch uses incompatible texturing mode"
+    },
+    {
+        "driver_name": "CUDA_ERROR_PEER_ACCESS_ALREADY_ENABLED",
+        "runtime_name": "cudaErrorPeerAccessAlreadyEnabled",
+        "cnp_name": null,
+        "runtime_mapsto": null,
+        "description": "peer access is already enabled"
+    },
+    {
+        "driver_name": "CUDA_ERROR_PEER_ACCESS_NOT_ENABLED",
+        "runtime_name": "cudaErrorPeerAccessNotEnabled",
+        "cnp_name": null,
+        "runtime_mapsto": null,
+        "description": "peer access has not been enabled"
+    },
+    {
+        "driver_name": "CUDA_ERROR_PRIMARY_CONTEXT_ACTIVE",
+        "runtime_name": "cudaErrorSetOnActiveProcess",
+        "cnp_name": null,
+        "runtime_mapsto": null,
+        "description": "cannot set while device is active in this process"
+    },
+    {
+        "driver_name": "CUDA_ERROR_CONTEXT_IS_DESTROYED",
+        "runtime_name": "cudaErrorContextIsDestroyed",
+        "cnp_name": null,
+        "runtime_mapsto": null,
+        "description": "context is destroyed"
+    },
+    {
+        "driver_name": "CUDA_ERROR_ASSERT",
+        "runtime_name": "cudaErrorAssert",
+        "cnp_name": null,
+        "runtime_mapsto": null,
+        "description": "device-side assert triggered"
+    },
+    {
+        "driver_name": "CUDA_ERROR_TOO_MANY_PEERS",
+        "runtime_name": "cudaErrorTooManyPeers",
+        "cnp_name": null,
+        "runtime_mapsto": null,
+        "description": "peer mapping resources exhausted"
+    },
+    {
+        "driver_name": "CUDA_ERROR_HOST_MEMORY_ALREADY_REGISTERED",
+        "runtime_name": "cudaErrorHostMemoryAlreadyRegistered",
+        "cnp_name": null,
+        "runtime_mapsto": null,
+        "description": "part or all of the requested memory range is already mapped"
+    },
+    {
+        "driver_name": "CUDA_ERROR_HOST_MEMORY_NOT_REGISTERED",
+        "runtime_name": "cudaErrorHostMemoryNotRegistered",
+        "cnp_name": null,
+        "runtime_mapsto": null,
+        "description": "pointer does not correspond to a registered memory region"
+    },
+    {
+        "driver_name": "CUDA_ERROR_HARDWARE_STACK_ERROR",
+        "runtime_name": "cudaErrorHardwareStackError",
+        "cnp_name": null,
+        "runtime_mapsto": null,
+        "description": "hardware stack error"
+    },
+    {
+        "driver_name": "CUDA_ERROR_ILLEGAL_INSTRUCTION",
+        "runtime_name": "cudaErrorIllegalInstruction",
+        "cnp_name": null,
+        "runtime_mapsto": null,
+        "description": "an illegal instruction was encountered"
+    },
+    {
+        "driver_name": "CUDA_ERROR_MISALIGNED_ADDRESS",
+        "runtime_name": "cudaErrorMisalignedAddress",
+        "cnp_name": null,
+        "runtime_mapsto": null,
+        "description": "misaligned address"
+    },
+    {
+        "driver_name": "CUDA_ERROR_INVALID_ADDRESS_SPACE",
+        "runtime_name": "cudaErrorInvalidAddressSpace",
+        "cnp_name": null,
+        "runtime_mapsto": null,
+        "description": "operation not supported on global/shared address space"
+    },
+    {
+        "driver_name": "CUDA_ERROR_INVALID_PC",
+        "runtime_name": "cudaErrorInvalidPc",
+        "cnp_name": null,
+        "runtime_mapsto": null,
+        "description": "invalid program counter"
+    },
+    {
+        "driver_name": "CUDA_ERROR_LAUNCH_FAILED",
+        "runtime_name": "cudaErrorLaunchFailure",
+        "cnp_name": null,
+        "runtime_mapsto": null,
+        "description": "unspecified launch failure"
+    },
+    {
+        "driver_name": "CUDA_ERROR_COOPERATIVE_LAUNCH_TOO_LARGE",
+        "runtime_name": "cudaErrorCooperativeLaunchTooLarge",
+        "cnp_name": null,
+        "runtime_mapsto": null,
+        "description": "too many blocks in cooperative launch"
+    },
+    {
+        "driver_name": "CUDA_ERROR_TENSOR_MEMORY_LEAK",
+        "runtime_name": "cudaErrorTensorMemoryLeak",
+        "cnp_name": null,
+        "runtime_mapsto": null,
+        "description": "tensor memory not completely freed"
+    },
+    {
+        "driver_name": "CUDA_ERROR_NOT_PERMITTED",
+        "runtime_name": "cudaErrorNotPermitted",
+        "cnp_name": null,
+        "runtime_mapsto": null,
+        "description": "operation not permitted"
+    },
+    {
+        "driver_name": "CUDA_ERROR_NOT_SUPPORTED",
+        "runtime_name": "cudaErrorNotSupported",
+        "cnp_name": null,
+        "runtime_mapsto": null,
+        "description": "operation not supported"
+    },
+    {
+        "driver_name": "CUDA_ERROR_SYSTEM_NOT_READY",
+        "runtime_name": "cudaErrorSystemNotReady",
+        "cnp_name": null,
+        "runtime_mapsto": null,
+        "description": "system not yet initialized"
+    },
+    {
+        "driver_name": "CUDA_ERROR_SYSTEM_DRIVER_MISMATCH",
+        "runtime_name": "cudaErrorSystemDriverMismatch",
+        "cnp_name": null,
+        "runtime_mapsto": null,
+        "description": "system has unsupported display driver / cuda driver combination"
+    },
+    {
+        "driver_name": "CUDA_ERROR_COMPAT_NOT_SUPPORTED_ON_DEVICE",
+        "runtime_name": "cudaErrorCompatNotSupportedOnDevice",
+        "cnp_name": null,
+        "runtime_mapsto": null,
+        "description": "forward compatibility was attempted on non supported HW"
+    },
+    {
+        "driver_name": "CUDA_ERROR_MPS_CONNECTION_FAILED",
+        "runtime_name": "cudaErrorMpsConnectionFailed",
+        "cnp_name": null,
+        "runtime_mapsto": null,
+        "description": "MPS client failed to connect to the MPS control daemon or the MPS server"
+    },
+    {
+        "driver_name": "CUDA_ERROR_MPS_RPC_FAILURE",
+        "runtime_name": "cudaErrorMpsRpcFailure",
+        "cnp_name": null,
+        "runtime_mapsto": null,
+        "description": "the remote procedural call between the MPS server and the MPS client failed"
+    },
+    {
+        "driver_name": "CUDA_ERROR_MPS_SERVER_NOT_READY",
+        "runtime_name": "cudaErrorMpsServerNotReady",
+        "cnp_name": null,
+        "runtime_mapsto": null,
+        "description": "MPS server is not ready to accept new MPS client requests"
+    },
+    {
+        "driver_name": "CUDA_ERROR_MPS_MAX_CLIENTS_REACHED",
+        "runtime_name": "cudaErrorMpsMaxClientsReached",
+        "cnp_name": null,
+        "runtime_mapsto": null,
+        "description": "the hardware resources required to create MPS client have been exhausted"
+    },
+    {
+        "driver_name": "CUDA_ERROR_MPS_MAX_CONNECTIONS_REACHED",
+        "runtime_name": "cudaErrorMpsMaxConnectionsReached",
+        "cnp_name": null,
+        "runtime_mapsto": null,
+        "description": "the hardware resources required to support device connections have been exhausted"
+    },
+    {
+        "driver_name": "CUDA_ERROR_MPS_CLIENT_TERMINATED",
+        "runtime_name": "cudaErrorMpsClientTerminated",
+        "cnp_name": null,
+        "runtime_mapsto": null,
+        "description": "the MPS client has been terminated by the server"
+    },
+    {
+        "driver_name": "CUDA_ERROR_CDP_NOT_SUPPORTED",
+        "runtime_name": "cudaErrorCdpNotSupported",
+        "cnp_name": null,
+        "runtime_mapsto": null,
+        "description": "is using CUDA Dynamic Parallelism, but the current configuration, like MPS, does not support it"
+    },
+    {
+        "driver_name": "CUDA_ERROR_CDP_VERSION_MISMATCH",
+        "runtime_name": "cudaErrorCdpVersionMismatch",
+        "cnp_name": null,
+        "runtime_mapsto": null,
+        "description": "unsupported interaction between different versions of CUDA Dynamic Parallelism"
+    },
+    {
+        "driver_name": "CUDA_ERROR_COMMS_FAILURE",
+        "runtime_name": null,
+        "cnp_name": null,
+        "runtime_mapsto": null,
+        "description": "an error was returned from a method on a CUhostCommunicationsVtable object"
+    },
+    {
+        "driver_name": "CUDA_ERROR_STREAM_CAPTURE_UNSUPPORTED",
+        "runtime_name": "cudaErrorStreamCaptureUnsupported",
+        "cnp_name": null,
+        "runtime_mapsto": null,
+        "description": "operation not permitted when stream is capturing"
+    },
+    {
+        "driver_name": "CUDA_ERROR_STREAM_CAPTURE_INVALIDATED",
+        "runtime_name": "cudaErrorStreamCaptureInvalidated",
+        "cnp_name": null,
+        "runtime_mapsto": null,
+        "description": "operation failed due to a previous error during capture"
+    },
+    {
+        "driver_name": "CUDA_ERROR_STREAM_CAPTURE_MERGE",
+        "runtime_name": "cudaErrorStreamCaptureMerge",
+        "cnp_name": null,
+        "runtime_mapsto": null,
+        "description": "operation would result in a merge of separate capture sequences"
+    },
+    {
+        "driver_name": "CUDA_ERROR_STREAM_CAPTURE_UNMATCHED",
+        "runtime_name": "cudaErrorStreamCaptureUnmatched",
+        "cnp_name": null,
+        "runtime_mapsto": null,
+        "description": "capture was not ended in the same stream as it began"
+    },
+    {
+        "driver_name": "CUDA_ERROR_STREAM_CAPTURE_UNJOINED",
+        "runtime_name": "cudaErrorStreamCaptureUnjoined",
+        "cnp_name": null,
+        "runtime_mapsto": null,
+        "description": "capturing stream has unjoined work"
+    },
+    {
+        "driver_name": "CUDA_ERROR_STREAM_CAPTURE_ISOLATION",
+        "runtime_name": "cudaErrorStreamCaptureIsolation",
+        "cnp_name": null,
+        "runtime_mapsto": null,
+        "description": "dependency created on uncaptured work in another stream"
+    },
+    {
+        "driver_name": "CUDA_ERROR_STREAM_CAPTURE_IMPLICIT",
+        "runtime_name": "cudaErrorStreamCaptureImplicit",
+        "cnp_name": null,
+        "runtime_mapsto": null,
+        "description": "operation would make the legacy stream depend on a capturing blocking stream"
+    },
+    {
+        "driver_name": "CUDA_ERROR_CAPTURED_EVENT",
+        "runtime_name": "cudaErrorCapturedEvent",
+        "cnp_name": null,
+        "runtime_mapsto": null,
+        "description": "operation not permitted on an event last recorded in a capturing stream"
+    },
+    {
+        "driver_name": "CUDA_ERROR_STREAM_CAPTURE_WRONG_THREAD",
+        "runtime_name": "cudaErrorStreamCaptureWrongThread",
+        "cnp_name": null,
+        "runtime_mapsto": null,
+        "description": "attempt to terminate a thread-local capture sequence from another thread"
+    },
+    {
+        "driver_name": "CUDA_ERROR_TIMEOUT",
+        "runtime_name": "cudaErrorTimeout",
+        "cnp_name": null,
+        "runtime_mapsto": null,
+        "description": "wait operation timed out"
+    },
+    {
+        "driver_name": "CUDA_ERROR_GRAPH_EXEC_UPDATE_FAILURE",
+        "runtime_name": "cudaErrorGraphExecUpdateFailure",
+        "cnp_name": null,
+        "runtime_mapsto": null,
+        "description": "the graph update was not performed because it included changes which violated constraints specific to instantiated graph update"
+    },
+    {
+        "driver_name": "CUDA_ERROR_EXTERNAL_DEVICE",
+        "runtime_name": "cudaErrorExternalDevice",
+        "cnp_name": null,
+        "runtime_mapsto": null,
+        "description": "an async error has occured in external entity outside of CUDA"
+    },
+    {
+        "driver_name": "CUDA_ERROR_INVALID_CLUSTER_SIZE",
+        "runtime_name": "cudaErrorInvalidClusterSize",
+        "cnp_name": "CNP_ERROR_INVALID_CLUSTER_SIZE",
+        "runtime_mapsto": null,
+        "description": "a kernel launch error has occurred due to cluster misconfiguration"
+    },
+    {
+        "driver_name": "CUDA_ERROR_FUNCTION_NOT_LOADED",
+        "runtime_name": "cudaErrorFunctionNotLoaded",
+        "cnp_name": null,
+        "runtime_mapsto": null,
+        "description": "the function handle is not loaded when calling an API that requires a loaded function"
+    },
+    {
+        "driver_name": "CUDA_ERROR_INVALID_RESOURCE_TYPE",
+        "runtime_name": "cudaErrorInvalidResourceType",
+        "cnp_name": null,
+        "runtime_mapsto": null,
+        "description": "one or more resources passed in are not valid resource types for the operation"
+    },
+    {
+        "driver_name": "CUDA_ERROR_INVALID_RESOURCE_CONFIGURATION",
+        "runtime_name": "cudaErrorInvalidResourceConfiguration",
+        "cnp_name": null,
+        "runtime_mapsto": null,
+        "description": "one or more resources are insufficient or non-applicable for the operation"
+    },
+    {
+        "driver_name": "CUDA_ERROR_KEY_ROTATION",
+        "runtime_name": null,
+        "cnp_name": null,
+        "runtime_mapsto": null,
+        "description": "an error happened during the key rotation sequence"
+    },
+    {
+        "driver_name": "CUDA_ERROR_UNKNOWN",
+        "runtime_name": "cudaErrorUnknown",
+        "cnp_name": null,
+        "runtime_mapsto": null,
+        "description": "unknown error"
+    },
+    {
+        "driver_name": null,
+        "runtime_name": "cudaErrorMissingConfiguration",
+        "cnp_name": null,
+        "runtime_mapsto": null,
+        "description": "__global__ function call is not configured"
+    },
+    {
+        "runtime_mapsto": null,
+        "description": "unspecified launch failure in prior launch"
+    },
+    {
+        "driver_name": null,
+        "runtime_name": "cudaErrorInvalidDeviceFunction",
+        "cnp_name": null,
+        "runtime_mapsto": null,
+        "description": "invalid device function"
+    },
+    {
+        "driver_name": null,
+        "runtime_name": "cudaErrorInvalidConfiguration",
+        "cnp_name": null,
+        "runtime_mapsto": null,
+        "description": "invalid configuration argument"
+    },
+    {
+        "driver_name": null,
+        "runtime_name": "cudaErrorInvalidPitchValue",
+        "cnp_name": null,
+        "runtime_mapsto": null,
+        "description": "invalid pitch argument"
+    },
+    {
+        "driver_name": null,
+        "runtime_name": "cudaErrorInvalidSymbol",
+        "cnp_name": null,
+        "runtime_mapsto": null,
+        "description": "invalid device symbol"
+    },
+    {
+        "driver_name": null,
+        "runtime_name": "cudaErrorInvalidHostPointer",
+        "cnp_name": null,
+        "runtime_mapsto": null,
+        "description": "invalid host pointer"
+    },
+    {
+        "driver_name": null,
+        "runtime_name": "cudaErrorInvalidDevicePointer",
+        "cnp_name": null,
+        "runtime_mapsto": null,
+        "description": "invalid device pointer"
+    },
+    {
+        "driver_name": null,
+        "runtime_name": "cudaErrorInvalidTexture",
+        "cnp_name": null,
+        "runtime_mapsto": null,
+        "description": "invalid texture reference"
+    },
+    {
+        "driver_name": null,
+        "runtime_name": "cudaErrorInvalidTextureBinding",
+        "cnp_name": null,
+        "runtime_mapsto": null,
+        "description": "texture is not bound to a pointer"
+    },
+    {
+        "driver_name": null,
+        "runtime_name": "cudaErrorInvalidChannelDescriptor",
+        "cnp_name": null,
+        "runtime_mapsto": null,
+        "description": "invalid channel descriptor"
+    },
+    {
+        "driver_name": null,
+        "runtime_name": "cudaErrorInvalidMemcpyDirection",
+        "cnp_name": null,
+        "runtime_mapsto": null,
+        "description": "invalid copy direction for memcpy"
+    },
+    {
+        "driver_name": null,
+        "runtime_name": "cudaErrorAddressOfConstant",
+        "cnp_name": null,
+        "runtime_mapsto": null,
+        "description": "invalid address of constant"
+    },
+    {
+        "driver_name": null,
+        "runtime_name": "cudaErrorTextureFetchFailed",
+        "cnp_name": null,
+        "runtime_mapsto": null,
+        "description": "fetch from texture failed"
+    },
+    {
+        "driver_name": null,
+        "runtime_name": "cudaErrorTextureNotBound",
+        "cnp_name": null,
+        "runtime_mapsto": null,
+        "description": "cannot fetch from a texture that is not bound"
+    },
+    {
+        "driver_name": null,
+        "runtime_name": "cudaErrorSynchronizationError",
+        "cnp_name": null,
+        "runtime_mapsto": null,
+        "description": "incorrect use of __syncthreads()"
+    },
+    {
+        "driver_name": null,
+        "runtime_name": "cudaErrorInvalidFilterSetting",
+        "cnp_name": null,
+        "runtime_mapsto": null,
+        "description": "linear filtering not supported for non-float type"
+    },
+    {
+        "driver_name": null,
+        "runtime_name": "cudaErrorInvalidNormSetting",
+        "cnp_name": null,
+        "runtime_mapsto": null,
+        "description": "read as normalized float not supported for data type"
+    },
+    {
+        "driver_name": null,
+        "runtime_name": "cudaErrorMixedDeviceExecution",
+        "cnp_name": null,
+        "runtime_mapsto": null,
+        "description": "device emulation mode and device execution mode cannot be mixed"
+    },
+    {
+        "driver_name": null,
+        "runtime_name": "cudaErrorNotYetImplemented",
+        "cnp_name": null,
+        "runtime_mapsto": null,
+        "description": "feature not yet implemented"
+    },
+    {
+        "driver_name": null,
+        "runtime_name": "cudaErrorMemoryValueTooLarge",
+        "cnp_name": null,
+        "runtime_mapsto": null,
+        "description": "memory size or pointer value too large to fit in 32 bit"
+    },
+    {
+        "driver_name": null,
+        "runtime_name": "cudaErrorInsufficientDriver",
+        "cnp_name": null,
+        "runtime_mapsto": null,
+        "description": "CUDA driver version is insufficient for CUDA runtime version"
+    },
+    {
+        "driver_name": null,
+        "runtime_name": "cudaErrorCallRequiresNewerDriver",
+        "cnp_name": null,
+        "runtime_mapsto": null,
+        "description": "API call is not supported in the installed CUDA driver"
+    },
+    {
+        "driver_name": null,
+        "runtime_name": "cudaErrorInvalidSurface",
+        "cnp_name": null,
+        "runtime_mapsto": null,
+        "description": "invalid surface reference"
+    },
+    {
+        "driver_name": null,
+        "runtime_name": "cudaErrorDuplicateVariableName",
+        "cnp_name": null,
+        "runtime_mapsto": null,
+        "description": "duplicate global variable looked up by string name"
+    },
+    {
+        "driver_name": null,
+        "runtime_name": "cudaErrorDuplicateTextureName",
+        "cnp_name": null,
+        "runtime_mapsto": null,
+        "description": "duplicate texture looked up by string name"
+    },
+    {
+        "driver_name": null,
+        "runtime_name": "cudaErrorDuplicateSurfaceName",
+        "cnp_name": null,
+        "runtime_mapsto": null,
+        "description": "duplicate surface looked up by string name"
+    },
+    {
+        "driver_name": null,
+        "runtime_name": "cudaErrorIncompatibleDriverContext",
+        "cnp_name": null,
+        "runtime_mapsto": null,
+        "description": "incompatible driver context"
+    },
+    {
+        "driver_name": null,
+        "runtime_name": "cudaErrorLaunchMaxDepthExceeded",
+        "cnp_name": "CNP_ERROR_LAUNCH_MAX_DEPTH_EXCEEDED",
+        "runtime_mapsto": null,
+        "description": "launch would exceed maximum depth of nested launches"
+    },
+    {
+        "driver_name": null,
+        "runtime_name": "cudaErrorLaunchFileScopedTex",
+        "cnp_name": "CNP_ERROR_LAUNCH_NON_BINDLESS_TEXTURE",
+        "runtime_mapsto": null,
+        "description": "launch failed because kernel uses unsupported, file-scoped textures (texture objects are supported)"
+    },
+    {
+        "driver_name": null,
+        "runtime_name": "cudaErrorLaunchFileScopedSurf",
+        "cnp_name": "CNP_ERROR_LAUNCH_NON_BINDLESS_SURFACE",
+        "runtime_mapsto": null,
+        "description": "launch failed because kernel uses unsupported, file-scoped surfaces (surface objects are supported)"
+    },
+    {
+        "driver_name": null,
+        "runtime_name": "cudaErrorSyncDepthExceeded",
+        "cnp_name": "CNP_ERROR_DEVICE_SYNC_DEPTH_EXCEEDED",
+        "runtime_mapsto": null,
+        "description": "cudaDeviceSynchronize failed because caller's grid depth exceeds cudaLimitDevRuntimeSyncDepth"
+    },
+    {
+        "driver_name": null,
+        "runtime_name": "cudaErrorLaunchPendingCountExceeded",
+        "cnp_name": "CNP_ERROR_LAUNCH_OUT_OF_SLOTS",
+        "runtime_mapsto": null,
+        "description": "launch failed because launch would exceed cudaLimitDevRuntimePendingLaunchCount"
+    },
+    {
+        "driver_name": null,
+        "runtime_name": "cudaErrorStartupFailure",
+        "cnp_name": null,
+        "runtime_mapsto": null,
+        "description": "startup failure in cuda runtime"
+    },
+    {
+        "driver_name": null,
+        "runtime_name": "cudaErrorApiFailureBase",
+        "cnp_name": null,
+        "runtime_mapsto": null,
+        "description": "api failure base"
+    },
+    {
+        "driver_name": null,
+        "runtime_name": null,
+        "cnp_name": "CNP_ERROR_UNSUPPORTED_DEVICE",
+        "runtime_mapsto": "cudaErrorStartupFailure",
+        "description": ""
+    },
+    {
+        "driver_name": null,
+        "runtime_name": null,
+        "cnp_name": "CNP_ERROR_LAUNCH_INSUFFICIENT_REGISTERS",
+        "runtime_mapsto": "cudaErrorLaunchOutOfResources",
+        "description": ""
+    },
+    {
+        "driver_name": null,
+        "runtime_name": null,
+        "cnp_name": "CNP_ERROR_LAUNCH_INSUFFICIENT_SHARED_MEM",
+        "runtime_mapsto": "cudaErrorInvalidConfiguration",
+        "description": ""
+    },
+    {
+        "driver_name": null,
+        "runtime_name": null,
+        "cnp_name": "CNP_ERROR_LAUNCH_SIZE_LIMITS_EXCEEDED",
+        "runtime_mapsto": "cudaErrorInvalidConfiguration",
+        "description": ""
+    }
+]

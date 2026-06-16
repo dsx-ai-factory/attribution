@@ -1,0 +1,162 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: LicenseRef-NvidiaProprietary
+#
+# NVIDIA CORPORATION, its affiliates and licensors retain all intellectual
+# property and proprietary rights in and to this material, related
+# documentation and any modifications thereto. Any use, reproduction,
+# disclosure or distribution of this material and related documentation
+# without an express license agreement from NVIDIA CORPORATION or
+# its affiliates is strictly prohibited.
+
+import asyncio
+import logging
+import sys
+
+from attribution_lib.core import setup_rules
+from attribution_lib.exceptions import (
+    AttributionError as LibAttributionError,
+    JobInfoError,
+)
+from fastapi import FastAPI, Request, Response, status
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse
+from loguru import logger
+from prometheus_fastapi_instrumentator import Instrumentator
+
+import app.attributor_manager as attributor_manager
+import app.v1.api as v1
+import app.v2.api as v2
+from app import __version__
+from app.exceptions import FactHTTPException
+from app.metrics import VERSION_INFO
+
+_DESCRIPTION = """
+FACT Attribution Service helps interpret workload information (primarily failures).
+
+It produces 'attributions', typically node-based, based on 'observations'.
+
+The model is that POSTing to the '/attributor' endpoint with some workload information plus agent metadata creates a handle that is returned to the user.
+
+The handle can then be used as follows:
+
+* POSTing 'observations' to '/attributor/{handle}/observation' feeds logs/metrics/etc to the service and associates them with the handle. Each such POST will produce an 'observation_id' that can be used to track the ingestion of the observation.
+
+* GETing '/attributor/{handle}/attribution' will produce an attribution that tries to explain how the workload failed (if it did) and explains how the service reached that conclusion.
+
+* DELETEing '/attributor/{handle}' will clean up that handle.
+
+It is possible to interleave observation-posting and attribution-getting; the more observations that have been ingested, the better the quality of the attribution, generally speaking.
+"""
+
+
+def create_app():
+    logger.remove()
+    logger.add(
+        sys.stdout, level=logging.INFO, format="{time:HH:mm:ss} | {level} | {module}:{function}:{line} | {message}"
+    )
+    setup_rules()
+    global_aim = attributor_manager.AttributorManager(expiration_period_hours=24)
+    lapp = FastAPI(
+        title="FACT Attribution Service",
+        description=_DESCRIPTION,
+        summary="Service for producing failure attribution/workload information from metrics & logs",
+        contact={"name": "NVIDIA Corporation"},
+    )
+
+    lapp.state.aim = global_aim
+    lapp.include_router(v1.router, prefix="/v1")
+    lapp.include_router(v2.router, prefix="/v2")
+    lapp.include_router(v1.router, prefix="/latest")
+
+    @lapp.exception_handler(RequestValidationError)
+    async def validation_exception_handler(request: Request, exc: RequestValidationError):
+        return JSONResponse(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            content={
+                "errors": exc.errors(),
+                "body": exc.body,
+                "message": "Validation failed. Please check the errors.",
+            },
+        )
+
+    @lapp.exception_handler(FactHTTPException)
+    async def fact_http_exception_handler(_request: Request, exception: FactHTTPException):
+        return exception.to_json_response()
+
+    @lapp.exception_handler(JobInfoError)
+    async def jobinfo_error_handler(_request: Request, exception: JobInfoError):
+        return JSONResponse(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            content={
+                "errors": str(exception),
+                "body": repr(exception),
+                "message": "Workload validation failed.",
+            },
+        )
+
+    @lapp.exception_handler(LibAttributionError)
+    async def unhandled_lib_error(_request: Request, exception: LibAttributionError):
+        return JSONResponse(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            content={
+                "errors": str(exception),
+                "body": repr(exception),
+                "message": "Unhandled exception from attribution library.",
+            },
+        )
+
+    @lapp.middleware("http")
+    async def log_http(request: Request, call_next):
+        # Read and log the request body
+        body_bytes = await request.body()
+        logger.debug(f"REQUEST: {request.method} {request.url} Body: {body_bytes.decode('utf-8', errors='replace')}")
+
+        # Create a new request with the body for downstream handlers
+        async def receive():
+            return {"type": "http.request", "body": body_bytes}
+
+        request = Request(request.scope, receive)
+
+        try:
+            response = await call_next(request)
+            # Read and log the response body
+            response_body = b""
+            async for chunk in response.body_iterator:
+                response_body += chunk
+            logger.debug(
+                f"RESPONSE: {request.method} {request.url} Status: {response.status_code} Body: {response_body.decode('utf-8', errors='replace')}"
+            )
+            # Return a new response with the captured body
+            return Response(
+                content=response_body,
+                status_code=response.status_code,
+                headers=dict(response.headers),
+                media_type=response.media_type,
+            )
+        except Exception as e:
+            logger.exception(f"Error handling request: {e}")
+            logger.debug(f"REQUEST BODY ON ERROR: {body_bytes.decode('utf-8', errors='replace')}")
+            return JSONResponse(status_code=500, content={"detail": "Internal Server Error"})
+
+    instrumentator = Instrumentator().instrument(lapp)
+
+    @lapp.on_event("startup")
+    async def startup():
+        instrumentator.expose(lapp)
+        asyncio.create_task(cleanup_expired_attributors())
+
+    VERSION_INFO.labels(version=__version__).set(1)
+    logger.info(f"Current Version: {__version__}")
+
+    return lapp
+
+
+app = create_app()
+
+
+async def cleanup_expired_attributors():
+    """Background task to periodically clean up expired attributors."""
+    while True:
+        app.state.aim.cleanup_expired_attributors()
+        # Run cleanup every hour
+        await asyncio.sleep(3600)

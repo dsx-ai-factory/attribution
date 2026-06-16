@@ -1,0 +1,3 @@
+2026-06-11T12:53:00+00:00 - launcher - INFO - workload workload-0009 started on node-0009 with sanitized inputs.
+2026-06-11T13:03:00+00:00 - trainer - INFO - rank 0 completed warmup step 1009.
+2026-06-11T13:33:00+00:00 - launcher - INFO - workload workload-0009 cleanup completed after root symptom collection.
