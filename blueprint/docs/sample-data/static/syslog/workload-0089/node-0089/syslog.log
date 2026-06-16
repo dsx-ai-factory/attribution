@@ -1,0 +1,3 @@
+2026-06-15T12:20:00+00:00 node-0089 systemd[1]: Started sanitized training scope for workload-0089.
+2026-06-15T12:30:00+00:00 node-0089 kernel: Patch status for pod containerStatuses:[{"name":"slurmd","ready":false,"lastState":{"terminated":{"exitCode":137,"reason":"OOMKilled"}}}]
+2026-06-15T13:00:00+00:00 node-0089 systemd[1]: Stopped sanitized training scope for workload-0089.

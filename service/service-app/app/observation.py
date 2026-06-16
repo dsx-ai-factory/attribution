@@ -1,0 +1,80 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: LicenseRef-NvidiaProprietary
+#
+# NVIDIA CORPORATION, its affiliates and licensors retain all intellectual
+# property and proprietary rights in and to this material, related
+# documentation and any modifications thereto. Any use, reproduction,
+# disclosure or distribution of this material and related documentation
+# without an express license agreement from NVIDIA CORPORATION or
+# its affiliates is strictly prohibited.
+
+import json
+from typing import Any
+
+from attribution_lib.observation.inbound import (
+    Context as InboundContext,
+    Format as ObservationFormat,
+    Id as ObservationId,  # noqa: F401
+    Observation as LibObservation,
+    Source as ObservationSource,
+)
+from attribution_lib.resources import AllJobResources
+from pydantic import BaseModel, RootModel
+
+from app.exceptions import UnknownObservationFormatError
+from app.util import HashableModel, TimeInterval, to_zoneinfo
+
+
+class ObservationContext(HashableModel):
+    """Describes the scope of an observation."""
+
+    time_interval: TimeInterval
+    resources: str = "AllJobResources"
+    source: ObservationSource
+    format: ObservationFormat
+
+    def to_lib_context(self) -> InboundContext:
+        return InboundContext(
+            TimeInterval(start=self.time_interval.start, end=self.time_interval.end),
+            AllJobResources,
+            self.source,
+            self.format,
+            to_zoneinfo(self.time_interval.start),
+        )
+
+
+class RawLokiStreamPair(RootModel):
+    root: tuple[str, str]
+
+
+class RawLokiStream(BaseModel):
+    stream: dict[str, Any]
+    values: list[RawLokiStreamPair]
+
+
+class RawLokiStreams(RootModel):
+    root: list[RawLokiStream]
+
+
+class Observation(HashableModel):
+    """Describes association of some observation data with a context."""
+
+    context: ObservationContext
+    body: str
+
+    def to_lib_observation(self) -> LibObservation:
+        context = self.context.to_lib_context()
+        body: str | list[str] | dict[str, Any]
+        match context.format:
+            case ObservationFormat.STRING_LIST:
+                body = self.body.split("\n")
+            case ObservationFormat.RAW_LOG_LINES | ObservationFormat.CSV_METRIC_RESPONSE:
+                body = self.body.split("\n")
+            case ObservationFormat.LOKI_DICT_LIST:
+                body = json.loads(self.body)
+            case ObservationFormat.RAW_LOKI_STREAMS:
+                body = RawLokiStreams.model_validate_json(self.body).model_dump()
+            case _:
+                raise UnknownObservationFormatError.new(str(context.format)).to_http_exception()
+
+        return LibObservation(self.context.to_lib_context(), body)

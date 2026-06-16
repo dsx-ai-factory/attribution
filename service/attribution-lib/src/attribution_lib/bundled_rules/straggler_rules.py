@@ -1,0 +1,136 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: LicenseRef-NvidiaProprietary
+#
+# NVIDIA CORPORATION, its affiliates and licensors retain all intellectual
+# property and proprietary rights in and to this material, related
+# documentation and any modifications thereto. Any use, reproduction,
+# disclosure or distribution of this material and related documentation
+# without an express license agreement from NVIDIA CORPORATION or
+# its affiliates is strictly prohibited.
+
+"""
+Megatron straggler detection rules.
+
+Megatron rules parse ranks inline and emit completed group events.
+"""
+
+import re
+
+from attribution_lib.bundled_rules.common.megatron import (
+    MEGATRON_STRAGGLER_BOTTOM_RANKS,
+    MEGATRON_STRAGGLER_QUALIFIER_TYPE,
+    MEGATRON_STRAGGLER_SCORE_TYPE,
+    MEGATRON_STRAGGLER_TOP_RANKS,
+    MegatronStragglerGroup,
+    MegatronStragglerItem,
+    MegatronStragglerParams,
+    MegatronStragglerParseState,
+    filter_megatron_stragglers,
+)
+from attribution_lib.bundled_rules.common.straggler_types import StragglerQualifier, StragglerScoreType
+from loguru import logger
+
+from attribution_lib.exceptions import UnknownResourceError
+from attribution_lib.observation.inbound import Source as ObsSource
+from attribution_lib.rules_engine import EventTriple, RuleContext, collector_def, extractor_def
+from attribution_lib.sources import Source, SourceSet
+
+rule_author = "FACT Team"
+rule_sources = {ObsSource.APPLOG}
+
+RANK_SCORE_RE = re.compile(r"(?P<score>\d+\.\d+)/(?P<rank>\d+)/?")
+
+
+def _parse_megatron_ranks(
+    ranks_str: str, source: Source, ctx: RuleContext, rule_name: str
+) -> list[MegatronStragglerItem]:
+    """Parse a Megatron ranks string into MegatronStragglerItem list."""
+    items: list[MegatronStragglerItem] = []
+    if ctx.job_info is None:
+        return items
+
+    rank_pairs = ranks_str.split(",")
+    for pair in rank_pairs:
+        pair = pair.strip()
+        if match := RANK_SCORE_RE.match(pair):
+            score = float(match.group("score"))
+            rank = int(match.group("rank"))
+            try:
+                node = ctx.job_info.verify_rank(rank)
+                items.append(MegatronStragglerItem(rank, node, score, source.derived(rule=rule_name)))
+            except UnknownResourceError:
+                logger.debug(f"Skipping Megatron straggler rank {rank}: unknown resource (score={score})")
+                continue
+    return items
+
+
+@extractor_def(
+    name="MegatronStragglerBottom",
+    match_re=r"Bottom\s+(?P<count>\d+)\s+Ranks\s+with\s+lowest\s+Etpt\(TF\):\s*(?P<ranks>.*)",
+    derived_rules=[
+        MEGATRON_STRAGGLER_BOTTOM_RANKS,
+        MEGATRON_STRAGGLER_SCORE_TYPE,
+        MEGATRON_STRAGGLER_QUALIFIER_TYPE,
+    ],
+    derived_event_types=["Application.MegatronStraggler.bottom"],
+)
+def megatron_bottom(groups: dict[str, str], node: str, source: Source, ctx: RuleContext) -> list[EventTriple]:
+    ranks = _parse_megatron_ranks(groups["ranks"], source, ctx, MEGATRON_STRAGGLER_BOTTOM_RANKS)
+    if not ranks:
+        return []
+
+    score_type_set = SourceSet(StragglerScoreType.INDIVIDUAL)
+    score_type_set.add(source.derived(rule=MEGATRON_STRAGGLER_SCORE_TYPE))
+
+    qual_set = SourceSet(StragglerQualifier.WORST)
+    qual_set.add(source.derived(rule=MEGATRON_STRAGGLER_QUALIFIER_TYPE))
+
+    group = MegatronStragglerGroup(ranks, qual_set, score_type_set)
+    return [
+        EventTriple(
+            type="Application.MegatronStraggler.bottom",
+            payload={"data": group},
+            source=ranks[0].source,
+        )
+    ]
+
+
+@extractor_def(
+    name="MegatronStragglerTop",
+    match_re=r"Top\s+(?P<count>\d+)\s+Ranks\s+with\s+highest\s+Etpt\(TF\):\s*(?P<ranks>.*)",
+    derived_rules=[
+        MEGATRON_STRAGGLER_TOP_RANKS,
+        MEGATRON_STRAGGLER_SCORE_TYPE,
+        MEGATRON_STRAGGLER_QUALIFIER_TYPE,
+    ],
+    derived_event_types=["Application.MegatronStraggler.top"],
+)
+def megatron_top(groups: dict[str, str], node: str, source: Source, ctx: RuleContext) -> list[EventTriple]:
+    ranks = _parse_megatron_ranks(groups["ranks"], source, ctx, MEGATRON_STRAGGLER_TOP_RANKS)
+    if not ranks:
+        return []
+
+    score_type_set = SourceSet(StragglerScoreType.INDIVIDUAL)
+    score_type_set.add(source.derived(rule=MEGATRON_STRAGGLER_SCORE_TYPE))
+
+    qual_set = SourceSet(StragglerQualifier.BEST)
+    qual_set.add(source.derived(rule=MEGATRON_STRAGGLER_QUALIFIER_TYPE))
+
+    group = MegatronStragglerGroup(ranks, qual_set, score_type_set)
+    return [
+        EventTriple(
+            type="Application.MegatronStraggler.top",
+            payload={"data": group},
+            source=ranks[0].source,
+        )
+    ]
+
+
+@collector_def(
+    name="Collect.MegatronStraggler",
+    formatter=lambda raw: {"megatron_straggler": raw},
+    params_model=MegatronStragglerParams,
+)
+def _collect_megatron_straggler(event_stream, _job_info, params):
+    data = MegatronStragglerParseState.collect(event_stream)
+    return filter_megatron_stragglers(data, params)

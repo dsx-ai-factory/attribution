@@ -1,0 +1,22 @@
+{
+  "name": "nvidia-attribution",
+  "version": "main-7c0666c9",
+  "attribution_lib_version": "0.4.1.dev15",
+  "repositories": [
+    {
+      "name": "attribution-service",
+      "ref": "HEAD",
+      "sha": "06b3979acd4504c068696add0dbe95eeefe6ae6e"
+    },
+    {
+      "name": "attribution-lib",
+      "ref": "HEAD",
+      "sha": "c104c7389555279433b0e38ef4b8c486405d1cd4"
+    },
+    {
+      "name": "attribution-blueprint",
+      "ref": "7c0666c9f974561ccef9c737ed3701f0afe8029a",
+      "sha": "7c0666c9f974561ccef9c737ed3701f0afe8029a"
+    }
+  ]
+}
