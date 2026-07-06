@@ -8,4 +8,5 @@
 # without an express license agreement from NVIDIA CORPORATION or
 # its affiliates is strictly prohibited.
 
-__version__ = "0.0.0+06b3979a"
+# Static version stamped when the release bundle is built; the +<sha> suffix identifies the source commit.
+__version__ = "0.0.0+c05b4e3d"

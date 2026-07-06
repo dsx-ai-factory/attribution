@@ -7,8 +7,8 @@ component = "static"
 
 [eca.static]
 id = "workload-0090"
-start_time = "2026-06-13T16:43:00+00:00"
-end_time = "2026-06-15T02:43:00+00:00"
+start_time = "2026-07-02T21:18:00+00:00"
+end_time = "2026-07-04T07:18:00+00:00"
 nodes = [
   "node-0090",
   "node-0090-peer-0001",

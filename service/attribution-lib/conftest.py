@@ -18,7 +18,7 @@ ROOT = Path(__file__).parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from test_support.fixtures import *  # noqa: F401,F403
+from test_support.fixtures import *  # noqa: E402,F401,F403
 
 
 def _iter_co_located_test_paths() -> list[Path]:

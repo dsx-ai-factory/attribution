@@ -684,19 +684,19 @@ def fm_node_failure(context: FilterContext):
 
     typ_id = event_stream.mgr.types.get_id("FM_parser.lost_gpu_connection")
 
-    # Collect per-node distinct GPU GUIDs and keep one representative source
-    node_gpu_data: dict[str, dict] = {}
+    # Keep one representative source per distinct GPU GUID so every lost GPU's line is retained.
+    node_gpu_sources: dict[str, dict[str, Source]] = {}
     for _eid, _evt_type, payload, source in query_events_with_source(event_stream, typ_id):
         node = payload.get("node")
         gpu_guid = payload.get("gpu_guid")
         if not node or not gpu_guid:
             continue
-        if node not in node_gpu_data:
-            node_gpu_data[node] = {"guids": set(), "source": source}
-        node_gpu_data[node]["guids"].add(gpu_guid)
+        node_gpu_sources.setdefault(node, {}).setdefault(gpu_guid, source)
 
     # Identify nodes where all GPUs lost FM connection
-    nodes_to_aggregate = {node for node, data in node_gpu_data.items() if len(data["guids"]) == ranks_per_node}
+    nodes_to_aggregate = {
+        node for node, guid_sources in node_gpu_sources.items() if len(guid_sources) == ranks_per_node
+    }
     if not nodes_to_aggregate:
         return
 
@@ -726,15 +726,15 @@ def fm_node_failure(context: FilterContext):
             [event_stream.ctx_id] + event_ids,
         )
 
-    # Create one aggregated symptom per affected node
+    # Aggregated symptom per affected node, emitted once per GPU so all lines survive as evidence.
     event_adder = event_stream.event_adder()
     for node in nodes_to_aggregate:
-        data = node_gpu_data[node]
-        event_adder(
-            "Attribution.node.bad",
-            {"node": node, "symptom": "Fabric manager lost connection to all GPUs"},
-            data["source"].derived(rule="fm-lost-connection-to-all-gpus"),
-        )
+        for source in node_gpu_sources[node].values():
+            event_adder(
+                "Attribution.node.bad",
+                {"node": node, "symptom": "Fabric manager lost connection to all GPUs"},
+                source.derived(rule="fm-lost-connection-to-all-gpus"),
+            )
 
 
 @filter_def(
@@ -784,7 +784,8 @@ def nccl_late_arrival_nodes(context: FilterContext) -> None:
 
     missing_nodes: defaultdict[str, list[int]] = defaultdict(list)
     for rank in late_ranks:
-        missing_nodes[job_info.get_name_from_rank(rank)].append(rank)
+        if job_info.rank_exists(rank):
+            missing_nodes[job_info.get_name_from_rank(rank)].append(rank)
 
     # Apply a size guard before emitting.
     # The straggler pattern (one slow/dead node blocking a collective) only makes sense when a small fraction of nodes are missing.

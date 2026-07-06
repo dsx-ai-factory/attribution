@@ -18,19 +18,17 @@ import json
 
 from pydantic import BaseModel, ConfigDict
 from typing import Any, ClassVar, Dict, List, Optional
-from fact_client.models.megatron_straggler_parameters import MegatronStragglerParameters
-from fact_client.models.nvrx_straggler_parameters import NVRXStragglerParameters
+from fact_client.models.rule_parameters import RuleParameters
 from typing import Optional, Set
 from typing_extensions import Self
 from pydantic_core import to_jsonable_python
 
 class AttributionParameters(BaseModel):
     """
-    Parameters to guide attribution
+    Parameters to guide attribution.
     """ # noqa: E501
-    nvrx_straggler_parameters: Optional[NVRXStragglerParameters] = None
-    megatron_straggler_parameters: Optional[MegatronStragglerParameters] = None
-    __properties: ClassVar[List[str]] = ["nvrx_straggler_parameters", "megatron_straggler_parameters"]
+    rule_params: Optional[Dict[str, RuleParameters]] = None
+    __properties: ClassVar[List[str]] = ["rule_params"]
 
     model_config = ConfigDict(
         validate_by_name=True,
@@ -71,12 +69,13 @@ class AttributionParameters(BaseModel):
             exclude=excluded_fields,
             exclude_none=True,
         )
-        # override the default output from pydantic by calling `to_dict()` of nvrx_straggler_parameters
-        if self.nvrx_straggler_parameters:
-            _dict['nvrx_straggler_parameters'] = self.nvrx_straggler_parameters.to_dict()
-        # override the default output from pydantic by calling `to_dict()` of megatron_straggler_parameters
-        if self.megatron_straggler_parameters:
-            _dict['megatron_straggler_parameters'] = self.megatron_straggler_parameters.to_dict()
+        # override the default output from pydantic by calling `to_dict()` of each value in rule_params (dict)
+        _field_dict = {}
+        if self.rule_params:
+            for _key_rule_params in self.rule_params:
+                if self.rule_params[_key_rule_params]:
+                    _field_dict[_key_rule_params] = self.rule_params[_key_rule_params].to_dict()
+            _dict['rule_params'] = _field_dict
         return _dict
 
     @classmethod
@@ -89,8 +88,12 @@ class AttributionParameters(BaseModel):
             return cls.model_validate(obj)
 
         _obj = cls.model_validate({
-            "nvrx_straggler_parameters": NVRXStragglerParameters.from_dict(obj["nvrx_straggler_parameters"]) if obj.get("nvrx_straggler_parameters") is not None else None,
-            "megatron_straggler_parameters": MegatronStragglerParameters.from_dict(obj["megatron_straggler_parameters"]) if obj.get("megatron_straggler_parameters") is not None else None
+            "rule_params": dict(
+                (_k, RuleParameters.from_dict(_v))
+                for _k, _v in obj["rule_params"].items()
+            )
+            if obj.get("rule_params") is not None
+            else None
         })
         return _obj
 

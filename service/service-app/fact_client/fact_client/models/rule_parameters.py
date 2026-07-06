@@ -16,20 +16,18 @@ import pprint
 import re  # noqa: F401
 import json
 
-from pydantic import BaseModel, ConfigDict, StrictFloat, StrictInt
-from typing import Any, ClassVar, Dict, List, Optional, Union
-from fact_client.models.straggler_score_type import StragglerScoreType
+from pydantic import BaseModel, ConfigDict
+from typing import Any, ClassVar, Dict, List, Optional
 from typing import Optional, Set
 from typing_extensions import Self
 from pydantic_core import to_jsonable_python
 
-class NVRXStragglerParameters(BaseModel):
+class RuleParameters(BaseModel):
     """
-    Parameters to guide NVRX stragglers
+    Generic envelope for rule parameters.
     """ # noqa: E501
-    straggler_threshold: Optional[Union[StrictFloat, StrictInt]] = 0.7
-    score_types: Optional[List[StragglerScoreType]] = None
-    __properties: ClassVar[List[str]] = ["straggler_threshold", "score_types"]
+    params: Optional[Dict[str, Any]] = None
+    __properties: ClassVar[List[str]] = ["params"]
 
     model_config = ConfigDict(
         validate_by_name=True,
@@ -49,7 +47,7 @@ class NVRXStragglerParameters(BaseModel):
 
     @classmethod
     def from_json(cls, json_str: str) -> Optional[Self]:
-        """Create an instance of NVRXStragglerParameters from a JSON string"""
+        """Create an instance of RuleParameters from a JSON string"""
         return cls.from_dict(json.loads(json_str))
 
     def to_dict(self) -> Dict[str, Any]:
@@ -74,7 +72,7 @@ class NVRXStragglerParameters(BaseModel):
 
     @classmethod
     def from_dict(cls, obj: Optional[Dict[str, Any]]) -> Optional[Self]:
-        """Create an instance of NVRXStragglerParameters from a dict"""
+        """Create an instance of RuleParameters from a dict"""
         if obj is None:
             return None
 
@@ -82,8 +80,7 @@ class NVRXStragglerParameters(BaseModel):
             return cls.model_validate(obj)
 
         _obj = cls.model_validate({
-            "straggler_threshold": obj.get("straggler_threshold") if obj.get("straggler_threshold") is not None else 0.7,
-            "score_types": obj.get("score_types")
+            "params": obj.get("params")
         })
         return _obj
 

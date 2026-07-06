@@ -96,7 +96,7 @@ def prefix_count(numstr: str) -> int:
         return len(numstr)
 
 
-class HostlistError(Exception):
+class HostlistError(ParseError):
     """Base exception class for hostlist parsing errors"""
 
     def __init__(self, message: str, position: int):

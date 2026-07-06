@@ -75,7 +75,7 @@ def attribute(att_id: AttributorId, request: Request, response: Response) -> Att
     """Perform attribution on specified attributor based on all previous observation ingested on this attributor."""
     ctx: AttributionContext = request.app.state.aim.get_attributor(att_id).attribute()
     response.status_code = 200
-    return AttributionResponseV1.from_lib_attribution(ctx.parameters, ctx.observation_ids, ctx.result)
+    return AttributionResponseV1.from_lib_attribution(ctx.observation_ids, ctx.result)
 
 
 @router.delete(

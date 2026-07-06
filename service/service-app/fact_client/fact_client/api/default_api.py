@@ -60,7 +60,7 @@ class DefaultApi:
         _content_type: Optional[StrictStr] = None,
         _headers: Optional[Dict[StrictStr, Any]] = None,
         _host_index: Annotated[StrictInt, Field(ge=0, le=0)] = 0,
-    ) -> AttributionResponseV1:
+    ) -> AttributionResponseV2:
         """Attribute
 
         Perform attribution on specified attributor based on all previous observation ingested on this attributor.
@@ -98,7 +98,7 @@ class DefaultApi:
         )
 
         _response_types_map: Dict[str, Optional[str]] = {
-            '200': "AttributionResponseV1",
+            '200': "AttributionResponseV2",
             '404': "UnknownAttributorIdError",
             '422': "HTTPValidationError",
         }
@@ -129,7 +129,7 @@ class DefaultApi:
         _content_type: Optional[StrictStr] = None,
         _headers: Optional[Dict[StrictStr, Any]] = None,
         _host_index: Annotated[StrictInt, Field(ge=0, le=0)] = 0,
-    ) -> ApiResponse[AttributionResponseV1]:
+    ) -> ApiResponse[AttributionResponseV2]:
         """Attribute
 
         Perform attribution on specified attributor based on all previous observation ingested on this attributor.
@@ -167,7 +167,7 @@ class DefaultApi:
         )
 
         _response_types_map: Dict[str, Optional[str]] = {
-            '200': "AttributionResponseV1",
+            '200': "AttributionResponseV2",
             '404': "UnknownAttributorIdError",
             '422': "HTTPValidationError",
         }
@@ -236,7 +236,7 @@ class DefaultApi:
         )
 
         _response_types_map: Dict[str, Optional[str]] = {
-            '200': "AttributionResponseV1",
+            '200': "AttributionResponseV2",
             '404': "UnknownAttributorIdError",
             '422': "HTTPValidationError",
         }
@@ -2392,7 +2392,7 @@ class DefaultApi:
         _content_type: Optional[StrictStr] = None,
         _headers: Optional[Dict[StrictStr, Any]] = None,
         _host_index: Annotated[StrictInt, Field(ge=0, le=0)] = 0,
-    ) -> ObservationResponseV1:
+    ) -> ObservationResponseV2:
         """Ingest
 
         Pass observation to specified attributor and return an id that identifies it. It is an error to provide a duplicate observation. When the id is returned, the observation has been successfully ingested.
@@ -2433,8 +2433,8 @@ class DefaultApi:
         )
 
         _response_types_map: Dict[str, Optional[str]] = {
-            '200': "ObservationResponseV1",
-            '201': "ObservationResponseV1",
+            '200': "ObservationResponseV2",
+            '201': "ObservationResponseV2",
             '404': "UnknownAttributorIdError",
             '409': "DuplicateObservationError",
             '422': "HTTPValidationError",
@@ -2467,7 +2467,7 @@ class DefaultApi:
         _content_type: Optional[StrictStr] = None,
         _headers: Optional[Dict[StrictStr, Any]] = None,
         _host_index: Annotated[StrictInt, Field(ge=0, le=0)] = 0,
-    ) -> ApiResponse[ObservationResponseV1]:
+    ) -> ApiResponse[ObservationResponseV2]:
         """Ingest
 
         Pass observation to specified attributor and return an id that identifies it. It is an error to provide a duplicate observation. When the id is returned, the observation has been successfully ingested.
@@ -2508,8 +2508,8 @@ class DefaultApi:
         )
 
         _response_types_map: Dict[str, Optional[str]] = {
-            '200': "ObservationResponseV1",
-            '201': "ObservationResponseV1",
+            '200': "ObservationResponseV2",
+            '201': "ObservationResponseV2",
             '404': "UnknownAttributorIdError",
             '409': "DuplicateObservationError",
             '422': "HTTPValidationError",
@@ -2583,8 +2583,8 @@ class DefaultApi:
         )
 
         _response_types_map: Dict[str, Optional[str]] = {
-            '200': "ObservationResponseV1",
-            '201': "ObservationResponseV1",
+            '200': "ObservationResponseV2",
+            '201': "ObservationResponseV2",
             '404': "UnknownAttributorIdError",
             '409': "DuplicateObservationError",
             '422': "HTTPValidationError",
@@ -3523,7 +3523,7 @@ class DefaultApi:
     @validate_call
     def new_attribution_latest_attributor_post(
         self,
-        attributor_info_v1: AttributorInfoV1,
+        attributor_info_v2: AttributorInfoV2,
         _request_timeout: Union[
             None,
             Annotated[StrictFloat, Field(gt=0)],
@@ -3536,13 +3536,13 @@ class DefaultApi:
         _content_type: Optional[StrictStr] = None,
         _headers: Optional[Dict[StrictStr, Any]] = None,
         _host_index: Annotated[StrictInt, Field(ge=0, le=0)] = 0,
-    ) -> NewResponseV1:
+    ) -> NewResponseV2:
         """New Attribution
 
         Create a new attribution attributor based on provided metadata and return an id with which to identify it. Providing identical metadata to an existing attributor is an error.
 
-        :param attributor_info_v1: (required)
-        :type attributor_info_v1: AttributorInfoV1
+        :param attributor_info_v2: (required)
+        :type attributor_info_v2: AttributorInfoV2
         :param _request_timeout: timeout setting for this request. If one
                                  number provided, it will be total request
                                  timeout. It can also be a pair (tuple) of
@@ -3566,7 +3566,7 @@ class DefaultApi:
         """ # noqa: E501
 
         _param = self._new_attribution_latest_attributor_post_serialize(
-            attributor_info_v1=attributor_info_v1,
+            attributor_info_v2=attributor_info_v2,
             _request_auth=_request_auth,
             _content_type=_content_type,
             _headers=_headers,
@@ -3574,8 +3574,8 @@ class DefaultApi:
         )
 
         _response_types_map: Dict[str, Optional[str]] = {
-            '200': "NewResponseV1",
-            '201': "NewResponseV1",
+            '200': "NewResponseV2",
+            '201': "NewResponseV2",
             '409': "DuplicateAttributorError",
             '422': "HTTPValidationError",
         }
@@ -3593,7 +3593,7 @@ class DefaultApi:
     @validate_call
     def new_attribution_latest_attributor_post_with_http_info(
         self,
-        attributor_info_v1: AttributorInfoV1,
+        attributor_info_v2: AttributorInfoV2,
         _request_timeout: Union[
             None,
             Annotated[StrictFloat, Field(gt=0)],
@@ -3606,13 +3606,13 @@ class DefaultApi:
         _content_type: Optional[StrictStr] = None,
         _headers: Optional[Dict[StrictStr, Any]] = None,
         _host_index: Annotated[StrictInt, Field(ge=0, le=0)] = 0,
-    ) -> ApiResponse[NewResponseV1]:
+    ) -> ApiResponse[NewResponseV2]:
         """New Attribution
 
         Create a new attribution attributor based on provided metadata and return an id with which to identify it. Providing identical metadata to an existing attributor is an error.
 
-        :param attributor_info_v1: (required)
-        :type attributor_info_v1: AttributorInfoV1
+        :param attributor_info_v2: (required)
+        :type attributor_info_v2: AttributorInfoV2
         :param _request_timeout: timeout setting for this request. If one
                                  number provided, it will be total request
                                  timeout. It can also be a pair (tuple) of
@@ -3636,7 +3636,7 @@ class DefaultApi:
         """ # noqa: E501
 
         _param = self._new_attribution_latest_attributor_post_serialize(
-            attributor_info_v1=attributor_info_v1,
+            attributor_info_v2=attributor_info_v2,
             _request_auth=_request_auth,
             _content_type=_content_type,
             _headers=_headers,
@@ -3644,8 +3644,8 @@ class DefaultApi:
         )
 
         _response_types_map: Dict[str, Optional[str]] = {
-            '200': "NewResponseV1",
-            '201': "NewResponseV1",
+            '200': "NewResponseV2",
+            '201': "NewResponseV2",
             '409': "DuplicateAttributorError",
             '422': "HTTPValidationError",
         }
@@ -3663,7 +3663,7 @@ class DefaultApi:
     @validate_call
     def new_attribution_latest_attributor_post_without_preload_content(
         self,
-        attributor_info_v1: AttributorInfoV1,
+        attributor_info_v2: AttributorInfoV2,
         _request_timeout: Union[
             None,
             Annotated[StrictFloat, Field(gt=0)],
@@ -3681,8 +3681,8 @@ class DefaultApi:
 
         Create a new attribution attributor based on provided metadata and return an id with which to identify it. Providing identical metadata to an existing attributor is an error.
 
-        :param attributor_info_v1: (required)
-        :type attributor_info_v1: AttributorInfoV1
+        :param attributor_info_v2: (required)
+        :type attributor_info_v2: AttributorInfoV2
         :param _request_timeout: timeout setting for this request. If one
                                  number provided, it will be total request
                                  timeout. It can also be a pair (tuple) of
@@ -3706,7 +3706,7 @@ class DefaultApi:
         """ # noqa: E501
 
         _param = self._new_attribution_latest_attributor_post_serialize(
-            attributor_info_v1=attributor_info_v1,
+            attributor_info_v2=attributor_info_v2,
             _request_auth=_request_auth,
             _content_type=_content_type,
             _headers=_headers,
@@ -3714,8 +3714,8 @@ class DefaultApi:
         )
 
         _response_types_map: Dict[str, Optional[str]] = {
-            '200': "NewResponseV1",
-            '201': "NewResponseV1",
+            '200': "NewResponseV2",
+            '201': "NewResponseV2",
             '409': "DuplicateAttributorError",
             '422': "HTTPValidationError",
         }
@@ -3728,7 +3728,7 @@ class DefaultApi:
 
     def _new_attribution_latest_attributor_post_serialize(
         self,
-        attributor_info_v1,
+        attributor_info_v2,
         _request_auth,
         _content_type,
         _headers,
@@ -3754,8 +3754,8 @@ class DefaultApi:
         # process the header parameters
         # process the form parameters
         # process the body parameter
-        if attributor_info_v1 is not None:
-            _body_params = attributor_info_v1
+        if attributor_info_v2 is not None:
+            _body_params = attributor_info_v2
 
 
         # set the HTTP header `Accept`

@@ -13,7 +13,7 @@
 # its affiliates is strictly prohibited.
 
 
-__version__ = "0.0.0+06b3979a"
+__version__ = "0.0.0+c05b4e3d"
 
 # Define package exports
 __all__ = [
@@ -45,8 +45,6 @@ __all__ = [
     "GlobalAttribution",
     "HTTPValidationError",
     "LocationInner",
-    "MegatronStragglerParameters",
-    "NVRXStragglerParameters",
     "NewResponseV1",
     "NewResponseV2",
     "NodeAttribution",
@@ -57,12 +55,12 @@ __all__ = [
     "ObservationResponseV2",
     "RecommendationEnum",
     "ResourcelessSource",
+    "RuleParameters",
     "SingleAttribution",
     "Source",
     "SourcedSymptom",
     "StorageAttribution",
     "StragglerAttribution",
-    "StragglerScoreType",
     "SwitchAttribution",
     "SymptomsValueInner",
     "TimeInterval",
@@ -106,8 +104,6 @@ from fact_client.models.format import Format as Format
 from fact_client.models.global_attribution import GlobalAttribution as GlobalAttribution
 from fact_client.models.http_validation_error import HTTPValidationError as HTTPValidationError
 from fact_client.models.location_inner import LocationInner as LocationInner
-from fact_client.models.megatron_straggler_parameters import MegatronStragglerParameters as MegatronStragglerParameters
-from fact_client.models.nvrx_straggler_parameters import NVRXStragglerParameters as NVRXStragglerParameters
 from fact_client.models.new_response_v1 import NewResponseV1 as NewResponseV1
 from fact_client.models.new_response_v2 import NewResponseV2 as NewResponseV2
 from fact_client.models.node_attribution import NodeAttribution as NodeAttribution
@@ -118,12 +114,12 @@ from fact_client.models.observation_response_v1 import ObservationResponseV1 as 
 from fact_client.models.observation_response_v2 import ObservationResponseV2 as ObservationResponseV2
 from fact_client.models.recommendation_enum import RecommendationEnum as RecommendationEnum
 from fact_client.models.resourceless_source import ResourcelessSource as ResourcelessSource
+from fact_client.models.rule_parameters import RuleParameters as RuleParameters
 from fact_client.models.single_attribution import SingleAttribution as SingleAttribution
 from fact_client.models.source import Source as Source
 from fact_client.models.sourced_symptom import SourcedSymptom as SourcedSymptom
 from fact_client.models.storage_attribution import StorageAttribution as StorageAttribution
 from fact_client.models.straggler_attribution import StragglerAttribution as StragglerAttribution
-from fact_client.models.straggler_score_type import StragglerScoreType as StragglerScoreType
 from fact_client.models.switch_attribution import SwitchAttribution as SwitchAttribution
 from fact_client.models.symptoms_value_inner import SymptomsValueInner as SymptomsValueInner
 from fact_client.models.time_interval import TimeInterval as TimeInterval

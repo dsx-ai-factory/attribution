@@ -65,9 +65,10 @@ _DCA_CHECK_NAME_RULES: dict[str, tuple[str, bool]] = {
     "sw_sys_logs_network_conn_error": ("Lustre network connectivity error", True),
 }
 
-# Shared derived rule name for all keyword-based epilog extractors below.
-# These are loop-generated rules so declare_rule_names is the cleanest way.
-declare_rule_names("Epilog keyword")
+# Each keyword-based epilog extractor credits its own finding (symptom) as the
+# rule name. The registration set at the bottom of this section is DERIVED from
+# the tables below (and the XID catalog), so adding a rule auto-registers its
+# credited name — no hand-maintained list to drift out of sync.
 declare_event_types("Attribution.node.bad")
 
 
@@ -75,10 +76,11 @@ def _ecc_error(groups: Dict[str, str], node: str, source: Source, ctx: RuleConte
     """ECC Error rules must check that the error is uncorrected."""
     if "uncorrected=" not in source.datum and "uncorrected_total=" not in source.datum:
         return []
-    return [_bad(node, "ECC Error", source.derived(rule="Epilog keyword"))]
+    return [_bad(node, "ECC Error", source.derived(rule="ECC Error"))]
 
 
-# ECC Error rules
+# ECC Error rules — special processor (only fires on uncorrected errors), so they
+# stay outside the plain keyword→symptom table. Their finding is "ECC Error".
 for _keyword in [
     "gpu_ecc_error: gpu",
     "gpu-ecc-errors GPU",
@@ -90,36 +92,21 @@ for _keyword in [
         processor=_ecc_error,
     )
 
-# Row Remap rules
-for _keyword in [
-    "gpu_remapped_rows: pci",
-    "hw_drv_gpu_ecc_remapped_rows: pci",
-    "gpu_remapped_rows: gpu",
-    "gpu-remapped-rows Remap",
-    "Some remapped rows exist",
-]:
-    extractor_def(
-        name=f"Epilog_{re.sub(r'[^a-zA-Z0-9]', '_', _keyword)}",
-        match_re=re.escape(_keyword),
-        processor=lambda groups, node, source, ctx: [_bad(node, "Row Remap", source.derived(rule="Epilog keyword"))],
-    )
-
-# Page Retirement rules
-for _keyword in [
-    "gpu_retired_pages: pci",
-    "gpu_retired_pages: gpu",
-    "[FAILED] Retired pages found",
-]:
-    extractor_def(
-        name=f"Epilog_{re.sub(r'[^a-zA-Z0-9]', '_', _keyword)}",
-        match_re=re.escape(_keyword),
-        processor=lambda groups, node, source, ctx: [
-            _bad(node, "Page Retirement", source.derived(rule="Epilog keyword"))
-        ],
-    )
-
-# Rules with aliased symptoms
-for _keyword, _symptom in [
+# Plain keyword→symptom epilog extractors: (match keyword, credited symptom).
+# Each emits _bad(node, symptom) crediting the symptom as its own rule name.
+# The findings set below is derived from this table.
+_EPILOG_KEYWORD_RULES: list[tuple[str, str]] = [
+    # Row Remap
+    ("gpu_remapped_rows: pci", "Row Remap"),
+    ("hw_drv_gpu_ecc_remapped_rows: pci", "Row Remap"),
+    ("gpu_remapped_rows: gpu", "Row Remap"),
+    ("gpu-remapped-rows Remap", "Row Remap"),
+    ("Some remapped rows exist", "Row Remap"),
+    # Page Retirement
+    ("gpu_retired_pages: pci", "Page Retirement"),
+    ("gpu_retired_pages: gpu", "Page Retirement"),
+    ("[FAILED] Retired pages found", "Page Retirement"),
+    # Aliased symptoms (keyword differs from credited symptom)
     ("Unable to query nvidia-smi", "error running nvidia-smi"),
     ("Some Infiniband devices down", "Mellanox links are down"),
     ("Missing some Infiniband devices", "Mellanox links are down"),
@@ -127,26 +114,19 @@ for _keyword, _symptom in [
     ("Route Unhealthy: True", "Route Unhealthy"),
     ("gpu_idle: gpu", "gpu_idle"),
     ("Mellanox links are down", "Mellanox links are down"),
-]:
+    # Empty alias — the keyword is itself the symptom
+    ("error running nvidia-smi", "error running nvidia-smi"),
+    ("ERR! found in nvidia-smi", "ERR! found in nvidia-smi"),
+    ("Not responding", "Not responding"),
+    ("Node unexpectedly rebooted", "Node unexpectedly rebooted"),
+    ("ec2 instance retirement", "ec2 instance retirement"),
+    ("CMDaemon: not ready for scheduling", "CMDaemon: not ready for scheduling"),
+]
+for _keyword, _symptom in _EPILOG_KEYWORD_RULES:
     extractor_def(
         name=f"Epilog_{re.sub(r'[^a-zA-Z0-9]', '_', _keyword)}",
         match_re=re.escape(_keyword),
-        processor=lambda groups, node, source, ctx, s=_symptom: [_bad(node, s, source.derived(rule="Epilog keyword"))],
-    )
-
-# Rules with empty alias — keyword becomes the symptom
-for _keyword in [
-    "error running nvidia-smi",
-    "ERR! found in nvidia-smi",
-    "Not responding",
-    "Node unexpectedly rebooted",
-    "ec2 instance retirement",
-    "CMDaemon: not ready for scheduling",
-]:
-    extractor_def(
-        name=f"Epilog_{re.sub(r'[^a-zA-Z0-9]', '_', _keyword)}",
-        match_re=re.escape(_keyword),
-        processor=lambda groups, node, source, ctx, s=_keyword: [_bad(node, s, source.derived(rule="Epilog keyword"))],
+        processor=lambda groups, node, source, ctx, s=_symptom: [_bad(node, s, source.derived(rule=s))],
     )
 
 # Register dynamic epilog rules for XID catalog entries, e.g.
@@ -159,8 +139,14 @@ for id, item in get_catalog().items():
     extractor_def(
         name=f"Epilog_XID_{xid_type}_{id}",
         match_re=re.escape(keyword),
-        processor=lambda groups, node, source, ctx, s=nice_name: [_bad(node, s, source.derived(rule="Epilog keyword"))],
+        processor=lambda groups, node, source, ctx, s=nice_name: [_bad(node, s, source.derived(rule=s))],
     )
+
+# Register every credited finding, derived from the tables/catalog above so it
+# cannot drift. "ECC Error" comes from _ecc_error (special-cased, not in the table).
+_EPILOG_FINDINGS = {symptom for _, symptom in _EPILOG_KEYWORD_RULES} | {"ECC Error"}
+_EPILOG_XID_FINDINGS = {item["nice_name"] for item in get_catalog().values()}
+declare_rule_names(*sorted(_EPILOG_FINDINGS | _EPILOG_XID_FINDINGS))
 
 
 @extractor_def(

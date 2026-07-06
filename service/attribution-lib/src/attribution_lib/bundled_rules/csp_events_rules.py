@@ -20,7 +20,7 @@ from typing import Dict, List
 
 from attribution_lib.observation.inbound import Source as ObsSource
 from attribution_lib.rule_helpers import _bad, _interesting
-from attribution_lib.rules.csp_events_to_symptom import INTERESTING_CATEGORIES, get_symptom as csp_get_symptom
+from attribution_lib.bundled_rules.csp_events_to_symptom import INTERESTING_CATEGORIES, get_symptom as csp_get_symptom
 from attribution_lib.rules_engine import EventTriple, RuleContext, declare_event_types, extractor_def
 from attribution_lib.sources import Source
 

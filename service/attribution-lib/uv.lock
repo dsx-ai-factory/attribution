@@ -23,7 +23,7 @@ wheels = [
 
 [[package]]
 name = "attribution-lib"
-version = "0.4.1.dev15"
+version = "0.4.1.dev39"
 source = { editable = "." }
 dependencies = [
     { name = "duckdb" },

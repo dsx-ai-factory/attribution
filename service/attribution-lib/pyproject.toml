@@ -10,7 +10,7 @@
 
 [project]
 name = "attribution-lib"
-version = "0.4.1.dev15"
+version = "0.4.1.dev39"
 description = "FACT Attribution Library"
 license = "LicenseRef-NvidiaProprietary"
 license-files = ["LICENSE"]
@@ -122,7 +122,6 @@ module = [
     "attribution_lib.ufmlog_common",
     "attribution_lib.observation.*",
     "attribution_lib.resources.*",
-    "attribution_lib.rules.*",
     "attribution_lib.symptoms.*",
     "attribution_lib.stragglers.*",
     "attribution_lib.logline_filtering.*",

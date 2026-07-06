@@ -123,10 +123,8 @@ rule_sources = {ObsSource.APPLOG}
 # Shared derived rule names for loop-generated rules where co-location isn't practical.
 declare_rule_names(
     "alias else",
-    "cudaError",
     "DataLoader Exception",
     "the process completes",
-    "io-error",
 )
 
 # Event types emitted by helpers (_bad, _bad_peers) and shared across multiple extractors.
@@ -168,6 +166,25 @@ def _keyword_to_rule_name(keyword: str) -> str:
     cleaned = re.sub(r"[^a-zA-Z0-9\s_]", "", keyword)
     words = re.split(r"[\s_]+", cleaned)
     return "".join(word.capitalize() for word in words if word)
+
+
+def _format_ib_error_message(error_code: int, vendor_err: int) -> str:
+    """Format an IB work-completion error as a FACT symptom.
+
+    Args:
+        error_code: Numeric ibv_wc_status value.
+        vendor_err: Numeric vendor error from the completion.
+
+    Returns:
+        A normalized IB Error symptom string.
+    """
+    error_code_name = get_status_name(error_code)
+    msg = f"IB Error-{error_code}"
+    if vendor_err != 0:
+        msg += f" Vendor-{vendor_err}"
+    if error_code_name is not None:
+        msg += f" ({error_code_name})"
+    return msg
 
 
 def _path_is_user_owned(path: str) -> bool:
@@ -292,13 +309,7 @@ def got_completion_from_peer_new_event(
         _logger.warning(f"Failed to get hostname for {groups['peer_ip']}: {e}")
         peer_node = groups["peer_ip"]
 
-    error_code, vendor_err = int(groups["error_code"]), int(groups["vendor_err"])
-    error_code_name = get_status_name(error_code)
-    msg = f"IB Error-{error_code}"
-    if vendor_err:
-        msg += f" Vendor-{vendor_err}"
-    if error_code_name:
-        msg += f" ({error_code_name})"
+    msg = _format_ib_error_message(int(groups["error_code"]), int(groups["vendor_err"]))
 
     events = [
         _bad_peers(
@@ -354,13 +365,7 @@ def got_completion_from_peer_old_event(
         _logger.warning(f"Failed to get hostname for {groups['peer_ip']}: {e}")
         peer_node = groups["peer_ip"]
 
-    error_code, vendor_err = int(groups["error_code"]), int(groups["vendor_err"])
-    error_code_name = get_status_name(error_code)
-    msg = f"IB Error-{error_code}"
-    if vendor_err:
-        msg += f" Vendor-{vendor_err}"
-    if error_code_name:
-        msg += f" ({error_code_name})"
+    msg = _format_ib_error_message(int(groups["error_code"]), int(groups["vendor_err"]))
 
     events = [
         _bad_peers(
@@ -380,6 +385,115 @@ def got_completion_from_peer_old_event(
             source=source.derived(rule="Got completion from peer"),
         )
     )
+    return events
+
+
+@extractor_def(
+    name="Got completion with error",
+    match_re=r"Got completion with error (?P<error_code>\d+), opcode \d+, len \d+, vendor err (?P<vendor_err>\d+)",
+)
+def got_completion_with_error_event(
+    groups: Dict[str, str], node: str, source: Source, ctx: RuleContext
+) -> List[EventTriple]:
+    """Create a node-level IB symptom for old NCCL completion warnings.
+
+    Args:
+        groups: Regex capture groups for error and vendor status.
+        node: Local node where the line was observed.
+        source: Source metadata for the matched log line.
+        ctx: Rule context for the current attribution run.
+
+    Returns:
+        A bad-node event with the normalized IB completion symptom.
+    """
+    return [
+        _bad(
+            node,
+            _format_ib_error_message(int(groups["error_code"]), int(groups["vendor_err"])),
+            source,
+            demotion="Got completion with error",
+        )
+    ]
+
+
+@extractor_def(
+    name="Irrecoverable NET/IB communicator error",
+    match_re=(
+        r"(?:\[[^\]]+\]\s+(?P<log_node>[^:\s]+):\d+:\d+\s+\[\d+\]\s+)?"
+        r".*?"
+        r"Irrecoverable (?P<direction>send|receive) communicator error on device (?P<device>\d+)\. "
+        r"Reason: (?P<reason>.*?)\. Peer: (?P<peer_ip>[^<,\s]+)<\d+>,.*"
+        r"status[= ]\s*(?:[A-Z0-9_]+\()?(?P<error_code>\d+)\)?.*"
+        r"vendor[ _]err[ =](?P<vendor_err>\d+).*"
+        r"localGid[: ](?P<local_gid>[0-9a-fA-F:.]+) remoteGid[: ](?P<remote_gid>[0-9a-fA-F:.]+),.*"
+        r"hca[= ](?P<hca>\S+)"
+    ),
+    derived_rules=["Irrecoverable NET/IB communicator error"],
+)
+def irrecoverable_net_ib_communicator_error_event(
+    groups: Dict[str, str], node: str, source: Source, ctx: RuleContext
+) -> List[EventTriple]:
+    """Create peer and bad-pair symptoms for irrecoverable NET/IB warnings.
+
+    Args:
+        groups: Regex capture groups for peer, GID, HCA, and completion status fields.
+        node: Parser-supplied local node fallback.
+        source: Source metadata for the matched log line.
+        ctx: Rule context for the current attribution run.
+
+    Returns:
+        A bad-peer event plus a complete or partial bad-pair event.
+    """
+    local_node = groups.get("log_node")
+    if local_node is None or local_node == "":
+        local_node = node
+
+    try:
+        peer_node = get_hostname(groups["peer_ip"])
+    except (socket.gaierror, socket.herror, socket.timeout, OSError) as e:
+        _logger.warning(f"Failed to get hostname for {groups['peer_ip']}: {e}")
+        peer_node = groups["peer_ip"]
+    msg = _format_ib_error_message(int(groups["error_code"]), int(groups["vendor_err"]))
+    rule_name = "Irrecoverable NET/IB communicator error"
+
+    events = [
+        _bad_peers(
+            local_node,
+            peer_node,
+            msg,
+            source,
+            demotion=rule_name,
+            rule_name=rule_name,
+        )
+    ]
+
+    local_dev_ip = groups["local_gid"][7:] if groups["local_gid"].startswith("::ffff:") else None
+    remote_dev_ip = groups["remote_gid"][7:] if groups["remote_gid"].startswith("::ffff:") else None
+    if local_dev_ip is not None and remote_dev_ip is not None:
+        events.append(
+            EventTriple(
+                type="Application.bad_pair.complete",
+                payload={
+                    "local_node": local_node,
+                    "remote_node": peer_node,
+                    "local_dev_ip": local_dev_ip,
+                    "local_device": groups["hca"],
+                    "remote_dev_ip": remote_dev_ip,
+                },
+                source=source.derived(rule=rule_name),
+            )
+        )
+    else:
+        events.append(
+            EventTriple(
+                type="Application.bad_pair.partial",
+                payload={
+                    "local_node": local_node,
+                    "remote_node": peer_node,
+                },
+                source=source.derived(rule=rule_name),
+            )
+        )
     return events
 
 
@@ -498,8 +612,8 @@ def nccl_warn_cuda_failure_event(
     if nice_name:
         # Determine rule name and demotion based on nice_name pattern
         if nice_name.startswith("cuda"):
-            rule_name = "cudaError"
-            demotion = "cudaError"
+            rule_name = nice_name
+            demotion = nice_name
         else:
             rule_name = "alias else"
             demotion = "alias else"
@@ -545,8 +659,8 @@ def _pytorch_watchdog_event(groups: Dict[str, str], node: str, source: Source, c
     if nice_name:
         # Determine rule name and demotion based on nice_name pattern
         if nice_name.startswith("cuda"):
-            rule_name = "cudaError"
-            demotion = "cudaError"
+            rule_name = nice_name
+            demotion = nice_name
         else:
             rule_name = "alias else"
             demotion = "alias else"
@@ -887,15 +1001,14 @@ def _cuda_error_processor(symptom: str):
     def processor(groups: Dict[str, str], node: str, source: Source, ctx: RuleContext) -> List[EventTriple]:
         # Determine rule name and demotion based on symptom name pattern
         if symptom.startswith("cuda"):
-            rule_name = "cudaError"
-            demotion = "cudaError"
+            rule_name = symptom
+            demotion = symptom
         else:
             rule_name = "alias else"
             demotion = "alias else"
 
         payload = {"node": node, "symptom": symptom}
         payload[DemotionTypes.AFTER_MFU_DEMOTION] = demotion
-        # Override rule name for backward compatibility
         return [
             EventTriple(
                 type="Attribution.node.bad",
@@ -927,6 +1040,10 @@ for error_desc, error_info in _CUDA_ERRORS.items():
             processor=_cuda_error_processor(nice_name),
         )
 
+# cudaError-branch findings now credit their own nice_name; register so source.rule resolves.
+_CUDA_NICE_NAMES = {info["nice_name"] for info in _CUDA_ERRORS.values()}
+declare_rule_names(*sorted({n for n in _CUDA_NICE_NAMES if n.startswith("cuda")}))
+
 
 # Generic keyword rule for "No such file or directory"
 @extractor_def(name="No such file or directory", match_re=r"No such file or directory")
@@ -951,8 +1068,14 @@ def gloo_connectfullmesh_failed(
 # Generic keyword rules from applog_to_symptom.py
 # =============================================================================
 
-# Additional generic keyword rules
-for keyword, symptom, rule_name in [
+# Additional generic keyword rules.
+# These tags only *classify* which rows credit their own symptom (the finding)
+# instead of a shared placeholder bucket — they are no longer credited as rule
+# names themselves. "alias else" / "the process completes" rows are deferred
+# (scrub-coupled) and keep crediting their bucket name.
+_RETIRE_NOW_BUCKETS = {"cudaError", "io-error"}
+
+_GENERIC_KEYWORD_RULES = [
     ("Unexpected error from cudaGetDeviceCount()", None, "cudaError"),
     ("local catastrophic error", None, "cudaError"),
     ("ibv_open_device failed", None, "cudaError"),
@@ -967,6 +1090,7 @@ for keyword, symptom, rule_name in [
     ("ncclInvalidArgument", None, "alias else"),
     ("ncclInvalidUsage", None, "alias else"),
     ("ncclRemoteError", None, "alias else"),
+    ("ncclTimeout", None, "alias else"),
     ("Unconvertible NCCL type", None, "alias else"),
     ("BrokenPipeError", None, "alias else"),
     ("megatron.core.dist_checkpointing.core.CheckpointingException", None, "alias else"),
@@ -1054,15 +1178,26 @@ for keyword, symptom, rule_name in [
     ("oom_kill events in StepId", "System-out of memory", "alias else"),
     ("sigkill_handler] Killing subprocess", None, "alias else"),
     ("Call to ibv_set_ece failed", None, "cudaError"),
-]:
+]
+
+for keyword, symptom, rule_name in _GENERIC_KEYWORD_RULES:
     final_symptom = symptom if symptom else keyword
+    # Retired buckets credit/demote the finding (symptom); other rows keep their name.
+    credited = final_symptom if rule_name in _RETIRE_NOW_BUCKETS else rule_name
     extractor_def(
         name=_keyword_to_rule_name(keyword),
         match_re=re.escape(keyword),
-        processor=lambda groups, node, source, ctx, s=final_symptom, r=rule_name: [
-            _bad(node, s, source.derived(rule=r) if r else source, demotion=r)
+        processor=lambda groups, node, source, ctx, s=final_symptom, c=credited: [
+            _bad(node, s, source.derived(rule=c) if c else source, demotion=c)
         ],
     )
+
+_KEYWORD_RETIRED_FINDINGS = {
+    (symptom if symptom else keyword)
+    for keyword, symptom, rule_name in _GENERIC_KEYWORD_RULES
+    if rule_name in _RETIRE_NOW_BUCKETS
+}
+declare_rule_names(*sorted(_KEYWORD_RETIRED_FINDINGS))
 
 
 @extractor_def(

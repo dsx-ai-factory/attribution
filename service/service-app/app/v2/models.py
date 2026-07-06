@@ -11,7 +11,7 @@
 from collections import defaultdict
 from collections.abc import Mapping
 from datetime import datetime
-from typing import Annotated, Literal, Optional
+from typing import Annotated, Any, Literal, Optional
 
 from attribution_lib.attr_types import JobNodeAttributions
 from attribution_lib.core import AttributionResult
@@ -20,6 +20,7 @@ from attribution_lib.sources import (
     Source as LibSource,
     SourceSet,
 )
+from fastapi.encoders import jsonable_encoder
 from pydantic import AwareDatetime, BaseModel, Field
 
 from app.attribution import AttributionSource, Symptom
@@ -63,6 +64,7 @@ class AttributorInfoV2(HashableModel):
     parameters: AttributionParameters = Field(default_factory=AttributionParameters)
 
     def to_lib_jobinfo(self) -> JobInfo:
+        """Translate the V2 wire payload into a lib ``JobInfo`` for attribution."""
         w = self.workload
         builder = JobInfoBuilder(
             id=w.id,
@@ -73,7 +75,8 @@ class AttributorInfoV2(HashableModel):
             job_start_time=w.job_start_time,
             source_name="attributor service translation",
             timezone=to_zoneinfo(w.job_start_time),
-        ).node_to_ranks(w.nodes)
+            node_to_ranks=w.nodes,
+        )
         if w.interest_start_time:
             builder.interest_start_time(w.interest_start_time)
         if w.interest_end_time:
@@ -179,12 +182,18 @@ def _sites_for_symptom(
     return sites
 
 
+_LIB_TYPES_ENCODER: dict[type, Any] = {
+    LibSource: lambda v: AttributionSource.from_lib(v).model_dump(mode="json"),
+}
+
+
 class AttributionResponseV2(ResponseModel):
     """V2 response to GET /v2/attributor/{att_id}/attribution."""
 
     verdict: Verdict
     symptoms: dict[Symptom, list[SymptomSite]]
     observation_context: list[ObservationId]
+    collectors: dict[str, Any] = Field(default_factory=dict)
 
     @classmethod
     def from_lib_attribution(
@@ -197,6 +206,7 @@ class AttributionResponseV2(ResponseModel):
             verdict=cls._build_verdict(result),
             symptoms=cls._build_symptoms(result),
             observation_context=sorted(ingested_observations),
+            collectors=jsonable_encoder(result.collectors, custom_encoder=_LIB_TYPES_ENCODER),
         )
 
     @staticmethod

@@ -4,7 +4,7 @@ NVIDIA Attribution is two components plus a set of connector frameworks the Blue
 
 | Component | Role | Language | External integration surface |
 |---|---|---|---|
-| Attribution Service (fact-attribution-service) | HTTP REST service. Owns the rules engine. Receives observations, returns one verdict per attributor handle. | Python 3.12.3+, FastAPI / Uvicorn | HTTP API at /v2/... |
+| Attribution Service (fact-attribution-service) | HTTP REST service. Owns the rules engine. Receives observations, returns one verdict per attributor handle. | Python 3.13, FastAPI / Uvicorn | HTTP API at /v2/... |
 | Attribution Blueprint (attribution-blueprint) | Single-process reference orchestrator. Discovers workloads, collects observations, calls the Service, writes verdicts. | Python 3.11+ | CLI entry: nvidia-attribution-blueprint. Read-side dashboard: nvidia-attribution-blueprint-web. |
 
 The Service does not query schedulers, read logs, or scrape metrics. The Blueprint does. The Service receives normalized observations over HTTP and returns a verdict. That separation is what lets operators run the Service centrally and the Blueprint at the edge of each cluster.
@@ -77,6 +77,6 @@ sidecar.
 ## Output backends (V1)
 
 * **stdout.** Prints the enriched result as JSON. Used for one-shot CLI runs and for piping into other tools.
-* **sqlite.** Persists the result into a local SQLite database. The schema lives in `docs/output_schema.md` and carries three tables (`schema_version`, `execution_context`, `attribution_run`). The read-side `nvidia-attribution-blueprint-web` dashboard queries this database.
+* **sqlite.** Persists the result into a local SQLite database. The schema lives in `blueprint/docs/output_schema.md` and carries three tables (`schema_version`, `execution_context`, `attribution_run`). The read-side `nvidia-attribution-blueprint-web` dashboard queries this database.
 
 Multiple sinks can be configured per run. Per-sink failures are isolated. The architecture supports additional sinks (Elasticsearch, Kafka, downstream HTTP) via the same `OutputConnector` Protocol. None ship at V1.

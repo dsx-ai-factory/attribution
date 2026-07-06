@@ -42,6 +42,11 @@ HOST_FAILURE_REASON_TO_SYMPTOM: dict[str, str] = {
     "BAD_MEMORY": "CSP Event Memory Fault",
     "BAD_SSD": "CSP Event Storage Device Fault",
     "BAD_IPU": "CSP Event IPU Fault",
+    # Tenant (NVIDIA SRE automation) reported the host faulty via the provider API -- an internal operation,
+    # not a CSP-detected hardware diagnosis. Distinct from BAD_HARDWARE (the provider's own hostError detection).
+    "TENANT_REPORTED": "CSP Event Tenant Reported As Faulty",
+    # The provider evicted the VM for host maintenance (terminateOnHostMaintenance) -- CSP-initiated termination.
+    "CSP_TERMINATED": "CSP Event Terminated by CSP",
 }
 
 HEALTH_EVENT_GENERIC_SYMPTOM = "CSP Event Unrecognized Health Event"

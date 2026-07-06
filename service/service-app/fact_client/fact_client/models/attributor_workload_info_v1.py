@@ -26,7 +26,7 @@ from pydantic_core import to_jsonable_python
 
 class AttributorWorkloadInfoV1(BaseModel):
     """
-    V1 wire shape: legacy positional node list + ranks-per-node fan-out, or explicit node-to-ranks mapping. Mutually exclusive at the lib layer.
+    V1 wire shape: legacy positional node list + ranks-per-node fan-out, or an explicit node-to-ranks mapping. If both are sent, the explicit mapping wins (see to_lib_jobinfo).
     """ # noqa: E501
     id: StrictStr
     type: WorkloadTypeEnum

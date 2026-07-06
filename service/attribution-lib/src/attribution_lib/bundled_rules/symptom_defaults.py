@@ -28,6 +28,13 @@ outcome_symptom(
 )
 
 outcome_symptom(
+    "NVRx synthetic fault injection",
+    outcome="Artificial",
+    priority=OutcomePriority.CRITICAL,
+    doc="nvrx-synthetic-fault-injection",
+)
+
+outcome_symptom(
     "XID-149",
     outcome="Fail InfraHW",
     priority=OutcomePriority.CRITICAL,
@@ -139,6 +146,27 @@ outcome_symptom(
     outcome="Fail InfraHW",
     priority=OutcomePriority.CSP,
     doc="csp-event-urgent-repair",
+    hw_cause="Known HW Cause - Node",
+    cascade_discards=("Node failure reported by slurm", "Not responding"),
+)
+
+# Tenant (NVIDIA SRE automation) reported the host faulty via the provider's report-host-as-faulty API. An
+# internal operation rather than a provider-detected defect, but the node is still pulled -> Fail InfraHW.
+outcome_symptom(
+    "CSP Event Tenant Reported As Faulty",
+    outcome="Fail InfraHW",
+    priority=OutcomePriority.CSP,
+    doc="csp-event-tenant-reported-as-faulty",
+    hw_cause="Known HW Cause - Node",
+    cascade_discards=("Node failure reported by slurm", "Not responding"),
+)
+
+# The provider terminated the VM for host maintenance (terminateOnHostMaintenance) -- CSP-initiated eviction.
+outcome_symptom(
+    "CSP Event Terminated by CSP",
+    outcome="Fail InfraHW",
+    priority=OutcomePriority.CSP,
+    doc="csp-event-terminated-by-csp",
     hw_cause="Known HW Cause - Node",
     cascade_discards=("Node failure reported by slurm", "Not responding"),
 )
@@ -472,6 +500,20 @@ outcome_symptom(
 )
 
 outcome_symptom(
+    "Node stopped by controller",
+    outcome="Fail InfraSW",
+    priority=OutcomePriority.MEDIUM_SW,
+    doc="node-stopped-by-controller",
+    cascade_discards=(
+        "Node failure reported by slurm",
+        "Not responding",
+        "Node unexpectedly rebooted",
+        "node offline",
+        "System is powering down",
+    ),
+)
+
+outcome_symptom(
     "PCIe bus degraded",
     outcome="Fail Undetermined",
     priority=OutcomePriority.HIGH_HW,
@@ -641,7 +683,8 @@ outcome_symptom(
     outcome="Fail InfraSW",
     priority=OutcomePriority.MEDIUM_SW,
     doc="kernel-invalid-memory-access",
-    cascade_discards=("Node failure reported by slurm", "Not responding"),
+    # Same crash also prints the generic "Internal error: Oops"; keep this specific symptom.
+    cascade_discards=("Node failure reported by slurm", "Not responding", "kernel oops"),
 )
 
 outcome_symptom(
@@ -1219,6 +1262,13 @@ outcome_symptom(
     outcome="Fail MultiCategory",
     priority=OutcomePriority.LOW_GENERIC,
     doc="ncclremoteerror",
+)
+
+outcome_symptom(
+    "ncclTimeout",
+    outcome="Fail MultiCategory",
+    priority=OutcomePriority.LOW_GENERIC,
+    doc="nccltimeout",
 )
 
 outcome_symptom(
@@ -1959,6 +2009,7 @@ cascade_symptom(
     "Mellanox links are down",
     cascade_discards=(
         "ncclRemoteError",
+        "ncclTimeout",
         "ncclInternalError",
         "Connection reset by peer",
         "Connection closed",
@@ -2054,7 +2105,13 @@ known_symptom("EFA Error-connection-reset")
 
 known_symptom("Fabric manager lost connection to GPU")
 
-known_symptom("Fabric manager lost connection to all GPUs")
+outcome_symptom(
+    "Fabric manager lost connection to all GPUs",
+    outcome="Fail InfraHW",
+    priority=OutcomePriority.HIGH_HW,
+    doc="fabric-manager-lost-connection-to-all-gpus",
+    hw_cause="Known HW Cause - Node",
+)
 
 known_symptom("IB Error-12 (IBV_WC_RETRY_EXC_ERR)")
 
@@ -2067,6 +2124,8 @@ known_symptom("IB firmware outdated")
 known_symptom("NV_ERR_INVALID_STATE")
 
 known_symptom("NV_ERR_INVALID_STATE nv_gpu_ops.c")
+
+known_symptom("NVRx step section timeout")
 
 known_symptom("OOM kill (other)")
 
