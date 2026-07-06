@@ -16,7 +16,6 @@ from typing import Protocol, TypeAlias
 
 import attribution_lib
 from attribution_lib.attributor import Attributor
-from attribution_lib.bundled_rules.common.straggler_types import StragglerScoreType
 from attribution_lib.checkpoint_backends import MemoryCheckpointBackend
 from attribution_lib.core import AttributionResult
 from attribution_lib.events import EventManager
@@ -25,8 +24,9 @@ from attribution_lib.exceptions import (
     MismatchedSourceAndFormatError as LibMismatchedSourceAndFormatError,
 )
 from attribution_lib.job_info import JobInfo
+from attribution_lib.rules_engine import RuleEngine, RuleId, RuleParameters
 from loguru import logger
-from pydantic import Field
+from pydantic import ConfigDict, Field, field_validator
 
 from app.exceptions import (
     DuplicateObservationError,
@@ -64,26 +64,30 @@ class AttributorMetadata(HashableModel):
     ruleset: str
 
 
-class NVRXStragglerParameters(HashableModel):
-    """Parameters to guide NVRX stragglers"""
-
-    straggler_threshold: float = 0.7
-    score_types: list[StragglerScoreType] = [StragglerScoreType.RELATIVE]
-
-
-class MegatronStragglerParameters(HashableModel):
-    """Parameters to guide Megatron stragglers"""
-
-    straggler_threshold: float = 0.95  # Relative threshold (0.0-1.0) - 95%
-    score_types: list[StragglerScoreType] = [StragglerScoreType.INDIVIDUAL]
-    infer_threshold_from_data: bool = True  # Auto-calculate threshold from top ranks
-
-
 class AttributionParameters(HashableModel):
-    """Parameters to guide attribution"""
+    """Parameters to guide attribution."""
 
-    nvrx_straggler_parameters: NVRXStragglerParameters = Field(default_factory=NVRXStragglerParameters)
-    megatron_straggler_parameters: MegatronStragglerParameters = Field(default_factory=MegatronStragglerParameters)
+    # Reject unknown fields so V1 clients still posting the old `nvrx_straggler_parameters` /
+    # `megatron_straggler_parameters` shape get a 422 instead of silently running with lib defaults.
+    model_config = ConfigDict(extra="forbid")
+
+    rule_params: dict[RuleId, RuleParameters] = Field(default_factory=dict)
+
+    @field_validator("rule_params")
+    @classmethod
+    def _validate_against_ruleset(cls, value: dict[RuleId, RuleParameters]) -> dict[RuleId, RuleParameters]:
+        """Validate each rule_params entry against the registered collector rules.
+
+        Raises ValueError for unknown rule IDs.
+        """
+        # TODO: Currently only allowing parameters for collector rules.
+        collector_rules = attribution_lib.get_rules_engine().collector_rules
+        for rule_id, rp in value.items():
+            rule = collector_rules.get(rule_id)
+            if rule is None:
+                raise ValueError(f"unknown rule id: {rule_id!r}")
+            RuleEngine.parse_collector_params(rule, rp)
+        return value
 
 
 class AttributorInput(Protocol):
@@ -130,7 +134,7 @@ class AttributorWrapper:
                 logger.debug(f"Ingesting observation for attributor {self.id}")
                 id = self.attributor.ingest(observation.to_lib_observation())
                 self.last_access_time = datetime.now()
-                logger.info(f"Successfully ingested observation for attributor {self.id}, returned ingest_id: {id}")
+                logger.debug(f"Successfully ingested observation for attributor {self.id}, returned ingest_id: {id}")
             except LibDuplicateObservationError as e:
                 logger.warning(f"Duplicate observation error for attributor {self.id}: {e.id}")
                 raise DuplicateObservationError.new(e.id).to_http_exception() from e
@@ -145,7 +149,11 @@ class AttributorWrapper:
         with self.lock:
             logger.debug(f"Starting attribution for attributor {self.id}")
             try:
-                result = self.attributor.attribute(self._checkpoint_backend)
+                result = self.attributor.attribute(
+                    self._checkpoint_backend,
+                    rule_params=self.parameters.rule_params,
+                    run_collectors=True,
+                )
                 self.last_access_time = datetime.now()
                 ctx = AttributionContext(
                     result=result,

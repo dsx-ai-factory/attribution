@@ -259,10 +259,9 @@ class AttributionOrchestrator:
                 "tenant": "",
                 "ruleset": "",
             },
-            "parameters": {
-                "nvrx_straggler_parameters": {},
-                "megatron_straggler_parameters": {},
-            },
+            # `parameters` is intentionally omitted. The service defaults it,
+            # and its AttributionParameters model forbids unknown fields, so
+            # the legacy straggler-parameter keys would 422 every request.
         }
 
 

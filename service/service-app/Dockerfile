@@ -9,11 +9,19 @@
 # without an express license agreement from NVIDIA CORPORATION or
 # its affiliates is strictly prohibited.
 
+# Runtime base image. NVIDIA distroless python, publicly pullable.
+# Can be overridden with airgapped mirror via --build-arg.
+ARG BASE_IMAGE=python:3.13-slim
+
 # Install uv
-FROM python:3.12-slim AS builder
+FROM python:3.13-slim AS builder
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
 ENV UV_COMPILE_BYTECODE=1
 
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends git ca-certificates build-essential \
+    && rm -rf /var/lib/apt/lists/*
 
 # Change the working directory to the `app` directory
 WORKDIR /app
@@ -32,13 +40,12 @@ RUN  uv sync --frozen --no-install-project --no-editable --no-dev
 ADD . /app
 
 
-# Bumps the version
 
 # Sync the project
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --frozen --no-editable --no-dev
 
-FROM python:3.12-slim
+FROM ${BASE_IMAGE}
 
 ENV PATH="/app/.venv/bin:$PATH"
 

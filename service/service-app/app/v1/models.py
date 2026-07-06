@@ -9,24 +9,22 @@
 # its affiliates is strictly prohibited.
 
 from datetime import datetime
-from typing import Optional
+from typing import Annotated, Literal, NamedTuple, Optional, Union
 
-from attribution_lib.bundled_rules.common.megatron import MegatronStragglerParseState
-from attribution_lib.bundled_rules.common.nvrx import StragglerGroup, StragglerParseState
+from attribution_lib.attr_types import NodeAttributionGroup
 from attribution_lib.core import AttributionResult
 from attribution_lib.job_info import JobInfo, JobInfoBuilder
-from attribution_lib.sources import SourceSet
+from attribution_lib.outcome import calculate_outcome
+from attribution_lib.sources import SourceSet, SymptomSet
 from loguru import logger
-from pydantic import AwareDatetime, Field
+from pydantic import AwareDatetime, BaseModel, Field
 
 from app.attribution import (
     AttributionClassEnum,
-    AttributionTypes,
-    GlobalAttribution,
-    NodeAttribution,
+    AttributionSource,
     RecommendationEnum,
     SingleAttribution,
-    StragglerAttribution,
+    SingleAttributionBase,
     Symptom,
 )
 from app.attributor import (
@@ -41,8 +39,8 @@ from app.util import HashableModel, to_zoneinfo
 
 
 class AttributorWorkloadInfoV1(HashableModel):
-    """V1 wire shape: legacy positional node list + ranks-per-node fan-out, or explicit
-    node-to-ranks mapping. Mutually exclusive at the lib layer."""
+    """V1 wire shape: legacy positional node list + ranks-per-node fan-out, or an explicit
+    node-to-ranks mapping. If both are sent, the explicit mapping wins (see to_lib_jobinfo)."""
 
     id: str
     type: WorkloadTypeEnum
@@ -74,8 +72,21 @@ class AttributorInfoV1(HashableModel):
     parameters: AttributionParameters = Field(default_factory=AttributionParameters)
 
     def to_lib_jobinfo(self) -> JobInfo:
+        """Translate the V1 wire payload into a lib ``JobInfo`` for attribution."""
         w = self.workload
-        builder_kwargs: dict = dict(
+        # Explicit node_to_ranks (the v1 optional field) takes precedence; otherwise synthesize the
+        # uniform mapping from positional nodes + ranks_per_node. The lib has a single node_to_ranks
+        # input now, so there is no "both supplied" conflict to surface (explicit simply wins).
+        if w.node_to_ranks is not None:
+            node_to_ranks = w.node_to_ranks
+        elif w.nodes is not None and w.ranks_per_node is not None:
+            node_to_ranks = JobInfoBuilder.uniform_node_to_ranks(w.nodes, w.ranks_per_node)
+        elif w.nodes is not None:
+            # nodes without ranks_per_node: keep as empty-rank members, don't drop the list.
+            node_to_ranks = {n: [] for n in w.nodes}
+        else:
+            node_to_ranks = {}
+        builder = JobInfoBuilder(
             id=w.id,
             framework=w.framework,
             type=w.type,
@@ -84,14 +95,8 @@ class AttributorInfoV1(HashableModel):
             job_start_time=w.job_start_time,
             source_name="attributor service translation",
             timezone=to_zoneinfo(w.job_start_time),
+            node_to_ranks=node_to_ranks,
         )
-        if w.ranks_per_node is not None:
-            builder_kwargs["RANKS_PER_NODE"] = w.ranks_per_node
-        builder = JobInfoBuilder(**builder_kwargs)
-        if w.nodes is not None:
-            builder = builder.nodes(w.nodes)
-        if w.node_to_ranks is not None:
-            builder = builder.node_to_ranks(w.node_to_ranks)
         if w.interest_start_time:
             builder.interest_start_time(w.interest_start_time)
         if w.interest_end_time:
@@ -113,6 +118,111 @@ class AttributorInfoV1(HashableModel):
         return builder.build()
 
 
+# Straggler/workload/node/storage/switch/global shapes kept out of shared models
+# so V2 (and any future version) can stay rule-agnostic.
+
+
+class WorkloadRecord(BaseModel):
+    """A class for non-failure related observations"""
+
+    type: Literal["WorkloadRecord"] = Field(default="WorkloadRecord")
+    key: str
+    val: str
+    sources: list[AttributionSource]
+
+
+class RankScore(NamedTuple):
+    """A rank and its associated score."""
+
+    rank: int
+    score: float
+
+
+class StragglerAttribution(SingleAttributionBase):
+    """A node-specific attribution"""
+
+    type: Literal["StragglerAttribution"] = Field(default="StragglerAttribution")
+    symptom: Literal["Straggler"] = Field(default="Straggler")
+    description: str = Field(default="Straggler Pattern")  # Dynamic description based on source
+    attribution_class: AttributionClassEnum = AttributionClassEnum.UNDETERMINED
+    recommendation: RecommendationEnum = RecommendationEnum.AMBIGUOUS
+    rank_scores: list[RankScore] = []
+
+
+SingleAttributionTypes = Annotated[
+    Union[SingleAttribution, StragglerAttribution],
+    Field(discriminator="type"),
+]
+
+
+class NodeAttribution(BaseModel):
+    """A node-specific attribution"""
+
+    type: Literal["NodeAttribution"] = Field(default="NodeAttribution")
+    attributions: list[SingleAttributionTypes]
+    node: str
+
+    @classmethod
+    def from_lib_node_group(
+        cls,
+        node_attr: NodeAttributionGroup,
+    ) -> "NodeAttribution":
+        attributions = []
+        for _symptom, source_set in node_attr.attributions._data.items():
+            if source_set.has_bad():
+                tmp: SymptomSet[Symptom] = SymptomSet()
+                tmp.add(source_set)
+                outcome = calculate_outcome(tmp)
+                att_class = AttributionClassEnum.from_lib_outcomes(outcome.value().outcome)
+                if (
+                    att := SingleAttribution.from_lib_source_set_bad(
+                        source_set,
+                        outcome.value().hw_cause,
+                        att_class,
+                        RecommendationEnum.UNKNOWN,
+                    )
+                ) is not None:
+                    attributions.append(att)
+            elif source_set.has_interesting():
+                if (att := SingleAttribution.from_lib_source_set_other(source_set)) is not None:
+                    attributions.append(att)
+            else:
+                continue
+        if not attributions:
+            raise ValueError(f"NodeAttributionGroup for {node_attr.hostname} has no bad or interesting attributions")
+        return cls(
+            node=node_attr.hostname,
+            attributions=attributions,
+        )
+
+
+class StorageAttribution(BaseModel):
+    """Storage-specific attribution; details TBD"""
+
+    type: Literal["StorageAttribution"] = Field(default="StorageAttribution")
+    attributions: list[SingleAttributionTypes]
+
+
+class SwitchAttribution(BaseModel):
+    """Switch-specific attribution; details TBD"""
+
+    type: Literal["SwitchAttribution"] = Field(default="SwitchAttribution")
+    attributions: list[SingleAttributionTypes]
+
+
+class GlobalAttribution(BaseModel):
+    """Non-specific attribution (i.e. job-level)"""
+
+    type: Literal["GlobalAttribution"] = Field(default="GlobalAttribution")
+    attributions: list[SingleAttributionTypes]
+
+
+AttributionTypes = Annotated[
+    Union[WorkloadRecord, NodeAttribution, StorageAttribution, SwitchAttribution, GlobalAttribution],
+    Field(discriminator="type"),
+]
+
+
 class AttributionResponseV1(ResponseModel):
     """Response to attribution requests"""
 
@@ -122,26 +232,21 @@ class AttributionResponseV1(ResponseModel):
     @classmethod
     def from_lib_attribution(
         cls,
-        parameters: AttributionParameters,
         ingested_observations: set[ObservationId],
         result: AttributionResult,
     ) -> "AttributionResponseV1":
         attributions: list[AttributionTypes] = []
 
-        nvrx_results = StragglerParseState.collect(result.event_stream)
-        nvrx_groups = [g for g in nvrx_results if isinstance(g, StragglerGroup)]
-        node_straggler_results = StragglerAttribution.unpack_lib_groups(
-            parameters.nvrx_straggler_parameters, nvrx_groups
-        )
-
-        megatron_data = MegatronStragglerParseState.collect(result.event_stream)
-        if megatron_data.reports:
-            megatron_straggler_results = StragglerAttribution.unpack_megatron_lib_groups(
-                parameters.megatron_straggler_parameters,
-                megatron_data.reports,
-                megatron_data.top_scores,
-            )
-            node_straggler_results.update(megatron_straggler_results)
+        # V1-only debt: hardcodes straggler digest keys. V2 stays rule-agnostic
+        # (dumps result.collectors raw). Don't repeat this pattern elsewhere.
+        node_straggler_results: dict[str, StragglerAttribution] = {}
+        for digest_key in ("nvrx_straggler", "megatron_straggler"):
+            for node, report in result.collectors.get(digest_key, {}).items():
+                node_straggler_results[node] = StragglerAttribution(
+                    description=report.pattern,
+                    rank_scores=[RankScore(rank=r.rank, score=r.score) for r in report.rank_scores],
+                    sources=[AttributionSource.from_lib(s) for s in report.sources],
+                )
 
         bad_nodes = set(result.bad_nodes_attr.my_bad_nodes.keys())
         bad_nodes.update(node_straggler_results.keys())

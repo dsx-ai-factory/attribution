@@ -313,6 +313,12 @@ def remove_cascaded_network_symptoms(symptoms: SymptomSet[str], my_bad_nodes: Jo
 
 
 def get_clean_bad_nodes(my_bad_nodes: JobNodeAttributions, cluster: str) -> JobNodeAttributions:
+    # NOTE (rule-credit migration): these two are placeholder credited-rule names,
+    # intentionally NOT renamed in the credited-rule-provenance change because this
+    # manual match depends on them. Retire them here when scrub is made rule-based —
+    # key the demotion off the symptom (as the block below already does) and
+    # reconcile these findings' source.resources to AllJobResources. Until then,
+    # the rules that emit them keep crediting these names on purpose.
     non_node_compat = frozenset(["the process completes", "alias else"])
     nodes = list(my_bad_nodes.attributions.keys())  # a copy so we can delete while iterating
     for node in nodes:

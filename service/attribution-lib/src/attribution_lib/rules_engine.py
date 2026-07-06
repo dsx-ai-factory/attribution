@@ -74,10 +74,18 @@ class RuleContext:
     hostname: Optional[str] = None
 
     def get_node_from_rank(self, rank: int) -> Optional[str]:
-        """Resolve a rank number to a node hostname."""
+        """Resolve a rank number to a node hostname. Returns None if rank is unknown."""
         if self.job_info is None:
             return None
-        result: Optional[str] = self.job_info.get_name_from_rank(rank)
+        if not self.job_info.rank_exists(rank):
+            logger.debug(
+                "rank {} not in job {} topology; cannot resolve to a node",
+                rank,
+                self.job_info.id,
+            )
+            return None
+
+        result: str = self.job_info.get_name_from_rank(rank)
         return result
 
     @property

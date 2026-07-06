@@ -10,15 +10,14 @@ Modern AI training and inference workloads fail in dozens of ways. A multi-rank 
 
 ![NVIDIA Attribution UI — verdict, responsible node, and recommended action for a failed GPU workload](blueprint/docs/attribution-demo.gif)
 
-## Three deployable forms
+## Two deployable forms
 
-NVIDIA Attribution ships in three components that share one rules engine. Pick the form that matches how you want to integrate.
+NVIDIA Attribution ships in two components that share one rules engine. Pick the form that matches how you want to integrate.
 
 * **Attribution Blueprint.** A Python reference orchestrator that discovers workloads from your scheduler, collects log and metric evidence from your telemetry stack, calls the Attribution Service, and persists the diagnosis. The Blueprint owns the connector contracts (scheduler, logs, metrics, output) and is the fastest path to a running system. Use when you want a working deployment fast, for a proof-of-concept, an early-access deployment, or as the starting point for your own production topology. Ships with a read-side dashboard that renders the per-workload diagnosis and its symptom chain.
 * **Attribution Service.** A self-hosted HTTP REST service that owns the rules engine and returns one diagnosis per workload. Use when you want a shared attribution endpoint across many workloads and a single deployment to operate.
-* **Attribution Library.** The rules engine core, distributed as a standalone library alongside the Service at V1.
 
-All three are distributed under the NVIDIA AI Enterprise Early Access agreement during private preview. The Blueprint is the orchestrator that wires the Service into a real cluster. It implements a modular connector architecture designed to be extended and customized for your production environment. Run it as-is or adapt it to your topology, and contribute improvements back once the project reaches GA.
+Both are distributed under the NVIDIA AI Enterprise Early Access agreement during private preview. The Blueprint is the orchestrator that wires the Service into a real cluster. It implements a modular connector architecture designed to be extended and customized for your production environment. Run it as-is or adapt it to your topology, and contribute improvements back once the project reaches GA.
 
 ## What NVIDIA Attribution does
 
@@ -71,7 +70,7 @@ Three cases the rules engine handles in production:
 
 ## Prerequisites
 
-* **Python.** 3.12.3+ on the host running the Attribution Service. 3.11+ on the host running the Blueprint orchestrator. The two can run on the same host or different hosts.
+* **Python.** 3.13 on the host running the Attribution Service. 3.11+ on the host running the Blueprint orchestrator. The two can run on the same host or different hosts.
 * **uv package manager.** Install with `curl -LsSf https://astral.sh/uv/install.sh | sh`. Every `uv run` command resolves and installs dependencies on first invocation, no separate install step.
 * **Scheduler.** Slurm 25.11+ (SLUID required), or Kueue v0.6+ with JobSet v0.5+ for JobSet-shaped distributed training.
 * **Telemetry backends (any subset of):** Loki for application or system logs, a PromQL-compatible Prometheus or Mimir instance for node metrics, `kubectl` access for Kueue pod log collection, or local files for sacct-resolved StdOut/StdErr paths.
@@ -91,7 +90,7 @@ tar -xzf nvidia-attribution-${version}.tar.gz
 cd nvidia-attribution-${version}
 ```
 
-The bundle contains the attribution service under `service/service-app/`, the bundled attribution library under `service/attribution-lib/`, and the blueprint reference implementation under `blueprint/`.
+The bundle contains the attribution service under `service/service-app/` and the blueprint reference implementation under `blueprint/`.
 
 This quickstart assumes you are running commands from the root directory of the attribution service bundle.
 
@@ -152,7 +151,7 @@ If `ATTRIBUTION_DB` already exists, the command appends a new attribution run fo
 
 Open `http://127.0.0.1:8080`, or the port you set in `ATTRIBUTION_WEB_PORT`.
 
-If you are running from a source checkout rather than the release bundle, use scripts/webui.sh instead of Docker. The script builds the React assets and starts the FastAPI backend directly against your database. See docs/README.md in the source repository for the full source workflow.
+If you are running from a source checkout rather than the release bundle, use the source repository's web UI helper instead of Docker. The helper builds the React assets and starts the FastAPI backend directly against your database. See the source repository README for the full source workflow.
 
 ## Where to go for more
 

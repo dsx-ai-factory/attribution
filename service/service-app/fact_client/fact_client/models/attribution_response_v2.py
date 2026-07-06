@@ -17,7 +17,7 @@ import re  # noqa: F401
 import json
 
 from pydantic import BaseModel, ConfigDict, StrictInt, StrictStr, field_validator
-from typing import Any, ClassVar, Dict, List
+from typing import Any, ClassVar, Dict, List, Optional
 from fact_client.models.symptoms_value_inner import SymptomsValueInner
 from fact_client.models.verdict import Verdict
 from typing import Optional, Set
@@ -31,8 +31,9 @@ class AttributionResponseV2(BaseModel):
     verdict: Verdict
     symptoms: Dict[str, List[SymptomsValueInner]]
     observation_context: List[StrictInt]
+    collectors: Optional[Dict[str, Any]] = None
     model_type: StrictStr
-    __properties: ClassVar[List[str]] = ["verdict", "symptoms", "observation_context", "model_type"]
+    __properties: ClassVar[List[str]] = ["verdict", "symptoms", "observation_context", "collectors", "model_type"]
 
     @field_validator('model_type')
     def model_type_validate_enum(cls, value):
@@ -114,6 +115,7 @@ class AttributionResponseV2(BaseModel):
                 for _k, _v in obj.get("symptoms", {}).items()
             ),
             "observation_context": obj.get("observation_context"),
+            "collectors": obj.get("collectors"),
             "model_type": obj.get("model_type")
         })
         return _obj

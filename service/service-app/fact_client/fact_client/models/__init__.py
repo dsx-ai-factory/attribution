@@ -30,8 +30,6 @@ from fact_client.models.format import Format
 from fact_client.models.global_attribution import GlobalAttribution
 from fact_client.models.http_validation_error import HTTPValidationError
 from fact_client.models.location_inner import LocationInner
-from fact_client.models.megatron_straggler_parameters import MegatronStragglerParameters
-from fact_client.models.nvrx_straggler_parameters import NVRXStragglerParameters
 from fact_client.models.new_response_v1 import NewResponseV1
 from fact_client.models.new_response_v2 import NewResponseV2
 from fact_client.models.node_attribution import NodeAttribution
@@ -42,12 +40,12 @@ from fact_client.models.observation_response_v1 import ObservationResponseV1
 from fact_client.models.observation_response_v2 import ObservationResponseV2
 from fact_client.models.recommendation_enum import RecommendationEnum
 from fact_client.models.resourceless_source import ResourcelessSource
+from fact_client.models.rule_parameters import RuleParameters
 from fact_client.models.single_attribution import SingleAttribution
 from fact_client.models.source import Source
 from fact_client.models.sourced_symptom import SourcedSymptom
 from fact_client.models.storage_attribution import StorageAttribution
 from fact_client.models.straggler_attribution import StragglerAttribution
-from fact_client.models.straggler_score_type import StragglerScoreType
 from fact_client.models.switch_attribution import SwitchAttribution
 from fact_client.models.symptoms_value_inner import SymptomsValueInner
 from fact_client.models.time_interval import TimeInterval

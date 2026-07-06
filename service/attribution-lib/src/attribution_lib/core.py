@@ -342,7 +342,7 @@ def calculate_symptoms(
     symptoms: SymptomSet[str] = SymptomSet()
 
     # logic wrt job_info metadata
-    if job_info.nodelist == "None assigned":
+    if len(job_info.nodes) == 0:
         symptoms.add(job_info.source_value("Job didn't start", None, "none assigned"))
         return symptoms
 

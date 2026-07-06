@@ -261,6 +261,7 @@ _IB_GENERAL_ERRORS = frozenset(
     {
         "Mellanox links are down",
         "ncclRemoteError",
+        "ncclTimeout",
         "ncclInternalError",
         "Connection reset by peer",
         "Connection closed",
@@ -1654,6 +1655,7 @@ def post_process_symptoms_refiner(context: RefinerContext):
         "ncclInvalidArgument",
         "ncclInvalidUsage",
         "ncclRemoteError",
+        "ncclTimeout",
     ]:
         # TODO: should still keep them for debugging purpose
         if nccl_error in symptoms and len(symptoms) > 1:

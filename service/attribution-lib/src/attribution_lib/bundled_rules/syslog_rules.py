@@ -19,7 +19,8 @@ in filter_rules.py (HandleXidBurstEvents, EARLY priority).
 import json
 import math
 import re
-from typing import Dict, List
+from datetime import datetime
+from typing import Dict, List, Optional
 
 from common.syslog_helpers import SyslogAttributionParams
 from common.xid_errors import (
@@ -83,6 +84,10 @@ _CONTAINER_OOMKILLED_RE = (
     rf"{_JSON_QUOTE_RE}name{_JSON_QUOTE_RE}:{_JSON_QUOTE_RE}(?P<container>[^\"\\]+){_JSON_QUOTE_RE}"
     rf"(?:(?!{_JSON_QUOTE_RE}name{_JSON_QUOTE_RE}).)*?"
     rf"{_JSON_QUOTE_RE}reason{_JSON_QUOTE_RE}:{_JSON_QUOTE_RE}OOMKilled{_JSON_QUOTE_RE}"
+    # Optionally capture the terminated block's ``finishedAt`` (the real OOM time).
+    # Stop at the next container's ``name`` so we never grab a sibling's timestamp.
+    rf"(?:(?:(?!{_JSON_QUOTE_RE}name{_JSON_QUOTE_RE}).)*?"
+    rf"{_JSON_QUOTE_RE}finishedAt{_JSON_QUOTE_RE}:{_JSON_QUOTE_RE}(?P<finished_at>[^\"\\]+){_JSON_QUOTE_RE})?"
 )
 
 
@@ -94,6 +99,40 @@ def _is_system_service_process(process_name: str) -> bool:
 
 def _is_system_pod_container(container_name: str) -> bool:
     return container_name.lower() in _SYSTEM_POD_CONTAINER_NAMES
+
+
+def _is_stale_kubelet_oom(finished_at: Optional[str], ctx: RuleContext) -> bool:
+    """Return True when a kubelet OOMKilled status is a stale re-publication.
+
+    The kubelet re-emits a container's termination state on every status sync, so
+    a single OOM keeps appearing in syslog for the whole life of the restarted
+    container (days, spanning many unrelated jobs). Attributing on the re-publish
+    time tags that one event onto every job that lands on the node afterwards.
+    Gate on the embedded ``finishedAt`` (the actual OOM time) instead: if the OOM
+    completed before this job started, it is not this job's failure.
+
+    Args:
+        finished_at: ``finishedAt`` ISO-8601 timestamp from the OOMKilled
+            terminated block, or None when the payload omits it.
+        ctx: Rule context; ``ctx.job_info.job_start_time`` bounds the job.
+
+    Returns:
+        True if the OOM finished before the job started. False when the timestamp
+        is absent, unparseable, or there is no job window to compare against
+        (in which case we cannot gate and fall back to attributing).
+    """
+    if finished_at is None or ctx.job_info is None:
+        return False
+    start = ctx.job_info.job_start_time
+    if start is None:
+        return False
+    try:
+        finished = datetime.fromisoformat(finished_at.replace("Z", "+00:00"))
+        # A timezone-naive finished_at parses fine but can't be compared to the
+        # tz-aware start, raising TypeError here rather than at the parse above.
+        return finished < start
+    except (ValueError, TypeError):
+        return False
 
 
 @extractor_def(
@@ -346,7 +385,14 @@ def kubelet_container_oomkilled(
     The matched ``containerStatuses`` payload names the container killed by the
     OOM killer. System pod containers are infrastructure failures; other
     containers are treated as user task OOMs.
+
+    The kubelet re-publishes a container's termination state on every status sync,
+    so a stale OOM keeps matching long after the container recovered. The status's
+    ``finishedAt`` is the real OOM time: drop the event when it completed before
+    this job started so one old OOM is not re-attributed to every later job.
     """
+    if _is_stale_kubelet_oom(groups.get("finished_at"), ctx):
+        return []
     if _is_system_pod_container(groups["container"]):
         return [
             _bad(
@@ -504,6 +550,15 @@ def syslog_nfs_not_responding(groups: Dict[str, str], node: str, source: Source,
 
 
 @extractor_def(
+    name="SyslogControllerStop",
+    match_re=re.escape("Node was stopped by CMDaemon"),
+    derived_rules=["node-stopped-by-controller"],
+)
+def syslog_controller_stop(groups: Dict[str, str], node: str, source: Source, ctx: RuleContext) -> List[EventTriple]:
+    return [_bad(node, "Node stopped by controller", source.derived(rule="node-stopped-by-controller"))]
+
+
+@extractor_def(
     name="SyslogRxDetectLinkMask",
     match_re=re.escape("Failed to update Rx Detect Link mask!"),
     derived_rules=["update-rx-detect-link-mask-failure"],
@@ -572,17 +627,14 @@ def syslog_kernel_invalid_memory_access(
     return [_bad(node, "kernel invalid memory access", source.derived(rule="kernel-invalid-memory-access"))]
 
 
-# Generic kernel die() banner. Anchored on the printk-uptime prefix
-# `[<seconds>.<frac>]` so we don't false-positive on slurmd debug strings
-# that have been observed to contain "Internal error: Oops handler" as
-# plain text (the slurmd `[date 0xaddr]` brackets don't match \d+\.\d+).
-# Catches every die() path -- paging faults, instruction aborts, BUG_ON()
-# / BRK, undefined-instruction traps, SErrors -- so we still get an
-# attribution when the more-specific "Unable to handle kernel" line above
-# is missing (e.g. BUG_ON()-driven crashes).
+# Generic kernel die() banner. Matches the "Oops:" colon form so it fires whether
+# or not the printk-uptime prefix survives log forwarding (some collectors, e.g.
+# aws-cmh-slurm-1, strip it), while excluding slurmd "Internal error: Oops handler"
+# debug strings (no colon). Covers BUG_ON/BRK/SError paths when the more-specific
+# "Unable to handle kernel" line is absent.
 @extractor_def(
     name="SyslogKernelOops",
-    match_re=r"\[\s*\d+\.\d+\]\s+Internal error: Oops",
+    match_re=r"Internal error: Oops:",
     derived_rules=["kernel-oops"],
 )
 def syslog_kernel_oops(groups: Dict[str, str], node: str, source: Source, ctx: RuleContext) -> List[EventTriple]:

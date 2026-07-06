@@ -244,26 +244,6 @@ class JobInfoError(AttributionError):
     pass
 
 
-class JobInfoEmptyNodesError(JobInfoError):
-    """Error for when we are passed in an empty node list."""
-
-    pass
-
-
-class JobInfoNodesAfterNodelistError(JobInfoError):
-    """Error for when we are passed in a nodes list after we were given a nodelist"""
-
-    def __init__(self, nodes: list[str]) -> None:
-        self.nodes = nodes
-
-
-class JobInfoNodelistAfterNodesError(JobInfoError):
-    """Error for when we are passed in a nodes list after we were given a nodelist"""
-
-    def __init__(self, nodes: str) -> None:
-        self.nodes = nodes
-
-
 class JobInfoInvalidTimeLimitError(JobInfoError):
     """Error for when we are passed in an non-positive time_limit."""
 
@@ -277,12 +257,6 @@ class JobInfoIncompleteEndTimeError(JobInfoError):
     pass
 
 
-class JobInfoNoNodeInfoError(JobInfoError):
-    """Error for when we are passed in an a job that has neither nodelist nor nodes."""
-
-    pass
-
-
 class JobInfoDuplicateFieldError(JobInfoError):
     """Error for when multiple builder fields that map to the same underlying field are given."""
 
@@ -290,15 +264,11 @@ class JobInfoDuplicateFieldError(JobInfoError):
         self.field_name = field_name
 
 
-class JobInfoNodeToRanksConflictError(JobInfoError):
-    """Error when node_to_ranks is mixed with legacy inputs (nodes / nodelist / RANKS_PER_NODE)."""
-
-    def __init__(self, conflicting_field: str) -> None:
-        self.conflicting_field = conflicting_field
-
-
 class JobInfoUnevenNodeToRanksError(JobInfoError):
-    """Error when node_to_ranks has per-node rank lists of differing lengths."""
+    """Error when participating nodes in node_to_ranks have rank lists of differing lengths.
+
+    Empty rank lists (non-participating nodes) are allowed and excluded from this check.
+    """
 
     def __init__(self, node_to_ranks: dict[str, list[int]]) -> None:
         self.node_to_ranks = node_to_ranks

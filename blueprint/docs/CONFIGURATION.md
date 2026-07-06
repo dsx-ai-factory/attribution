@@ -2,7 +2,7 @@
 
 The blueprint reads configuration from three places:
 
-1. TOML, via `--config ./attribution-blueprint.toml` or the default `./attribution-blueprint.toml`
+1. TOML, via `--config ./attribution-blueprint.toml`, `--configs <dir>`, or the default `./attribution-blueprint.toml`
 2. environment variables prefixed with `NVAB_`
 3. CLI `--connector` assignments
 
@@ -51,6 +51,21 @@ uv run nvidia-attribution-blueprint \
   --connector eca slurm ids "123456"
 ```
 
+## CLI Flags
+
+| Flag | Repeatable | Meaning |
+|---|---:|---|
+| `--connector TOKEN...` | Yes | Configuration assignment. The last token is the value; earlier tokens form the path. `--connector eca slurm` selects a component, `--connector eca slurm ids "1,5"` sets a parameter. End a path with `help` to list valid keys at that level. |
+| `--config PATH` | Yes | TOML config file. When neither `--config` nor `--configs` is given, `./attribution-blueprint.toml` is used if it exists. |
+| `--configs DIR` | Yes | Directory of TOML configs. Runs every top-level `*.toml` file in sorted order, one attribution pass per file. Fails if the directory contains no top-level `.toml` files. |
+| `--dump-observations DIR` | No | Write each collected observation to `DIR/<ctx-id>.<source>.json` before submitting it to the service. |
+
+Notes:
+
+- Section aliases: `execution_context` is accepted for `eca`, and `logs` for `log`, on the CLI, in environment variables, and in TOML.
+- A component-qualified CLI or environment assignment also selects that component. `--connector eca kueue ids "team-a/wl-1"` sets `eca.kueue.ids` and implies `eca.component = "kueue"`. TOML does not imply selection; set `component` explicitly in TOML.
+- With `--configs`, environment variables and `--connector` assignments apply to every config file in the run.
+
 ## Required Sections
 
 ### `[attribution]`
@@ -76,7 +91,7 @@ timeout_seconds = 60
 
 | Field | Required | Default | Meaning |
 |---|---:|---|---|
-| `[eca].component` | Yes | `slurm` | Selects the execution context adapter. Use `slurm` for a SLURM cluster. |
+| `[eca].component` | No | `slurm` | Selects the execution context adapter: `slurm`, `kueue`, or `static`. Defaults to `slurm` when unset. |
 | `sacct_path` | No | `sacct` | Path to the `sacct` binary. Use an absolute path if `sacct` is not on `PATH`. |
 | `cluster_tz` | Strongly recommended | blueprint host timezone | IANA timezone for the SLURM controller, used to anchor naive `sacct` timestamps. |
 | `ids` | Per run | none | Comma-separated job IDs. Usually pass this by CLI, not TOML. |
@@ -106,6 +121,13 @@ uv run nvidia-attribution-blueprint --config ./attribution-blueprint.toml \
   --connector eca slurm end_time "2026-05-25T06:00:00+00:00" \
   --connector eca slurm nodelist "node[001-004]"
 ```
+
+Runtime selector rules, validated on the merged configuration before the run starts, for `slurm` and `kueue`:
+
+- `ids` and `start_time` are mutually exclusive.
+- `start_time` and `end_time` must be set together.
+- `nodelist` is only valid in time-range mode.
+- ISO-8601 times without a UTC offset are interpreted as UTC.
 
 **Cluster Timezone Gotcha**
 
@@ -199,11 +221,11 @@ contexts_path = "path/to/static-contexts.json"
 
 | Field | Required | Default | Meaning |
 |---|---:|---|---|
-| `contexts_path` | Alternative to inline fields | none | JSON file containing either a context list or an object with a `contexts` list. |
-| `id` | No for inline mode | derived hash | Execution context ID. |
+| `contexts_path` | Alternative to inline fields | none | JSON file containing either a context list or an object with a `contexts` list. Each context requires `id`, `start_time`, `end_time` (timezone-aware), and `nodes`; duplicate `id` values are rejected. |
+| `id` | No for inline mode | `static-<hash>` | Execution context ID. The default hash is derived from `start_time`, `end_time`, and `nodes`. |
 | `start_time` | Yes for inline mode | none | Timezone-aware ISO-8601 start time. |
 | `end_time` | Yes for inline mode | none | Timezone-aware ISO-8601 end time. |
-| `nodes` | Yes for inline mode | none | Node list. |
+| `nodes` | Yes for inline mode | none | Node list. Accepts a TOML list or a comma-separated string. |
 | `state` | No | `UNKNOWN` | Scheduler state string. |
 | `name` | No | none | Workload name. |
 | `user_name` | No | none | Workload owner. |
@@ -239,7 +261,7 @@ For `nodes = ["node-a", "node-b"]`, the service v2 payload contains
 
 ### `[output.<name>]`
 
-Outputs are named instances. The instance name is yours, such as `db`, `console`, or `primary`.
+Outputs are named instances. The instance name is yours, such as `db`, `console`, or `primary`. The name `component` and names starting with `_` are reserved.
 
 If you omit all output blocks, the blueprint prints one JSON object per verdict to stdout.
 
@@ -279,7 +301,11 @@ path = "./attributions.db"
 
 ## Log Collection
 
-Log collection is optional, but attribution quality is usually poor without at least application logs.
+Log evidence is required for attribution. Logs must either be sent directly to
+the Attribution Service or collected by Attribution Blueprint. Attribution
+quality is usually poor without at least SYSLOG evidence. APPLOG is output from
+workload processes, including application and framework messages. SYSLOG is
+node-level operating-system, kernel, and GPU-driver output.
 
 The supported log sources are:
 
@@ -291,6 +317,19 @@ The supported log components are:
 - `local_file`, read files visible on the blueprint host
 - `loki`, query Loki over HTTP
 - `kubectl_logs`, collect Kubernetes pod logs for Kueue workloads
+
+### Evidence Coverage
+
+| Logs available to the Attribution Service | Expected coverage | Main limitation |
+|---|---|---|
+| APPLOG and SYSLOG | Recommended for the highest accuracy. SYSLOG provides node and GPU evidence, while APPLOG adds process and framework context plus more visibility into network and communication failures. | Coverage still depends on the events present in the collected logs. |
+| SYSLOG only | Supports most GPU-related attributions from kernel, driver, and node events. | Application context is absent, and network visibility is reduced. |
+| APPLOG only | Supports application and framework evidence, including network or communication failures reported in workload output. | GPU and hardware attributions may be missed when the relevant evidence exists only in node logs. |
+| No logs | Insufficient evidence for attribution. | Send logs directly to the Attribution Service or configure Attribution Blueprint to collect them. |
+
+If logs are available for only some workload nodes, attribution has reduced
+evidence coverage for the missing nodes and may be unable to assign node
+responsibility accurately.
 
 ### Local File APPLOG
 
@@ -305,13 +344,18 @@ paths = ["{std_out}", "{std_err}"]
 max_bytes = "2GB"
 ```
 
+| Field | Required | Default | Meaning |
+|---|---:|---|---|
+| `paths` | Yes | none | Path templates to read. Accepts a list or a single string. |
+| `max_bytes` | No | `2GB` | Per-file cap. Accepts an integer byte count or a size string such as `500MB` or `2G` (binary multiples, suffixes through `TB`). |
+
 Supported placeholders include:
 
 | Placeholder | Meaning |
 |---|---|
 | `{std_out}` | Resolved `StdOut` path from `sacct`. |
 | `{std_err}` | Resolved `StdErr` path from `sacct`. |
-| `{job_id}` | Numeric job ID. |
+| `{job_id}` | Job ID from the execution context. Falls back to the context ID when unset. |
 | `{name}` | SLURM job name. |
 | `{user_name}` | SLURM user. |
 | `{start_time_ns}` | Execution context start time in nanoseconds. |
@@ -320,6 +364,8 @@ Supported placeholders include:
 Scheduler-specific placeholders such as `{array_id}` and `{attempt_index}` are not supported by the local file connector. Use `{std_out}` and `{std_err}` for SLURM output files; the SLURM execution context adapter resolves scheduler filename tokens before the local file connector sees them.
 
 `max_bytes` caps each file by reading the last N bytes. This keeps large training logs from exhausting memory.
+
+If a rendered path is a directory, every regular file directly inside it is read (non-recursive). Paths that do not exist are skipped silently; paths that exist but cannot be read are logged as warnings.
 
 ### Local File SYSLOG
 
@@ -339,7 +385,7 @@ paths = ["/path/to/syslog"]
 max_bytes = "2GB"
 ```
 
-For an execution context whose `nodes` are `["node-a", "node-b"]`, the connector reads regular files directly under `/path/to/syslog/node-a/` and `/path/to/syslog/node-b/`. Missing per-node directories are logged as warnings. Each emitted syslog observation uses `raw_log`, with the regular syslog file text as its body.
+For an execution context whose `nodes` are `["node-a", "node-b"]`, the connector reads regular files directly under `/path/to/syslog/node-a/` and `/path/to/syslog/node-b/`. Missing per-node directories are logged at debug level; the connector warns when no node directory is found under any configured base path. `max_bytes` behaves as for APPLOG (default `2GB`). Each emitted syslog observation uses `raw_log`, with the regular syslog file text as its body.
 
 ### Loki SYSLOG Or APPLOG
 
@@ -396,12 +442,14 @@ Fields:
 | `auth.ca_cert_path` | No | CA bundle path. |
 | `auth.org_id` | No | Optional `X-Scope-OrgID` value. |
 | `query_kwargs` | Usually | Label values used by bundled LogQL templates. |
-| `query` | No | Single custom LogQL template. |
-| `queries` | No | List of custom LogQL templates. |
-| `node_label` | No | Loki stream label used as the node name. Defaults to `host_name`. |
+| `query` | No | Single custom LogQL template. Replaces the bundled templates for this source. |
+| `queries` | No | List of custom LogQL templates. Replaces the bundled templates for this source. Takes precedence over `query` when both are set. |
+| `node_label` | No | Loki stream label used as the node name, and spliced into each query to scope it to the context's nodes. Defaults to `host_name`. |
 | `timeout_seconds` | No | HTTP timeout. Defaults to `60.0`. |
 
 The bundled Loki templates are examples. If your labels are not `service_name`, `app`, or `host_name`, set `query`, `queries`, `query_kwargs`, and `node_label` for your environment.
+
+Custom templates may use `{job_id}` (the execution context ID) and any `{key}` supplied in `query_kwargs`. Literal `{` and `}` in LogQL label selectors must be doubled (`{{`, `}}`).
 
 ### Kubectl Pod Logs
 
@@ -436,8 +484,12 @@ Fields:
 | `timestamps` | No | `true` | Include timestamps in `kubectl logs` output. |
 | `previous` | No | `false` | Read logs from a previous container instance. |
 | `since_context_start` | No | `false` | Add `--since-time` using the execution context start time. |
-| `max_bytes_per_pod` | No | `16MB` | Tail cap applied to each pod log. |
+| `max_bytes_per_pod` | No | `16MB` | Tail cap applied to each pod log. Accepts an integer byte count or a size string such as `16MB`. |
 | `timeout_seconds` | No | `60` | Timeout for each `kubectl logs` command. |
+
+`timestamps`, `previous`, and `since_context_start` accept TOML booleans, or
+the strings `true`/`false` (also `yes`/`no`/`1`/`0`) when set from the CLI or
+environment.
 
 This connector does not use `{std_out}` or `{std_err}`. Those placeholders are
 for local file log collection.
@@ -469,9 +521,11 @@ Fields:
 | `auth.type` | No | Optional. If present, `token` or `mtls`; same auth fields as Loki. Omit the `auth` block for unauthenticated endpoints. |
 | `step_seconds` | No | Query step size. Defaults to `60`. |
 | `timeout_seconds` | No | HTTP timeout. Defaults to `60.0`. |
-| `queries` | No | Custom named PromQL templates. These extend the bundled templates. |
+| `queries` | No | Custom named PromQL templates. These extend the bundled templates and override bundled templates with the same name. |
 
 The bundled PromQL templates expect labels such as `s_cluster` and `net_host_name`. If your metrics use different labels, override the relevant query templates.
+
+Each template may use `{name}` (the template's own name), `{cluster}`, and `{nodes}` (a regex alternation of the context's node names). Literal `{` and `}` in PromQL label selectors must be doubled (`{{`, `}}`).
 
 ## Environment Variables
 
@@ -488,6 +542,10 @@ export NVAB_OUTPUT_DB_SQLITE_PATH="./attributions.db"
 CLI values still win over environment variables.
 
 **Warning:** Env vars override TOML, and CLI flags override env vars. A stale `NVAB_*` in your shell will silently win against your config file. Run `env | grep NVAB_` before debugging unexpected config behavior.
+
+Unknown `NVAB_`-prefixed variables are logged as warnings and ignored, so unrelated `NVAB_` variables from other tooling do not abort a run.
+
+The stderr log level is controlled by the `ATTRIBUTION_LOG_LEVEL` environment variable (default `INFO`). This is a plain environment variable, not an `NVAB_` config key.
 
 ## Config Checks
 
@@ -510,3 +568,17 @@ uv run nvidia-attribution-blueprint --config ./attribution-blueprint.toml
 ```
 
 This builds the configured connectors and exits with zero verdicts. It does not scan the entire cluster.
+
+## Web UI Flags
+
+The read-side dashboard, `nvidia-attribution-blueprint-web`, is a separate binary that reads the SQLite database written by the `sqlite` output. It takes no TOML or `NVAB_` configuration.
+
+| Flag | Required | Default | Meaning |
+|---|---:|---|---|
+| `--db` | Yes | none | Path to the attribution SQLite database. |
+| `--host` | No | `127.0.0.1` | Listen address. |
+| `--port` | No | `8080` | Listen port. |
+
+```bash
+uv run nvidia-attribution-blueprint-web --db ./attributions.db
+```

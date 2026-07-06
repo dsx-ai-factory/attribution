@@ -9,15 +9,18 @@
 # its affiliates is strictly prohibited.
 
 import asyncio
-import logging
-import sys
+from contextlib import asynccontextmanager
+from typing import Union
 
 from attribution_lib.core import setup_rules
 from attribution_lib.exceptions import (
     AttributionError as LibAttributionError,
+    InvalidRuleParams,
     JobInfoError,
+    RuleAcceptsNoParamsError,
 )
 from fastapi import FastAPI, Request, Response, status
+from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from loguru import logger
@@ -28,6 +31,7 @@ import app.v1.api as v1
 import app.v2.api as v2
 from app import __version__
 from app.exceptions import FactHTTPException
+from app.logging_config import setup_logging
 from app.metrics import VERSION_INFO
 
 _DESCRIPTION = """
@@ -50,33 +54,47 @@ It is possible to interleave observation-posting and attribution-getting; the mo
 
 
 def create_app():
-    logger.remove()
-    logger.add(
-        sys.stdout, level=logging.INFO, format="{time:HH:mm:ss} | {level} | {module}:{function}:{line} | {message}"
-    )
+    otlp_provider = setup_logging()
+
     setup_rules()
     global_aim = attributor_manager.AttributorManager(expiration_period_hours=24)
+    instrumentator = Instrumentator()
+
+    @asynccontextmanager
+    async def lifespan(app: FastAPI):
+        instrumentator.expose(app)
+        # Keep a strong ref to avoid garbage collection of the task.
+        app.state.cleanup_task = asyncio.create_task(_cleanup_expired_attributors(global_aim))
+        yield
+        if otlp_provider is not None:
+            otlp_provider.force_flush(timeout_millis=5000)
+            otlp_provider.shutdown()
+
     lapp = FastAPI(
         title="FACT Attribution Service",
         description=_DESCRIPTION,
         summary="Service for producing failure attribution/workload information from metrics & logs",
         contact={"name": "NVIDIA Corporation"},
+        lifespan=lifespan,
     )
 
     lapp.state.aim = global_aim
     lapp.include_router(v1.router, prefix="/v1")
     lapp.include_router(v2.router, prefix="/v2")
-    lapp.include_router(v1.router, prefix="/latest")
+    lapp.include_router(v2.router, prefix="/latest")
+    instrumentator.instrument(lapp)
 
     @lapp.exception_handler(RequestValidationError)
     async def validation_exception_handler(request: Request, exc: RequestValidationError):
         return JSONResponse(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            content={
-                "errors": exc.errors(),
-                "body": exc.body,
-                "message": "Validation failed. Please check the errors.",
-            },
+            content=jsonable_encoder(
+                {
+                    "errors": exc.errors(),
+                    "body": exc.body,
+                    "message": "Validation failed. Please check the errors.",
+                }
+            ),
         )
 
     @lapp.exception_handler(FactHTTPException)
@@ -91,6 +109,20 @@ def create_app():
                 "errors": str(exception),
                 "body": repr(exception),
                 "message": "Workload validation failed.",
+            },
+        )
+
+    @lapp.exception_handler(RuleAcceptsNoParamsError)
+    @lapp.exception_handler(InvalidRuleParams)
+    async def rule_params_error_handler(
+        _request: Request, exception: Union[RuleAcceptsNoParamsError, InvalidRuleParams]
+    ) -> JSONResponse:
+        return JSONResponse(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            content={
+                "errors": [str(exception)],
+                "body": repr(exception),
+                "message": "Rule parameter validation failed.",
             },
         )
 
@@ -138,13 +170,6 @@ def create_app():
             logger.debug(f"REQUEST BODY ON ERROR: {body_bytes.decode('utf-8', errors='replace')}")
             return JSONResponse(status_code=500, content={"detail": "Internal Server Error"})
 
-    instrumentator = Instrumentator().instrument(lapp)
-
-    @lapp.on_event("startup")
-    async def startup():
-        instrumentator.expose(lapp)
-        asyncio.create_task(cleanup_expired_attributors())
-
     VERSION_INFO.labels(version=__version__).set(1)
     logger.info(f"Current Version: {__version__}")
 
@@ -154,9 +179,9 @@ def create_app():
 app = create_app()
 
 
-async def cleanup_expired_attributors():
+async def _cleanup_expired_attributors(aim: attributor_manager.AttributorManager):
     """Background task to periodically clean up expired attributors."""
     while True:
-        app.state.aim.cleanup_expired_attributors()
-        # Run cleanup every hour
-        await asyncio.sleep(3600)
+        aim.cleanup_expired_attributors()
+        # Run cleanup every 1 hour
+        await asyncio.sleep(60 * 60 * 1)

@@ -56,7 +56,7 @@ def _parse_megatron_ranks(
             score = float(match.group("score"))
             rank = int(match.group("rank"))
             try:
-                node = ctx.job_info.verify_rank(rank)
+                node = ctx.job_info.get_name_from_rank(rank)
                 items.append(MegatronStragglerItem(rank, node, score, source.derived(rule=rule_name)))
             except UnknownResourceError:
                 logger.debug(f"Skipping Megatron straggler rank {rank}: unknown resource (score={score})")

@@ -15,7 +15,7 @@ description = "NVIDIA Attribution Service"
 readme = "README.md"
 license = "LicenseRef-NvidiaProprietary"
 license-files = ["LICENSE"]
-requires-python = ">=3.12.3, <3.13"
+requires-python = ">=3.13,<3.14"
 classifiers = ["Private :: Do Not Upload"]
 dependencies = [
     "attribution-lib",
@@ -23,6 +23,8 @@ dependencies = [
     "h11==0.16.0",
     "loguru>=0.7.3",
     "openpyxl>=3.1.5",
+    "opentelemetry-exporter-otlp-proto-grpc>=1.30.0,<2.0.0",
+    "opentelemetry-sdk>=1.30.0,<2.0.0",
     "prometheus-client>=0.21.1",
     "prometheus-fastapi-instrumentator>=7.1.0",
     "uvicorn",
