@@ -280,9 +280,8 @@ def ib_symptom_cleanup(
             if (job_info.interest_end_time - job_info.interest_start_time) > timedelta(minutes=job_info.time_limit):
                 discard_cascaded_ib_symptoms(symptoms, ib_and_efa_errors_only=True)
 
-    # On affected CSP fabrics, EAP certificates are good for 2 hours. If the job runs for less than 2 hours and never sees an
-    # auth success, then we can't be certain if the failure was job fatal or not as the certificate may still be valid.
-    # If the job runs longer than 2 hours, then we can be certain that the failure was job fatal.
+    # Short jobs with an EAP failure but no recovery signal are ambiguous.
+    # Discard the failure until the job crosses the established observation window.
     if "EAP authentication failed" in symptoms and job_info is not None and job_info.job_end_time is not None:
         elapsed_time_hours = (job_info.job_end_time - job_info.job_start_time).total_seconds() / 3600
         if elapsed_time_hours < 2:

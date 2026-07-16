@@ -1,18 +1,18 @@
 # CLAUDE.md: Notes for agents and integrators
 
-This file is the deeper FAQ surface for agents and integrators. The README's "What it doesn't do" section is the short version. This is the long version.
+This file is the deeper FAQ surface for agents and integrators. The README's "What it doesn't do" section is the short version. This is the long version. This maintained guide is part of the distributed source tree.
 
 ## Capability boundaries
 
 * **Attribution is post-hoc, not predictive.** The unit of analysis is a workload that has reached a terminal state. Attribution cannot tell you a node will fail before symptoms appear.
 * **Attribution doesn't probe.** It reads the logs and metrics already collected by the operator's stack. It doesn't run `nvidia-smi`, `dcgmi diag`, `nvidia-fielddiag`, or any other diagnostic. Operators run those, and the output may land in syslog or a log store the Blueprint reads, but the running of the command is outside Attribution's scope.
-* **Attribution recommends next steps. It does not make hardware-call decisions.** The verdict describes the cascade, names the rule that fired, and renders recommended next steps tied to that rule (capture this evidence, drain this node, reset that GPU, restart fabric manager, escalate). It does not make binary hardware-call decisions (replace, return to service). Those calls are the operator's.
+* **Attribution provides evidence. It does not make hardware-call decisions.** The verdict describes the cascade, identifies the root symptom, and names responsible nodes when the evidence supports it. It does not make binary hardware-call decisions (replace, return to service). Those calls are the operator's.
 * **Attribution doesn't replace incident management.** A diagnosis is one input to whatever ticketing, paging, and runbook system the operator already runs. It is not itself an incident-management surface.
 
 ## Common operator misreads
 
-* **"Fail / hardware" doesn't mean replace the hardware.** It means the cascade's root cause sits in the hardware sub-domain. The action that follows is the operator's, not Attribution's. Attribution renders the recommended next steps tied to the rule. Those next steps describe what to do operationally. They do not recommend hardware replacement.
-* **Empty `responsible` isn't an error.** When the cascade doesn't point at a single node, `responsible` is null. That is honest output, not a failure.
+* **"Fail / hardware" doesn't mean replace the hardware.** It means the cascade's root cause sits in the hardware sub-domain. The operational action that follows is the operator's, not Attribution's.
+* **An empty responsible-node list isn't an error.** When the cascade doesn't point at a single node, `responsible_nodes_json` is an empty list. That is honest output, not a failure.
 * **An `ambiguous` or `unattributed` `sub_domain` isn't a bug.** When the evidence supports multiple plausible causes, `sub_domain` is `ambiguous`. When the evidence is insufficient to attribute a cause, `sub_domain` is `unattributed`. The distinction tells you whether the uncertainty is multiple causes fitting or insufficient evidence. Both are information, not failure.
 
 ## Missing signals and data gaps

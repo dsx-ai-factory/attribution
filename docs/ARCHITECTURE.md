@@ -1,13 +1,74 @@
 # Architecture
 
+## Overview
+
 NVIDIA Attribution is two components plus a set of connector frameworks the Blueprint exposes to operators.
 
 | Component | Role | Language | External integration surface |
 |---|---|---|---|
-| Attribution Service (fact-attribution-service) | HTTP REST service. Owns the rules engine. Receives observations, returns one verdict per attributor handle. | Python 3.13, FastAPI / Uvicorn | HTTP API at /v2/... |
+| Attribution Service (fact-attribution-service) | HTTP REST service. Owns the rules engine. Receives observations, returns one verdict per attributor handle. | Python `>=3.14.6,<3.15`, FastAPI / Uvicorn | HTTP API at /v2/... |
 | Attribution Blueprint (attribution-blueprint) | Single-process reference orchestrator. Discovers workloads, collects observations, calls the Service, writes verdicts. | Python 3.11+ | CLI entry: nvidia-attribution-blueprint. Read-side dashboard: nvidia-attribution-blueprint-web. |
 
 The Service does not query schedulers, read logs, or scrape metrics. The Blueprint does. The Service receives normalized observations over HTTP and returns a verdict. That separation is what lets operators run the Service centrally and the Blueprint at the edge of each cluster.
+
+```mermaid
+flowchart TD
+    subgraph cfg["configuration surfaces"]
+        direction LR
+        CLI[CLI args<br/>--connector ...]
+        ENV[env vars<br/>NVAB_*]
+        TOML[TOML file<br/>--config]
+    end
+
+    Settings[canonical settings dict<br/>precedence: CLI > env > TOML > defaults]
+
+    Orch([AttributionOrchestrator])
+
+    subgraph fw["connector frameworks"]
+        ECA[eca]
+        ECASlurm[slurm]
+        ECAStatic[static]
+        ECAKueue[kueue]
+        ECA --> ECASlurm
+        ECA --> ECAStatic
+        ECA --> ECAKueue
+
+        Log[log]
+        LogLoki[loki]
+        LogLocal[local_file]
+        LogKubectl[kubectl_logs]
+        Log --> LogLoki
+        Log --> LogLocal
+        Log --> LogKubectl
+
+        Met[metrics]
+        MetProm[promql]
+        Met --> MetProm
+
+        Attr[attribution]
+        AttrHTTP[HTTP client]
+        Attr --> AttrHTTP
+
+        Out[output]
+        OutStdout[stdout]
+        OutSqlite[sqlite]
+        Out --> OutStdout
+        Out --> OutSqlite
+    end
+
+    Service[attribution service<br/>HTTP v2 API]
+
+    CLI --> Settings
+    ENV --> Settings
+    TOML --> Settings
+    Settings --> Orch
+    Orch --> ECA
+    Orch --> Log
+    Orch --> Met
+    Orch --> Attr
+    Orch --> Out
+    AttrHTTP <-->|observations,<br/>verdict| Service
+```
 
 ## End-to-end flow for one workload
 
@@ -43,8 +104,8 @@ The Service returns a raw verdict. The Blueprint enriches it with normalized fie
 |---|---|---|
 | terminal_state | string | pass, fail, cancelled, expected_failure, unknown |
 | sub_domain | string | none, hardware, system_software, application, ambiguous, unattributed, expected, artificial, unclassified, plus cancellation/incomplete variants |
-| tenant_sre_action | string | Rendered runbook text for the tenant persona. Field name expected to change at GA. External consumers should consume the action surface through a stable alias once published. |
-| cloud_operator_sre_action | string | Rendered runbook text for the operator persona. Same rename note as above. |
+| tenant_sre_action | string | Reserved field that is currently emitted as an empty string. |
+| cloud_operator_sre_action | string | Reserved field that is currently emitted as an empty string. |
 | connector_reports | list | List of {connector: str, source: str, status: "ok" or "error", reason: str, observation_count: int} |
 
 `terminal_state` and `sub_domain` are mapped from the service verdict via `taxonomy.py`. The mapping is deterministic. Downstream consumers should branch on these normalized fields.

@@ -7,8 +7,8 @@ component = "static"
 
 [eca.static]
 id = "workload-0100"
-start_time = "2026-07-02T09:21:00+00:00"
-end_time = "2026-07-05T15:21:00+00:00"
+start_time = "2026-07-10T08:17:00+00:00"
+end_time = "2026-07-13T14:17:00+00:00"
 nodes = [
   "node-0100",
   "node-0100-peer-0001",
@@ -59,14 +59,12 @@ component = "local_file"
 
 [log.applog.local_file]
 paths = ["blueprint/docs/sample-data/static/applog/workload-0100"]
-max_bytes = "16MB"
 
 [log.syslog]
 component = "local_file"
 
 [log.syslog.local_file]
 paths = ["blueprint/docs/sample-data/static/syslog/workload-0100"]
-max_bytes = "16MB"
 
 [output.db]
 component = "sqlite"

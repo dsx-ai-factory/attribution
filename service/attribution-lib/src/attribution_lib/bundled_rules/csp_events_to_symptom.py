@@ -42,10 +42,9 @@ HOST_FAILURE_REASON_TO_SYMPTOM: dict[str, str] = {
     "BAD_MEMORY": "CSP Event Memory Fault",
     "BAD_SSD": "CSP Event Storage Device Fault",
     "BAD_IPU": "CSP Event IPU Fault",
-    # Tenant (NVIDIA SRE automation) reported the host faulty via the provider API -- an internal operation,
-    # not a CSP-detected hardware diagnosis. Distinct from BAD_HARDWARE (the provider's own hostError detection).
+    # A tenant report is distinct from a provider-detected hardware diagnosis.
     "TENANT_REPORTED": "CSP Event Tenant Reported As Faulty",
-    # The provider evicted the VM for host maintenance (terminateOnHostMaintenance) -- CSP-initiated termination.
+    # Provider-initiated host maintenance terminated the VM.
     "CSP_TERMINATED": "CSP Event Terminated by CSP",
 }
 
@@ -111,10 +110,8 @@ def get_symptom(category: str, reason: Optional[str], status: str) -> Optional[s
     if category in SKIP_CATEGORIES:
         return None
 
-    # PENDING events already carry category/reason from the provider's initial triage.
-    # Use the specific symptom when available to reduce attribution delay from
-    # ~74h to ~2h. Fall back to generic "pending classification" only when the
-    # category/reason doesn't map to a known symptom.
+    # PENDING events can carry a category and reason. Use a specific symptom
+    # when one is available, and fall back to pending classification otherwise.
     if status == "CLASSIFICATION_PENDING":
         specific = _symptom_from_category(category, reason)
         return specific if specific is not None else "CSP Event Classification Pending"

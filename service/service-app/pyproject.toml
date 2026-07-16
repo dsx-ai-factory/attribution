@@ -15,7 +15,7 @@ description = "NVIDIA Attribution Service"
 readme = "README.md"
 license = "LicenseRef-NvidiaProprietary"
 license-files = ["LICENSE"]
-requires-python = ">=3.13,<3.14"
+requires-python = ">=3.14.6,<3.15"
 classifiers = ["Private :: Do Not Upload"]
 dependencies = [
     "attribution-lib",

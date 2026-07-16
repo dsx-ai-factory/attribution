@@ -19,7 +19,7 @@ from attribution_lib.exceptions import (
     JobInfoError,
     RuleAcceptsNoParamsError,
 )
-from fastapi import FastAPI, Request, Response, status
+from fastapi import FastAPI, Request, status
 from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
@@ -139,35 +139,13 @@ def create_app():
 
     @lapp.middleware("http")
     async def log_http(request: Request, call_next):
-        # Read and log the request body
-        body_bytes = await request.body()
-        logger.debug(f"REQUEST: {request.method} {request.url} Body: {body_bytes.decode('utf-8', errors='replace')}")
-
-        # Create a new request with the body for downstream handlers
-        async def receive():
-            return {"type": "http.request", "body": body_bytes}
-
-        request = Request(request.scope, receive)
-
+        logger.debug(f"REQUEST: {request.method} {request.url.path}")
         try:
             response = await call_next(request)
-            # Read and log the response body
-            response_body = b""
-            async for chunk in response.body_iterator:
-                response_body += chunk
-            logger.debug(
-                f"RESPONSE: {request.method} {request.url} Status: {response.status_code} Body: {response_body.decode('utf-8', errors='replace')}"
-            )
-            # Return a new response with the captured body
-            return Response(
-                content=response_body,
-                status_code=response.status_code,
-                headers=dict(response.headers),
-                media_type=response.media_type,
-            )
-        except Exception as e:
-            logger.exception(f"Error handling request: {e}")
-            logger.debug(f"REQUEST BODY ON ERROR: {body_bytes.decode('utf-8', errors='replace')}")
+            logger.debug(f"RESPONSE: {request.method} {request.url.path} Status: {response.status_code}")
+            return response
+        except Exception as exception:
+            logger.exception(f"Error handling request: {exception}")
             return JSONResponse(status_code=500, content={"detail": "Internal Server Error"})
 
     VERSION_INFO.labels(version=__version__).set(1)

@@ -6,7 +6,7 @@ Attribution handles workloads from single-GPU jobs to 10k+ GPU multi-rank traini
 
 ## How do you know the rules are accurate?
 
-Each rule is calibrated against historical attribution outcomes from NVIDIA's internal production clusters. New rules go through a calibration cycle (synthetic-fixture tests in the test framework, then a shadow-run period against historical data) before they ship with the product.
+Bundled rules are validated with synthetic fixtures and regression tests before they ship with the product.
 
 ## How does attribution quality degrade when log coverage is incomplete?
 
@@ -19,7 +19,7 @@ The minimum useful set for most rules is one log source (applog or syslog) plus 
 
 ## Does NVIDIA Attribution need real-time switch logs?
 
-No. Most rules run on node-local signals (XIDs, DCGM counters via PromQL, dmesg, scheduler events). A narrow set of multi-host NVLink cascade rules requires switch logs to fire. Without switch-log access those specific rules don't fire. The rest of the catalog runs normally. NVIDIA Attribution operates today on clusters that don't expose real-time switch logs.
+No. Most rules run on node-local signals (XIDs, DCGM counters via PromQL, dmesg, scheduler events). A narrow set of multi-host NVLink cascade rules requires switch logs to fire. Without switch-log access those specific rules don't fire. The rest of the catalog runs normally without real-time switch logs.
 
 ## How does the Blueprint authenticate against the Service?
 
@@ -27,11 +27,11 @@ The Blueprint's attribution connector calls the Service over HTTP with `service_
 
 ## Can I extend the rule set?
 
-For your own deployment: yes. The rule schema, the cascade-pattern syntax, and the test framework are all public, so you can author and run rules against your own Service instance. Upstream contributions open at GA. See the Contributing tab for the EA-period stance.
+During private preview, the bundled rules are not a supported customer extension point. Upstream contributions open at GA. See the Contributing tab for the EA-period stance.
 
 ## What's the schema-versioning policy?
 
-The Service exposes a versioned HTTP API. V1 paths are under `/v2/...` (the version reflects the contract iteration, not the product version). The compound outcome representation (`terminal_state` + `sub_domain`, plus the recommended next-steps field) is the V1 contract. During pre-release development, SQLite schema changes are applied in place and sample databases should be regenerated with the current tooling.
+NVIDIA Attribution product V1 uses the Service's `/v2/...` HTTP API routes. The `/v2` route prefix is the Service API version and is independent of the product version. The compound outcome representation (`terminal_state` + `sub_domain`) is the product V1 contract. During pre-release development, SQLite schema changes are applied in place and sample databases should be regenerated with the current tooling.
 
 ## What happens when the symptoms are ambiguous?
 
@@ -39,7 +39,7 @@ When evidence supports multiple plausible causes, `sub_domain` is `"ambiguous"`.
 
 ## What hardware does NVIDIA Attribution cover?
 
-A100, H100, L40S, B200, GB200. The same rule library runs across all five. GB200 rule coverage matures as production telemetry accumulates. No timeline commitments for future generations.
+A100, H100, L40S, B200, GB200, GB300. The same rule library runs across all six. GB200 and GB300 rule coverage continues to mature as coverage expands. No timeline commitments for future generations.
 
 ## What happens on Kueue when pods are garbage-collected before attribution runs?
 

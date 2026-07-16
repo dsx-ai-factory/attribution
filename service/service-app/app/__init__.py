@@ -9,4 +9,4 @@
 # its affiliates is strictly prohibited.
 
 # Static version stamped when the release bundle is built; the +<sha> suffix identifies the source commit.
-__version__ = "0.0.0+c05b4e3d"
+__version__ = "0.0.0+f78b551f"

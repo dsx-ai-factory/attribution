@@ -116,6 +116,7 @@ class AttributorWrapper:
 
         self.attributor = Attributor.new(event_stream, job_info)
         self._checkpoint_backend = MemoryCheckpointBackend()
+        self._timezone = job_info.timezone
         self.parameters = info.parameters
         self.lock = threading.Lock()
         self.last_access_time = datetime.now()
@@ -132,9 +133,9 @@ class AttributorWrapper:
         with self.lock:
             try:
                 logger.debug(f"Ingesting observation for attributor {self.id}")
-                id = self.attributor.ingest(observation.to_lib_observation())
+                _id = self.attributor.ingest(observation.to_lib_observation(self._timezone))
                 self.last_access_time = datetime.now()
-                logger.debug(f"Successfully ingested observation for attributor {self.id}, returned ingest_id: {id}")
+                logger.debug(f"Successfully ingested observation for attributor {self.id}, returned ingest_id: {_id}")
             except LibDuplicateObservationError as e:
                 logger.warning(f"Duplicate observation error for attributor {self.id}: {e.id}")
                 raise DuplicateObservationError.new(e.id).to_http_exception() from e
@@ -143,7 +144,7 @@ class AttributorWrapper:
                     f"Source/format mismatch error for attributor {self.id}: source={e.source}, format={e.format}"
                 )
                 raise IncompatibleObservationSourceFormatError(source=e.source, format=e.format) from e
-            return id
+            return _id
 
     def attribute(self) -> AttributionContext:
         with self.lock:

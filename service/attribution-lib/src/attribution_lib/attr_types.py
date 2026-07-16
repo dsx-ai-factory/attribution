@@ -41,8 +41,8 @@ _NCCL_PID_SUFFIX_RE = re.compile(r"<\d+>.*", re.DOTALL)
 def _normalize_node(name: str) -> str:
     """Normalize a node name by stripping NCCL ``<pid>`` suffixes and lowercasing.
 
-    Lowercasing ensures that the same physical node (e.g. ``nvl72D089-T13``
-    from log-line parsing vs ``nvl72d089-t13`` from Loki labels) maps to a
+    Lowercasing ensures that the same physical node (e.g. ``Node-042.Example.COM``
+    from log-line parsing vs ``node-042.example.com`` from labels) maps to a
     single key in ``JobNodeAttributions``.  Canonical casing is restored
     later by ``update_to_canonical`` in the report layer.
 

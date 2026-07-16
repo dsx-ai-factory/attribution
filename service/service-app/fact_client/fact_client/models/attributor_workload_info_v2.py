@@ -31,6 +31,7 @@ class AttributorWorkloadInfoV2(BaseModel):
     type: StrictStr
     srun_cmd: Optional[StrictStr] = None
     job_start_time: datetime
+    timezone: StrictStr
     job_end_time: Optional[datetime] = None
     interest_start_time: Optional[datetime] = None
     interest_end_time: Optional[datetime] = None
@@ -44,7 +45,7 @@ class AttributorWorkloadInfoV2(BaseModel):
     username: StrictStr
     last_tflops_time: Optional[datetime] = None
     framework: StrictStr
-    __properties: ClassVar[List[str]] = ["id", "type", "srun_cmd", "job_start_time", "job_end_time", "interest_start_time", "interest_end_time", "exit_code_signal", "cancelled_by", "time_limit", "failed_node", "status", "nodes", "name", "username", "last_tflops_time", "framework"]
+    __properties: ClassVar[List[str]] = ["id", "type", "srun_cmd", "job_start_time", "timezone", "job_end_time", "interest_start_time", "interest_end_time", "exit_code_signal", "cancelled_by", "time_limit", "failed_node", "status", "nodes", "name", "username", "last_tflops_time", "framework"]
 
     model_config = ConfigDict(
         validate_by_name=True,
@@ -146,6 +147,7 @@ class AttributorWorkloadInfoV2(BaseModel):
             "type": obj.get("type"),
             "srun_cmd": obj.get("srun_cmd"),
             "job_start_time": obj.get("job_start_time"),
+            "timezone": obj.get("timezone"),
             "job_end_time": obj.get("job_end_time"),
             "interest_start_time": obj.get("interest_start_time"),
             "interest_end_time": obj.get("interest_end_time"),

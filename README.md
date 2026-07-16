@@ -25,7 +25,7 @@ NVIDIA Attribution identifies and correlates symptoms from XIDs, NCCL events, ap
 
 Two short examples:
 
-* **NCCL collective fails with a paired XID.** A multi-rank training job runs. An NVLink fabric error fires XID 149 on one GPU. The downstream NCCL error follows on a different rank. NVIDIA Attribution returns `terminal_state: fail`, `sub_domain: hardware`, identifies the responsible node, and renders the recommended next steps tied to the rule that fired.
+* **NCCL collective fails with a paired XID.** A multi-rank training job runs. An NVLink fabric error fires XID 149 on one GPU. The downstream NCCL error follows on a different rank. NVIDIA Attribution returns `terminal_state: fail`, `sub_domain: hardware`, and identifies the responsible node.
 * **Symptom chain surfaces operator context even when the verdict points at hardware.** A BLAS workload running at 4 AM is interrupted when a node in the allocation is rebooted mid-run. The logs show XID 145 in dmesg and a Slurm NODE_FAIL. The cascade matches a hardware-class rule, so NVIDIA Attribution returns `terminal_state: fail`, `sub_domain: hardware`. The symptom chain in the output includes the reboot event upstream of the XID. An operator reading the chain sees the reboot, recognizes the cause, and keeps the node in production. The verdict says what the cascade matched. The chain shows the broader context. The operator decides.
 
 ## How the engine works
@@ -34,7 +34,7 @@ A workload finishes. The engine looks back at what happened.
 
 1. **Scope.** The workload is identified either by its workload context IDs (for example scheduler job IDs), from which the Blueprint resolves the node list and execution time window, or directly by a time window paired with a node list. That scope selects which logs and metrics the engine reads.
 2. **Extract.** Log and metric sources are filtered to that window. Significant events are extracted (using the extractor ruleset) into structured events: XID codes, NCCL errors, scheduler transitions, DCGM metrics, each with a timestamp and source node.
-3. **Filter & Correlate.** Filter rules are run against the event set. These rules handle interactions between event types — an XID firing on one node while NCCL times out on another is a different pattern from either event alone. New symptoms may be added, others discarded. **Diagnose.** Symptoms are ranked and collapsed to a single verdict: a failure class, the nodes most associated with the failure, and the recommended next step for that class.
+3. **Filter & Correlate.** Filter rules are run against the event set. These rules handle interactions between event types — an XID firing on one node while NCCL times out on another is a different pattern from either event alone. New symptoms may be added, others discarded. **Diagnose.** Symptoms are ranked and collapsed to a single verdict: a failure class, the nodes most associated with the failure, and the root symptom for that class.
 
 The example below shows what that collapse looks like for a single workload.
 
@@ -52,7 +52,6 @@ The engine collapses these transport symptoms to one root cause. For this worklo
 ```None
 terminal_state:       fail
 sub_domain:           system_software
-tenant_sre_action:    [rendered runbook with the recommended next steps]
 ```
 
 ## At NVIDIA scale
@@ -64,18 +63,18 @@ Three cases the rules engine handles in production:
 
 ## What NVIDIA Attribution doesn't do
 
-* **NVIDIA Attribution doesn't probe.** It is a log correlation engine. It does not run diagnostic commands or probe hardware state. The output describes the cascade, names the rule that fired, and recommends next steps (capture this evidence, drain this node, reset that GPU, restart fabric manager, escalate). It does not make binary hardware-call decisions (replace, return to service). Those calls are the operator's.
+* **NVIDIA Attribution doesn't probe.** It is a log correlation engine. It does not run diagnostic commands or probe hardware state. The output describes the cascade and names the rule that fired. It does not make binary hardware-call decisions (replace, return to service). Those calls are the operator's.
 * **NVIDIA Attribution doesn't replace your monitoring or telemetry stack.** It consumes the signals your stack already produces (XIDs, scheduler state, log lines, Prometheus counters). It does not ingest, route, or alert on healthy workloads.
 * **NVIDIA Attribution doesn't claim definitive attribution where the symptoms are ambiguous.** Output quality scales with the quantity and coverage of the logs the Service sees. When multiple causes fit, `sub_domain` is `ambiguous`; when the evidence is insufficient to attribute, `sub_domain` is `unattributed`. Those are honest narrowings, not false confidence.
 
 ## Prerequisites
 
-* **Python.** 3.13 on the host running the Attribution Service. 3.11+ on the host running the Blueprint orchestrator. The two can run on the same host or different hosts.
+* **Python.** `>=3.14.6,<3.15` on the host running the Attribution Service. 3.11+ on the host running the Blueprint orchestrator. The two can run on the same host or different hosts.
 * **uv package manager.** Install with `curl -LsSf https://astral.sh/uv/install.sh | sh`. Every `uv run` command resolves and installs dependencies on first invocation, no separate install step.
 * **Scheduler.** Slurm 25.11+ (SLUID required), or Kueue v0.6+ with JobSet v0.5+ for JobSet-shaped distributed training.
 * **Telemetry backends (any subset of):** Loki for application or system logs, a PromQL-compatible Prometheus or Mimir instance for node metrics, `kubectl` access for Kueue pod log collection, or local files for sacct-resolved StdOut/StdErr paths.
 * **Network reach.** The Blueprint must reach the Attribution Service over HTTP. The Service does not need outbound network access.
-* **Supported GPU architectures.** A100, H100, L40S, B200, GB200, GB300. GB200 and GB300 rule coverage continues to mature as production telemetry accumulates.
+* **Supported GPU architectures.** A100, H100, L40S, B200, GB200, GB300. GB200 and GB300 rule coverage continues to mature as coverage expands.
 
 ## Quick start
 
@@ -156,6 +155,9 @@ If you are running from a source checkout rather than the release bundle, use th
 ## Where to go for more
 
 * Runnable release-bundle quickstart: [docs/quickstart.md](blueprint/docs/quickstart.md)
+* Blueprint configuration reference: [docs/CONFIGURATION.md](blueprint/docs/CONFIGURATION.md)
+* Kueue example: [examples/kueue](blueprint/examples/kueue)
+* Attribution Service v2 REST walkthrough: [docs/rest-api.md](blueprint/docs/rest-api.md)
 * Static sample configs used by the quickstart: [examples/static/configs](blueprint/examples/static/configs)
 * Static sample evidence used by those configs: [docs/sample-data/static](blueprint/docs/sample-data/static)
 
@@ -177,3 +179,7 @@ Contributions open at GA.
 ## License
 
 NVIDIA Attribution is currently distributed under the NVIDIA AI Enterprise Early Access agreement during private preview. This project will download and install additional third-party open source software projects. Review the license terms of these open source projects before use.
+
+## Use cases
+
+For task-focused workflows, see the [Attribution Blueprint use-case guides](blueprint/docs/use-cases/README.md).

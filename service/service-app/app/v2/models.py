@@ -12,6 +12,7 @@ from collections import defaultdict
 from collections.abc import Mapping
 from datetime import datetime
 from typing import Annotated, Any, Literal, Optional
+from zoneinfo import ZoneInfo
 
 from attribution_lib.attr_types import JobNodeAttributions
 from attribution_lib.core import AttributionResult
@@ -31,7 +32,7 @@ from app.attributor import (
 )
 from app.exceptions import ResponseModel
 from app.observation import ObservationId
-from app.util import HashableModel, to_zoneinfo
+from app.util import HashableModel
 
 
 class AttributorWorkloadInfoV2(HashableModel):
@@ -41,6 +42,7 @@ class AttributorWorkloadInfoV2(HashableModel):
     type: str
     srun_cmd: Optional[str] = "dummy"
     job_start_time: AwareDatetime
+    timezone: ZoneInfo
     job_end_time: Optional[AwareDatetime] = None
     interest_start_time: Optional[AwareDatetime] = None
     interest_end_time: Optional[AwareDatetime] = None
@@ -74,7 +76,7 @@ class AttributorInfoV2(HashableModel):
             state=w.status,
             job_start_time=w.job_start_time,
             source_name="attributor service translation",
-            timezone=to_zoneinfo(w.job_start_time),
+            timezone=w.timezone,
             node_to_ranks=w.nodes,
         )
         if w.interest_start_time:

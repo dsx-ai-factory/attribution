@@ -34,7 +34,6 @@ component = "local_file"
 
 [log.applog.local_file]
 paths = ["{std_out}", "{std_err}"]
-max_bytes = "2GB"
 
 [output.db]
 component = "sqlite"
@@ -58,7 +57,7 @@ uv run nvidia-attribution-blueprint \
 | `--connector TOKEN...` | Yes | Configuration assignment. The last token is the value; earlier tokens form the path. `--connector eca slurm` selects a component, `--connector eca slurm ids "1,5"` sets a parameter. End a path with `help` to list valid keys at that level. |
 | `--config PATH` | Yes | TOML config file. When neither `--config` nor `--configs` is given, `./attribution-blueprint.toml` is used if it exists. |
 | `--configs DIR` | Yes | Directory of TOML configs. Runs every top-level `*.toml` file in sorted order, one attribution pass per file. Fails if the directory contains no top-level `.toml` files. |
-| `--dump-observations DIR` | No | Write each collected observation to `DIR/<ctx-id>.<source>.json` before submitting it to the service. |
+| `--dump-observations DIR` | No | Write collected observations to `DIR/<ctx-id>.<source>.json` before service-specific adaptation and submission. Multiple observations with the same context ID and source use the same path, so the last one replaces earlier dumps. |
 
 Notes:
 
@@ -77,6 +76,9 @@ The blueprint uses this section to call the attribution service.
 | `service_url` | Yes in practice | `http://localhost:8080` | Base URL for the attribution service. Set this explicitly because the service examples normally run on port `8000`. |
 | `timeout_seconds` | No | `60.0` | HTTP timeout for service calls. |
 
+For the service v2 request lifecycle and wire schemas, see
+[Attribution Service REST API](./rest-api.md).
+
 Example:
 
 ```toml
@@ -93,7 +95,7 @@ timeout_seconds = 60
 |---|---:|---|---|
 | `[eca].component` | No | `slurm` | Selects the execution context adapter: `slurm`, `kueue`, or `static`. Defaults to `slurm` when unset. |
 | `sacct_path` | No | `sacct` | Path to the `sacct` binary. Use an absolute path if `sacct` is not on `PATH`. |
-| `cluster_tz` | Strongly recommended | blueprint host timezone | IANA timezone for the SLURM controller, used to anchor naive `sacct` timestamps. |
+| `cluster_tz` | Strongly recommended | blueprint host fixed offset | IANA timezone for the SLURM controller, used to anchor naive `sacct` timestamps and preserve regional/DST identity. |
 | `ids` | Per run | none | Comma-separated job IDs. Usually pass this by CLI, not TOML. |
 | `start_time` | Per run | none | ISO-8601 time for time-range mode. |
 | `end_time` | Per run | none | ISO-8601 time for time-range mode. Required with `start_time`. |
@@ -131,7 +133,12 @@ Runtime selector rules, validated on the merged configuration before the run sta
 
 **Cluster Timezone Gotcha**
 
-If the blueprint host and slurmctld run in different timezones, `cluster_tz` is effectively required, not optional. The default ("blueprint host timezone") silently mis-anchors `sacct` timestamps when the two hosts disagree.
+Set `cluster_tz` whenever the blueprint can run in a different timezone from
+slurmctld, the controller's timezone observes daylight-saving changes, or its
+UTC offset is not a whole hour. The host fallback loses the regional timezone
+identity. If an unconfigured job spans a UTC offset change or uses a non-hour
+offset, the blueprint rejects it instead of sending an incorrect timezone to
+the Service.
 
 - Symptom: sacct timestamps are shifted by hours, causing attribution windows to miss the real job range.
 - How to find the right value: run `timedatectl` on the slurmctld host, or ask cluster ops for the canonical IANA timezone (for example, `America/Los_Angeles` or `UTC`).
@@ -184,6 +191,20 @@ Kueue time-range filtering is client-side because the Workload API does not
 provide server-side time filtering. Pod evidence and `kubectl_logs` collection
 depend on the owned pods still existing when the blueprint runs.
 
+The adapter derives `state` from Kueue conditions, using finished conditions
+before evicted, preempted, admitted, quota-reserved, and pending conditions.
+For example, a `Finished=True` condition with reason `Succeeded` becomes
+`FINISHED_SUCCEEDED`. This scheduler lifecycle state is separate from the
+Attribution Service verdict.
+
+The adapter marks a node as failed when one of its selected pods has a
+container with a non-zero terminated exit code. If more than one node meets
+that condition, `failed_node` is the alphabetically first node name so the
+result is stable across Kubernetes response orderings.
+
+For a complete runnable configuration, see
+[examples/kueue](../examples/kueue/README.md).
+
 ### `[eca.static]`
 
 Use the static adapter for sample data, local smoke tests, or cases where an
@@ -199,6 +220,7 @@ component = "static"
 id = "sample-job"
 start_time = "2026-05-25T00:00:00+00:00"
 end_time = "2026-05-25T00:30:00+00:00"
+timezone = "UTC"
 nodes = ["node-a"]
 state = "FAILED"
 name = "sample-job"
@@ -221,20 +243,33 @@ contexts_path = "path/to/static-contexts.json"
 
 | Field | Required | Default | Meaning |
 |---|---:|---|---|
-| `contexts_path` | Alternative to inline fields | none | JSON file containing either a context list or an object with a `contexts` list. Each context requires `id`, `start_time`, `end_time` (timezone-aware), and `nodes`; duplicate `id` values are rejected. |
+| `contexts_path` | Alternative to inline fields | none | JSON file containing either a context list or an object with a `contexts` list. Each context requires `id`, `start_time`, `end_time` (timezone-aware), and `nodes`; duplicate `id` values are rejected. Optional `timezone` values are validated as IANA names. |
 | `id` | No for inline mode | `static-<hash>` | Execution context ID. The default hash is derived from `start_time`, `end_time`, and `nodes`. |
 | `start_time` | Yes for inline mode | none | Timezone-aware ISO-8601 start time. |
 | `end_time` | Yes for inline mode | none | Timezone-aware ISO-8601 end time. |
+| `timezone` | No | inferred when safe | IANA timezone used to interpret offsetless evidence. Set it when timestamps use a non-hour numeric offset or the workload uses a regional timezone, such as `Asia/Kolkata` or `America/Los_Angeles`. |
 | `nodes` | Yes for inline mode | none | Node list. Accepts a TOML list or a comma-separated string. |
-| `state` | No | `UNKNOWN` | Scheduler state string. |
+| `state` | No | `UNKNOWN` | Scheduler state sent unchanged as the service workload `status`. This is not the attribution verdict. |
 | `name` | No | none | Workload name. |
 | `user_name` | No | none | Workload owner. |
 | `std_out` | No | none | Path used by local file APPLOG placeholders. |
 | `std_err` | No | none | Path used by local file APPLOG placeholders. |
-| `workload_type` | No | empty string | Workload type sent to the service, such as `slurm`. |
+| `workload_type` | No | empty string | Workload type sent unchanged to service v2. The v2 schema accepts any string. Examples include `slurm`, `runai`, and `kueue`; the empty string means unspecified. |
 | `workload_framework` | No | none | Optional framework label, such as `pytorch`. |
 | `attempt_id` | No | `0` | Attempt key used by outputs. |
 | `gpu_count` | No | none | Optional allocated GPU count used by outputs and the web UI. |
+
+`state` is an open scheduler string, not a closed enum. Its value can affect
+fallback attribution when no stronger log or metric symptom exists. The
+current rules treat exactly `COMPLETED` as a successful fallback. Values such
+as `FAILED`, `UNKNOWN`, or an unrecognized scheduler-specific state fall back
+to `job failed`. Use the scheduler's real state, and do not use `state` to
+preselect the desired attribution outcome.
+
+`workload_type` identifies the workload manager to the service. The Kueue
+adapter currently sends an empty value and records `scheduler = "kueue"`
+internally for SQLite output. Static contexts can send `kueue` directly
+because service v2 accepts open string values.
 
 ### `[workload]`
 
@@ -341,7 +376,6 @@ component = "local_file"
 
 [log.applog.local_file]
 paths = ["{std_out}", "{std_err}"]
-max_bytes = "2GB"
 ```
 
 | Field | Required | Default | Meaning |
@@ -382,7 +416,6 @@ component = "local_file"
 
 [log.syslog.local_file]
 paths = ["/path/to/syslog"]
-max_bytes = "2GB"
 ```
 
 For an execution context whose `nodes` are `["node-a", "node-b"]`, the connector reads regular files directly under `/path/to/syslog/node-a/` and `/path/to/syslog/node-b/`. Missing per-node directories are logged at debug level; the connector warns when no node directory is found under any configured base path. `max_bytes` behaves as for APPLOG (default `2GB`). Each emitted syslog observation uses `raw_log`, with the regular syslog file text as its body.
@@ -466,10 +499,9 @@ component = "kubectl_logs"
 kubectl_path = "kubectl"
 context = "prod-batch"
 container = "trainer"
-timestamps = true
+timestamps = false
 previous = false
 since_context_start = true
-max_bytes_per_pod = "16MB"
 timeout_seconds = 60
 ```
 
@@ -491,8 +523,23 @@ Fields:
 the strings `true`/`false` (also `yes`/`no`/`1`/`0`) when set from the CLI or
 environment.
 
+For APPLOG, set `timestamps = false` when application lines already begin with
+a rank prefix such as `[rank 0]`. The current raw-log parser expects that prefix
+at the start of the line. A timestamp added by `kubectl` would appear first and
+prevent rank parsing. This setting only controls the prefix added by `kubectl`;
+the application log itself must still put its rank prefix first.
+
 This connector does not use `{std_out}` or `{std_err}`. Those placeholders are
 for local file log collection.
+
+The Kueue adapter and `kubectl_logs` connector are configured independently.
+Settings under `[eca.kueue]` are not inherited by
+`[log.<source>.kubectl_logs]`. Repeat `kubectl_path`, `kubeconfig`, and
+`context` when both components must use the same non-default values.
+
+Omitting `max_bytes_per_pod` keeps the default 16 MiB cap. It does not disable
+truncation. The current TOML configuration surface supports changing the cap,
+but not disabling it entirely.
 
 ## Metrics Collection
 

@@ -29,6 +29,7 @@ class SlurmExecutionContext(TypedDict):
     nodes: list[str]
     start_time: datetime
     end_time: datetime
+    timezone: NotRequired[str]
 
     job_id: str
     job_id_raw: NotRequired[str]  # Internal numeric jobid; %j at write time
@@ -249,6 +250,8 @@ def _parse_row(row: str, cluster_tz: ZoneInfo | None = None) -> SlurmExecutionCo
         "parent_job_id": parent_job_id,
         "state": state,
     }
+    if cluster_tz is not None:
+        ctx["timezone"] = cluster_tz.key
     if step_id is not None:
         ctx["step_id"] = step_id
     if job_name:

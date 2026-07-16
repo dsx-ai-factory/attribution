@@ -10,6 +10,7 @@
 
 import json
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from attribution_lib.observation.inbound import (
     Context as InboundContext,
@@ -22,7 +23,7 @@ from attribution_lib.resources import AllJobResources
 from pydantic import BaseModel, RootModel
 
 from app.exceptions import UnknownObservationFormatError
-from app.util import HashableModel, TimeInterval, to_zoneinfo
+from app.util import HashableModel, TimeInterval
 
 
 class ObservationContext(HashableModel):
@@ -33,13 +34,14 @@ class ObservationContext(HashableModel):
     source: ObservationSource
     format: ObservationFormat
 
-    def to_lib_context(self) -> InboundContext:
+    def to_lib_context(self, timezone: ZoneInfo) -> InboundContext:
+        """Convert the observation context to a lib context."""
         return InboundContext(
             TimeInterval(start=self.time_interval.start, end=self.time_interval.end),
             AllJobResources,
             self.source,
             self.format,
-            to_zoneinfo(self.time_interval.start),
+            timezone,
         )
 
 
@@ -62,19 +64,20 @@ class Observation(HashableModel):
     context: ObservationContext
     body: str
 
-    def to_lib_observation(self) -> LibObservation:
-        context = self.context.to_lib_context()
+    def to_lib_observation(self, timezone: ZoneInfo) -> LibObservation:
+        """Convert the observation to a lib observation."""
+        context = self.context.to_lib_context(timezone)
         body: str | list[str] | dict[str, Any]
         match context.format:
             case ObservationFormat.STRING_LIST:
                 body = self.body.split("\n")
             case ObservationFormat.RAW_LOG_LINES | ObservationFormat.CSV_METRIC_RESPONSE:
                 body = self.body.split("\n")
-            case ObservationFormat.LOKI_DICT_LIST:
+            case ObservationFormat.LOKI_DICT_LIST | ObservationFormat.PROMETHEUS_METRICS:
                 body = json.loads(self.body)
             case ObservationFormat.RAW_LOKI_STREAMS:
                 body = RawLokiStreams.model_validate_json(self.body).model_dump()
             case _:
                 raise UnknownObservationFormatError.new(str(context.format)).to_http_exception()
 
-        return LibObservation(self.context.to_lib_context(), body)
+        return LibObservation(context, body)
