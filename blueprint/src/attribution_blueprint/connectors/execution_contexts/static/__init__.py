@@ -21,10 +21,32 @@ import hashlib
 import json
 from datetime import datetime
 from pathlib import Path
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from attribution_blueprint import mca_registry as _registry
 from attribution_blueprint.mca_registry import _PARAM
 from attribution_blueprint.types import ExecutionContext
+
+
+def _iana_timezone_key(value: object, field: str) -> str:
+    """Validate and canonicalize an IANA timezone key.
+
+    Args:
+        value: Candidate timezone key.
+        field: Configuration field name for validation errors.
+
+    Returns:
+        The canonical ZoneInfo key.
+
+    Raises:
+        ValueError: If the value is not a valid IANA timezone key.
+    """
+    if not isinstance(value, str) or value == "":
+        raise ValueError(f"{field} must be a valid IANA timezone key, got {value!r}")
+    try:
+        return ZoneInfo(value).key
+    except ZoneInfoNotFoundError as exc:
+        raise ValueError(f"{field} must be a valid IANA timezone key, got {value!r}") from exc
 
 
 class StaticExecutionContextAdapter:
@@ -44,6 +66,7 @@ class StaticExecutionContextAdapter:
         workload_framework: str | None = None,
         attempt_id: str = "0",
         gpu_count: int | None = None,
+        timezone: str | None = None,
         contexts: list[ExecutionContext] | None = None,
     ):
         if gpu_count is not None and gpu_count < 0:
@@ -51,7 +74,15 @@ class StaticExecutionContextAdapter:
         if contexts is not None:
             if contexts == []:
                 raise ValueError("static ECA: contexts must be non-empty")
-            self._contexts = [dict(ctx) for ctx in contexts]
+            self._contexts = []
+            for ctx in contexts:
+                normalized = dict(ctx)
+                context_timezone = normalized.get("timezone")
+                if context_timezone is not None and context_timezone != "":
+                    normalized["timezone"] = _iana_timezone_key(
+                        context_timezone, f"static ECA context {ctx.get('id', '?')!r} timezone"
+                    )
+                self._contexts.append(normalized)
             self._id = ""
             self._start_time = None
             self._end_time = None
@@ -65,6 +96,7 @@ class StaticExecutionContextAdapter:
             self._workload_framework = workload_framework
             self._attempt_id = attempt_id
             self._gpu_count = gpu_count
+            self._timezone = None
             return
 
         if id is None or id == "":
@@ -98,6 +130,9 @@ class StaticExecutionContextAdapter:
         self._workload_framework = workload_framework
         self._attempt_id = attempt_id
         self._gpu_count = gpu_count
+        self._timezone = (
+            _iana_timezone_key(timezone, "static ECA: timezone") if timezone is not None and timezone != "" else None
+        )
 
     def discover(self) -> list[ExecutionContext]:
         if self._contexts is not None:
@@ -131,6 +166,8 @@ class StaticExecutionContextAdapter:
             ctx["workload_framework"] = self._workload_framework
         if self._gpu_count is not None:
             ctx["gpu_count"] = self._gpu_count
+        if self._timezone is not None:
+            ctx["timezone"] = self._timezone
         return [ctx]
 
     def discover_by_ids(self, ids: list[str]) -> list[ExecutionContext]:
@@ -242,6 +279,14 @@ def _normalize_context(raw_context: object, index: int, path: Path) -> Execution
     ctx["scheduler"] = str(raw_context.get("scheduler", "static"))
     ctx["job_id"] = str(raw_context.get("job_id", ctx["id"]))
     ctx["state"] = str(raw_context.get("state", "UNKNOWN"))
+    context_timezone = raw_context.get("timezone")
+    if context_timezone is not None and context_timezone != "":
+        try:
+            ctx["timezone"] = _iana_timezone_key(context_timezone, f"{path}: context #{index} timezone")
+        except ValueError as exc:
+            raise MCAError(str(exc)) from exc
+    else:
+        ctx.pop("timezone", None)
     if "time_limit" in raw_context and raw_context["time_limit"] is not None:
         ctx["time_limit"] = _coerce_int(raw_context["time_limit"], f"{path}: context #{index} time_limit")
     if "gpu_count" in raw_context and raw_context["gpu_count"] is not None:
@@ -273,21 +318,25 @@ def _build(spec: dict, ctx: dict) -> StaticExecutionContextAdapter:
         gpu_count = _coerce_int(gpu_count_raw, "eca.static.gpu_count")
         if gpu_count < 0:
             raise MCAError("eca.static.gpu_count must be non-negative")
-    return StaticExecutionContextAdapter(
-        id=id_str,
-        start_time=start_time,
-        end_time=end_time,
-        nodes=nodes,
-        state=spec.get("state", "UNKNOWN"),
-        name=spec.get("name"),
-        user_name=spec.get("user_name"),
-        std_out=spec.get("std_out"),
-        std_err=spec.get("std_err"),
-        workload_type=str(spec.get("workload_type", "")),
-        workload_framework=spec.get("workload_framework"),
-        attempt_id=str(spec.get("attempt_id", "0")),
-        gpu_count=gpu_count,
-    )
+    try:
+        return StaticExecutionContextAdapter(
+            id=id_str,
+            start_time=start_time,
+            end_time=end_time,
+            nodes=nodes,
+            state=spec.get("state", "UNKNOWN"),
+            name=spec.get("name"),
+            user_name=spec.get("user_name"),
+            std_out=spec.get("std_out"),
+            std_err=spec.get("std_err"),
+            workload_type=str(spec.get("workload_type", "")),
+            workload_framework=spec.get("workload_framework"),
+            attempt_id=str(spec.get("attempt_id", "0")),
+            gpu_count=gpu_count,
+            timezone=spec.get("timezone"),
+        )
+    except ValueError as exc:
+        raise MCAError(str(exc)) from exc
 
 
 _registry.register_component(
@@ -306,6 +355,7 @@ _registry.register_component(
         "workload_type": _PARAM,
         "attempt_id": _PARAM,
         "gpu_count": _PARAM,
+        "timezone": _PARAM,
         "contexts_path": _PARAM,
         # Optional workload-framework label (e.g. "megatron", "pytorch").
         # Omitted by default; populated only when known. The key name is

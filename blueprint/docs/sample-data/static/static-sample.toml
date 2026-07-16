@@ -26,14 +26,12 @@ component = "local_file"
 
 [log.applog.local_file]
 paths = ["{std_out}", "{std_err}"]
-max_bytes = "16MB"
 
 [log.syslog]
 component = "local_file"
 
 [log.syslog.local_file]
 paths = ["docs/sample-data/static/syslog"]
-max_bytes = "16MB"
 
 [output.db]
 component = "sqlite"

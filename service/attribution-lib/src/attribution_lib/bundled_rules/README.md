@@ -26,8 +26,7 @@ from those declarations
 Declarations use three helpers from `attribution_lib.rules_engine`:
 
 - `outcome_symptom(prefix, *, outcome, priority, doc, ...)` — a symptom that can
-  drive final outcome selection. `outcome` is one of `Fail InfraSW`,
-  `Fail InfraHW`, `Fail User`, `Incomplete Info`, etc.; `priority` is an
+  drive final outcome selection. `outcome` uses the library's raw compatibility taxonomy; `priority` is an
   `OutcomePriority` tier (lower wins).
 - `cascade_symptom(prefix, *, cascade_discards, ...)` — a cascade-only symptom
   used for pruning, not outcome selection.

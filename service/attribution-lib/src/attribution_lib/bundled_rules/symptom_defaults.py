@@ -150,8 +150,7 @@ outcome_symptom(
     cascade_discards=("Node failure reported by slurm", "Not responding"),
 )
 
-# Tenant (NVIDIA SRE automation) reported the host faulty via the provider's report-host-as-faulty API. An
-# internal operation rather than a provider-detected defect, but the node is still pulled -> Fail InfraHW.
+# A tenant report still removes the node from service, so classify it as Fail InfraHW.
 outcome_symptom(
     "CSP Event Tenant Reported As Faulty",
     outcome="Fail InfraHW",
@@ -161,7 +160,7 @@ outcome_symptom(
     cascade_discards=("Node failure reported by slurm", "Not responding"),
 )
 
-# The provider terminated the VM for host maintenance (terminateOnHostMaintenance) -- CSP-initiated eviction.
+# Provider-initiated host maintenance terminated the VM.
 outcome_symptom(
     "CSP Event Terminated by CSP",
     outcome="Fail InfraHW",
@@ -906,7 +905,7 @@ outcome_symptom(
     priority=OutcomePriority.MEDIUM_SW,
     doc="eap-authentication-failed",
     hw_cause="Known Provider Network issue of Network Authentication Failure",
-    conditional_discards=(("EAP authentication failed", "job_elapsed_under_2_hours"),),
+    conditional_discards=(("EAP authentication failed", "job_elapsed_below_eap_observation_window"),),
 )
 
 outcome_symptom(

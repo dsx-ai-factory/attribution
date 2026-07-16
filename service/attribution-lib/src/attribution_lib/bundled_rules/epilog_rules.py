@@ -51,7 +51,7 @@ register_pre_filter(
     ),
 )
 
-# DCA check_name to (symptom, is_bad_node)
+# Health-check name to (symptom, is_bad_node)
 _DCA_CHECK_NAME_RULES: dict[str, tuple[str, bool]] = {
     "hw_drv_gpu_nvlink_active": ("NVLink inactive", True),
     "hw_drv_gpu_nvlink_error_counters": ("NVLink error counters", True),
@@ -158,7 +158,7 @@ declare_rule_names(*sorted(_EPILOG_FINDINGS | _EPILOG_XID_FINDINGS))
     derived_rules=[f"Epilog_DCA_HealthCheck/{name}" for name in _DCA_CHECK_NAME_RULES],
 )
 def epilog_dca_health_check(groups: Dict[str, str], node: str, source: Source, ctx: RuleContext) -> List[EventTriple]:
-    """Parse structured DCA health-check lines and map known check_names to symptoms."""
+    """Parse structured health-check lines and map known check_names to symptoms."""
 
     remainder = groups["remainder"]
     check_name = remainder.split(": ", 1)[0].strip() if ": " in remainder else remainder[:60].strip()
@@ -166,7 +166,7 @@ def epilog_dca_health_check(groups: Dict[str, str], node: str, source: Source, c
     entry = _DCA_CHECK_NAME_RULES.get(check_name)
     if entry is None:
         _logger.debug(
-            f"DCA check_name not in catalog: {check_name!r} action={groups['action']} body={source.datum[:120]!r}"
+            f"Health-check name not in catalog: {check_name!r} action={groups['action']} body={source.datum[:120]!r}"
         )
         return []
 

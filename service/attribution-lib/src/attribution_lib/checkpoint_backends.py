@@ -11,7 +11,7 @@
 """Checkpoint storage backends for extraction caching.
 
 Defines the CheckpointBackend protocol and the in-memory implementation.
-I/O-based backends (e.g. Elasticsearch) live in fact_pm.storage.
+I/O-based backends can be provided by integrating applications.
 """
 
 from typing import Optional, Protocol

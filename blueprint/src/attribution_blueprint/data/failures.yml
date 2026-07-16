@@ -5644,12 +5644,12 @@ failures:
       support_details: Job ID, node, GPU UUID, dmesg XID 162 line, and any preceding XID 163.
     cloud_operator:
       title: XID 162 - PSHC re-engaged
-      summary: Power Scaling Hardware Controller re-engaged. Internal experience treats solo XID 162 as a likely false positive that is often re-attributed to job success.
+      summary: Power Scaling Hardware Controller re-engaged. Solo XID 162 is treated as a likely false positive that is often re-attributed to job success.
       impact: None on its own. Recurrence with XID 163 may indicate power delivery or thermal stress.
       action: Track XID 162 / 163 trends per node. If solo and frequent on one node - inspect BMC power and thermal logs and PSU health. Do not drain on solo XID 162.
       support_details: dmesg XID 162 / 163 history, nvidia-smi -q -d POWER and -d TEMPERATURE output, BMC PSU / thermal logs, PSHC firmware version.
   technical_details: |
-    XID 162 (PSHC_REENGAGED) is logged when the Power Scaling Hardware Controller re-engages after a previous disengage. NVIDIA's public catalog at the time of authoring did not call out XID 162 explicitly; internal field experience treats solo XID 162 as informational and frequently re-attributes affected jobs to success.
+    XID 162 (PSHC_REENGAGED) is logged when the Power Scaling Hardware Controller re-engages after a previous disengage. Solo XID 162 is informational and affected jobs are frequently re-attributed to success.
   summary: GPU PSHC re-engaged (XID 162); informational on its own, often a false-positive failure attribution.
   signals:
     - kind: xid
@@ -5693,7 +5693,7 @@ failures:
       action: Trend XID 162 with XID 163 per node. If isolated - close as informational. If paired with frequent XID 163 - inspect BMC PSU / thermal logs.
       support_details: dmesg XID 162 / 163 trend, BMC power / thermal logs, GPU firmware versions, GPU UUID.
   technical_details: |
-    XID-162-PSHC_REENGAGED is the symbolic form of XID 162 - the GPU's Power Scaling Hardware Controller re-engaged after a previous disengage event. Public NVIDIA catalog content for this XID is limited; internal field experience indicates jobs flagged by solo XID 162 are frequently re-attributed to success.
+    XID-162-PSHC_REENGAGED is the symbolic form of XID 162 - the GPU's Power Scaling Hardware Controller re-engaged after a previous disengage event. Jobs flagged by solo XID 162 are frequently re-attributed to success.
   summary: PSHC re-engaged (XID-162); typically informational and a frequent false-positive symptom.
   signals:
     - kind: xid
@@ -6085,47 +6085,36 @@ failures:
   personas:
     tenant_sre:
       title: Compute node lost link because 802.1X re-authentication failed
-      summary: The node-side supplicant could not re-authenticate the access port against the CSP RADIUS server and the switch dropped the port from the authorized VLAN.
+      summary: The node-side supplicant could not complete 802.1X re-authentication, and the network interface became unavailable.
       impact: All traffic over that NIC stops, including NCCL and IPoIB; jobs scheduled on the affected node hang or fail with downstream timeouts.
       action: 'Do not retry on the same node; report the affected hostname and timestamp so your cluster administrator or cloud provider can drain it, then resubmit the job on healthy nodes.'
       support_details: Provide the node hostname, NIC name, time of the failure, and any NCCL or socket error captured at that timestamp.
     cloud_operator:
-      title: Port-level RADIUS/EAP authentication failed on the access switch
-      summary: The Ethernet access port on this node failed 802.1X re-authentication against the CSP RADIUS realm, so the switch moved the port to an unauthorized state.
+      title: 802.1X/EAP network authentication failed
+      summary: The node failed 802.1X re-authentication, leaving its network interface unavailable.
       impact: The node is partitioned from the data-plane network; any RDMA QP transitioning through that link will get ETIMEDOUT until the port is re-authorized.
-      action: Pull `journalctl -u wpa_supplicant`, the kernel `IFLA_CARRIER` events, and switch authentication-session logs; cordon and drain the node, open a CSP ticket with the EAP failure timestamp,
-        and only return the node to service after the supplicant succeeds and the port is back in the authorized VLAN.
-      support_details: wpa_supplicant log, switch RADIUS accounting records, switchport authentication state, NIC carrier history, and the CSP support case reference.
-  technical_details: 'EAP (RFC 3748) over 802.1X (IEEE 802.1X-2010) is used by some CSPs
+      action: Review the node supplicant and carrier logs; cordon and drain the node, and only return it to service after authentication succeeds and carrier is restored.
+      support_details: Node supplicant log, NIC carrier history, and network authentication state around the failure.
+  technical_details: 'EAP (RFC 3748) over 802.1X (IEEE 802.1X-2010) authenticates
 
-    on bare-metal compute access ports. The host-side
+    a network interface before it carries traffic. An authentication failure
 
-    supplicant (typically `wpa_supplicant`) periodically re-authenticates
+    can make the link unavailable, causing downstream socket and RDMA timeouts
 
-    against a RADIUS server. On EAP-Failure the switch moves the port
-
-    out of the authorized VLAN, the kernel reports CARRIER_DOWN, and
-
-    every L2/L3 path over that interface starts to fail. This is a
-
-    port/fabric-level failure that is independent of any RDMA verb but
-
-    is the most common upstream cause of `ibv_modify_qp` ETIMEDOUT on
-
-    affected CSP clusters.
+    until authentication recovers.
 
     '
-  summary: 802.1X EAP re-authentication against the CSP RADIUS server failed and the switch deauthorized the access port.
+  summary: 802.1X EAP re-authentication failed and the node network interface became unavailable.
   signals:
   - kind: log
     pattern: wpa_supplicant.*CTRL-EVENT-EAP-FAILURE
-    note: Host supplicant indicates the RADIUS server rejected the EAP exchange.
+    note: The node supplicant reported a failed EAP exchange.
   - kind: log
     pattern: EAP authentication failed
-    note: NCCL/CSP downstream message echoing the supplicant failure.
+    note: Downstream message echoing the supplicant failure.
   - kind: metric
-    pattern: Switchport state authorized -> unauthorized
-    note: From the access-switch authentication-session table.
+    pattern: Network authentication state changed to unauthorized
+    note: Network authentication state transition.
   related:
   - call-to-ibv-modify-qp-failed-eno-110-timeout
   - call-to-ibv-modify-qp-failed-eno-110-timeout-overwrite-nccl-parameters
@@ -6235,7 +6224,7 @@ failures:
       summary: ETIMEDOUT from `ibv_modify_qp` is a fabric-side symptom - the HCA-to-HCA path was not usable when the kernel issued the modify command.
       impact: Every QP setup against the affected peer or via the affected leaf will time out; without remediation the cluster develops a hot zone of repeat failures.
       action: Correlate the timestamp with switch port up/down events, IB link flap counters, and EAP authentication logs; check `dmesg` for `mlx5_ib` command timeouts, drain both the local and remote node,
-        and engage the CSP if access-port re-auth is implicated.
+        and escalate to the network operator if network re-authentication is implicated.
       support_details: '`dmesg | grep mlx5`, switch port history for both endpoints, UFM topology snapshot, EAP supplicant log on both nodes, and node drain decision record.'
   technical_details: 'ETIMEDOUT (errno 110) from `ibv_modify_qp` indicates the kernel/HCA
 
@@ -6249,7 +6238,7 @@ failures:
 
     causes are IB/RoCE link flaps, congested or mis-configured PFC,
 
-    and 802.1X EAP re-authentication on CSP access ports. The NCCL workaround `NCCL_IB_MQP_RETRY_ALL=1` retries the
+    and 802.1X EAP re-authentication failures. The NCCL setting `NCCL_IB_MQP_RETRY_ALL=1` retries the
 
     modify on transient drops but does not address persistent fabric
 
@@ -6305,8 +6294,8 @@ failures:
         NCCL.'
       impact: A subset of nodes is producing repeat ETIMEDOUTs; leaving them in the schedulable pool will keep failing future jobs.
       action: Identify the implicated nodes from the warning history, drain them, run port-level diagnostics (`ibstat`, `ethtool`, switch port counters, EAP session table) and remediate before returning
-        them to service; raise a CSP ticket if access-port re-auth is the root cause.
-      support_details: List of failing nodes/peers, drain ticket, switch and UFM telemetry around the failure window, and CSP case reference if applicable.
+        them to service; escalate to the network operator if network re-authentication is the root cause.
+      support_details: List of failing nodes/peers, drain ticket, switch and UFM telemetry around the failure window, and network-operator case reference if applicable.
   technical_details: '`NCCL_IB_MQP_RETRY_ALL=1` is a NCCL runtime override that retries
 
     `ibv_modify_qp` across every attribute-mask grouping when a
@@ -7167,7 +7156,7 @@ failures:
         -r, FM restart cycle; pay attention to ErrorStatus 02/40/80 which require GPU reset.
       support_details: dmesg Xid 145 payload with subcode and ErrorStatus, NVSwitch link telemetry, /var/log/fabricmanager.log, GFM logs if RLW_REMAP, MNNVL nvbandwidth output if CUDA_ERROR_ILLEGAL_STATE
         was seen, NVSwitch and GPU firmware versions.
-  technical_details: 'Documented subcodes from the NVIDIA Attribution readme include RLW_RXPIPE-8, RLW_SRC_TRACK-4, RLW_SRC_TRACK-8 and RLW_REMAP-4/8/16/32. XID 145 is typically a cascade indicator.'
+  technical_details: 'Documented XID 145 subcodes include RLW_RXPIPE-8, RLW_SRC_TRACK-4, RLW_SRC_TRACK-8 and RLW_REMAP-4/8/16/32. XID 145 is typically a cascade indicator.'
   summary: Decode the XID 145 NVLINK_RLW subcode, look for the upstream XID, and run the NVLink5 recovery workflow on the affected node.
   signals:
   - kind: xid
@@ -7435,11 +7424,11 @@ failures:
       support_details: Job ID, dmesg Xid 149.0 line, NCCL log excerpt, list of any other XIDs around the same timestamp.
     cloud_operator:
       title: XID 149.0 informational NETIR_INT - record and continue monitoring
-      summary: A NETIR interrupt fired without an associated link-down event on an NVLink5/GB200 GPU; per the readme this is informational and not a failure condition.
+      summary: A NETIR interrupt fired without an associated link-down event on an NVLink5/GB200 GPU; this is informational and not a failure condition.
       impact: No fabric outage and no required reset; high frequency of XID 149.0 on a port may still hint at marginal signal integrity and warrants tracking.
       action: Log the event, do not drain, but trend-watch the affected port with nvidia-smi nvlink -e and NVSwitch counters; only escalate to the NVLink5 fabric recovery sequence if a fatal XID 149 sub-code follows.
       support_details: dmesg Xid 149.0 lines and timestamps, nvidia-smi nvlink -e history, NVSwitch port telemetry, GPU and NVSwitch firmware versions.
-  technical_details: 'The id xid-1490 originates from the readme migration and refers to XID 149 sub-code 0 (XID 149.0), an informational NETIR_INT event without an associated link-down. Per the input readme, it is non-fatal and does not require recovery action. Authoritative grounding for the sub-code list comes from the NVIDIA decode-nvlink5-xid-errors spreadsheet referenced from the NVIDIA Attribution readme.'
+  technical_details: 'The bundled catalog entry xid-1490 refers to XID 149 sub-code 0 (XID 149.0), an informational NETIR_INT event without an associated link-down. It is non-fatal and does not require recovery action. Authoritative grounding for the sub-code list comes from the bundled XID catalog.'
   summary: XID 149.0 is an informational NETIR_INT without link-down on GB200; record and trend-watch but do not drain.
   signals:
   - kind: xid
@@ -7628,37 +7617,35 @@ failures:
   aliases:
   - NETIR switch-side port down
   - PortDownReason switch-initiated
-  - CSP automation port down
+  - maintenance automation port down
   category: gpu
   likely_owner: infrastructure
   related_readme_anchor: xid-149-22
   personas:
     tenant_sre:
       title: NVLink port was brought down on the switch side - usually maintenance
-      summary: A GB200 NVLink port was deliberately brought down on the NVSwitch side, typically by an operator or CSP maintenance automation; your job lost a fabric path.
+      summary: A GB200 NVLink port was deliberately brought down on the NVSwitch side, typically by an operator or maintenance automation; your job lost a fabric path.
       impact: The rank fails when the link goes down; if maintenance is in progress, your nodes will be unavailable until the operation completes.
       action: 'Requeue on a healthy allocation outside the maintenance window, attach the dmesg Xid 149.22 line. Contact your cluster administrator or cloud provider. Include the NVIDIA Attribution diagnosis (verdict, symptom chain, and source logs).'
       support_details: Job ID, failing rank/node, dmesg Xid 149.22 payload, scheduler node-state output, time of failure.
     cloud_operator:
       title: XID 149.22 - port brought down on the NVSwitch side (operator or automation)
-      summary: NVRM reports XID 149.22 on a GB200 GPU; the NVSwitch side took the port down, either by manual operator action or by CSP automation during a maintenance operation such as switch or node removal.
+      summary: NVRM reports XID 149.22 on a GB200 GPU; the NVSwitch side took the port down, either by manual operator action or by maintenance automation during a maintenance operation such as switch or node removal.
       impact: Expected behavior during maintenance windows; outside of one, indicates an unexpected operator action or stale automation script.
-      action: Confirm against the maintenance schedule and CSP automation logs; if expected, no action beyond letting jobs requeue. If unexpected, audit CSP automation, restart nv-fabricmanager on the affected
+      action: Confirm against the maintenance schedule and maintenance automation logs; if expected, no action beyond letting jobs requeue. If unexpected, audit maintenance automation, restart nv-fabricmanager on the affected
         hosts after the port is brought back, and re-validate links with nvidia-smi nvlink -s.
-      support_details: dmesg Xid 149.22 payload, NVSwitch SXid history, CSP maintenance/automation log, /var/log/fabricmanager.log, NVSwitch port admin state (nvswitch-audit), timestamp correlation.
-  technical_details: 'Per the input readme, XID 149.22 indicates that the port was
+      support_details: dmesg Xid 149.22 payload, NVSwitch SXid history, maintenance automation log, /var/log/fabricmanager.log, NVSwitch port admin state (nvswitch-audit), timestamp correlation.
+  technical_details: 'XID 149.22 indicates that the port was
 
     brought down on the switch side, either manually by an operator
 
-    or automatically by a CSP automation process during maintenance
+    or automatically by a maintenance automation process during maintenance
 
     operations (e.g., removing a switch or node for repair). It is a
 
     NETIR sub-code under XID 149 (NVLINK_NETIR_ERROR). Authoritative
 
-    sub-code wording comes from the NVIDIA decode-nvlink5-xid-errors
-
-    spreadsheet.
+    sub-code wording comes from the bundled XID catalog.
 
     '
   summary: XID 149.22 means the NVSwitch side brought the port down on purpose; reconcile with maintenance/automation before treating as a fault.
@@ -7707,12 +7694,12 @@ failures:
       support_details: Job ID, failing rank/node (if any), dmesg Xid 149.30 payload, NCCL log excerpt, observed throughput.
     cloud_operator:
       title: XID 149.30 - Fast Recovery Symbol BER threshold exceeded on an NVSwitch
-      summary: NVRM reports XID 149.30 indicating that the Fast Recovery Symbol BER threshold has been exceeded; per the readme, this is typically observed on NVLink switches and compute nodes are not placed
+      summary: NVRM reports XID 149.30 indicating that the Fast Recovery Symbol BER threshold has been exceeded; this is typically observed on NVLink switches and compute nodes are not placed
         in link-down for symbol errors.
       impact: No immediate fabric outage but a strong signal of a marginal port; left unaddressed it tends to escalate to 149.4 or 149.10 link-downs.
       action: 'Trend the affected port''s symbol-error counters with `nvidia-smi nvlink -e` and NVSwitch telemetry. Drain the node, stop nv-fabricmanager, run `nvidia-smi -r`, restart nv-fabricmanager. If BER stays high after reset, submit a ticket to your system vendor with the per-port BER trend evidence.'
       support_details: dmesg Xid 149.30 payload, NVSwitch port FRS/BER counters, /var/log/fabricmanager.log, nvidia-smi nvlink -e history, NVSwitch port serial / cable ID, prior BER trend.
-  technical_details: 'Per the input readme, XID 149.30 indicates that the Fast Recovery
+  technical_details: 'XID 149.30 indicates that the Fast Recovery
 
     Symbol BER (Bit Error Rate) threshold has been exceeded; it is
 
@@ -7722,9 +7709,7 @@ failures:
 
     occur. It is a NETIR sub-code under XID 149 (NVLINK_NETIR_ERROR).
 
-    Authoritative sub-code wording comes from the NVIDIA
-
-    decode-nvlink5-xid-errors spreadsheet.
+    Authoritative sub-code wording comes from the bundled XID catalog.
 
     '
   summary: XID 149.30 is a fast-recovery symbol BER threshold breach on an NVSwitch; trend, schedule maintenance, and if the BER signal persists submit a ticket to your system vendor with the BER evidence.
@@ -7773,14 +7758,14 @@ failures:
       support_details: Job ID, failing rank/node, dmesg Xid 149.33 payload, NCCL log excerpt, recent firmware or config change tickets.
     cloud_operator:
       title: XID 149.33 - peer switch transitioned to disabled state
-      summary: NVRM reports XID 149.33 indicating that the peer (switch) side has transitioned to a disabled state; per the readme this can be a side-effect of switch symbol errors or hardware/software
+      summary: NVRM reports XID 149.33 indicating that the peer (switch) side has transitioned to a disabled state; this can be a side-effect of switch symbol errors or hardware/software
         config drift after a firmware change.
       impact: Single-link outage with a config-drift component; if hw/sw configuration are out of sync, multiple ports can be affected at once.
       action: Reconcile NVSwitch firmware against the platform configuration baseline, drain the node, run the fabric recovery sequence (FM stop, nvidia-smi -r, FM restart), and re-enable the peer port from the
         switch side; investigate switch symbol-error trends if 149.33 recurs.
       support_details: dmesg Xid 149.33 payload, NVSwitch SXid history and admin events, /var/log/fabricmanager.log, NVSwitch firmware version vs platform baseline, recent change-management records, port
         admin state.
-  technical_details: 'Per the input readme, XID 149.33 indicates that the peer (switch)
+  technical_details: 'XID 149.33 indicates that the peer (switch)
 
     side has transitioned to a disabled state; it can occur as a
 
@@ -7792,9 +7777,7 @@ failures:
 
     sub-code under XID 149 (NVLINK_NETIR_ERROR). Authoritative
 
-    sub-code wording comes from the NVIDIA decode-nvlink5-xid-errors
-
-    spreadsheet.
+    sub-code wording comes from the bundled XID catalog.
 
     '
   summary: XID 149.33 is a peer NVSwitch disable; reconcile firmware vs config baseline and run the NVLink5 recovery workflow.
@@ -7843,14 +7826,14 @@ failures:
       support_details: Job ID, failing rank/node, dmesg Xid 149.37 payload, NCCL log excerpt, time of failure.
     cloud_operator:
       title: XID 149.37 - peer NVSwitch reset; GPU lost all NVLinks, drain and run fabric recovery
-      summary: NVRM reports XID 149.37 on a GB200 GPU; per the readme this is associated with NVLINK_NETIR/NETIR_LINK_EVT fatal events that cause some NVLinks to become inactive, and the peer (switch) side
+      summary: NVRM reports XID 149.37 on a GB200 GPU; this is associated with NVLINK_NETIR/NETIR_LINK_EVT fatal events that cause some NVLinks to become inactive, and the peer (switch) side
         went down due to a reset event - either an intentional user action or an accidental switch reboot.
       impact: Affected GPUs lose all their NVLinks and require a GPU reset to recover; depending on which switch reset, multiple GB200 nodes can be impacted at once.
       action: Identify the switch that reset, drain all GPUs that lost NVLinks, stop nv-fabricmanager on each, run nvidia-smi -r, restart nv-fabricmanager, validate with nvidia-smi nvlink -s and nvidia-smi
         nvlink -e, and review NVSwitch reset cause (planned, watchdog, power) before un-draining.
       support_details: dmesg Xid 149.37 payload, NVSwitch reset/reboot logs, /var/log/fabricmanager.log on every affected host, nvidia-smi nvlink -s output, NVSwitch firmware version, switch BMC/IPMI logs
         around the event.
-  technical_details: 'Per the input readme, XID 149.37 is associated with
+  technical_details: 'XID 149.37 is associated with
 
     NVLINK_NETIR/NETIR_LINK_EVT fatal events that cause some NVLinks
 
@@ -7866,7 +7849,7 @@ failures:
 
     (NVLINK_NETIR_ERROR). Authoritative sub-code wording comes from
 
-    the NVIDIA decode-nvlink5-xid-errors spreadsheet.
+    the bundled XID catalog.
 
     '
   summary: 'XID 149.37 means a peer NVSwitch reset took out all NVLinks on a GB200 GPU. Drain the node, stop nv-fabricmanager, reset the GPU with `nvidia-smi -r`, restart nv-fabricmanager. Review the NVSwitch reset cause before returning the node to service.'
@@ -7918,7 +7901,7 @@ failures:
       support_details: Job ID, failing rank/node, dmesg Xid 149.42 payload, NCCL log excerpt, scheduler node-state output.
     cloud_operator:
       title: XID 149.42 - NVLink L1 protocol-stack failure, GPU reset required
-      summary: NVRM reports XID 149.42 indicating an L1 (Layer 1) failure in the NVLink protocol stack on a GB200 GPU; per the readme a GPU reset is recommended to recover.
+      summary: NVRM reports XID 149.42 indicating an L1 (Layer 1) failure in the NVLink protocol stack on a GB200 GPU; a GPU reset is recommended to recover.
       impact: Single-GPU outage on the fabric until reset; if 149.42 recurs after reset, treat as suspected hardware on the GPU NVLink interface.
       action: 'Drain the node, stop nv-fabricmanager, run `nvidia-smi -r` on the affected GPU, restart nv-fabricmanager, validate with `nvidia-smi nvlink -s` and `nvidia-smi nvlink -e`. If XID 149.42 recurs after reset, refer to official NVIDIA documentation.'
       support_details: dmesg Xid 149.42 payload, /var/log/fabricmanager.log, nvidia-smi nvlink -e counters, GPU firmware version, prior 149.42 occurrences for the same GPU PCI BDF.

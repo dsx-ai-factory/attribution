@@ -155,7 +155,7 @@ def syslog_xid(groups: Dict[str, str], node: str, source: Source, ctx: RuleConte
 
     events: List[EventTriple] = []
 
-    # Store hostname:PCI ID for Athena GPU correlation
+    # Store hostname:PCI ID for GPU correlation
     events.append(
         _other_event(
             "XID_parser.pci_mapping",
@@ -628,8 +628,8 @@ def syslog_kernel_invalid_memory_access(
 
 
 # Generic kernel die() banner. Matches the "Oops:" colon form so it fires whether
-# or not the printk-uptime prefix survives log forwarding (some collectors, e.g.
-# aws-cmh-slurm-1, strip it), while excluding slurmd "Internal error: Oops handler"
+# or not the printk-uptime prefix survives log forwarding, while excluding
+# slurmd "Internal error: Oops handler"
 # debug strings (no colon). Covers BUG_ON/BRK/SError paths when the more-specific
 # "Unable to handle kernel" line is absent.
 @extractor_def(

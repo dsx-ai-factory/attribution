@@ -11,6 +11,7 @@
 import json
 from datetime import datetime
 from pathlib import Path
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from loguru import logger
 
@@ -22,6 +23,63 @@ from attribution_blueprint.connectors.execution_contexts import ExecutionContext
 from attribution_blueprint.connectors.logs.service_observation_adapter import adapt_log_observation_for_service
 from attribution_blueprint.connectors.outputs import OutputConnector
 from attribution_blueprint.result import ConnectorReport, enrich_attribution_result, service_outcome
+
+
+def _service_timezone_name(start: datetime, end: datetime, configured: str | None = None) -> str:
+    """Return the IANA timezone key required by Attribution Service v2.
+
+    Args:
+        start: Timezone-aware workload start timestamp.
+        end: Timezone-aware workload end timestamp.
+        configured: Optional explicit IANA timezone key.
+
+    Returns:
+        A validated IANA timezone key.
+
+    Raises:
+        ValueError: If fixed offsets lose regional/DST identity or cannot be
+            represented by an IANA timezone key.
+    """
+    if configured is not None and configured != "":
+        try:
+            return ZoneInfo(configured).key
+        except (TypeError, ZoneInfoNotFoundError) as exc:
+            raise ValueError(f"ctx['timezone'] must be a valid IANA timezone key, got {configured!r}") from exc
+
+    tzinfo = start.tzinfo
+    if isinstance(tzinfo, ZoneInfo):
+        return tzinfo.key
+
+    start_offset = start.utcoffset()
+    end_offset = end.utcoffset()
+    if start_offset is None or end_offset is None:
+        raise ValueError("execution context timestamps must have a defined UTC offset")
+    if start_offset != end_offset:
+        raise ValueError(
+            "execution context spans a UTC offset change without an IANA timezone; "
+            "set [eca.slurm] cluster_tz or ctx['timezone']"
+        )
+
+    total_seconds = int(start_offset.total_seconds())
+    if total_seconds == 0:
+        return "UTC"
+    hours, remainder = divmod(abs(total_seconds), 3600)
+    if remainder != 0:
+        raise ValueError(
+            f"UTC offset {start_offset} cannot be represented by an IANA fixed-offset zone; "
+            "set ctx['timezone'] to the workload's IANA timezone key"
+        )
+    # POSIX Etc/GMT signs are inverted: UTC-7 is Etc/GMT+7.
+    sign = "-" if total_seconds > 0 else "+"
+    candidate = f"Etc/GMT{sign}{hours}"
+    try:
+        ZoneInfo(candidate)
+    except ZoneInfoNotFoundError as exc:
+        raise ValueError(
+            f"UTC offset {start_offset} has no IANA fixed-offset zone; "
+            "set ctx['timezone'] to the workload's IANA timezone key"
+        ) from exc
+    return candidate
 
 
 class AttributionOrchestrator:
@@ -235,6 +293,7 @@ class AttributionOrchestrator:
             "name": ctx.get("name", ""),
             "username": ctx.get("user_name", ""),
             "job_start_time": ctx["start_time"].isoformat(),
+            "timezone": _service_timezone_name(ctx["start_time"], ctx["end_time"], ctx.get("timezone")),
             "job_end_time": ctx["end_time"].isoformat(),
             "interest_start_time": ctx["start_time"].isoformat(),
             "interest_end_time": ctx["end_time"].isoformat(),

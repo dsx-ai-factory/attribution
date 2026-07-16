@@ -35,6 +35,7 @@ class AttributorWorkloadDict(TypedDict):
     id: str
     type: str
     job_start_time: str
+    timezone: str
     status: str
     nodes: dict[str, list[int]]
     name: str
@@ -105,7 +106,7 @@ class AttributionConnector:
             self.delete_attributor(existing)
             return self.create_attributor(info)
 
-    def ingest_observation(self, attributor_id: str, observation: dict) -> str:
+    def ingest_observation(self, attributor_id: str, observation: dict) -> int:
         """POST /v2/attributor/{attributor_id}/observation. Returns observation_id."""
         url = f"{self.service_url}/v2/attributor/{attributor_id}/observation"
         response = self._session.post(

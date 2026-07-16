@@ -26,6 +26,9 @@ class ExecutionContext(TypedDict):
     nodes: list[str]
     start_time: datetime
     end_time: datetime
+    # Optional IANA zone used to interpret offsetless evidence timestamps.
+    # This preserves regional/DST identity that a numeric UTC offset cannot.
+    timezone: NotRequired[str]
     # Wire-format value sent to the attribution service as `workload.type`.
     # Constrained by the service's WorkloadTypeEnum ({"", "slurm", "runai"}
     # today). A connector that has no matching enum member must send "".

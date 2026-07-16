@@ -28,8 +28,8 @@ def _elapsed_hours(job_info: Optional[JobInfo]) -> Optional[float]:
     return delta.total_seconds() / 3600
 
 
-def job_elapsed_under_2_hours(symptoms: SymptomSet[str], job_info: Optional[JobInfo]) -> bool:
-    """Return True when the job ran for less than two hours."""
+def job_elapsed_below_eap_observation_window(symptoms: SymptomSet[str], job_info: Optional[JobInfo]) -> bool:
+    """Return True when the job is shorter than the EAP observation window."""
     elapsed = _elapsed_hours(job_info)
     return elapsed is not None and elapsed < 2.0
 

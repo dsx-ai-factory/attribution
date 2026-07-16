@@ -6,7 +6,8 @@ COPY blueprint/src/attribution_blueprint/webui/frontend/ ./
 RUN corepack enable && pnpm install --frozen-lockfile && pnpm exec tsc -b && pnpm exec vite build --outDir dist
 
 # Stage 2: python app
-FROM ghcr.io/astral-sh/uv:python3.12-bookworm-slim
+FROM python:3.14.6-slim-trixie
+COPY --from=ghcr.io/astral-sh/uv:0.10.12 /uv /uvx /bin/
 
 ENV UV_COMPILE_BYTECODE=1
 ENV UV_LINK_MODE=copy

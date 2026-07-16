@@ -229,7 +229,7 @@ def normalize_pci_id(pci_id: str) -> str:
     Args:
         pci_id: PCI ID in two encountered formats:
         - Syslog: "0000:c2:00" (domain:bus:device)
-        - Athena: "00000000:C2:00.0" (domain:bus:device.function)
+        - Four-field PCI address: "00000000:C2:00.0" (domain:bus:device.function)
     Returns:
         Normalized PCI ID in format "domain:bus:device" (e.g., "0000:c2:00")
     """
@@ -268,7 +268,7 @@ def is_event_at_end_of_job(event_time: datetime, job_end_time: datetime) -> bool
 
 
 def extract_node_name_from_hostname(hostname: str) -> str:
-    """Extract node name from Athena hostname by removing cluster prefix.
+    """Extract a node name by removing a versioned cluster prefix.
 
     - "cluster-m3n4o5p6-v3-host-q7r8s9t0" -> "host-q7r8s9t0"
     - "host-q7r8s9t0" -> "host-q7r8s9t0" (no change if no prefix)

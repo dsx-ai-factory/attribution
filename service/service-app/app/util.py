@@ -17,8 +17,6 @@ from fastapi.encoders import jsonable_encoder
 from pydantic import AwareDatetime, BaseModel
 
 
-# TODO: Ideally the caller would provide a timezone directly.
-# It may be difficult to infer this otherwise, depending on deployment details.
 def to_zoneinfo(dt: datetime) -> ZoneInfo:
     """Convert a datetime's tzinfo to ZoneInfo (required by attribution_lib).
 

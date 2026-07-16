@@ -57,7 +57,7 @@ def _is_it_nvswitch_reboot_for_gb200_only(
     for node_name, node_group in my_bad_nodes.items():
         for error in node_group.symptoms():
             if "XID-149.4-" in error and "-" in node_name:
-                # Extract the rack name (prefix before dash, in this case "nvl72001")
+                # Extract the rack name (prefix before dash, for example "rack001")
                 rack_name = node_name.split("-")[0]
                 # Get the SourceSet for this error from the node's attributions
                 error_sources = node_group.attributions[error]

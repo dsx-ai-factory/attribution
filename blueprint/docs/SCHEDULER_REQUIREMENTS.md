@@ -98,7 +98,12 @@ Many `sacct` deployments return timestamps without timezone offsets. Configure t
 cluster_tz = "America/Los_Angeles"
 ```
 
-Use the IANA timezone for `slurmctld`, not necessarily the timezone of the laptop or container running the blueprint.
+Use the IANA timezone for `slurmctld`, not necessarily the timezone of the
+laptop or container running the blueprint. Always set it for a zone that
+observes daylight-saving changes or uses a non-hour UTC offset. Without
+`cluster_tz`, the host fallback keeps only numeric offsets. A job that spans an
+offset change or uses a non-hour offset is rejected instead of being sent with
+an incorrect timezone.
 
 When you pass CLI times with no timezone offset, the blueprint interprets them as UTC. Prefer explicit offsets:
 
@@ -162,7 +167,7 @@ Use this checklist before the first production run:
 - `sacct --jobs=<jobid> --format=JobID,SLUID --parsable2 --noheader` returns a non-empty `SLUID`
 - the full `sacct --format=...` command returns `Start`, `End`, `NodeList`, and `State`
 - the blueprint user can read at least one application log file if local APPLOG is configured
-- `cluster_tz` is set when the blueprint host timezone differs from the SLURM controller timezone
+- `cluster_tz` is set when the blueprint host timezone differs from the SLURM controller timezone, the controller observes DST, or its UTC offset is not a whole hour
 - `curl -fsS http://<service-host>:8000/v2/healthz` succeeds from the blueprint host
 - Loki and PromQL token environment variables are set if those collectors use `token_env`
 
