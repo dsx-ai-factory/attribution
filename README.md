@@ -178,7 +178,7 @@ Contributions open at GA.
 
 ## License
 
-NVIDIA Attribution is currently distributed under the NVIDIA AI Enterprise Early Access agreement during private preview. This project will download and install additional third-party open source software projects. Review the license terms of these open source projects before use.
+NVIDIA Attribution is currently distributed under the NVIDIA Software and Model Evaluation License during private preview. This project will download and install additional third-party open source software projects. Review the license terms of these open source projects before use.
 
 ## Use cases
 
