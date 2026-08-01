@@ -1,9 +1,11 @@
-SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-SPDX-License-Identifier: LicenseRef-NvidiaProprietary
+GOVERNING DOWNLOAD TERMS: Use of the software is governed by the NVIDIA
+Software and Model Evaluation License, available at
+https://www.nvidia.com/en-us/agreements/enterprise-software/nvidia-software-and-model-evaluation-license/
 
-NVIDIA CORPORATION, its affiliates and licensors retain all intellectual
-property and proprietary rights in and to this material, related
-documentation and any modifications thereto. Any use, reproduction,
-disclosure or distribution of this material and related documentation
-without an express license agreement from NVIDIA CORPORATION or
-its affiliates is strictly prohibited.
+By accessing or using this software, you agree to the terms of that license.
+
+The Attribution Service (service/) contains proprietary NVIDIA components.
+These components are identified by the LICENSE files within that directory
+and are subject to the NVIDIA Proprietary License terms included therein.
+
+Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
