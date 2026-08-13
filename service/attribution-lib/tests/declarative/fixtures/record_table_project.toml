@@ -1,0 +1,39 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: LicenseRef-NvidiaProprietary
+#
+# NVIDIA CORPORATION, its affiliates and licensors retain all intellectual
+# property and proprietary rights in and to this material, related
+# documentation and any modifications thereto. Any use, reproduction,
+# disclosure or distribution of this material and related documentation
+# without an express license agreement from NVIDIA CORPORATION or
+# its affiliates is strictly prohibited.
+#
+# Fixture (Plan 3, Part B): exercises the record-table + `project` path of
+# `catalog_lookup`. No real record rule is portable until @rows lands (Plan 5), so
+# this validates the engine path on a synthetic SXID table. The lookup key is an
+# expression (`int(sxid)`) over the line capture, str()-coerced to match the record
+# table's string keys; a hit PROJECTS the record's `nice_name` column as the symptom,
+# a miss emits a fallback symptom built from the line capture and credits a fixed rule.
+
+sources = ["SYSLOG"]
+author  = "NVIDIA Attribution team"
+
+# A record table: key -> arbitrary record (columns id/type/nice_name).
+[rows.xid_sample]
+48 = { id = 48, type = "gpu", nice_name = "GPU fell off the bus" }
+63 = { id = 63, type = "gpu", nice_name = "ECC page retirement or row remapping" }
+79 = { id = 79, type = "gpu", nice_name = "GPU has fallen off the bus" }
+
+[[extractor]]
+name     = "SxidRecordProject"
+match_re = 'SXID (?P<sxid>\d+)'
+emit     = { type = "catalog_lookup", catalog = "xid_sample", key = "int(sxid)", project = { type = "interesting_node", symptom = "{nice_name}" }, not_found = { type = "interesting_node", symptom = "SXID-{sxid}", derived_rule = "sxid-id-missing-in-catalog" } }
+
+# `catalog` expansion covers every row (renders one line per key); the extra line
+# hits an id absent from the table to cover the not_found path.
+[[extractor.cases]]
+expansion     = "catalog"
+line_template = "SXID {key} detected on gpu"
+[[extractor.cases]]
+expect = "interesting"
+line   = "SXID 12345 detected on gpu"

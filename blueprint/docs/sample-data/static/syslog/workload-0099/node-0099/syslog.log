@@ -1,0 +1,3 @@
+2026-08-06T19:30:00+00:00 node-0099 systemd[1]: Started sample training scope for workload-0099.
+2026-08-06T19:40:00+00:00 node-0099 kernel: System is powering down
+2026-08-06T20:10:00+00:00 node-0099 systemd[1]: Stopped sample training scope for workload-0099.

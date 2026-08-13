@@ -1,0 +1,83 @@
+name: Tests
+
+on:
+  push:
+    # "pull_request" events are not permitted on NVIDIA self-hosted runners,
+    # so CI runs from push events instead. "**" covers main, every feature
+    # branch (including flat names like "patch-1" that a slash-bearing
+    # pattern would miss), and copy-pr-bot "pull-request/<N>" mirrors.
+    #
+    # Pull requests from forks push to the fork, not here, so they get no
+    # CI from this workflow.
+    branches:
+      - "**"
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+permissions:
+  contents: read
+
+env:
+  # One interpreter for every Python component. service-app declares
+  # requires-python ">=3.14.6,<3.15" and is the binding constraint;
+  # attribution-lib and blueprint allow >=3.11. Pinned to the exact patch
+  # because a bare "3.14" resolves to 3.14.3 on linux-aarch64.
+  UV_PYTHON: "3.14.6"
+
+jobs:
+  python-tests:
+    name: ${{ matrix.suite }}
+    runs-on: linux-arm64-cpu16
+    strategy:
+      fail-fast: false
+      matrix:
+        suite:
+          - attribution-lib
+          - service-app
+          - blueprint
+    env:
+      COVERAGE: "true"
+    steps:
+      - uses: actions/checkout@v6
+      - uses: astral-sh/setup-uv@v7
+        with:
+          version: "0.12.3"
+          enable-cache: true
+      - name: Install Python
+        run: uv python install "$UV_PYTHON"
+      - name: Run ${{ matrix.suite }} with coverage
+        run: bash .ci/run-tests.sh "${{ matrix.suite }}"
+
+  frontend-tests:
+    name: frontend
+    runs-on: linux-arm64-cpu16
+    env:
+      COVERAGE: "true"
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "22"
+      - name: Enable pnpm
+        run: |
+          corepack enable
+          corepack prepare pnpm@10.11.0 --activate
+      - name: Run frontend tests with coverage
+        run: bash .ci/run-tests.sh frontend
+
+  quickstart:
+    name: quickstart
+    runs-on: linux-arm64-cpu16
+    steps:
+      - uses: actions/checkout@v6
+      - uses: astral-sh/setup-uv@v7
+        with:
+          version: "0.12.3"
+          enable-cache: true
+      - name: Install Python
+        run: uv python install "$UV_PYTHON"
+      - name: Run release quickstart
+        run: bash .ci/run-tests.sh quickstart

@@ -1,0 +1,112 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: LicenseRef-NvidiaProprietary
+
+# NVIDIA CORPORATION, its affiliates and licensors retain all intellectual
+# property and proprietary rights in and to this material, related
+# documentation and any modifications thereto. Any use, reproduction,
+# disclosure or distribution of this material and related documentation
+# without an express license agreement from NVIDIA CORPORATION or
+# its affiliates is strictly prohibited.
+
+
+[project]
+name = "nvidia-attribution-client"
+dynamic = ["version"]
+description = "NVIDIA Attribution Service"
+authors = [
+    {name = "NVIDIA Corporation"}
+]
+readme = "README.md"
+license = "LicenseRef-NvidiaProprietary"
+license-files = ["LICENSE"]
+keywords = ["OpenAPI", "OpenAPI-Generator", "NVIDIA Attribution Service"]
+include = ["nvidia_attribution_client/py.typed"]
+requires-python = ">=3.9"
+
+dependencies = [
+    "urllib3>=2.7.0,<3.0.0",
+    "python-dateutil>=2.8.2",
+    "pydantic>=2",
+    "typing-extensions>=4.7.1",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=7.2.1",
+    "pytest-cov>=2.8.1",
+    "tox>=3.9.0",
+    "flake8>= 4.0.0",
+    "types-python-dateutil>=2.8.19.14",
+    "mypy>=1.5",
+]
+
+[tool.hatch.build.targets.sdist]
+packages = ["nvidia_attribution_client"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["nvidia_attribution_client"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.version]
+path = "nvidia_attribution_client/__init__.py"
+
+[tool.pylint.'MESSAGES CONTROL']
+extension-pkg-whitelist = "pydantic"
+
+[tool.mypy]
+files = [
+  "nvidia_attribution_client",
+  #"test",  # auto-generated tests
+  "tests", # hand-written tests
+]
+# TODO: enable "strict" once all these individual checks are passing
+# strict = true
+
+# List from: https://mypy.readthedocs.io/en/stable/existing_code.html#introduce-stricter-options
+warn_unused_configs = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+
+## Getting these passing should be easy
+strict_equality = true
+extra_checks = true
+
+## Strongly recommend enabling this one as soon as you can
+check_untyped_defs = true
+
+## These shouldn't be too much additional work, but may be tricky to
+## get passing if you use a lot of untyped libraries
+disallow_subclassing_any = true
+disallow_untyped_decorators = true
+disallow_any_generics = true
+
+### These next few are various gradations of forcing use of type annotations
+#disallow_untyped_calls = true
+#disallow_incomplete_defs = true
+#disallow_untyped_defs = true
+#
+### This one isn't too hard to get passing, but return on investment is lower
+#no_implicit_reexport = true
+#
+### This one can be tricky to get passing if you use a lot of untyped libraries
+#warn_return_any = true
+
+[[tool.mypy.overrides]]
+module = [
+  "nvidia_attribution_client.configuration",
+]
+warn_unused_ignores = true
+strict_equality = true
+extra_checks = true
+check_untyped_defs = true
+disallow_subclassing_any = true
+disallow_untyped_decorators = true
+disallow_any_generics = true
+disallow_untyped_calls = true
+disallow_incomplete_defs = true
+disallow_untyped_defs = true
+no_implicit_reexport = true
+warn_return_any = true

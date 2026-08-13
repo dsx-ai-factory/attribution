@@ -1,0 +1,36 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: LicenseRef-NvidiaProprietary
+#
+# NVIDIA CORPORATION, its affiliates and licensors retain all intellectual
+# property and proprietary rights in and to this material, related
+# documentation and any modifications thereto. Any use, reproduction,
+# disclosure or distribution of this material and related documentation
+# without an express license agreement from NVIDIA CORPORATION or
+# its affiliates is strictly prohibited.
+#
+# Declarative port of the CUDA-error matrix formerly stamped by a Python double
+# loop in bundled_rules/applog_rules.py: 135 error descriptions x 4 pattern
+# templates = 540 extractors. Each (description, template) matched
+# re.escape(template.format(description)) and emitted _bad(node, nice_name,
+# demotion=credit) crediting `credit`, where credit = nice_name if it starts with
+# "cuda" else "alias else". Because the family emit is a STATIC template that
+# cannot branch, the credit is PRE-RESOLVED per row by the @rows("cuda_errors")
+# provider in applog_rules.py; the family substitutes {symptom}/{credit} per row
+# and {error_desc} into each pattern (then re.escape's it). The nested
+# demotion.AFTER_MFU_DEMOTION = "{credit}" reproduces payload[AFTER_MFU_DEMOTION].
+# Parity (symptom + credit per CUDA line) is enforced through process_check
+# (tests/test_rule_data.py -k applog).
+
+author  = "NVIDIA Attribution team"
+sources = ["APPLOG"]
+
+
+[[family]]
+name      = "CudaError"
+rows_from = "cuda_errors"
+patterns  = ["Cuda failure '{error_desc}'", "CUDA error: {error_desc}", "Cuda Runtime ({error_desc})", "CUDA {error_desc}"]
+emit      = { type = "bad_node", symptom = "{symptom}", derived_rule = "{credit}", demotion = { AFTER_MFU_DEMOTION = "{credit}" } }
+
+[[family.cases]]
+expansion = "rows"
+expect    = "bad"

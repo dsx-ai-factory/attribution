@@ -1,0 +1,92 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: LicenseRef-NvidiaProprietary
+#
+# NVIDIA CORPORATION, its affiliates and licensors retain all intellectual
+# property and proprietary rights in and to this material, related
+# documentation and any modifications thereto. Any use, reproduction,
+# disclosure or distribution of this material and related documentation
+# without an express license agreement from NVIDIA CORPORATION or
+# its affiliates is strictly prohibited.
+
+[meta]
+runner = "node_metrics"
+
+[[cases]]
+description = "infiniband link down at end of job is bad"
+metric = "node_infiniband_link_downed_total"
+value = 1
+timestamp = 1744734450
+expect = "bad"
+expected_symptom = "link down(east-west)"
+expected_rule = "node-metric-infiniband-link-downed"
+
+[[cases]]
+description = "infiniband link down far after job end is ignored"
+metric = "node_infiniband_link_downed_total"
+value = 1
+timestamp = 1744735400
+expect = "no_match"
+
+[[cases]]
+description = "carrier down at end of job is bad"
+metric = "node_network_carrier_down_changes_total"
+value = 2
+timestamp = 1744734450
+expect = "bad"
+expected_symptom = "link down(east-west)"
+expected_rule = "node-metric-carrier-down"
+
+[[cases]]
+description = "carrier down zero value is ignored"
+metric = "node_network_carrier_down_changes_total"
+value = 0
+timestamp = 1744734450
+expect = "no_match"
+
+[[cases]]
+description = "roce retrans above threshold is interesting"
+metric = "ib_roce_adp_retrans"
+value = 51
+timestamp = 1744734450
+expect = "interesting"
+expected_symptom = "performance_roce_adp_retrans_high"
+expected_rule = "node-metric-roce-adp-retrans"
+
+[[cases]]
+description = "roce retrans at threshold is ignored"
+metric = "ib_roce_adp_retrans"
+value = 50
+timestamp = 1744734450
+expect = "no_match"
+
+[[cases]]
+description = "prometheus up zero is bad"
+metric = "up"
+value = 0
+timestamp = 1744734450
+expect = "bad"
+expected_symptom = "prometheus lost connection"
+expected_rule = "node-metric-prometheus-down"
+
+[[cases]]
+description = "prometheus up one is ignored"
+metric = "up"
+value = 1
+timestamp = 1744734450
+expect = "no_match"
+
+[[cases]]
+description = "dcgm nvlink physical link down above zero is interesting"
+metric = "DCGM_FI_DEV_NVLINK_PPCNT_PHYSICAL_LINK_DOWN_COUNTER"
+value = 1
+timestamp = 1744734450
+expect = "interesting"
+expected_symptom = "link down(nvlink physical layer)"
+expected_rule = "node-metric-dcgm-nvlink-physical-link-down"
+
+[[cases]]
+description = "dcgm nvlink physical link down zero is ignored"
+metric = "DCGM_FI_DEV_NVLINK_PPCNT_PHYSICAL_LINK_DOWN_COUNTER"
+value = 0
+timestamp = 1744734450
+expect = "no_match"

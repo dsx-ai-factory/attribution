@@ -1,0 +1,105 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: LicenseRef-NvidiaProprietary
+#
+# NVIDIA CORPORATION, its affiliates and licensors retain all intellectual
+# property and proprietary rights in and to this material, related
+# documentation and any modifications thereto. Any use, reproduction,
+# disclosure or distribution of this material and related documentation
+# without an express license agreement from NVIDIA CORPORATION or
+# its affiliates is strictly prohibited.
+#
+# Declarative applog combinator rules. EnrootNotEnoughSpace is a path-aware
+# binary split: a user-owned path (is_user_path, an @expr_helper registered in
+# applog_rules.py) vs a system path. Formerly the enroot_not_enough_space
+# @extractor_def in applog_rules.py. Parity via applog_rules.test.toml / process_check.
+
+author  = "NVIDIA Attribution team"
+sources = ["APPLOG"]
+
+[[extractor]]
+name     = "EnrootNotEnoughSpace"
+match_re = '\[ERROR\]\s+Not enough space left in\s+(?P<path>\S+)'
+[extractor.emit]
+type = "pick_one"
+branches = [ { when = "is_user_path(path)", type = "bad_node", symptom = "enroot: not enough space (user path)" } ]
+default  = { type = "bad_node", symptom = "enroot: not enough space (system path)" }
+
+[[extractor.cases]]
+description = "user-owned path selects the user branch"
+expect      = "bad"
+line        = "[ERROR] Not enough space left in /home/alice/data"
+symptom     = "enroot: not enough space (user path)"
+[[extractor.cases]]
+description = "system path falls through to the default"
+expect      = "bad"
+line        = "[ERROR] Not enough space left in /var/lib/enroot"
+symptom     = "enroot: not enough space (system path)"
+
+
+# PyxisMkdirPermissionDenied: enroot init-phase mkdir failure. Path-aware split on
+# is_user_path -> user vs system path. Formerly the pyxis_mkdir_permission_denied
+# @extractor_def. Both branches bad_node, self-credit (no derived_rule/demotion).
+[[extractor]]
+name     = "PyxisMkdirPermissionDenied"
+match_re = "mkdir: cannot create directory '(?P<path>[^']+)': Permission denied"
+[extractor.emit]
+type = "pick_one"
+branches = [ { when = "is_user_path(path)", type = "bad_node", symptom = "pyxis: mkdir permission denied (user path)" } ]
+default  = { type = "bad_node", symptom = "pyxis: mkdir permission denied (system path)" }
+
+[[extractor.cases]]
+description = "user-owned path selects the user branch"
+expect      = "bad"
+line        = "mkdir: cannot create directory '/home/alice/.cache': Permission denied"
+symptom     = "pyxis: mkdir permission denied (user path)"
+[[extractor.cases]]
+description = "system path falls through to the default"
+expect      = "bad"
+line        = "mkdir: cannot create directory '/run/enroot': Permission denied"
+symptom     = "pyxis: mkdir permission denied (system path)"
+
+
+# UnsquashfsDirScanPermissionDenied: extraction-phase dir_scan failure. Path-aware
+# split on is_user_path. Formerly unsquashfs_dir_scan_permission_denied. Both
+# branches bad_node, self-credit.
+[[extractor]]
+name     = "UnsquashfsDirScanPermissionDenied"
+match_re = 'FATAL ERROR: dir_scan: failed to make directory (?P<path>\S+?), because Permission denied'
+[extractor.emit]
+type = "pick_one"
+branches = [ { when = "is_user_path(path)", type = "bad_node", symptom = "unsquashfs: dir_scan permission denied (user path)" } ]
+default  = { type = "bad_node", symptom = "unsquashfs: dir_scan permission denied (system path)" }
+
+[[extractor.cases]]
+description = "user-owned path selects the user branch"
+expect      = "bad"
+line        = "FATAL ERROR: dir_scan: failed to make directory /lustre/scratch/out, because Permission denied"
+symptom     = "unsquashfs: dir_scan permission denied (user path)"
+[[extractor.cases]]
+description = "system path falls through to the default"
+expect      = "bad"
+line        = "FATAL ERROR: dir_scan: failed to make directory /raid/enroot/data, because Permission denied"
+symptom     = "unsquashfs: dir_scan permission denied (system path)"
+
+
+# UnsquashfsWriteFailed: disk-full writer failure during extraction. Path-aware
+# split on is_user_path. Formerly unsquashfs_write_failed. Both branches bad_node,
+# self-credit.
+[[extractor]]
+name     = "UnsquashfsWriteFailed"
+match_re = 'FATAL ERROR:writer: failed to write file (?P<path>\S+)'
+[extractor.emit]
+type = "pick_one"
+branches = [ { when = "is_user_path(path)", type = "bad_node", symptom = "unsquashfs: write failed (user path)" } ]
+default  = { type = "bad_node", symptom = "unsquashfs: write failed (system path)" }
+
+[[extractor.cases]]
+description = "user-owned path selects the user branch"
+expect      = "bad"
+line        = "FATAL ERROR:writer: failed to write file /home/bob/model/layer.bin"
+symptom     = "unsquashfs: write failed (user path)"
+[[extractor.cases]]
+description = "system path falls through to the default"
+expect      = "bad"
+line        = "FATAL ERROR:writer: failed to write file /raid/enroot/data/layer.bin"
+symptom     = "unsquashfs: write failed (system path)"

@@ -1,0 +1,86 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: LicenseRef-NvidiaProprietary
+#
+# Capstone parity fixture for the bundled `SyslogLustreError` declarative rule.
+# It is loaded into a fresh RuleEngine by
+# tests/declarative/test_ported_combinator_rules.py so branch coverage can be
+# enforced independently of the bundled rule engine.
+#
+# Parity target (syslog_combinator_rules.toml `SyslogLustreError`):
+#   normally: bad "LustreError" (rule lustre-error) + demotion map
+#           {NOT_NEAR_WATCHDOG_EVENT_DEMOTION: "...-watchdog",
+#            BEFORE_DATALOADER_DEMOTION:        "...-dataloader-exception"}
+#   EINTR:  the exact ll_inode_revalidate_fini() ... rc = -4 signature is
+#           interesting only
+#   then:   if the line is that exact EINTR signature:
+#               interesting "(non-fatal) LustreError" (rule lustre-error-eintr)
+#           elif re.match(<evicted regex>, source.datum):
+#               bad "Lustre Client Evicted" (rule lustre-client-evicted)
+#           else:
+#               interesting "(non-fatal) LustreError" (rule lustre-error-non-fatal)
+#
+# match_re: main uses re.escape("LustreError") (a bare search literal). The
+# pick_one branch reproduces main's `re.match(evicted_regex, source.datum)` by
+# referencing `datum` (the full log line), which the loader injects into every
+# expression's eval namespace alongside the match's captures. No capture hack is
+# needed. Behavioral parity (symptom / credited rule / demotion keys / emitted
+# event set) matches origin/main.
+
+sources = ["SYSLOG"]
+author  = "NVIDIA Attribution team"
+
+[[extractor]]
+name     = "SyslogLustreError"
+match_re = 'LustreError'
+
+[extractor.emit]
+type = "pick_one"
+
+[[extractor.emit.branches]]
+type         = "interesting_node"
+symptom      = "(non-fatal) LustreError"
+derived_rule = "lustre-error-eintr"
+when         = 'search(r"ll_inode_revalidate_fini\(\).*error:\s*rc\s*=\s*-4\b", datum)'
+
+[extractor.emit.default]
+type = "try_all"
+
+# Non-EINTR event[0]: bad "LustreError" carrying the demotion map.
+[[extractor.emit.default.events]]
+type         = "bad_node"
+symptom      = "LustreError"
+derived_rule = "lustre-error"
+demotion     = { NOT_NEAR_WATCHDOG_EVENT_DEMOTION = "lustre-error-non-fatal-watchdog", BEFORE_DATALOADER_DEMOTION = "lustre-error-non-fatal-dataloader-exception" }
+
+# Non-EINTR event[1]: evicted -> bad, otherwise interesting.
+[[extractor.emit.default.events]]
+type = "pick_one"
+
+[[extractor.emit.default.events.branches]]
+type         = "bad_node"
+symptom      = "Lustre Client Evicted"
+derived_rule = "lustre-client-evicted"
+when         = 'match(r".*This client was evicted by.*in progress operations using this service will fail\.", datum)'
+
+[extractor.emit.default.events.default]
+type         = "interesting_node"
+symptom      = "(non-fatal) LustreError"
+derived_rule = "lustre-error-non-fatal"
+
+# --- parity cases (mined from syslog_rules.test.toml) ---------------------------
+# Cover the EINTR branch plus the non-EINTR nested branch and default. The full
+# emitted event sets are asserted in test_ported_combinator_rules.py.
+[[extractor.cases]]
+line    = "LustreError: 1597603:0:(file.c:5582:ll_inode_revalidate_fini()) peer01: revalidate FID [0xc540001cea:0x65:0x0] error: rc = -4"
+symptom = "(non-fatal) LustreError"
+expect  = "interesting"
+
+[[extractor.cases]]
+line    = "LustreError: 167-0: testfs-OST001c-osc-ffff94dc5684f800: This client was evicted by testfs-OST001c; in progress operations using this service will fail."
+symptom = "Lustre Client Evicted"
+expect  = "bad"
+
+[[extractor.cases]]
+line    = "LustreError: 52716:0:(events.c:651:ptlrpc_init_portals()) network initialisation failed"
+symptom = "(non-fatal) LustreError"
+expect  = "interesting"

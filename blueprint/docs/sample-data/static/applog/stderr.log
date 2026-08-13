@@ -1,0 +1,1 @@
+[2026-05-27T21:15:31Z] node-a-001 kernel: Memory cgroup out of memory: Killed process 12345 (python) total-vm:123456kB, anon-rss:65432kB, file-rss:4096kB, shmem-rss:2048kB, UID:<uid> pgtables:1024kB oom_score_adj:0

@@ -1,0 +1,6 @@
+**
+!service/
+!service/service-app/
+!service/service-app/**
+!service/attribution-lib/
+!service/attribution-lib/**

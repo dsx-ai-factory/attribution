@@ -1,0 +1,12 @@
+1001|1001|sluid-aaaa-1001|COMPLETED|2026-05-01T12:00:00|2026-05-01T12:30:00|node005||60|cpu=8,mem=32G,gres/gpu=1|/home/u/out-1001.log|/home/u/err-1001.log|alice|train-mnist
+1002|1002|sluid-bbbb-1002|FAILED|2026-05-01T13:00:00|2026-05-01T13:45:00|node[001-003]|node002|120|cpu=24,mem=96G,gres/gpu=3|/home/u/out-1002.log|/home/u/err-1002.log|bob|llama-7b-pretrain
+1003|1003|sluid-cccc-1003|CANCELLED by 54321|2026-05-01T14:00:00|2026-05-01T14:05:00|node[001-002],other[5-6]||30|cpu=32,mem=128G,gres/gpu=4|/home/u/out-1003.log|/home/u/err-1003.log|carol|hpl-bench
+1004|1004|sluid-dddd-1004|COMPLETED|2026-05-01T15:00:00|2026-05-01T15:30:00|node[001,003,005]||60|cpu=24,mem=96G,gres/gpu=3|/home/u/out-1004.log|/home/u/err-1004.log||
+2001|2001|sluid-rq-2001a|NODE_FAIL|2026-05-02T08:00:00|2026-05-02T09:30:00|node[010-012]|node011|10080|cpu=24,mem=96G,gres/gpu=3|/home/u/out-2001.log|/home/u/err-2001.log|dave|requeue-job
+2001.batch|2001.batch|sluid-rq-2001a|CANCELLED|2026-05-02T08:00:00|2026-05-02T09:30:00|node010||10080|cpu=24,mem=96G,gres/gpu=3|||dave|batch
+2001.extern|2001.extern|sluid-rq-2001a|CANCELLED|2026-05-02T08:00:00|2026-05-02T09:30:00|node[010-012]||10080|cpu=24,mem=96G,gres/gpu=3|||dave|extern
+2001.0|2001.0|sluid-rq-2001a|CANCELLED by 999|2026-05-02T08:00:30|2026-05-02T09:30:00|node[010-012]||10080|cpu=24,mem=96G,gres/gpu=3|||dave|step0
+2001|2001|sluid-rq-2001b|TIMEOUT|2026-05-02T09:35:00|2026-05-02T16:30:00|node[020-022]||10080|cpu=24,mem=96G,gres/gpu=3|/home/u/out-2001.log|/home/u/err-2001.log|dave|requeue-job
+2001.batch|2001.batch|sluid-rq-2001b|CANCELLED|2026-05-02T09:35:00|2026-05-02T16:30:00|node020||10080|cpu=24,mem=96G,gres/gpu=3|||dave|batch
+2001.0|2001.0|sluid-rq-2001b|COMPLETED|2026-05-02T09:35:30|2026-05-02T16:30:00|node[020-022]||10080|cpu=24,mem=96G,gres/gpu=3|||dave|step0
+2001.1|2001.1|sluid-rq-2001b|COMPLETED|2026-05-02T15:00:00|2026-05-02T15:00:30|node[020-022]||10080|cpu=24,mem=96G,gres/gpu=3|||dave|step1

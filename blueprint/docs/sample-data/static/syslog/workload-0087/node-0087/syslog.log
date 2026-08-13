@@ -1,0 +1,3 @@
+2026-08-06T19:53:00+00:00 node-0087 systemd[1]: Started sample training scope for workload-0087.
+2026-08-06T20:03:00+00:00 node-0087 kernel: kubepods-besteffort-pod239fec60_2cf7_4396_827c_dc8167f7a1b1.slice: A process of this unit has been killed by the OOM killer.
+2026-08-06T20:33:00+00:00 node-0087 systemd[1]: Stopped sample training scope for workload-0087.

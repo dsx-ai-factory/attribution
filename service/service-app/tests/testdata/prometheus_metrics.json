@@ -1,0 +1,15 @@
+[
+  {
+    "timestamp": 1744734437,
+    "value": "1",
+    "metric": "node_infiniband_link_downed_total",
+    "labels": {
+      "net_host_name": "test-node-h100-003-180-012",
+      "s_cluster": "test-cluster-a",
+      "device": "mlx5_0"
+    },
+    "node": "test-node-h100-003-180-012",
+    "component": "mlx5_0",
+    "cluster": "test-cluster-a"
+  }
+]

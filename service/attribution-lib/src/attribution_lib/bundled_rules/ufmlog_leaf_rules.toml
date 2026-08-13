@@ -1,0 +1,54 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: LicenseRef-NvidiaProprietary
+#
+# NVIDIA CORPORATION, its affiliates and licensors retain all intellectual
+# property and proprietary rights in and to this material, related
+# documentation and any modifications thereto. Any use, reproduction,
+# disclosure or distribution of this material and related documentation
+# without an express license agreement from NVIDIA CORPORATION or
+# its affiliates is strictly prohibited.
+#
+# Declarative port of the two UFM-log end-of-job leaf rules formerly defined as
+# @extractor_def functions in bundled_rules/ufmlog_rules.py. Each stanza keeps
+# the Python rule NAME and credits the original `ufm` slug via `derived_rule`.
+# Both fire only when the event falls in the end-of-job window
+# (is_event_at_end_of_job), expressed here with the at_end_of_job() lifecycle
+# predicate. The co-located cases declare `at_end_of_job` (true/false) so
+# load-time coverage machine-verifies both when sides; the real timing is
+# exercised by tests/test_rule_data.py via process_check.
+
+author  = "NVIDIA Attribution team"
+sources = ["UFMLOG"]
+
+
+[[extractor]]
+name     = "UfmlogLinkDown"
+match_re = 'Link went down'
+emit     = { type = "bad_node", when = "at_end_of_job()", symptom = "link down(east-west)", derived_rule = "ufm" }
+[[extractor.cases]]
+expect        = "bad"
+line          = "IB port: Link went down on switch"
+at_end_of_job = true
+symptom       = "link down(east-west)"
+[[extractor.cases]]
+expect        = "none"
+line          = "IB port: Link went down on switch"
+at_end_of_job = false
+
+[[extractor]]
+name     = "UfmlogNodeDown"
+match_re = 'node is Down'
+emit     = { type = "interesting_node", when = "at_end_of_job()", symptom = "node down reported by ufm", derived_rule = "ufm" }
+[[extractor.cases]]
+expect        = "interesting"
+line          = "UFM: node is Down"
+at_end_of_job = true
+symptom       = "node down reported by ufm"
+[[extractor.cases]]
+expect        = "none"
+line          = "UFM: node is Down"
+at_end_of_job = false
+
+[prefilter]
+include = ["Link went down", "node is Down"]
+exclude = ["message repeated", "MT4129 ConnectX7"]

@@ -1,0 +1,2 @@
+2026-08-05T11:57:00+00:00 - trainer - INFO - rank 0 starting all_reduce on node-0201
+2026-08-05T11:58:00+00:00 node-0201:12345:12346 [0] ib_plugin.c:2033 NCCL WARN NET/IB: Got completion from peer 192.0.2.45<31197> with status=IBV_WC_RETRY_EXC_ERR(12) opcode=IBV_WC_SEND(0) reqSize=262144 vendor_err=129 req_type=Send localGid ::ffff:192.168.127.202 remoteGids::ffff:192.168.112.50 hca mlx5_0 responsible_node=node-0201

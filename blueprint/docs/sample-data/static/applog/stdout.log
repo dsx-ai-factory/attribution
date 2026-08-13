@@ -1,0 +1,3 @@
+[rank 0] 2026-05-27T20:50:43Z starting evaluation workload on node-a-001
+[rank 0] 2026-05-27T21:15:31Z evaluation worker exited after the kernel OOM killer terminated a python process
+[rank 0] 2026-05-27T21:15:44Z scheduler state OUT_OF_MEMORY

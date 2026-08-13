@@ -1,0 +1,11 @@
+[attribution]
+service_url = "http://localhost:8000"
+
+[eca]
+component = "slurm"
+
+[eca.slurm]
+sacct_path = "sacct"
+
+[output.console]
+component = "stdout"

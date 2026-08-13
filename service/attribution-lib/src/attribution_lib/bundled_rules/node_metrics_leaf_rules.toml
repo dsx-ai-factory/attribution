@@ -1,0 +1,94 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: LicenseRef-NvidiaProprietary
+#
+# NVIDIA CORPORATION, its affiliates and licensors retain all intellectual
+# property and proprietary rights in and to this material, related
+# documentation and any modifications thereto. Any use, reproduction,
+# disclosure or distribution of this material and related documentation
+# without an express license agreement from NVIDIA CORPORATION or
+# its affiliates is strictly prohibited.
+#
+# Declarative port of the PURE metric-threshold leaf rules formerly defined as
+# @extractor_def functions in bundled_rules/node_metrics_rules.py. Each stanza
+# keeps the Python rule NAME and credits its original slug via `derived_rule`.
+# `match_re`, `symptom`, and the numeric threshold in `when` are copied verbatim.
+# Parity is enforced by node_metrics_rules.test.toml through process_check.
+#
+# The two end-of-job rules (NodeMetrics_infiniband_link_downed and
+# NodeMetrics_carrier_down_changes) are now ported too, using the at_end_of_job()
+# lifecycle predicate; see the end-of-job stanzas at the bottom of this file.
+
+author  = "NVIDIA Attribution team"
+sources = ["NODE_METRICS"]
+
+
+[[extractor]]
+name     = "NodeMetrics_roce_adp_retrans"
+match_re = "metric_name: ib_roce_adp_retrans, metric_value: (?P<value>[^,]+)"
+emit     = { type = "interesting_node", when = "float(value) > 50", symptom = "performance_roce_adp_retrans_high", derived_rule = "node-metric-roce-adp-retrans" }
+[[extractor.cases]]
+expect  = "interesting"
+line    = "metric_name: ib_roce_adp_retrans, metric_value: 60"
+symptom = "performance_roce_adp_retrans_high"
+[[extractor.cases]]
+expect = "none"
+line   = "metric_name: ib_roce_adp_retrans, metric_value: 10"
+
+[[extractor]]
+name     = "NodeMetrics_prometheus_up"
+match_re = "metric_name: up, metric_value: (?P<value>[^,]+)"
+emit     = { type = "bad_node", when = "float(value) == 0", symptom = "prometheus lost connection", derived_rule = "node-metric-prometheus-down" }
+[[extractor.cases]]
+expect  = "bad"
+line    = "metric_name: up, metric_value: 0"
+symptom = "prometheus lost connection"
+[[extractor.cases]]
+expect = "none"
+line   = "metric_name: up, metric_value: 1"
+
+[[extractor]]
+name     = "NodeMetrics_dcgm_nvlink_physical_link_down"
+match_re = "metric_name: DCGM_FI_DEV_NVLINK_PPCNT_PHYSICAL_LINK_DOWN_COUNTER, metric_value: (?P<value>[^,]+)"
+emit     = { type = "interesting_node", when = "float(value) > 0", symptom = "link down(nvlink physical layer)", derived_rule = "node-metric-dcgm-nvlink-physical-link-down" }
+[[extractor.cases]]
+expect  = "interesting"
+line    = "metric_name: DCGM_FI_DEV_NVLINK_PPCNT_PHYSICAL_LINK_DOWN_COUNTER, metric_value: 5"
+symptom = "link down(nvlink physical layer)"
+[[extractor.cases]]
+expect = "none"
+line   = "metric_name: DCGM_FI_DEV_NVLINK_PPCNT_PHYSICAL_LINK_DOWN_COUNTER, metric_value: 0"
+
+# --- end-of-job link-down rules (at_end_of_job() lifecycle predicate) ------------
+# Formerly NodeMetrics_infiniband_link_downed / NodeMetrics_carrier_down_changes.
+# Each fires only when the counter is > 0 AND the event falls in the end-of-job
+# window (is_event_at_end_of_job). The co-located cases declare `at_end_of_job`
+# (true/false) so load-time coverage machine-verifies both when sides; the real
+# timing is exercised by node_metrics_rules.test.toml via process_check. Plan 5c.
+
+[[extractor]]
+name     = "NodeMetrics_infiniband_link_downed"
+match_re = 'metric_name: node_infiniband_link_downed_total, metric_value: (?P<value>[^,]+)'
+emit     = { type = "bad_node", when = "float(value) > 0 and at_end_of_job()", symptom = "link down(east-west)", derived_rule = "node-metric-infiniband-link-downed" }
+[[extractor.cases]]
+expect        = "bad"
+line          = "metric_name: node_infiniband_link_downed_total, metric_value: 5"
+at_end_of_job = true
+symptom       = "link down(east-west)"
+[[extractor.cases]]
+expect        = "none"
+line          = "metric_name: node_infiniband_link_downed_total, metric_value: 5"
+at_end_of_job = false
+
+[[extractor]]
+name     = "NodeMetrics_carrier_down_changes"
+match_re = 'metric_name: node_network_carrier_down_changes_total, metric_value: (?P<value>[^,]+)'
+emit     = { type = "bad_node", when = "float(value) > 0 and at_end_of_job()", symptom = "link down(east-west)", derived_rule = "node-metric-carrier-down" }
+[[extractor.cases]]
+expect        = "bad"
+line          = "metric_name: node_network_carrier_down_changes_total, metric_value: 5"
+at_end_of_job = true
+symptom       = "link down(east-west)"
+[[extractor.cases]]
+expect        = "none"
+line          = "metric_name: node_network_carrier_down_changes_total, metric_value: 5"
+at_end_of_job = false

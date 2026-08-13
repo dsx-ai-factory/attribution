@@ -1,0 +1,45 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: LicenseRef-NvidiaProprietary
+#
+# NVIDIA CORPORATION, its affiliates and licensors retain all intellectual
+# property and proprietary rights in and to this material, related
+# documentation and any modifications thereto. Any use, reproduction,
+# disclosure or distribution of this material and related documentation
+# without an express license agreement from NVIDIA CORPORATION or
+# its affiliates is strictly prohibited.
+#
+# SyslogSXid as a catalog_lookup over the `xid` record table (a @rows("xid")
+# provider in syslog_rules.py returns the shared XID catalog). A HIT projects the
+# matched record's nice_name and credits "known-sxid-event"; a MISS emits
+# "SXID-<sxid>" and credits "sxid-id-missing-in-catalog". Formerly the syslog_sxid
+# @extractor_def. Parity via syslog_rules.test.toml / process_check. Plan 5d.
+
+author  = "NVIDIA Attribution team"
+sources = ["SYSLOG"]
+
+[[extractor]]
+name     = "SyslogSXid"
+match_re = ' SXid \(PCI:[0-9a-fA-F.:]+\): (?P<sxid>\d+)'
+[extractor.emit]
+type         = "catalog_lookup"
+catalog      = "xid"
+key          = "int(sxid)"
+derived_rule = "known-sxid-event"
+project      = { type = "interesting_node", symptom = "{nice_name}" }
+not_found    = { type = "interesting_node", symptom = "SXID-{sxid}", derived_rule = "sxid-id-missing-in-catalog" }
+
+# The xid table has many rows; catalog coverage is row-complete, so cover every
+# row with an `expansion = "catalog"` case (one generated line per key) plus one
+# not_found case. The real per-row symptom/rule is asserted by
+# syslog_rules.test.toml through process_check.
+[[extractor.cases]]
+description   = "every catalog row is reachable"
+expansion     = "catalog"
+line_template = " SXid (PCI:0000:8d:00.0): {key}"
+
+[[extractor.cases]]
+description = "unknown sxid -> SXID-<n>, credit sxid-id-missing-in-catalog"
+expect      = "interesting"
+line        = " SXid (PCI:0000:8d:00.0): 999999"
+symptom     = "SXID-999999"
+rule        = "sxid-id-missing-in-catalog"

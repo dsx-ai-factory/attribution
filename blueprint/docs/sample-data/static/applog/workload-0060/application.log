@@ -1,0 +1,3 @@
+2026-08-06T14:02:00+00:00 - launcher - INFO - workload workload-0060 started on node-0060 with sample inputs.
+2026-08-06T14:12:00+00:00 - trainer - INFO - rank 0 completed warmup step 1060.
+2026-08-06T14:42:00+00:00 - launcher - INFO - workload workload-0060 cleanup completed after root symptom collection.

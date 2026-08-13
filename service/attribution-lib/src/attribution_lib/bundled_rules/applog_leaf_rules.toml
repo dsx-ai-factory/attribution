@@ -1,0 +1,415 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: LicenseRef-NvidiaProprietary
+#
+# NVIDIA CORPORATION, its affiliates and licensors retain all intellectual
+# property and proprietary rights in and to this material, related
+# documentation and any modifications thereto. Any use, reproduction,
+# disclosure or distribution of this material and related documentation
+# without an express license agreement from NVIDIA CORPORATION or
+# its affiliates is strictly prohibited.
+#
+# Declarative port of the PORTABLE single-leaf applog rules formerly defined as
+# @extractor_def functions in bundled_rules/applog_rules.py.
+#
+# Each stanza keeps the Python rule's NAME so the declarative engine and the
+# Python side never disagree on identity. `match_re`, `symptom`, `derived_rule`
+# (the credit slug the rule emitted via source.derived(rule=...)), and `demotion`
+# (the AFTER_MFU_DEMOTION string passed to _bad/_interesting) are copied verbatim
+# from applog_rules.py. Parity is enforced by applog_rules.test.toml through
+# process_check (tests/test_rule_data.py) for the rules exercised there.
+#
+# Rules NOT ported (need an unbuilt feature): every rule that resolves an IP/rank
+# to a hostname (socket*, IPv4CannotBeRetrieved, ClientSocketTimeout,
+# Connection closed by remote peer, Got completion*, Irrecoverable NET/IB,
+# ibv_modify_qp), the CUDA-catalog lookups (NCCLWarnCudaFailure, the CudaError_
+# family), any path-heuristic helper (_path_is_user_owned /
+# _path_is_ephemeral_pyxis_container: EnrootNotEnoughSpace, EnrootFileAlreadyExists,
+# PyxisMkdirPermissionDenied, UnsquashfsDirScanPermissionDenied,
+# UnsquashfsWriteFailed), EnrootRegistryHttpError (secondary parse + numbered
+# group), the MFU typed payload, NCCLCudaVersion (conditional payload keys),
+# MegatronRuntimeArgs (ctx.job_info gate), the loop-generated families
+# (watchdog / dataloader / generic-keyword / CUDA), the
+# accumulators and collectors, and the no-op marker
+# GracefullySkippingMulticastInitialization.
+
+author  = "NVIDIA Attribution team"
+sources = ["APPLOG"]
+
+
+# --- literal-symptom bad_node leaves (credit the stanza name) --------------------
+
+[[extractor]]
+name     = "AttributeTypeError"
+match_re = "(?:AttributeError|TypeError): (?:'[\\w\\d]+' object has no attribute '[\\w\\d]+'|object of type '[\\w\\d]+' has no [\\w\\d()]+)"
+emit     = { type = "bad_node", symptom = "Python bug", demotion = "AttributeError/TypeError" }
+[[extractor.cases]]
+expect  = "bad"
+line    = "AttributeError: 'Transformer' object has no attribute 'layers'. Did you mean: 'n_layers'?"
+symptom = "Python bug"
+[[extractor.cases]]
+expect  = "bad"
+line    = "TypeError: object of type 'WebLoader' has no len()"
+symptom = "Python bug"
+
+[[extractor]]
+name     = "KeyValidationError"
+match_re = "KeyValidationError: ListConfig indices must be .+, not .+"
+emit     = { type = "bad_node", symptom = "Python Exception", demotion = "KeyValidationError" }
+[[extractor.cases]]
+expect  = "bad"
+line    = "omegaconf.errors.KeyValidationError: ListConfig indices must be integers or slices, not NoneType"
+symptom = "Python Exception"
+
+[[extractor]]
+name     = "BusErrorSignal"
+match_re = "Caught signal \\d+ \\(Bus error: nonexistent physical address\\)"
+emit     = { type = "bad_node", symptom = "bus error", demotion = "Bus error: nonexistent physical address" }
+[[extractor.cases]]
+expect  = "bad"
+line    = "[testnode0-003:1234567:0:1234567] Caught signal 7 (Bus error: nonexistent physical address)"
+symptom = "bus error"
+
+[[extractor]]
+name     = "UnsquashfsOomKilled"
+match_re = "runtime\\.sh: line \\d+:\\s+\\d+\\s+Killed\\s+unsquashfs"
+emit     = { type = "bad_node", symptom = "unsquashfs: killed by OOM" }
+[[extractor.cases]]
+expect  = "bad"
+line    = "runtime.sh: line 42:  12345 Killed                  unsquashfs -f -d /raid/enroot/data image.sqsh"
+symptom = "unsquashfs: killed by OOM"
+
+[[extractor]]
+name     = "MksquashfsDiskFull"
+match_re = "FATAL ERROR: Probably out of space on output filesystem"
+emit     = { type = "bad_node", symptom = "mksquashfs: disk full (system path)" }
+[[extractor.cases]]
+expect  = "bad"
+line    = "FATAL ERROR: Probably out of space on output filesystem"
+symptom = "mksquashfs: disk full (system path)"
+
+[[extractor]]
+name     = "PyxisNamespaceCreateFailed"
+match_re = "failed to create (?:user|mount|network|IPC|PID|cgroup) namespace"
+emit     = { type = "bad_node", symptom = "pyxis: failed to create namespace" }
+[[extractor.cases]]
+expect  = "bad"
+line    = "enroot-nsenter: failed to create mount namespace: Operation not permitted"
+symptom = "pyxis: failed to create namespace"
+
+[[extractor]]
+name     = "EnrootCapSetFailed"
+match_re = "enroot-[a-z0-9]+: failed to (?:set|get) capabilities:"
+emit     = { type = "bad_node", symptom = "enroot: failed to set capabilities" }
+[[extractor.cases]]
+expect  = "bad"
+line    = "enroot-switchroot: failed to set capabilities: Operation not permitted"
+symptom = "enroot: failed to set capabilities"
+
+[[extractor]]
+name     = "PyxisContainerStartNonzero"
+match_re = "pyxis: container start failed with error code:\\s*\\d+"
+emit     = { type = "bad_node", symptom = "pyxis: container start nonzero exit" }
+[[extractor.cases]]
+expect  = "bad"
+line    = "slurmstepd: error: pyxis: container start failed with error code: 1"
+symptom = "pyxis: container start nonzero exit"
+
+[[extractor]]
+name     = "PyxisCouldntChdirWorkdir"
+match_re = "pyxis: couldn't chdir to (?!container cwd)"
+emit     = { type = "bad_node", symptom = "pyxis: couldn't chdir to container workdir" }
+[[extractor.cases]]
+expect  = "bad"
+line    = "slurmstepd: error: pyxis: couldn't chdir to /workdir/does-not-exist: No such file or directory"
+symptom = "pyxis: couldn't chdir to container workdir"
+
+[[extractor]]
+name     = "PyxisConflictingOptions"
+match_re = "pyxis: both --container-\\S+ and --(?:no-)?container-\\S+ were specified"
+emit     = { type = "bad_node", symptom = "pyxis: conflicting options" }
+[[extractor.cases]]
+expect  = "bad"
+line    = "slurmstepd: error: pyxis: both --container-image and --no-container-mount-home were specified"
+symptom = "pyxis: conflicting options"
+
+[[extractor]]
+name     = "SrunInvalidPyxisArgument"
+match_re = "srun: error: Invalid --(?:no-)?container-\\S+ argument:"
+emit     = { type = "bad_node", symptom = "srun: invalid pyxis argument" }
+[[extractor.cases]]
+expect  = "bad"
+line    = "srun: error: Invalid --container-mounts argument: /nonexistent"
+symptom = "srun: invalid pyxis argument"
+
+[[extractor]]
+name     = "PyxisCouldNotWaitChildInterrupted"
+match_re = "pyxis: could not wait for child \\d+: Interrupted system call"
+emit     = { type = "bad_node", symptom = "pyxis: cancelled by SIGTERM" }
+[[extractor.cases]]
+expect  = "bad"
+line    = "slurmstepd: error: pyxis: could not wait for child 12345: Interrupted system call"
+symptom = "pyxis: cancelled by SIGTERM"
+
+[[extractor]]
+name     = "PyxisEnrootMountFailureUser"
+match_re = "enroot-mount: failed to mount:\\s*(?P<path>(?:/home/|/lustre/)\\S+)\\s+at\\s+"
+emit     = { type = "bad_node", symptom = "pyxis: enroot mount failure from user directory" }
+[[extractor.cases]]
+expect  = "bad"
+line    = "enroot-mount: failed to mount: /home/user/data.sqsh at /tmp/.enroot/abc123"
+symptom = "pyxis: enroot mount failure from user directory"
+[[extractor.cases]]
+expect  = "bad"
+line    = "enroot-mount: failed to mount: /lustre/scratch/model.sqsh at /tmp/.enroot/abc123"
+symptom = "pyxis: enroot mount failure from user directory"
+
+
+# --- templated-symptom bad_node leaf --------------------------------------------
+# int(error_code) strips any leading zeros, matching f"EFA Error-{int(...)}".
+[[extractor]]
+name     = "completed with error"
+match_re = "OFI Request .* completed with error\\. RC: (?P<error_code>\\d+)"
+emit     = { type = "bad_node", symptom = "EFA Error-{int(error_code)}", demotion = "completed with error" }
+[[extractor.cases]]
+expect  = "bad"
+line    = "OFI Request 0x7f00 completed with error. RC: 12 ( status)"
+symptom = "EFA Error-12"
+
+
+# --- interesting_node leaf (credit the stanza name) -----------------------------
+[[extractor]]
+name     = "Gloo connectFullMesh failed"
+match_re = "Gloo connectFullMesh failed"
+emit     = { type = "interesting_node", symptom = "Gloo connectFullMesh failed" }
+[[extractor.cases]]
+expect  = "interesting"
+line    = "RuntimeError: Gloo connectFullMesh failed"
+symptom = "Gloo connectFullMesh failed"
+
+
+# --- shared-slug leaves via derived_rule ("alias else" / dedicated slugs) --------
+# BusErrorKeyword: generic lowercase "bus error"; main emits Attribution.node.bad
+# {node, "bus error", AFTER_MFU_DEMOTION="alias else"} credited to "alias else",
+# i.e. _bad(node, "bus error", source.derived(rule="alias else"), demotion="alias else").
+[[extractor]]
+name     = "BusErrorKeyword"
+match_re = "bus error"
+emit     = { type = "bad_node", symptom = "bus error", derived_rule = "alias else", demotion = "alias else" }
+[[extractor.cases]]
+expect  = "bad"
+line    = "bus error"
+symptom = "bus error"
+
+# NcclWarnMessageTruncated: dedicated slug nccl-invalid-nic-selection, NO demotion
+# (main calls _bad without a demotion arg).
+[[extractor]]
+name     = "NcclWarnMessageTruncated"
+match_re = "NCCL WARN Message truncated"
+emit     = { type = "bad_node", symptom = "NCCL invalid NIC selection", derived_rule = "nccl-invalid-nic-selection" }
+[[extractor.cases]]
+expect  = "bad"
+line    = "misc/socket.cc:47 NCCL WARN Message truncated : received 1024 bytes instead of 256"
+symptom = "NCCL invalid NIC selection"
+
+
+# --- guarded bad_node leaves (a `when` reproducing main's early-return guard) -----
+# AddressAlreadyInUse: main returns [] when the line is the NCCL bind-failed noise
+# ("ras/client_support.cc" AND "NCCL WARN Call to bind failed:" both in datum);
+# otherwise emits bad "Address already in use" credited to "address-in-use".
+# EADDRINUSE renders as "Address already in use" via glibc strerror() but as
+# all-lowercase via libuv's uv_strerror() (torch's libuv-backed TCPStore). Match both.
+[[extractor]]
+name     = "AddressAlreadyInUse"
+match_re = "[Aa]ddress already in use"
+
+[extractor.emit]
+type         = "bad_node"
+symptom      = "Address already in use"
+derived_rule = "address-in-use"
+demotion     = "address-in-use"
+when         = "not ('ras/client_support.cc' in datum and 'NCCL WARN Call to bind failed:' in datum)"
+
+# when:true -- ordinary "Address already in use" line, so the negated guard holds.
+[[extractor.cases]]
+expect  = "bad"
+line    = "Address already in use"
+symptom = "Address already in use"
+# when:false -- the NCCL bind-failed noise line; main suppresses it.
+[[extractor.cases]]
+expect = "no_match"
+line   = "ras/client_support.cc NCCL WARN Call to bind failed: Address already in use"
+
+# No such file or directory: main returns [] when "error: pyxis:" is in datum
+# (that variant is handled by a dedicated pyxis keyword rule); otherwise emits bad
+# "No such file or directory" credited to "alias else".
+[[extractor]]
+name     = "No such file or directory"
+match_re = "No such file or directory"
+
+[extractor.emit]
+type         = "bad_node"
+symptom      = "No such file or directory"
+derived_rule = "alias else"
+demotion     = "alias else"
+when         = "not ('error: pyxis:' in datum)"
+
+# when:true -- plain "No such file or directory" line.
+[[extractor.cases]]
+expect  = "bad"
+line    = "FileNotFoundError: [Errno 2] No such file or directory: '/data/x'"
+symptom = "No such file or directory"
+# when:false -- the pyxis-prefixed variant is suppressed here.
+[[extractor.cases]]
+expect = "no_match"
+line   = "error: pyxis:     [ERROR] No such file or directory"
+
+
+# --- pick_one: symptom depends on whether the failure is a missing path ----------
+# PyxisEnrootMountFailureSystem: main branches on "No such file or directory" in
+# datum -> "path not found"; else -> "failure from system directory". Both credit
+# the stanza name. The match_re's (?!/home/)(?!/lustre/) lookaheads keep user
+# paths out (those go to PyxisEnrootMountFailureUser).
+[[extractor]]
+name     = "PyxisEnrootMountFailureSystem"
+match_re = "enroot-mount: failed to mount:\\s*(?!/home/)(?!/lustre/)\\S+\\s+at\\s+"
+
+[extractor.emit]
+type = "pick_one"
+
+[[extractor.emit.branches]]
+type    = "bad_node"
+symptom = "pyxis: enroot mount path not found"
+when    = "'No such file or directory' in datum"
+
+[extractor.emit.default]
+type    = "bad_node"
+symptom = "pyxis: enroot mount failure from system directory"
+
+# branch[0]:selected -- the mount line ends in "No such file or directory".
+[[extractor.cases]]
+expect  = "bad"
+line    = "enroot-mount: failed to mount: /opt/nvidia/nsight-systems at /raid/enroot/data/user-00001/pyxis_123/opt/nvidia/nsight-systems: No such file or directory"
+symptom = "pyxis: enroot mount path not found"
+# default:reached -- a system-path mount failure without the missing-path text.
+[[extractor.cases]]
+expect  = "bad"
+line    = "enroot-mount: failed to mount: /etc/resolv.conf at /tmp/.enroot/abc123"
+symptom = "pyxis: enroot mount failure from system directory"
+
+
+# --- generic_event: megatron runtime-args timeout normalization ------------------
+# DistributedTimeoutMinutes: emit Application.megatron-lm.runtime_args with the raw
+# captured minutes (string), credited "distributed timeout minutes".
+[[extractor]]
+name     = "DistributedTimeoutMinutes"
+match_re = "--distributed-timeout-minutes\\s+(?P<minutes>\\d+)"
+
+[extractor.emit]
+type         = "generic_event"
+event_type   = "Application.megatron-lm.runtime_args"
+derived_rule = "distributed timeout minutes"
+payload      = { pytorch_timeout_minutes = "{minutes}" }
+
+# no-when leaf: the line MATCHES and emits an Application (non-node) generic event,
+# so `expect` is "generic" -- not "no_match", which would mean the matcher never
+# fired. Coverage only (the co-located runner does not execute these).
+[[extractor.cases]]
+expect = "generic"
+line   = "torchrun --distributed-timeout-minutes 30 --other 1"
+
+# DistributedInitTimeout: normalize the init-line seconds to minutes,
+# str(int(round(seconds/60))), credited "distributed timeout (init line, normalized)".
+[[extractor]]
+name     = "DistributedInitTimeout"
+match_re = "Initialized distributed training.*with\\s*timeout\\s+(?P<seconds>\\d+)"
+
+[extractor.emit]
+type         = "generic_event"
+event_type   = "Application.megatron-lm.runtime_args"
+derived_rule = "distributed timeout (init line, normalized)"
+payload      = { pytorch_timeout_minutes = "{int(round(int(seconds)/60))}" }
+
+# The line MATCHES and emits an Application (non-node) generic event, so `expect`
+# is "generic" -- "no_match" would falsely claim the matcher never fired.
+[[extractor.cases]]
+expect = "generic"
+line   = "Initialized distributed training with timeout 1800"
+
+
+# --- guarded bad_node leaf: ephemeral-pyxis-name gate (a new expr_helper) --------
+# EnrootFileAlreadyExists: main emits _bad(node, "pyxis: file already exists
+# (ephemeral)") ONLY when _path_is_ephemeral_pyxis_container(path); otherwise
+# returns []. Registered as expr_helper "is_ephemeral_pyxis_container" in
+# applog_rules.py. Self-credit, no demotion. Formerly enroot_file_already_exists.
+[[extractor]]
+name     = "EnrootFileAlreadyExists"
+match_re = '\[ERROR\]\s+File already exists:\s+(?P<path>\S+)'
+emit     = { type = "bad_node", when = "is_ephemeral_pyxis_container(path)", symptom = "pyxis: file already exists (ephemeral)" }
+# when:true -- an ephemeral pyxis container name (pyxis_<jobid>.<step>).
+[[extractor.cases]]
+expect  = "bad"
+line    = "[ERROR] File already exists: /run/enroot/pyxis_00001.0"
+symptom = "pyxis: file already exists (ephemeral)"
+# when:false -- a non-ephemeral path; main returns [].
+[[extractor.cases]]
+expect = "none"
+line   = "[ERROR] File already exists: /home/alice/data/model.sqsh"
+
+
+# --- templated-symptom bad_node leaf: IB completion status (a new expr_helper) ---
+# Got completion with error: single _bad on the local node; symptom is computed by
+# _format_ib_error_message(int(error_code), int(vendor_err)) (expr_helper
+# "format_ib_error"); credit is the stanza name; demotion "Got completion with
+# error". Formerly got_completion_with_error_event.
+[[extractor]]
+name     = "Got completion with error"
+match_re = 'Got completion with error (?P<error_code>\d+), opcode \d+, len \d+, vendor err (?P<vendor_err>\d+)'
+emit     = { type = "bad_node", symptom = "{format_ib_error(int(error_code), int(vendor_err))}", demotion = "Got completion with error" }
+[[extractor.cases]]
+expect  = "bad"
+line    = "Got completion with error 12, opcode 0, len 0, vendor err 136"
+symptom = "IB Error-12 Vendor-136 (IBV_WC_RETRY_EXC_ERR)"
+
+
+# PyTorch can surface cudaGetDeviceCount() as the top-level failure while CUDA
+# error 803 identifies the specific cause. Container compatibility probes are
+# retained as interesting evidence because they do not prove the application failed.
+[[extractor]]
+name     = "CudaSystemDriverMismatchEvidence"
+match_re = '(?:Unexpected error from cudaGetDeviceCount\(\).*?[Ee]rror\s*803\b|CUDA_ERROR_SYSTEM_DRIVER_MISMATCH|CUDA [Ee]rror 803\b|CUDA [Ee]rror-803\b|cudaErrorSystemDriverMismatch|[Ss]ystem has unsupported display driver\s*/\s*(?:cuda|CUDA) driver combination|cuInit\(\)\s*=\s*803\b)'
+
+[extractor.emit]
+type = "pick_one"
+
+[[extractor.emit.branches]]
+when         = "'_CUDA_COMPAT_STATUS=' in datum"
+type         = "interesting_node"
+symptom      = "cudaErrorSystemDriverMismatch"
+derived_rule = "cudaErrorSystemDriverMismatch"
+
+[extractor.emit.default]
+type         = "bad_node"
+symptom      = "cudaErrorSystemDriverMismatch"
+derived_rule = "cudaErrorSystemDriverMismatch"
+demotion     = "cudaErrorSystemDriverMismatch"
+
+[[extractor.cases]]
+description = "cudaGetDeviceCount exposes error 803"
+expect      = "bad"
+line        = "RuntimeError: Unexpected error from cudaGetDeviceCount(). Did you run some cuda functions before calling NumCudaDevices() that might have already set an error? Error 803: system has unsupported display driver / cuda driver combination"
+symptom     = "cudaErrorSystemDriverMismatch"
+rule        = "cudaErrorSystemDriverMismatch"
+
+[[extractor.cases]]
+description = "compatibility status exposes the symbolic and numeric mismatch"
+expect      = "interesting"
+line        = "_CUDA_COMPAT_STATUS=System has unsupported display driver / cuda driver combination (CUDA_ERROR_SYSTEM_DRIVER_MISMATCH) cuInit()=803"
+symptom     = "cudaErrorSystemDriverMismatch"
+rule        = "cudaErrorSystemDriverMismatch"
+
+[[extractor.cases]]
+description = "space-separated CUDA error 803"
+expect      = "bad"
+line        = "CUDA error 803"
+symptom     = "cudaErrorSystemDriverMismatch"
+rule        = "cudaErrorSystemDriverMismatch"

@@ -1,0 +1,2 @@
+2026-08-05T06:12:00+00:00 node-0205 slurmstepd[3322]: error: NVML: Failed to get usage(15): GPU is lost responsible_node=node-0205
+1: May 30 12:35:01.123456 3322 acctg 0x0000000000000001: error: NVML: Failed to get usage(15): GPU is lost

@@ -1,0 +1,3 @@
+2026-08-07T00:54:00+00:00 node-0091 systemd[1]: Started sample training scope for workload-0091.
+2026-08-07T01:04:00+00:00 node-0091 kernel: NV_ERR_FABRIC_MANAGER_NOT_PRESENT
+2026-08-07T01:34:00+00:00 node-0091 systemd[1]: Stopped sample training scope for workload-0091.

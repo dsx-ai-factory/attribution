@@ -1,0 +1,96 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: LicenseRef-NvidiaProprietary
+#
+# NVIDIA CORPORATION, its affiliates and licensors retain all intellectual
+# property and proprietary rights in and to this material, related
+# documentation and any modifications thereto. Any use, reproduction,
+# disclosure or distribution of this material and related documentation
+# without an express license agreement from NVIDIA CORPORATION or
+# its affiliates is strictly prohibited.
+
+[meta]
+runner = "applog_single_line"
+
+[[cases]]
+description = "nvrx injected exception logger line is artificial failure"
+line = "5: CRITICAL:nvidia_resiliency_ext.shared_utils.inject_fault:asynchronously raising <class 'nvidia_resiliency_ext.shared_utils.inject_fault.InjectedException'>"
+expect = "bad"
+expected_node = "host-9ad02e1b"
+expected_symptom = "NVRx synthetic fault injection"
+expected_rule = "NVRXInjectedException"
+
+[[cases]]
+description = "nvrx injected exception traceback line is artificial failure"
+line = "5: [rank5]: nvidia_resiliency_ext.shared_utils.inject_fault.InjectedException"
+expect = "bad"
+expected_node = "host-9ad02e1b"
+expected_symptom = "NVRx synthetic fault injection"
+expected_rule = "NVRXInjectedException"
+
+[[cases]]
+description = "nvrx planned injection text without exception is ignored"
+line = "0: nvidia_resiliency_ext.shared_utils.inject_fault will inject fault later"
+expect = "no_match"
+expected_node = "host-9ad02e1b"
+
+[[cases]]
+description = "nvrx failure detected is temporarily attributed for job-level aggregation"
+line = "1: 2025-12-03 06:03:56,286 [INFO] [node043-T02] [workload:1(0) infra:1(0)] profiling.py:215 - Cycle: 1 Event: failure_detected Node: node077-T01.example.test_3319525_0 Rank: 1 Time: 2025-12-03 14:03:56.286 UTC"
+expect = "bad"
+expected_node = "host-9ad02e1b"
+expected_symptom = "NVRx detected failure"
+expected_rule = "NVRXFailureDetected"
+
+[[cases]]
+description = "nvrx failure detected accepts a non-cluster fqdn"
+line = "1: 2025-12-03 06:03:56,286 [INFO] [node043-T02] profiling.py:215 - Cycle: 1 Event: failure_detected Node: node077-T01.compute.example.net Rank: 1 Time: 2025-12-03 14:03:56.286 UTC"
+expect = "bad"
+expected_node = "host-9ad02e1b"
+expected_symptom = "NVRx detected failure"
+expected_rule = "NVRXFailureDetected"
+
+[[cases]]
+description = "organic nvrx unhealthy node exception surfaces the short hostname"
+job_variant = "named_hosts"
+line = "2026-07-29 08:22:51,298 [ERROR] [testnode0-001] [workload:0(0) infra:1(0)] launcher.py:1749 Agent .run() raised UnhealthyNodeException: Node testnode0-001.example.test_2115174_0 has an unhealthy GPU."
+expect = "bad"
+expected_node = "testnode0-001"
+expected_symptom = "NVRx unhealthy node"
+expected_rule = "NVRXUnhealthyNode"
+
+[[cases]]
+description = "synthetic unhealthy node injection is not treated as an organic unhealthy node"
+line = "2026-07-29 08:22:51,298 [ERROR] [host-9ad02e1b] launcher.py:1749 Agent .run() raised UnhealthyNodeException: Injected failure: infra_rank=1, cycle=1"
+expect = "no_match"
+
+[[cases]]
+description = "nvrx gpu memory reclamation timeout with reported node is interesting"
+line = "2026-07-02 09:07:55,998 [ERROR] [node053-T01] [workload:0(0) infra:176(0)] launcher.py:1229 Timeout waiting for GPU memory to be reclaimed after 50.0s. Memory may not have been fully cleaned up. Proceeding anyway as best effort."
+expect = "interesting"
+expected_node = "node053-t01"
+expected_symptom = "NVRx GPU memory reclamation timeout"
+expected_rule = "NVRXGpuMemReclaimTimeout"
+
+[[cases]]
+description = "nvrx gpu memory reclamation timeout without reported node uses source node"
+line = "0: launcher.py:1229 Timeout waiting for GPU memory to be reclaimed after 50.0s. Memory may not have been fully cleaned up. Proceeding anyway as best effort."
+expect = "interesting"
+expected_node = "host-9ad02e1b"
+expected_symptom = "NVRx GPU memory reclamation timeout"
+expected_rule = "NVRXGpuMemReclaimTimeout"
+
+[[cases]]
+description = "nvrx gpu memory reclamation timeout with reported node is interesting"
+line = "2026-07-02 09:07:55,998 [ERROR] [node053-T01] [workload:0(0) infra:176(0)] launcher.py:1229 Timeout waiting for GPU memory to be reclaimed after 50.0s. Memory may not have been fully cleaned up. Proceeding anyway as best effort."
+expect = "interesting"
+expected_node = "node053-t01"
+expected_symptom = "NVRx GPU memory reclamation timeout"
+expected_rule = "NVRXGpuMemReclaimTimeout"
+
+[[cases]]
+description = "nvrx gpu memory reclamation timeout without reported node uses source node"
+line = "0: launcher.py:1229 Timeout waiting for GPU memory to be reclaimed after 50.0s. Memory may not have been fully cleaned up. Proceeding anyway as best effort."
+expect = "interesting"
+expected_node = "host-9ad02e1b"
+expected_symptom = "NVRx GPU memory reclamation timeout"
+expected_rule = "NVRXGpuMemReclaimTimeout"

@@ -1,0 +1,74 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: LicenseRef-NvidiaProprietary
+#
+# NVIDIA CORPORATION, its affiliates and licensors retain all intellectual
+# property and proprietary rights in and to this material, related
+# documentation and any modifications thereto. Any use, reproduction,
+# disclosure or distribution of this material and related documentation
+# without an express license agreement from NVIDIA CORPORATION or
+# its affiliates is strictly prohibited.
+
+[project]
+name = "nvidia-attribution-service"
+dynamic = ["version"]
+description = "NVIDIA Attribution Service"
+readme = "README.md"
+license = "LicenseRef-NvidiaProprietary"
+license-files = ["LICENSE"]
+requires-python = ">=3.14.6,<3.15"
+classifiers = ["Private :: Do Not Upload"]
+dependencies = [
+    "attribution-lib",
+    "fastapi>=0.115.6",
+    "h11==0.16.0",
+    "loguru>=0.7.3",
+    "openpyxl>=3.1.5",
+    "opentelemetry-exporter-otlp-proto-grpc>=1.30.0,<2.0.0",
+    "opentelemetry-sdk>=1.30.0,<2.0.0",
+    "prometheus-client>=0.21.1",
+    "prometheus-fastapi-instrumentator>=8.0.2",
+    "pydantic>=2.12",
+    "uvicorn",
+]
+
+[dependency-groups]
+dev = [
+    "fastapi[standard]>=0.115.6",
+    "mypy>=1.15.0",
+    "pytest-cov>=6.0.0",
+    "ruff>=0.8.6",
+    "openapi-generator-cli[jdk4py]>=7.11.0.post0",
+    "pyzstd>=0.16.2",
+    "hatchling>=1.27.0",
+    "schemathesis>=4.0.0",
+]
+
+[tool.uv]
+managed = true
+
+[tool.uv.workspace]
+members = ["nvidia_attribution_client"]
+
+[tool.uv.sources]
+attribution-lib = { path = "../attribution-lib", editable = false }
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.version]
+path = "app/__init__.py"
+
+[tool.hatch.build.targets.sdist]
+packages = ["app"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["app"]
+
+[tool.ty.src]
+include = ["app"]
+exclude = ["nvidia_attribution_client", "tests"]
+
+[tool.pyrefly]
+project-includes = ["app/**/*.py"]
+project-excludes = ["nvidia_attribution_client/**", "tests/**"]

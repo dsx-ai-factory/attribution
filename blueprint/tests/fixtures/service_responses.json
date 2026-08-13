@@ -1,0 +1,42 @@
+{
+  "create_response": {
+    "attributor_id": "12345678901234567890"
+  },
+  "ingest_response": {
+    "observation_id": 2681252656797335323
+  },
+  "attribution_response": {
+    "verdict": {
+      "root_symptom": {
+        "symptom": "GpuFell",
+        "source": {
+          "observation_id": 2681252656797335323,
+          "source": "SYSLOG",
+          "pos": 42,
+          "line": "NVRM: Xid (PCI:0000:01:00): 79, GPU has fallen off the bus.",
+          "rule": "gpu_fell_off_bus",
+          "time": "2026-05-01T00:30:00+00:00"
+        }
+      },
+      "attribution_outcome": "Fail InfraHW",
+      "detail": "GPU fell off the bus on node-001"
+    },
+    "symptoms": {
+      "GpuFell": [
+        {
+          "type": "NodeSource",
+          "node": "node-001",
+          "source": {
+            "observation_id": 2681252656797335323,
+            "source": "SYSLOG",
+            "pos": 42,
+            "line": "NVRM: Xid (PCI:0000:01:00): 79, GPU has fallen off the bus.",
+            "rule": "gpu_fell_off_bus",
+            "time": "2026-05-01T00:30:00+00:00"
+          }
+        }
+      ]
+    },
+    "observation_context": [2681252656797335323]
+  }
+}

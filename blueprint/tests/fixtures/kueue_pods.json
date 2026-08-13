@@ -1,0 +1,99 @@
+{
+  "apiVersion": "v1",
+  "kind": "List",
+  "items": [
+    {
+      "apiVersion": "v1",
+      "kind": "Pod",
+      "metadata": {
+        "name": "train-mnist-abc12-0",
+        "namespace": "team-alpha",
+        "labels": {
+          "batch.kubernetes.io/controller-uid": "owner-1001",
+          "batch.kubernetes.io/job-name": "train-mnist"
+        }
+      },
+      "spec": {"nodeName": "node005"},
+      "status": {
+        "phase": "Succeeded",
+        "containerStatuses": [
+          {"name": "trainer", "state": {"terminated": {"exitCode": 0, "reason": "Completed"}}}
+        ]
+      }
+    },
+    {
+      "apiVersion": "v1",
+      "kind": "Pod",
+      "metadata": {
+        "name": "llama-7b-pretrain-xyz77-0",
+        "namespace": "team-alpha",
+        "labels": {
+          "batch.kubernetes.io/controller-uid": "owner-1002",
+          "batch.kubernetes.io/job-name": "llama-7b-pretrain"
+        }
+      },
+      "spec": {"nodeName": "node001"},
+      "status": {"phase": "Failed", "containerStatuses": [
+        {"name": "trainer", "state": {"terminated": {"exitCode": 0}}}
+      ]}
+    },
+    {
+      "apiVersion": "v1",
+      "kind": "Pod",
+      "metadata": {
+        "name": "llama-7b-pretrain-xyz77-1",
+        "namespace": "team-alpha",
+        "labels": {
+          "batch.kubernetes.io/controller-uid": "owner-1002",
+          "batch.kubernetes.io/job-name": "llama-7b-pretrain"
+        }
+      },
+      "spec": {"nodeName": "node002"},
+      "status": {"phase": "Failed", "containerStatuses": [
+        {"name": "trainer", "state": {"terminated": {"exitCode": 137, "reason": "Error"}}}
+      ]}
+    },
+    {
+      "apiVersion": "v1",
+      "kind": "Pod",
+      "metadata": {
+        "name": "llama-7b-pretrain-xyz77-2",
+        "namespace": "team-alpha",
+        "labels": {
+          "batch.kubernetes.io/controller-uid": "owner-1002",
+          "batch.kubernetes.io/job-name": "llama-7b-pretrain"
+        }
+      },
+      "spec": {"nodeName": "node003"},
+      "status": {"phase": "Failed"}
+    },
+    {
+      "apiVersion": "v1",
+      "kind": "Pod",
+      "metadata": {
+        "name": "hpl-bench-pp99-0",
+        "namespace": "team-beta",
+        "labels": {
+          "batch.kubernetes.io/controller-uid": "owner-1003",
+          "batch.kubernetes.io/job-name": "hpl-bench"
+        }
+      },
+      "spec": {"nodeName": "node010"},
+      "status": {"phase": "Failed"}
+    },
+    {
+      "apiVersion": "v1",
+      "kind": "Pod",
+      "metadata": {
+        "name": "still-running-qq01-0",
+        "namespace": "team-alpha",
+        "labels": {
+          "batch.kubernetes.io/controller-uid": "owner-1004",
+          "batch.kubernetes.io/job-name": "still-running"
+        }
+      },
+      "spec": {"nodeName": "node020"},
+      "status": {"phase": "Running"}
+    }
+  ]
+}

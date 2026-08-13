@@ -1,0 +1,39 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: LicenseRef-NvidiaProprietary
+#
+# NVIDIA CORPORATION, its affiliates and licensors retain all intellectual
+# property and proprietary rights in and to this material, related
+# documentation and any modifications thereto. Any use, reproduction,
+# disclosure or distribution of this material and related documentation
+# without an express license agreement from NVIDIA CORPORATION or
+# its affiliates is strictly prohibited.
+#
+# Declarative processor stanzas: bespoke syslog rules whose event production
+# isn't a fixed emit shape keep their Python body (registered with
+# @rule_processor in syslog_rules.py) while TOML owns identity + matching.
+# SyslogXid does catalog lookup / burst branching / nvlink5 parsing;
+# KubeletContainerOomKilled classifies OOMKilled container-status patches.
+# Parity via syslog_rules.test.toml / process_check. Parity sweep.
+
+author  = "NVIDIA Attribution team"
+sources = ["SYSLOG"]
+
+[[extractor]]
+name                = "SyslogXid"
+match_re            = 'NVRM:\s+Xid \(PCI:(?P<pci_id>[0-9a-fA-F.:]+)\): (?P<xid>\d+),\s*(?P<extra>[A-Z_]+)?'
+processor           = "syslog:SyslogXid"
+derived_rules       = [
+    "single-gpu-xid",
+    "known-xid-event",
+    "known-xid-event-burst",
+    "Xid pci extraction",
+    "XPA xid_catalog",
+    "XID 154; GPU recovery action changed",
+    "WORKFLOW_NVLINK5_ERR",
+]
+
+[[extractor]]
+name                = "KubeletContainerOomKilled"
+match_re            = '(?:containerStatuses|(?:\\"|")containerStatuses(?:\\"|"))\s*:\s*\[(?:(?!(?:\\"|")reason(?:\\"|"):(?:\\"|")OOMKilled(?:\\"|")).)*?(?:\\"|")name(?:\\"|"):(?:\\"|")(?P<container>[^\"\\]+)(?:\\"|")(?:(?!(?:\\"|")name(?:\\"|")).)*?(?:\\"|")reason(?:\\"|"):(?:\\"|")OOMKilled(?:\\"|")(?:(?:(?!(?:\\"|")name(?:\\"|")).)*?(?:\\"|")finishedAt(?:\\"|"):(?:\\"|")(?P<finished_at>[^\"\\]+)(?:\\"|"))?'
+processor           = "syslog:KubeletContainerOomKilled"
+derived_rules       = ["kubelet-container-oomkilled-system-pod", "kubelet-container-oomkilled-user-task"]

@@ -1,0 +1,105 @@
+[attribution]
+service_url = "http://127.0.0.1:8000"
+timeout_seconds = 60
+
+[eca]
+component = "static"
+
+[eca.static]
+id = "workload-0014"
+start_time = "2026-08-06T14:52:00+00:00"
+end_time = "2026-08-09T15:52:00+00:00"
+nodes = [
+  "node-0014",
+  "node-0014-peer-0001",
+  "node-0014-peer-0002",
+  "node-0014-peer-0003",
+  "node-0014-peer-0004",
+  "node-0014-peer-0005",
+  "node-0014-peer-0006",
+  "node-0014-peer-0007",
+  "node-0014-peer-0008",
+  "node-0014-peer-0009",
+  "node-0014-peer-0010",
+  "node-0014-peer-0011",
+  "node-0014-peer-0012",
+  "node-0014-peer-0013",
+  "node-0014-peer-0014",
+  "node-0014-peer-0015",
+  "node-0014-peer-0016",
+  "node-0014-peer-0017",
+  "node-0014-peer-0018",
+  "node-0014-peer-0019",
+  "node-0014-peer-0020",
+  "node-0014-peer-0021",
+  "node-0014-peer-0022",
+  "node-0014-peer-0023",
+  "node-0014-peer-0024",
+  "node-0014-peer-0025",
+  "node-0014-peer-0026",
+  "node-0014-peer-0027",
+  "node-0014-peer-0028",
+  "node-0014-peer-0029",
+  "node-0014-peer-0030",
+  "node-0014-peer-0031",
+  "node-0014-peer-0032",
+  "node-0014-peer-0033",
+  "node-0014-peer-0034",
+  "node-0014-peer-0035",
+  "node-0014-peer-0036",
+  "node-0014-peer-0037",
+  "node-0014-peer-0038",
+  "node-0014-peer-0039",
+  "node-0014-peer-0040",
+  "node-0014-peer-0041",
+  "node-0014-peer-0042",
+  "node-0014-peer-0043",
+  "node-0014-peer-0044",
+  "node-0014-peer-0045",
+  "node-0014-peer-0046",
+  "node-0014-peer-0047",
+  "node-0014-peer-0048",
+  "node-0014-peer-0049",
+  "node-0014-peer-0050",
+  "node-0014-peer-0051",
+  "node-0014-peer-0052",
+  "node-0014-peer-0053",
+  "node-0014-peer-0054",
+  "node-0014-peer-0055",
+  "node-0014-peer-0056",
+  "node-0014-peer-0057",
+  "node-0014-peer-0058",
+  "node-0014-peer-0059",
+  "node-0014-peer-0060",
+  "node-0014-peer-0061",
+  "node-0014-peer-0062",
+  "node-0014-peer-0063"
+]
+state = "NODE_FAIL"
+name = "workload-0014"
+user_name = "trent"
+workload_type = "slurm"
+workload_framework = "pytorch"
+std_out = "blueprint/docs/sample-data/static/applog/workload-0014/application.log"
+std_err = "blueprint/docs/sample-data/static/applog/workload-0014/application.log"
+
+[workload]
+gpus_per_node = 8
+
+[log.applog]
+component = "local_file"
+
+[log.applog.local_file]
+paths = ["blueprint/docs/sample-data/static/applog/workload-0014"]
+
+[log.syslog]
+component = "local_file"
+
+[log.syslog.local_file]
+paths = ["blueprint/docs/sample-data/static/syslog/workload-0014"]
+
+[output.db]
+component = "sqlite"
+
+[output.db.sqlite]
+path = ".attribution-sample/attributions.db"

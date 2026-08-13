@@ -1,0 +1,176 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: LicenseRef-NvidiaProprietary
+#
+# NVIDIA CORPORATION, its affiliates and licensors retain all intellectual
+# property and proprietary rights in and to this material, related
+# documentation and any modifications thereto. Any use, reproduction,
+# disclosure or distribution of this material and related documentation
+# without an express license agreement from NVIDIA CORPORATION or
+# its affiliates is strictly prohibited.
+#
+# Declarative processor stanzas: a bespoke rule whose event production isn't a
+# fixed emit shape keeps its Python body (registered with @rule_processor in
+# applog_rules.py) while TOML owns identity + matching. `pushrecv` resolves the
+# stuck peer's rank to a node via ctx and emits a peer-pair (or a fallback bad
+# node). Formerly the pushrecv @extractor_def. Parity via applog_rules.test.toml
+# / process_check. Plan 5e.
+
+author  = "NVIDIA Attribution team"
+sources = ["APPLOG"]
+
+[[extractor]]
+name                = "pushrecv"
+match_re            = 'pushrecv'
+processor           = "applog:pushrecv"
+derived_rules       = ["pushrecv"]
+derived_event_types = ["Attribution.node.bad", "Attribution.node.bad_peers"]
+
+[[extractor]]
+name                = "MFU"
+match_re            = '\[(?P<isotime>\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})?)\]\s+iteration\s+\d+/\s*\d+.*TFLOP/s/GPU\):\s*\d+\.\d+'
+processor           = "applog:MFU"
+derived_event_types = ["Application.mfu"]
+
+[[extractor]]
+name                = "socketStartConnect"
+match_re            = 'socketStartConnect: Connect to (?P<ip>\d+\.\d+\.\d+\.\d+)<\d+> failed : (?P<reason>.*)'
+processor           = "applog:socketStartConnect"
+
+[[extractor]]
+name                = "socketPollConnect"
+match_re            = 'socketPollConnect: Connect to (?P<ip>\d+\.\d+\.\d+\.\d+)<\d+> returned \d+\((?P<reason>[^)]+)\) errno'
+processor           = "applog:socketPollConnect"
+
+[[extractor]]
+name                = "socketProgressOpt"
+match_re            = 'socketProgressOpt: Call to recv from (?P<ip>\d+\.\d+\.\d+\.\d+)<\d+> failed : (?P<reason>.*)'
+processor           = "applog:socketProgressOpt"
+
+[[extractor]]
+name                = "IPv4CannotBeRetrieved"
+match_re            = 'IPv4 network addresses of \((?P<hostname>[^,]+), \d+\) cannot be retrieved'
+processor           = "applog:IPv4CannotBeRetrieved"
+
+[[extractor]]
+name                = "ClientSocketTimeout"
+match_re            = 'client socket has timed out after \d+ms while trying to connect to \((?P<hostname>[^,]+), \d+\)'
+processor           = "applog:ClientSocketTimeout"
+
+[[extractor]]
+name                = "Connection closed by remote peer"
+match_re            = 'Connection closed by remote peer (?P<hostname>\S+)[^<]*<'
+processor           = "applog:Connection closed by remote peer"
+
+[[extractor]]
+name                = "EnrootRegistryHttpError"
+match_re            = '\[ERROR\]\s+URL\s+\S+\s+returned error code:\s*(?P<code>\d{3})\b'
+processor           = "applog:EnrootRegistryHttpError"
+
+[[extractor]]
+name                = "Got completion from peer (new)"
+match_re            = 'Got completion from peer (?P<peer_ip>\d+\.\d+\.\d+\.\d+).* with \w+[= ]\s*(?:\w+\()?(?P<error_code>\d+)\)?.*vendor[ _]err[ =](?P<vendor_err>\d+).*localGid (?P<local_gid>::ffff:\d+\.\d+\.\d+\.\d+).*remoteGids\s*(?P<remote_gid>::ffff:\d+\.\d+\.\d+\.\d+).*hca (?P<hca>\S+)'
+processor           = "applog:Got completion from peer (new)"
+derived_rules       = ["Got completion from peer"]
+
+[[extractor]]
+name                = "Got completion from peer (old)"
+match_re            = 'Got completion from peer (?P<peer_ip>\d+\.\d+\.\d+\.\d+).* with \w+[= ]\s*(?:\w+\()?(?P<error_code>\d+)\)?.*vendor[ _]err[ =](?P<vendor_err>\d+)'
+processor           = "applog:Got completion from peer (old)"
+derived_rules       = ["Got completion from peer"]
+
+[[extractor]]
+name                = "Irrecoverable NET/IB communicator error"
+match_re            = '(?:\[[^\]]+\]\s+(?P<log_node>[^:\s]+):\d+:\d+\s+\[\d+\]\s+)?.*?Irrecoverable (?P<direction>send|receive) communicator error on device (?P<device>\d+)\. Reason: (?P<reason>.*?)\. Peer: (?P<peer_ip>[^<,\s]+)<\d+>,.*status[= ]\s*(?:[A-Z0-9_]+\()?(?P<error_code>\d+)\)?.*vendor[ _]err[ =](?P<vendor_err>\d+).*localGid[: ](?P<local_gid>[0-9a-fA-F:.]+) remoteGid[: ](?P<remote_gid>[0-9a-fA-F:.]+),.*hca[= ](?P<hca>\S+)'
+processor           = "applog:Irrecoverable NET/IB communicator error"
+derived_rules       = ["Irrecoverable NET/IB communicator error"]
+
+[[extractor]]
+name                = "Call to ibv_modify_qp failed"
+match_re            = 'Call to ibv_modify_qp failed with (?P<error_code>\d+) .* on dev (?P<local_hca>[^,\s]+).*local GID index \d+, local GID (?P<local_gid>[^,\s]+), remote GID (?P<remote_gid>[^,\s\n]+)'
+processor           = "applog:Call to ibv_modify_qp failed"
+derived_rules       = ["Call to ibv_modify_qp failed"]
+
+[[extractor]]
+name                = "NCCLWarnCudaFailure"
+match_re            = 'NCCL WARN Cuda failure'
+processor           = "applog:NCCLWarnCudaFailure"
+
+[[extractor]]
+name                = "GracefullySkippingMulticastInitialization"
+match_re            = 'Gracefully\ skipping\ multicast\ initialization'
+processor           = "applog:GracefullySkippingMulticastInitialization"
+
+[[extractor]]
+name                = "NCCLCudaVersion"
+match_re            = 'NCCL version (?P<nccl_ver>\d+\.\d+\.\d+)(?:\S*\+cuda(?P<cuda_ver>\d+\.\d+))?'
+processor           = "applog:NCCLCudaVersion"
+derived_rules       = ["extract nccl cuda"]
+derived_event_types = ["Application.nccl.version"]
+
+[[extractor]]
+name                = "MegatronRuntimeArgs"
+match_re            = '\s+(?P<key>\S+)\s+\.{3,}\s+(?P<value>\S+)'
+processor           = "applog:MegatronRuntimeArgs"
+derived_rules       = ["megatron runtime args"]
+
+# DataLoader exception rules. One bespoke processor (applog:dataloader) shared by
+# three keyword stanzas; it stays a processor because it builds a payload with a
+# DemotionTypes key. Formerly the _dataloader_event extractor_def loop. Plan 7.
+
+[[extractor]]
+name                = "ErrorDataloaderWorker"
+match_re            = 'Error:\ DataLoader\ worker'
+processor           = "applog:dataloader"
+derived_rules       = ["DataLoader Exception"]
+derived_event_types = ["Application.dataloader.exception", "Attribution.node.bad"]
+
+[[extractor]]
+name                = "ErrorInDataloaderWorker"
+match_re            = 'Error\ in\ DataLoader\ worker'
+processor           = "applog:dataloader"
+derived_rules       = ["DataLoader Exception"]
+derived_event_types = ["Application.dataloader.exception", "Attribution.node.bad"]
+
+[[extractor]]
+name                = "Datasetgenerationerror"
+match_re            = 'DatasetGenerationError'
+processor           = "applog:dataloader"
+derived_rules       = ["DataLoader Exception"]
+derived_event_types = ["Application.dataloader.exception", "Attribution.node.bad"]
+
+# PyTorch NCCL watchdog rules. One bespoke processor (applog:pytorch_watchdog)
+# shared by six stanzas; it stays a processor because it emits an
+# Application.pytorch.nccl_watchdog event and builds a bad-node payload with a
+# DemotionTypes key from a runtime CUDA nice-name lookup. Rule names/event types
+# are declared module-level in applog_rules.py. Formerly the
+# _pytorch_watchdog_event keyword loop + explicit extractor_def. Plan 7.
+
+[[extractor]]
+name                = "NcclWatchdogThreadTerminated"
+match_re            = 'NCCL\ watchdog\ thread\ terminated'
+processor           = "applog:pytorch_watchdog"
+
+[[extractor]]
+name                = "ExceptionRaisedFromNcclcommwatchdog"
+match_re            = 'Exception\ raised\ from\ ncclCommWatchdog'
+processor           = "applog:pytorch_watchdog"
+
+[[extractor]]
+name                = "ProcessgroupncclsWatchdogGotStuck"
+match_re            = "ProcessGroupNCCL's\\ watchdog\\ got\\ stuck"
+processor           = "applog:pytorch_watchdog"
+
+[[extractor]]
+name                = "DetectedByWatchdogAtWorker"
+match_re            = 'detected\ by\ watchdog\ at\ worker'
+processor           = "applog:pytorch_watchdog"
+
+[[extractor]]
+name                = "WatchdogCaughtCollectiveOperation"
+match_re            = 'Watchdog\ caught\ collective\ operation'
+processor           = "applog:pytorch_watchdog"
+
+[[extractor]]
+name                = "ProcessGroupWatchdogTerminated"
+match_re            = 'Process group watchdog thread terminated'
+processor           = "applog:pytorch_watchdog"

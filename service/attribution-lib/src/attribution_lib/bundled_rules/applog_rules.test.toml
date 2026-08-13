@@ -1,0 +1,1760 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: LicenseRef-NvidiaProprietary
+#
+# NVIDIA CORPORATION, its affiliates and licensors retain all intellectual
+# property and proprietary rights in and to this material, related
+# documentation and any modifications thereto. Any use, reproduction,
+# disclosure or distribution of this material and related documentation
+# without an express license agreement from NVIDIA CORPORATION or
+# its affiliates is strictly prohibited.
+
+[meta]
+runner = "applog_single_line"
+
+[[cases]]
+description = "socket start connect bad peers"
+runner = "applog_bad_peers"
+job_variant = "peer_localhost"
+line = "0: socketStartConnect: Connect to 127.0.0.1<48547> failed : No route to host"
+expect = "bad"
+expected_nodes = ["host-9ad02e1b", "localhost"]
+expected_symptom = "No route to host"
+expected_rule = "socketStartConnect"
+
+[[cases]]
+description = "socket poll connect bad peers"
+runner = "applog_bad_peers"
+job_variant = "peer_localhost"
+line = "0: socketPollConnect: Connect to 127.0.0.1<55877> returned 113(No route to host) errno 115(Operation now in progress)"
+expect = "bad"
+expected_nodes = ["host-9ad02e1b", "localhost"]
+expected_symptom = "No route to host"
+expected_rule = "socketPollConnect"
+
+[[cases]]
+description = "socket poll connect nccl warn bad peers"
+runner = "applog_bad_peers"
+job_variant = "peer_localhost"
+line = "0: NCCL WARN socketPollConnect: Connect to 127.0.0.1<57685> returned 113(No route to host) errno 115(Operation now in progress)"
+expect = "bad"
+expected_nodes = ["host-9ad02e1b", "localhost"]
+expected_symptom = "No route to host"
+expected_rule = "socketPollConnect"
+
+[[cases]]
+description = "socket poll connect misc socket bad peers"
+runner = "applog_bad_peers"
+job_variant = "peer_localhost"
+line = "0: host-15f79ed7:688556:691865 [2] misc/socket.cc:533 NCCL WARN socketPollConnect: Connect to 127.0.0.1<24957> returned 113(No route to host) errno 115(Operation now in progress)"
+expect = "bad"
+expected_nodes = ["host-9ad02e1b", "localhost"]
+expected_symptom = "No route to host"
+expected_rule = "socketPollConnect"
+
+[[cases]]
+description = "socket progress opt bad"
+job_variant = "peer_localhost"
+line = "0: NCCL WARN socketProgressOpt: Call to recv from 127.0.0.1<28601> failed : Connection reset by peer"
+expect = "bad"
+expected_node = "localhost"
+expected_symptom = "Connection reset by peer"
+expected_rule = "socketProgressOpt"
+
+[[cases]]
+description = "ipv4 cannot be retrieved bad"
+job_variant = "named_hosts"
+line = "0: [W socket.cpp:558] [c10d] The IPv4 network addresses of (testnode0-001, 58773) cannot be retrieved (gai error: -2 - Name or service not known)"
+expect = "bad"
+expected_node = "testnode0-001"
+expected_symptom = "network address cannot be retrieved"
+expected_rule = "IPv4CannotBeRetrieved"
+
+[[cases]]
+description = "client socket timeout bad"
+job_variant = "named_hosts"
+line = "0: [W212 08:22:52.836046935 TCPStore.cpp:345] [c10d] TCP client failed to connect/validate to host testnode0-002:51955 - retrying (try=0, timeout=120000ms, delay=61638ms): The client socket has timed out after 120000ms while trying to connect to (testnode0-002, 51955)."
+expect = "bad"
+expected_node = "testnode0-002"
+expected_symptom = "client socket has timed out"
+expected_rule = "ClientSocketTimeout"
+
+[[cases]]
+description = "python attribute error bad"
+line = "0: AttributeError: 'Transformer' object has no attribute 'layers'. Did you mean: 'n_layers'?"
+expect = "bad"
+expected_symptom = "Python bug"
+expected_rule = "AttributeTypeError"
+
+[[cases]]
+description = "python type error bad"
+line = "0: TypeError: object of type 'WebLoader' has no len()"
+expect = "bad"
+expected_symptom = "Python bug"
+expected_rule = "AttributeTypeError"
+
+[[cases]]
+description = "key validation error bad"
+line = "0: omegaconf.errors.KeyValidationError: ListConfig indices must be integers or slices, not NoneType"
+expect = "bad"
+expected_symptom = "Python Exception"
+expected_rule = "KeyValidationError"
+
+[[cases]]
+description = "bus error signal bad"
+line = "0: [testnode0-003:1234567:0:1234567] Caught signal 7 (Bus error: nonexistent physical address)"
+expect = "bad"
+expected_symptom = "bus error"
+expected_rule = "BusErrorSignal"
+
+[[cases]]
+description = "pushrecv rank pair bad peers"
+runner = "applog_bad_peers"
+job_variant = "pushrecv_pair"
+line = "0: [23 from 8] pushrecv: fakeline"
+expect = "bad"
+expected_nodes = ["host-9ad02e1b", "host-a222193a"]
+expected_symptom = "pushrecv"
+expected_rule = "pushrecv"
+
+[[cases]]
+description = "pushrecv userbuffers bad peers"
+runner = "applog_bad_peers"
+job_variant = "pushrecv_pair"
+line = "0: [userbuffers.cu:kuserbuffers_pushrecv:2081] pushrecv [grank dst:207 global src:8][nvrank(GPU) dst: 7 src: 6] : expected 112421, observed 112420"
+expect = "bad"
+expected_nodes = ["host-9ad02e1b", "host-a222193a"]
+expected_symptom = "pushrecv"
+expected_rule = "pushrecv"
+
+[[cases]]
+description = "cuda error matrix"
+job_phases = ["during", "outside"]
+line_templates = [
+  { description = "nccl warn", template = "0: NCCL WARN Cuda failure {sub_error}" },
+  { description = "watchdog terminated", template = "0: NCCL watchdog thread terminated {sub_error}" },
+  { description = "ncclCommWatchdog", template = "0: Exception raised from ncclCommWatchdog {sub_error}" },
+  { description = "watchdog stuck", template = "0: ProcessGroupNCCL's watchdog got stuck {sub_error}" },
+  { description = "watchdog worker", template = "0: detected by watchdog at worker {sub_error}" },
+  { description = "watchdog collective", template = "0: Watchdog caught collective operation {sub_error}" },
+  { description = "cuda failure quoted", template = "0: Cuda failure '{sub_error}'" },
+  { description = "cuda error", template = "0: CUDA error: {sub_error}" },
+  { description = "cuda runtime", template = "0: Cuda Runtime ({sub_error})" },
+  { description = "cuda short", template = "0: CUDA {sub_error}" },
+]
+
+[[cases.sub_cases]]
+sub_error = "invalid argument"
+symptom = "cudaErrorInvalidValue"
+
+[[cases.sub_cases]]
+sub_error = "out of memory"
+symptom = "cudaError out of memory"
+
+[[cases.sub_cases]]
+sub_error = "initialization error"
+symptom = "cudaErrorInitializationError"
+
+[[cases.sub_cases]]
+sub_error = "profiler disabled while using external profiling tool"
+symptom = "cudaErrorProfilerDisabled"
+
+[[cases.sub_cases]]
+sub_error = "profiler not initialized: call cudaProfilerInitialize()"
+symptom = "cudaErrorProfilerNotInitialized"
+
+[[cases.sub_cases]]
+sub_error = "profiler already started"
+symptom = "cudaErrorProfilerAlreadyStarted"
+
+[[cases.sub_cases]]
+sub_error = "profiler already stopped"
+symptom = "cudaErrorProfilerAlreadyStopped"
+
+[[cases.sub_cases]]
+sub_error = "CUDA driver is a stub library"
+symptom = "cudaErrorStubLibrary"
+
+[[cases.sub_cases]]
+sub_error = "API call is not supported in the installed CUDA driver"
+symptom = "cudaErrorCallRequiresNewerDriver"
+
+[[cases.sub_cases]]
+sub_error = "CUDA-capable device(s) is/are busy or unavailable"
+symptom = "cudaErrorDevicesUnavailable"
+
+[[cases.sub_cases]]
+sub_error = "no CUDA-capable device is detected"
+symptom = "cudaErrorNoDevice"
+
+[[cases.sub_cases]]
+sub_error = "invalid device ordinal"
+symptom = "cudaErrorInvalidDevice"
+
+[[cases.sub_cases]]
+sub_error = "device doesn't have valid Grid license"
+symptom = "cudaErrorDeviceNotLicensed"
+
+[[cases.sub_cases]]
+sub_error = "integrity checks failed"
+symptom = "cudaErrorSoftwareValidityNotEstablished"
+
+[[cases.sub_cases]]
+sub_error = "device kernel image is invalid"
+symptom = "cudaErrorInvalidSource"
+
+[[cases.sub_cases]]
+sub_error = "invalid device context"
+symptom = "cudaErrorDeviceUninitialized"
+
+[[cases.sub_cases]]
+sub_error = "mapping of buffer object failed"
+symptom = "cudaErrorMapBufferObjectFailed"
+
+[[cases.sub_cases]]
+sub_error = "unmapping of buffer object failed"
+symptom = "cudaErrorUnmapBufferObjectFailed"
+
+[[cases.sub_cases]]
+sub_error = "array is mapped"
+symptom = "cudaErrorArrayIsMapped"
+
+[[cases.sub_cases]]
+sub_error = "resource already mapped"
+symptom = "cudaErrorAlreadyMapped"
+
+[[cases.sub_cases]]
+sub_error = "no kernel image is available for execution on the device"
+symptom = "cudaErrorNoKernelImageForDevice"
+
+[[cases.sub_cases]]
+sub_error = "resource already acquired"
+symptom = "cudaErrorAlreadyAcquired"
+
+[[cases.sub_cases]]
+sub_error = "resource not mapped"
+symptom = "cudaErrorNotMapped"
+
+[[cases.sub_cases]]
+sub_error = "resource not mapped as array"
+symptom = "cudaErrorNotMappedAsArray"
+
+[[cases.sub_cases]]
+sub_error = "resource not mapped as pointer"
+symptom = "cudaErrorNotMappedAsPointer"
+
+[[cases.sub_cases]]
+sub_error = "uncorrectable ECC error encountered"
+symptom = "cudaErrorECCUncorrectable"
+
+[[cases.sub_cases]]
+sub_error = "limit is not supported on this architecture"
+symptom = "cudaErrorUnsupportedLimit"
+
+[[cases.sub_cases]]
+sub_error = "exclusive-thread device already in use by a different thread"
+symptom = "cudaErrorDeviceAlreadyInUse"
+
+[[cases.sub_cases]]
+sub_error = "peer access is not supported between these two devices"
+symptom = "cudaErrorPeerAccessUnsupported"
+
+[[cases.sub_cases]]
+sub_error = "a PTX JIT compilation failed"
+symptom = "cudaErrorInvalidPtx"
+
+[[cases.sub_cases]]
+sub_error = "invalid OpenGL or DirectX context"
+symptom = "cudaErrorInvalidGraphicsContext"
+
+[[cases.sub_cases]]
+sub_error = "uncorrectable NVLink error detected during the execution"
+symptom = "cudaErrorNvlinkUncorrectable"
+
+[[cases.sub_cases]]
+sub_error = "PTX JIT compiler library not found"
+symptom = "cudaErrorJitCompilerNotFound"
+
+[[cases.sub_cases]]
+sub_error = "the provided PTX was compiled with an unsupported toolchain."
+symptom = "cudaErrorUnsupportedPtxVersion"
+
+[[cases.sub_cases]]
+sub_error = "PTX JIT compilation was disabled"
+symptom = "cudaErrorJitCompilationDisabled"
+
+[[cases.sub_cases]]
+sub_error = "the provided execution affinity is not supported"
+symptom = "cudaErrorUnsupportedExecAffinity"
+
+[[cases.sub_cases]]
+sub_error = "the provided PTX contains unsupported call to cudaDeviceSynchronize"
+symptom = "cudaErrorUnsupportedDevSideSync"
+
+[[cases.sub_cases]]
+sub_error = "Invalid access of peer GPU memory over nvlink or a hardware error"
+symptom = "cudaErrorContained"
+
+[[cases.sub_cases]]
+sub_error = "NVLink encryption error detected during the execution"
+symptom = "cudaErrorNvlinkEncryptionFailed"
+
+[[cases.sub_cases]]
+sub_error = "file not found"
+symptom = "cudaErrorFileNotFound"
+
+[[cases.sub_cases]]
+sub_error = "shared object symbol not found"
+symptom = "cudaErrorSharedObjectSymbolNotFound"
+
+[[cases.sub_cases]]
+sub_error = "shared object initialization failed"
+symptom = "cudaErrorSharedObjectInitFailed"
+
+[[cases.sub_cases]]
+sub_error = "OS call failed or operation not supported on this OS"
+symptom = "cudaErrorOperatingSystem"
+
+[[cases.sub_cases]]
+sub_error = "invalid resource handle"
+symptom = "cudaErrorInvalidResourceHandle"
+
+[[cases.sub_cases]]
+sub_error = "the operation cannot be performed in the present state"
+symptom = "cudaErrorIllegalState"
+
+[[cases.sub_cases]]
+sub_error = "attempted introspection would be semantically lossy"
+symptom = "cudaErrorLossyQuery"
+
+[[cases.sub_cases]]
+sub_error = "named symbol not found"
+symptom = "cudaErrorSymbolNotFound"
+
+[[cases.sub_cases]]
+sub_error = "device not ready"
+symptom = "cudaErrorNotReady"
+
+[[cases.sub_cases]]
+sub_error = "an illegal memory access was encountered"
+symptom = "cudaErrorIllegalAddress"
+
+[[cases.sub_cases]]
+sub_error = "too many resources requested for launch"
+symptom = "cudaErrorLaunchOutOfResources"
+
+[[cases.sub_cases]]
+sub_error = "the launch timed out and was terminated"
+symptom = "cudaErrorLaunchTimeout"
+
+[[cases.sub_cases]]
+sub_error = "launch uses incompatible texturing mode"
+symptom = "cudaErrorLaunchIncompatibleTexturing"
+
+[[cases.sub_cases]]
+sub_error = "peer access is already enabled"
+symptom = "cudaErrorPeerAccessAlreadyEnabled"
+
+[[cases.sub_cases]]
+sub_error = "peer access has not been enabled"
+symptom = "cudaErrorPeerAccessNotEnabled"
+
+[[cases.sub_cases]]
+sub_error = "cannot set while device is active in this process"
+symptom = "cudaErrorSetOnActiveProcess"
+
+[[cases.sub_cases]]
+sub_error = "context is destroyed"
+symptom = "cudaErrorContextIsDestroyed"
+
+[[cases.sub_cases]]
+sub_error = "device-side assert triggered"
+symptom = "cudaErrorAssert"
+
+[[cases.sub_cases]]
+sub_error = "peer mapping resources exhausted"
+symptom = "cudaErrorTooManyPeers"
+
+[[cases.sub_cases]]
+sub_error = "part or all of the requested memory range is already mapped"
+symptom = "cudaErrorHostMemoryAlreadyRegistered"
+
+[[cases.sub_cases]]
+sub_error = "pointer does not correspond to a registered memory region"
+symptom = "cudaErrorHostMemoryNotRegistered"
+
+[[cases.sub_cases]]
+sub_error = "hardware stack error"
+symptom = "cudaErrorHardwareStackError"
+
+[[cases.sub_cases]]
+sub_error = "an illegal instruction was encountered"
+symptom = "cudaErrorIllegalInstruction"
+
+[[cases.sub_cases]]
+sub_error = "misaligned address"
+symptom = "cudaErrorMisalignedAddress"
+
+[[cases.sub_cases]]
+sub_error = "operation not supported on global/shared address space"
+symptom = "cudaErrorInvalidAddressSpace"
+
+[[cases.sub_cases]]
+sub_error = "invalid program counter"
+symptom = "cudaErrorInvalidPc"
+
+[[cases.sub_cases]]
+sub_error = "unspecified launch failure"
+symptom = "cudaErrorLaunchFailure"
+
+[[cases.sub_cases]]
+sub_error = "too many blocks in cooperative launch"
+symptom = "cudaErrorCooperativeLaunchTooLarge"
+
+[[cases.sub_cases]]
+sub_error = "tensor memory not completely freed"
+symptom = "cudaErrorTensorMemoryLeak"
+
+[[cases.sub_cases]]
+sub_error = "operation not permitted"
+symptom = "cudaErrorNotPermitted"
+
+[[cases.sub_cases]]
+sub_error = "operation not supported"
+symptom = "cudaErrorNotSupported"
+
+[[cases.sub_cases]]
+sub_error = "system not yet initialized"
+symptom = "cudaErrorSystemNotReady"
+
+[[cases.sub_cases]]
+sub_error = "system has unsupported display driver / cuda driver combination"
+symptom = "cudaErrorSystemDriverMismatch"
+
+[[cases.sub_cases]]
+sub_error = "forward compatibility was attempted on non supported HW"
+symptom = "cudaErrorCompatNotSupportedOnDevice"
+
+[[cases.sub_cases]]
+sub_error = "MPS client failed to connect to the MPS control daemon or the MPS server"
+symptom = "cudaErrorMpsConnectionFailed"
+
+[[cases.sub_cases]]
+sub_error = "the remote procedural call between the MPS server and the MPS client failed"
+symptom = "cudaErrorMpsRpcFailure"
+
+[[cases.sub_cases]]
+sub_error = "MPS server is not ready to accept new MPS client requests"
+symptom = "cudaErrorMpsServerNotReady"
+
+[[cases.sub_cases]]
+sub_error = "the hardware resources required to create MPS client have been exhausted"
+symptom = "cudaErrorMpsMaxClientsReached"
+
+[[cases.sub_cases]]
+sub_error = "the hardware resources required to support device connections have been exhausted"
+symptom = "cudaErrorMpsMaxConnectionsReached"
+
+[[cases.sub_cases]]
+sub_error = "the MPS client has been terminated by the server"
+symptom = "cudaErrorMpsClientTerminated"
+
+[[cases.sub_cases]]
+sub_error = "is using CUDA Dynamic Parallelism, but the current configuration, like MPS, does not support it"
+symptom = "cudaErrorCdpNotSupported"
+
+[[cases.sub_cases]]
+sub_error = "unsupported interaction between different versions of CUDA Dynamic Parallelism"
+symptom = "cudaErrorCdpVersionMismatch"
+
+[[cases.sub_cases]]
+sub_error = "operation not permitted when stream is capturing"
+symptom = "cudaErrorStreamCaptureUnsupported"
+
+[[cases.sub_cases]]
+sub_error = "operation failed due to a previous error during capture"
+symptom = "cudaErrorStreamCaptureInvalidated"
+
+[[cases.sub_cases]]
+sub_error = "operation would result in a merge of separate capture sequences"
+symptom = "cudaErrorStreamCaptureMerge"
+
+[[cases.sub_cases]]
+sub_error = "capture was not ended in the same stream as it began"
+symptom = "cudaErrorStreamCaptureUnmatched"
+
+[[cases.sub_cases]]
+sub_error = "capturing stream has unjoined work"
+symptom = "cudaErrorStreamCaptureUnjoined"
+
+[[cases.sub_cases]]
+sub_error = "dependency created on uncaptured work in another stream"
+symptom = "cudaErrorStreamCaptureIsolation"
+
+[[cases.sub_cases]]
+sub_error = "operation would make the legacy stream depend on a capturing blocking stream"
+symptom = "cudaErrorStreamCaptureImplicit"
+
+[[cases.sub_cases]]
+sub_error = "operation not permitted on an event last recorded in a capturing stream"
+symptom = "cudaErrorCapturedEvent"
+
+[[cases.sub_cases]]
+sub_error = "attempt to terminate a thread-local capture sequence from another thread"
+symptom = "cudaErrorStreamCaptureWrongThread"
+
+[[cases.sub_cases]]
+sub_error = "wait operation timed out"
+symptom = "cudaErrorTimeout"
+
+[[cases.sub_cases]]
+sub_error = "the graph update was not performed because it included changes which violated constraints specific to instantiated graph update"
+symptom = "cudaErrorGraphExecUpdateFailure"
+
+[[cases.sub_cases]]
+sub_error = "an async error has occured in external entity outside of CUDA"
+symptom = "cudaErrorExternalDevice"
+
+[[cases.sub_cases]]
+sub_error = "a kernel launch error has occurred due to cluster misconfiguration"
+symptom = "cudaErrorInvalidClusterSize"
+
+[[cases.sub_cases]]
+sub_error = "the function handle is not loaded when calling an API that requires a loaded function"
+symptom = "cudaErrorFunctionNotLoaded"
+
+[[cases.sub_cases]]
+sub_error = "one or more resources passed in are not valid resource types for the operation"
+symptom = "cudaErrorInvalidResourceType"
+
+[[cases.sub_cases]]
+sub_error = "one or more resources are insufficient or non-applicable for the operation"
+symptom = "cudaErrorInvalidResourceConfiguration"
+
+[[cases.sub_cases]]
+sub_error = "unknown error"
+symptom = "cudaErrorUnknown"
+
+[[cases.sub_cases]]
+sub_error = "__global__ function call is not configured"
+symptom = "cudaErrorMissingConfiguration"
+
+[[cases.sub_cases]]
+sub_error = "invalid device function"
+symptom = "cudaErrorInvalidDeviceFunction"
+
+[[cases.sub_cases]]
+sub_error = "invalid configuration argument"
+symptom = "cudaErrorInvalidConfiguration"
+
+[[cases.sub_cases]]
+sub_error = "invalid pitch argument"
+symptom = "cudaErrorInvalidPitchValue"
+
+[[cases.sub_cases]]
+sub_error = "invalid device symbol"
+symptom = "cudaErrorInvalidSymbol"
+
+[[cases.sub_cases]]
+sub_error = "invalid host pointer"
+symptom = "cudaErrorInvalidHostPointer"
+
+[[cases.sub_cases]]
+sub_error = "invalid device pointer"
+symptom = "cudaErrorInvalidDevicePointer"
+
+[[cases.sub_cases]]
+sub_error = "invalid texture reference"
+symptom = "cudaErrorInvalidTexture"
+
+[[cases.sub_cases]]
+sub_error = "texture is not bound to a pointer"
+symptom = "cudaErrorInvalidTextureBinding"
+
+[[cases.sub_cases]]
+sub_error = "invalid channel descriptor"
+symptom = "cudaErrorInvalidChannelDescriptor"
+
+[[cases.sub_cases]]
+sub_error = "invalid copy direction for memcpy"
+symptom = "cudaErrorInvalidMemcpyDirection"
+
+[[cases.sub_cases]]
+sub_error = "invalid address of constant"
+symptom = "cudaErrorAddressOfConstant"
+
+[[cases.sub_cases]]
+sub_error = "fetch from texture failed"
+symptom = "cudaErrorTextureFetchFailed"
+
+[[cases.sub_cases]]
+sub_error = "cannot fetch from a texture that is not bound"
+symptom = "cudaErrorTextureNotBound"
+
+[[cases.sub_cases]]
+sub_error = "incorrect use of __syncthreads()"
+symptom = "cudaErrorSynchronizationError"
+
+[[cases.sub_cases]]
+sub_error = "linear filtering not supported for non-float type"
+symptom = "cudaErrorInvalidFilterSetting"
+
+[[cases.sub_cases]]
+sub_error = "read as normalized float not supported for data type"
+symptom = "cudaErrorInvalidNormSetting"
+
+[[cases.sub_cases]]
+sub_error = "device emulation mode and device execution mode cannot be mixed"
+symptom = "cudaErrorMixedDeviceExecution"
+
+[[cases.sub_cases]]
+sub_error = "feature not yet implemented"
+symptom = "cudaErrorNotYetImplemented"
+
+[[cases.sub_cases]]
+sub_error = "memory size or pointer value too large to fit in 32 bit"
+symptom = "cudaErrorMemoryValueTooLarge"
+
+[[cases.sub_cases]]
+sub_error = "CUDA driver version is insufficient for CUDA runtime version"
+symptom = "cudaErrorInsufficientDriver"
+
+[[cases.sub_cases]]
+sub_error = "invalid surface reference"
+symptom = "cudaErrorInvalidSurface"
+
+[[cases.sub_cases]]
+sub_error = "duplicate global variable looked up by string name"
+symptom = "cudaErrorDuplicateVariableName"
+
+[[cases.sub_cases]]
+sub_error = "duplicate texture looked up by string name"
+symptom = "cudaErrorDuplicateTextureName"
+
+[[cases.sub_cases]]
+sub_error = "duplicate surface looked up by string name"
+symptom = "cudaErrorDuplicateSurfaceName"
+
+[[cases.sub_cases]]
+sub_error = "incompatible driver context"
+symptom = "cudaErrorIncompatibleDriverContext"
+
+[[cases.sub_cases]]
+sub_error = "launch would exceed maximum depth of nested launches"
+symptom = "cudaErrorLaunchMaxDepthExceeded"
+
+[[cases.sub_cases]]
+sub_error = "launch failed because kernel uses unsupported, file-scoped textures (texture objects are supported)"
+symptom = "cudaErrorLaunchFileScopedTex"
+
+[[cases.sub_cases]]
+sub_error = "launch failed because kernel uses unsupported, file-scoped surfaces (surface objects are supported)"
+symptom = "cudaErrorLaunchFileScopedSurf"
+
+[[cases.sub_cases]]
+sub_error = "cudaDeviceSynchronize failed because caller's grid depth exceeds cudaLimitDevRuntimeSyncDepth"
+symptom = "cudaErrorSyncDepthExceeded"
+
+[[cases.sub_cases]]
+sub_error = "launch failed because launch would exceed cudaLimitDevRuntimePendingLaunchCount"
+symptom = "cudaErrorLaunchPendingCountExceeded"
+
+[[cases.sub_cases]]
+sub_error = "startup failure in cuda runtime"
+symptom = "cudaErrorStartupFailure"
+
+[[cases.sub_cases]]
+sub_error = "api failure base"
+symptom = "cudaErrorApiFailureBase"
+
+[[cases]]
+description = "cuda alias error matrix"
+job_phases = ["during", "outside"]
+expected_rule = "alias else"
+line_templates = [
+  { description = "nccl warn", template = "0: NCCL WARN Cuda failure {sub_error}" },
+  { description = "watchdog terminated", template = "0: NCCL watchdog thread terminated {sub_error}" },
+  { description = "ncclCommWatchdog", template = "0: Exception raised from ncclCommWatchdog {sub_error}" },
+  { description = "watchdog stuck", template = "0: ProcessGroupNCCL's watchdog got stuck {sub_error}" },
+  { description = "watchdog worker", template = "0: detected by watchdog at worker {sub_error}" },
+  { description = "watchdog collective", template = "0: Watchdog caught collective operation {sub_error}" },
+]
+
+[[cases.sub_cases]]
+sub_error = "an error was returned from a method on a CUhostCommunicationsVtable object"
+symptom = "CUDA_ERROR_COMMS_FAILURE"
+
+[[cases.sub_cases]]
+sub_error = "an error happened during the key rotation sequence"
+symptom = "CUDA_ERROR_KEY_ROTATION"
+
+[[cases.sub_cases]]
+sub_error = "context already current"
+symptom = "CUDA_ERROR_CONTEXT_ALREADY_CURRENT"
+
+[[cases.sub_cases]]
+sub_error = "unspecified launch failure in prior launch"
+symptom = "unspecified launch failure in prior launch"
+
+[[cases]]
+description = "pyxis mount system directory is bad"
+line = "0: enroot-mount: failed to mount: /etc/resolv.conf at /tmp/.enroot/abc123"
+expect = "bad"
+expected_symptom = "pyxis: enroot mount failure from system directory"
+expected_rule = "PyxisEnrootMountFailureSystem"
+
+[[cases]]
+description = "pyxis mount path not found is bad"
+line = "0: enroot-mount: failed to mount: /opt/nvidia/nsight-systems at /raid/enroot/data/user-00001/pyxis_123/opt/nvidia/nsight-systems: No such file or directory"
+expect = "bad"
+expected_symptom = "pyxis: enroot mount path not found"
+expected_rule = "PyxisEnrootMountFailureSystem"
+
+[[cases]]
+description = "pyxis mount user directory is bad"
+line = "0: enroot-mount: failed to mount: /home/user/data.sqsh at /tmp/.enroot/abc123"
+expect = "bad"
+expected_symptom = "pyxis: enroot mount failure from user directory"
+expected_rule = "PyxisEnrootMountFailureUser"
+
+[[cases]]
+description = "pyxis mount lustre directory is bad"
+line = "0: enroot-mount: failed to mount: /lustre/scratch/model.sqsh at /tmp/.enroot/abc123"
+expect = "bad"
+expected_symptom = "pyxis: enroot mount failure from user directory"
+expected_rule = "PyxisEnrootMountFailureUser"
+
+[[cases]]
+description = "address already in use is bad during job"
+line = "0: Address already in use"
+tflops_start = true
+expect = "bad"
+expected_symptom = "Address already in use"
+expected_rule = "address-in-use"
+
+[[cases]]
+description = "address already in use is interesting outside job"
+line = "0: Address already in use"
+tflops_start = false
+expect = "interesting"
+expected_symptom = "(non-fatal) Address already in use"
+expected_rule = "address-in-use"
+
+[[cases]]
+description = "lowercase address already in use (libuv/TCPStore) is bad during job"
+line = "0: torch.distributed.DistNetworkError: The server socket has failed to listen on any local network address. port: 14485, useIpv6: false, code: -98, name: EADDRINUSE, message: address already in use"
+tflops_start = true
+expect = "bad"
+expected_symptom = "Address already in use"
+expected_rule = "address-in-use"
+
+[[cases]]
+description = "data loader exception is bad during job"
+line = "0: Error: DataLoader worker"
+tflops_start = true
+expect = "bad"
+expected_symptom = "DataLoader Exception"
+expected_rule = "DataLoader Exception"
+
+[[cases]]
+description = "data loader exception is interesting outside job"
+line = "0: Error: DataLoader worker"
+tflops_start = false
+expect = "interesting"
+expected_symptom = "(non-fatal) DataLoader Exception"
+expected_rule = "DataLoader Exception"
+
+[[cases]]
+description = "io error is bad during job"
+line = "0: [Errno 5] Input/output error"
+tflops_start = true
+expect = "bad"
+expected_symptom = "IO error"
+expected_rule = "IO error"
+
+[[cases]]
+description = "io error is interesting outside job"
+line = "0: [Errno 5] Input/output error"
+tflops_start = false
+expect = "interesting"
+expected_symptom = "(non-fatal) IO error"
+expected_rule = "IO error"
+
+[[cases]]
+description = "cancelled by timeout is bad during job"
+line = "0: DUE TO TIME LIMIT"
+tflops_start = true
+expect = "bad"
+expected_symptom = "Cancelled by Timeout"
+expected_rule = "alias else"
+
+[[cases]]
+description = "cancelled by timeout is interesting outside job"
+line = "0: DUE TO TIME LIMIT"
+tflops_start = false
+expect = "interesting"
+expected_symptom = "(non-fatal) Cancelled by Timeout"
+expected_rule = "alias else"
+
+[[cases]]
+description = "cuda get device count is bad during job"
+line = "0: Unexpected error from cudaGetDeviceCount()"
+tflops_start = true
+expect = "bad"
+expected_symptom = "Unexpected error from cudaGetDeviceCount()"
+expected_rule = "Unexpected error from cudaGetDeviceCount()"
+
+[[cases]]
+description = "cuda get device count is interesting outside job"
+line = "0: Unexpected error from cudaGetDeviceCount()"
+tflops_start = false
+expect = "interesting"
+expected_symptom = "(non-fatal) Unexpected error from cudaGetDeviceCount()"
+expected_rule = "Unexpected error from cudaGetDeviceCount()"
+
+[[cases]]
+description = "gpu is lost is bad during job"
+line = "0: GPU is lost"
+tflops_start = true
+expect = "bad"
+expected_symptom = "GPU is lost reported by slurm"
+expected_rule = "GPU is lost reported by slurm"
+
+[[cases]]
+description = "gpu is lost is interesting outside job"
+line = "0: GPU is lost"
+tflops_start = false
+expect = "interesting"
+expected_symptom = "(non-fatal) GPU is lost reported by slurm"
+expected_rule = "GPU is lost reported by slurm"
+
+[[cases]]
+description = "segmentation fault is bad during job"
+line = "0: Segmentation fault"
+tflops_start = true
+expect = "bad"
+expected_symptom = "Segmentation fault"
+expected_rule = "alias else"
+
+[[cases]]
+description = "segmentation fault is interesting outside job"
+line = "0: Segmentation fault"
+tflops_start = false
+expect = "interesting"
+expected_symptom = "(non-fatal) Segmentation fault"
+expected_rule = "alias else"
+
+[[cases]]
+description = "terminate called is bad during job"
+line = "0: terminate called"
+tflops_start = true
+expect = "bad"
+expected_symptom = "terminate called"
+expected_rule = "alias else"
+
+[[cases]]
+description = "terminate called is interesting outside job"
+line = "0: terminate called"
+tflops_start = false
+expect = "interesting"
+expected_symptom = "(non-fatal) terminate called"
+expected_rule = "alias else"
+
+[[cases]]
+description = "s3 exception botocore is bad during job"
+line = "0: botocore.exceptions"
+tflops_start = true
+expect = "bad"
+expected_symptom = "S3 Exception"
+expected_rule = "alias else"
+
+[[cases]]
+description = "s3 exception botocore is interesting outside job"
+line = "0: botocore.exceptions"
+tflops_start = false
+expect = "interesting"
+expected_symptom = "(non-fatal) S3 Exception"
+expected_rule = "alias else"
+
+[[cases]]
+description = "s3 exception indexed dataset is bad during job"
+line = "0: s3_indexed_dataset.py"
+tflops_start = true
+expect = "bad"
+expected_symptom = "S3 Exception"
+expected_rule = "alias else"
+
+[[cases]]
+description = "s3 exception indexed dataset is interesting outside job"
+line = "0: s3_indexed_dataset.py"
+tflops_start = false
+expect = "interesting"
+expected_symptom = "(non-fatal) S3 Exception"
+expected_rule = "alias else"
+
+[[cases]]
+description = "s3 exception explicit is bad during job"
+line = "0: S3Error: Exception"
+tflops_start = true
+expect = "bad"
+expected_symptom = "S3 Exception"
+expected_rule = "alias else"
+
+[[cases]]
+description = "s3 exception explicit is interesting outside job"
+line = "0: S3Error: Exception"
+tflops_start = false
+expect = "interesting"
+expected_symptom = "(non-fatal) S3 Exception"
+expected_rule = "alias else"
+
+[[cases]]
+description = "watchdog thread terminated is bad during job"
+line = "0: NCCL watchdog thread terminated"
+tflops_start = true
+expect = "bad"
+expected_symptom = "PyTorch NCCL watchdog"
+expected_rule = "alias else"
+
+[[cases]]
+description = "watchdog thread terminated is interesting outside job"
+line = "0: NCCL watchdog thread terminated"
+tflops_start = false
+expect = "interesting"
+expected_symptom = "(non-fatal) PyTorch NCCL watchdog"
+expected_rule = "alias else"
+
+[[cases]]
+description = "ncclCommWatchdog exception is bad during job"
+line = "0: Exception raised from ncclCommWatchdog"
+tflops_start = true
+expect = "bad"
+expected_symptom = "PyTorch NCCL watchdog"
+expected_rule = "alias else"
+
+[[cases]]
+description = "ncclCommWatchdog exception is interesting outside job"
+line = "0: Exception raised from ncclCommWatchdog"
+tflops_start = false
+expect = "interesting"
+expected_symptom = "(non-fatal) PyTorch NCCL watchdog"
+expected_rule = "alias else"
+
+[[cases]]
+description = "no cuda runtime is bad during job"
+line = "0: No CUDA runtime is found"
+tflops_start = true
+expect = "bad"
+expected_symptom = "No CUDA runtime is found"
+expected_rule = "alias else"
+
+[[cases]]
+description = "no cuda runtime is interesting outside job"
+line = "0: No CUDA runtime is found"
+tflops_start = false
+expect = "interesting"
+expected_symptom = "(non-fatal) No CUDA runtime is found"
+expected_rule = "alias else"
+
+[[cases]]
+description = "error in dataloader worker is bad during job"
+line = "0: Error in DataLoader worker"
+tflops_start = true
+expect = "bad"
+expected_symptom = "DataLoader Exception"
+expected_rule = "DataLoader Exception"
+
+[[cases]]
+description = "error in dataloader worker is interesting outside job"
+line = "0: Error in DataLoader worker"
+tflops_start = false
+expect = "interesting"
+expected_symptom = "(non-fatal) DataLoader Exception"
+expected_rule = "DataLoader Exception"
+
+[[cases]]
+description = "dataset generation error is bad during job"
+line = "0: DatasetGenerationError"
+tflops_start = true
+expect = "bad"
+expected_symptom = "DataLoader Exception"
+expected_rule = "DataLoader Exception"
+
+[[cases]]
+description = "dataset generation error is interesting outside job"
+line = "0: DatasetGenerationError"
+tflops_start = false
+expect = "interesting"
+expected_symptom = "(non-fatal) DataLoader Exception"
+expected_rule = "DataLoader Exception"
+
+[[cases]]
+description = "disk quota exceeded is bad during job"
+line = "0: Disk quota exceeded"
+tflops_start = true
+expect = "bad"
+expected_symptom = "Disk quota exceeded"
+expected_rule = "alias else"
+
+[[cases]]
+description = "disk quota exceeded is interesting outside job"
+line = "0: Disk quota exceeded"
+tflops_start = false
+expect = "interesting"
+expected_symptom = "(non-fatal) Disk quota exceeded"
+expected_rule = "alias else"
+
+[[cases]]
+description = "nccl unhandled cuda error is bad during job"
+line = "0: ncclUnhandledCudaError"
+tflops_start = true
+expect = "bad"
+expected_symptom = "ncclUnhandledCudaError"
+expected_rule = "alias else"
+
+[[cases]]
+description = "nccl unhandled cuda error is interesting outside job"
+line = "0: ncclUnhandledCudaError"
+tflops_start = false
+expect = "interesting"
+expected_symptom = "(non-fatal) ncclUnhandledCudaError"
+expected_rule = "alias else"
+
+[[cases]]
+description = "nccl system error is bad during job"
+line = "0: ncclSystemError"
+tflops_start = true
+expect = "bad"
+expected_symptom = "ncclSystemError"
+expected_rule = "alias else"
+
+[[cases]]
+description = "nccl system error is interesting outside job"
+line = "0: ncclSystemError"
+tflops_start = false
+expect = "interesting"
+expected_symptom = "(non-fatal) ncclSystemError"
+expected_rule = "alias else"
+
+[[cases]]
+description = "nccl internal error is bad during job"
+line = "0: ncclInternalError"
+tflops_start = true
+expect = "bad"
+expected_symptom = "ncclInternalError"
+expected_rule = "alias else"
+
+[[cases]]
+description = "nccl internal error is interesting outside job"
+line = "0: ncclInternalError"
+tflops_start = false
+expect = "interesting"
+expected_symptom = "(non-fatal) ncclInternalError"
+expected_rule = "alias else"
+
+[[cases]]
+description = "nccl invalid argument is bad during job"
+line = "0: ncclInvalidArgument"
+tflops_start = true
+expect = "bad"
+expected_symptom = "ncclInvalidArgument"
+expected_rule = "alias else"
+
+[[cases]]
+description = "nccl invalid argument is interesting outside job"
+line = "0: ncclInvalidArgument"
+tflops_start = false
+expect = "interesting"
+expected_symptom = "(non-fatal) ncclInvalidArgument"
+expected_rule = "alias else"
+
+[[cases]]
+description = "nccl invalid usage is bad during job"
+line = "0: ncclInvalidUsage"
+tflops_start = true
+expect = "bad"
+expected_symptom = "ncclInvalidUsage"
+expected_rule = "alias else"
+
+[[cases]]
+description = "nccl invalid usage is interesting outside job"
+line = "0: ncclInvalidUsage"
+tflops_start = false
+expect = "interesting"
+expected_symptom = "(non-fatal) ncclInvalidUsage"
+expected_rule = "alias else"
+
+[[cases]]
+description = "nccl remote error is bad during job"
+line = "0: ncclRemoteError"
+tflops_start = true
+expect = "bad"
+expected_symptom = "ncclRemoteError"
+expected_rule = "alias else"
+
+[[cases]]
+description = "nccl remote error is interesting outside job"
+line = "0: ncclRemoteError"
+tflops_start = false
+expect = "interesting"
+expected_symptom = "(non-fatal) ncclRemoteError"
+expected_rule = "alias else"
+
+[[cases]]
+description = "nccl timeout is bad during job"
+line = "0: ncclTimeout"
+tflops_start = true
+expect = "bad"
+expected_symptom = "ncclTimeout"
+expected_rule = "alias else"
+
+[[cases]]
+description = "nccl timeout is interesting outside job"
+line = "0: ncclTimeout"
+tflops_start = false
+expect = "interesting"
+expected_symptom = "(non-fatal) ncclTimeout"
+expected_rule = "alias else"
+
+[[cases]]
+description = "broken pipe error is bad during job"
+line = "0: BrokenPipeError"
+tflops_start = true
+expect = "bad"
+expected_symptom = "BrokenPipeError"
+expected_rule = "alias else"
+
+[[cases]]
+description = "broken pipe error is interesting outside job"
+line = "0: BrokenPipeError"
+tflops_start = false
+expect = "interesting"
+expected_symptom = "(non-fatal) BrokenPipeError"
+expected_rule = "alias else"
+
+[[cases]]
+description = "no such file is bad during job"
+line = "0: No such file or directory"
+tflops_start = true
+expect = "bad"
+expected_symptom = "No such file or directory"
+expected_rule = "alias else"
+
+[[cases]]
+description = "no such file is interesting outside job"
+line = "0: No such file or directory"
+tflops_start = false
+expect = "interesting"
+expected_symptom = "(non-fatal) No such file or directory"
+expected_rule = "alias else"
+
+[[cases]]
+description = "cancelled due to task failure is bad during job"
+line = "0: DUE TO TASK FAILURE"
+tflops_start = true
+expect = "bad"
+expected_symptom = "Cancelled due to task failure"
+expected_rule = "alias else"
+
+[[cases]]
+description = "cancelled due to task failure is interesting outside job"
+line = "0: DUE TO TASK FAILURE"
+tflops_start = false
+expect = "interesting"
+expected_symptom = "(non-fatal) Cancelled due to task failure"
+expected_rule = "alias else"
+
+[[cases]]
+description = "watchdog got stuck is bad during job"
+line = "0: ProcessGroupNCCL's watchdog got stuck"
+tflops_start = true
+expect = "bad"
+expected_symptom = "PyTorch NCCL watchdog"
+expected_rule = "alias else"
+
+[[cases]]
+description = "watchdog got stuck is interesting outside job"
+line = "0: ProcessGroupNCCL's watchdog got stuck"
+tflops_start = false
+expect = "interesting"
+expected_symptom = "(non-fatal) PyTorch NCCL watchdog"
+expected_rule = "alias else"
+
+[[cases]]
+description = "watchdog worker detected is bad during job"
+line = "0: detected by watchdog at worker"
+tflops_start = true
+expect = "bad"
+expected_symptom = "PyTorch NCCL watchdog"
+expected_rule = "alias else"
+
+[[cases]]
+description = "watchdog worker detected is interesting outside job"
+line = "0: detected by watchdog at worker"
+tflops_start = false
+expect = "interesting"
+expected_symptom = "(non-fatal) PyTorch NCCL watchdog"
+expected_rule = "alias else"
+
+[[cases]]
+description = "watchdog collective is bad during job"
+line = "0: Watchdog caught collective operation"
+tflops_start = true
+expect = "bad"
+expected_symptom = "PyTorch NCCL watchdog"
+expected_rule = "alias else"
+
+[[cases]]
+description = "watchdog collective is interesting outside job"
+line = "0: Watchdog caught collective operation"
+tflops_start = false
+expect = "interesting"
+expected_symptom = "(non-fatal) PyTorch NCCL watchdog"
+expected_rule = "alias else"
+
+[[cases]]
+description = "ibv open device failed is bad during job"
+line = "0: ibv_open_device failed"
+tflops_start = true
+expect = "bad"
+expected_symptom = "ibv_open_device failed"
+expected_rule = "ibv_open_device failed"
+
+[[cases]]
+description = "ibv open device failed is interesting outside job"
+line = "0: ibv_open_device failed"
+tflops_start = false
+expect = "interesting"
+expected_symptom = "(non-fatal) ibv_open_device failed"
+expected_rule = "ibv_open_device failed"
+
+[[cases]]
+description = "stale file handle is bad during job"
+line = "0: Stale file handle"
+tflops_start = true
+expect = "bad"
+expected_symptom = "Stale file handle"
+expected_rule = "alias else"
+
+[[cases]]
+description = "stale file handle is interesting outside job"
+line = "0: Stale file handle"
+tflops_start = false
+expect = "interesting"
+expected_symptom = "(non-fatal) Stale file handle"
+expected_rule = "alias else"
+
+[[cases]]
+description = "bus error is bad during job"
+line = "0: bus error"
+tflops_start = true
+expect = "bad"
+expected_symptom = "bus error"
+expected_rule = "alias else"
+
+[[cases]]
+description = "bus error is interesting outside job"
+line = "0: bus error"
+tflops_start = false
+expect = "interesting"
+expected_symptom = "(non-fatal) bus error"
+expected_rule = "alias else"
+
+[[cases]]
+description = "device incompatibility is bad during job"
+line = "0: device is incompatible with the local"
+tflops_start = true
+expect = "bad"
+expected_symptom = "NCCL IB device incompatibility"
+expected_rule = "alias else"
+
+[[cases]]
+description = "device incompatibility is interesting outside job"
+line = "0: device is incompatible with the local"
+tflops_start = false
+expect = "interesting"
+expected_symptom = "(non-fatal) NCCL IB device incompatibility"
+expected_rule = "alias else"
+
+[[cases]]
+description = "nccl error 1 alias is bad during job"
+line = "0: NCCL Error 1: unhandled cuda error"
+tflops_start = true
+expect = "bad"
+expected_symptom = "ncclUnhandledCudaError"
+expected_rule = "alias else"
+
+[[cases]]
+description = "nccl error 1 alias is interesting outside job"
+line = "0: NCCL Error 1: unhandled cuda error"
+tflops_start = false
+expect = "interesting"
+expected_symptom = "(non-fatal) ncclUnhandledCudaError"
+expected_rule = "alias else"
+
+[[cases]]
+description = "nccl error 3 alias is bad during job"
+line = "0: NCCL Error 3: internal error"
+tflops_start = true
+expect = "bad"
+expected_symptom = "ncclInternalError"
+expected_rule = "alias else"
+
+[[cases]]
+description = "nccl error 3 alias is interesting outside job"
+line = "0: NCCL Error 3: internal error"
+tflops_start = false
+expect = "interesting"
+expected_symptom = "(non-fatal) ncclInternalError"
+expected_rule = "alias else"
+
+[[cases]]
+description = "nccl invalid nic selection is bad during job"
+line = "0: NCCL WARN Message truncated"
+tflops_start = true
+expect = "bad"
+expected_symptom = "NCCL invalid NIC selection"
+expected_rule = "nccl-invalid-nic-selection"
+
+[[cases]]
+description = "nccl invalid nic selection stays bad even before MFU"
+line = "0: NCCL WARN Message truncated"
+tflops_start = false
+expect = "bad"
+expected_symptom = "NCCL invalid NIC selection"
+expected_rule = "nccl-invalid-nic-selection"
+
+[[cases]]
+description = "unconvertible nccl type is bad during job"
+line = "0: Unconvertible NCCL type"
+tflops_start = true
+expect = "bad"
+expected_symptom = "Unconvertible NCCL type"
+expected_rule = "alias else"
+
+[[cases]]
+description = "unconvertible nccl type is interesting outside job"
+line = "0: Unconvertible NCCL type"
+tflops_start = false
+expect = "interesting"
+expected_symptom = "(non-fatal) Unconvertible NCCL type"
+expected_rule = "alias else"
+
+[[cases]]
+description = "checkpointing exception is bad during job"
+line = "0: megatron.core.dist_checkpointing.core.CheckpointingException"
+tflops_start = true
+expect = "bad"
+expected_symptom = "megatron.core.dist_checkpointing.core.CheckpointingException"
+expected_rule = "alias else"
+
+[[cases]]
+description = "checkpointing exception is interesting outside job"
+line = "0: megatron.core.dist_checkpointing.core.CheckpointingException"
+tflops_start = false
+expect = "interesting"
+expected_symptom = "(non-fatal) megatron.core.dist_checkpointing.core.CheckpointingException"
+expected_rule = "alias else"
+
+[[cases]]
+description = "wandb error is bad during job"
+line = "0: wandb.Error"
+tflops_start = true
+expect = "bad"
+expected_symptom = "wandb.Error"
+expected_rule = "alias else"
+
+[[cases]]
+description = "wandb error is interesting outside job"
+line = "0: wandb.Error"
+tflops_start = false
+expect = "interesting"
+expected_symptom = "(non-fatal) wandb.Error"
+expected_rule = "alias else"
+
+[[cases]]
+description = "cancelled by user is bad during job"
+line = "0: CANCELLED AT"
+tflops_start = true
+expect = "bad"
+expected_symptom = "Cancelled by user"
+expected_rule = "alias else"
+
+[[cases]]
+description = "cancelled by user is interesting outside job"
+line = "0: CANCELLED AT"
+tflops_start = false
+expect = "interesting"
+expected_symptom = "(non-fatal) Cancelled by user"
+expected_rule = "alias else"
+
+[[cases]]
+description = "distributed comm closed is bad during job"
+line = "0: distributed.comm.core.CommClosedError"
+tflops_start = true
+expect = "bad"
+expected_symptom = "distributed.comm.core.CommClosedError"
+expected_rule = "alias else"
+
+[[cases]]
+description = "distributed comm closed is interesting outside job"
+line = "0: distributed.comm.core.CommClosedError"
+tflops_start = false
+expect = "interesting"
+expected_symptom = "(non-fatal) distributed.comm.core.CommClosedError"
+expected_rule = "alias else"
+
+[[cases]]
+description = "dataset cache write failure is bad during job"
+line = "0: Exception: Failed to write dataset materials to the data cache directory"
+tflops_start = true
+expect = "bad"
+expected_symptom = "Dataset cache write failure"
+expected_rule = "alias else"
+
+[[cases]]
+description = "dataset cache write failure is interesting outside job"
+line = "0: Exception: Failed to write dataset materials to the data cache directory"
+tflops_start = false
+expect = "interesting"
+expected_symptom = "(non-fatal) Dataset cache write failure"
+expected_rule = "alias else"
+
+[[cases]]
+description = "file write failed is bad during job"
+line = "0: file write failed"
+tflops_start = true
+expect = "bad"
+expected_symptom = "file write failed"
+expected_rule = "alias else"
+
+[[cases]]
+description = "file write failed is interesting outside job"
+line = "0: file write failed"
+tflops_start = false
+expect = "interesting"
+expected_symptom = "(non-fatal) file write failed"
+expected_rule = "alias else"
+
+[[cases]]
+description = "failed to import docker image is bad during job"
+line = "0: failed to import docker image"
+tflops_start = true
+expect = "bad"
+expected_symptom = "failed to import docker image"
+expected_rule = "alias else"
+
+[[cases]]
+description = "failed to import docker image is interesting outside job"
+line = "0: failed to import docker image"
+tflops_start = false
+expect = "interesting"
+expected_symptom = "(non-fatal) failed to import docker image"
+expected_rule = "alias else"
+
+[[cases]]
+description = "collective timeout seq is bad during job"
+line = "0: collective timeout seq"
+tflops_start = true
+expect = "bad"
+expected_symptom = "pmix collective timeout"
+expected_rule = "alias else"
+
+[[cases]]
+description = "collective timeout seq is interesting outside job"
+line = "0: collective timeout seq"
+tflops_start = false
+expect = "interesting"
+expected_symptom = "(non-fatal) pmix collective timeout"
+expected_rule = "alias else"
+
+[[cases]]
+description = "pyxis could not start container is bad during job"
+line = "0: pyxis: couldn't start container"
+tflops_start = true
+expect = "bad"
+expected_symptom = "pyxis: couldn't start container"
+expected_rule = "alias else"
+
+[[cases]]
+description = "pyxis could not start container is interesting outside job"
+line = "0: pyxis: couldn't start container"
+tflops_start = false
+expect = "interesting"
+expected_symptom = "(non-fatal) pyxis: couldn't start container"
+expected_rule = "alias else"
+
+[[cases]]
+description = "error pyxis is bad during job"
+line = "0: error: pyxis"
+tflops_start = true
+expect = "bad"
+expected_symptom = "error: pyxis"
+expected_rule = "alias else"
+
+[[cases]]
+description = "error pyxis is interesting outside job"
+line = "0: error: pyxis"
+tflops_start = false
+expect = "interesting"
+expected_symptom = "(non-fatal) error: pyxis"
+expected_rule = "alias else"
+
+[[cases]]
+description = "pyxis cannot find container file is bad during job"
+line = "0: error: pyxis:     [ERROR] No such file or directory"
+tflops_start = true
+expect = "bad"
+expected_symptom = "pyxis: cannot find container file"
+expected_rule = "pyxis: cannot find container file"
+
+[[cases]]
+description = "pyxis cannot find container file is interesting outside job"
+line = "0: error: pyxis:     [ERROR] No such file or directory"
+tflops_start = false
+expect = "interesting"
+expected_symptom = "(non-fatal) pyxis: cannot find container file"
+expected_rule = "pyxis: cannot find container file"
+
+[[cases]]
+description = "numpy unavailable is bad during job"
+line = "0: RuntimeError: Numpy is not available"
+tflops_start = true
+expect = "bad"
+expected_symptom = "RuntimeError: Numpy is not available"
+expected_rule = "alias else"
+
+[[cases]]
+description = "numpy unavailable is interesting outside job"
+line = "0: RuntimeError: Numpy is not available"
+tflops_start = false
+expect = "interesting"
+expected_symptom = "(non-fatal) RuntimeError: Numpy is not available"
+expected_rule = "alias else"
+
+[[cases]]
+description = "bad token rank message is bad during job"
+line = "0: RuntimeError: Rank 909, node host-f85954d2, device 5, iteration 868011: Unexpected result inf"
+tflops_start = true
+expect = "bad"
+expected_symptom = "Bad Token"
+expected_rule = "alias else"
+
+[[cases]]
+description = "bad token rank message is interesting outside job"
+line = "0: RuntimeError: Rank 909, node host-f85954d2, device 5, iteration 868011: Unexpected result inf"
+tflops_start = false
+expect = "interesting"
+expected_symptom = "(non-fatal) Bad Token"
+expected_rule = "alias else"
+
+[[cases]]
+description = "bad token short message is bad during job"
+line = "0: Unexpected result inf"
+tflops_start = true
+expect = "bad"
+expected_symptom = "Bad Token"
+expected_rule = "alias else"
+
+[[cases]]
+description = "bad token short message is interesting outside job"
+line = "0: Unexpected result inf"
+tflops_start = false
+expect = "interesting"
+expected_symptom = "(non-fatal) Bad Token"
+expected_rule = "alias else"
+
+[[cases]]
+description = "value error tasks not found is bad during job"
+line = "0: ValueError: Tasks not found"
+tflops_start = true
+expect = "bad"
+expected_symptom = "ValueError: Tasks not found"
+expected_rule = "alias else"
+
+[[cases]]
+description = "value error tasks not found is interesting outside job"
+line = "0: ValueError: Tasks not found"
+tflops_start = false
+expect = "interesting"
+expected_symptom = "(non-fatal) ValueError: Tasks not found"
+expected_rule = "alias else"
+
+[[cases]]
+description = "stopping cuda profiler is bad during job"
+line = "0: Stopping cuda profiler"
+tflops_start = true
+expect = "bad"
+expected_symptom = "Stopping cuda profiler"
+expected_rule = "alias else"
+
+[[cases]]
+description = "stopping cuda profiler is interesting outside job"
+line = "0: Stopping cuda profiler"
+tflops_start = false
+expect = "interesting"
+expected_symptom = "(non-fatal) Stopping cuda profiler"
+expected_rule = "alias else"
+
+[[cases]]
+description = "eof error is bad during job"
+line = "0: EOFError: Ran out of input"
+tflops_start = true
+expect = "bad"
+expected_symptom = "EOFError: Ran out of input"
+expected_rule = "alias else"
+
+[[cases]]
+description = "eof error is interesting outside job"
+line = "0: EOFError: Ran out of input"
+tflops_start = false
+expect = "interesting"
+expected_symptom = "(non-fatal) EOFError: Ran out of input"
+expected_rule = "alias else"
+
+[[cases]]
+description = "remote disconnected is bad during job"
+line = "0: http.client.RemoteDisconnected"
+tflops_start = true
+expect = "bad"
+expected_symptom = "http.client.RemoteDisconnected"
+expected_rule = "alias else"
+
+[[cases]]
+description = "remote disconnected is interesting outside job"
+line = "0: http.client.RemoteDisconnected"
+tflops_start = false
+expect = "interesting"
+expected_symptom = "(non-fatal) http.client.RemoteDisconnected"
+expected_rule = "alias else"
+
+[[cases]]
+description = "oom_kill events is bad during job"
+line = "0: oom_kill events in StepId"
+tflops_start = true
+expect = "bad"
+expected_symptom = "System-out of memory"
+expected_rule = "alias else"
+
+[[cases]]
+description = "oom_kill events is interesting outside job"
+line = "0: oom_kill events in StepId"
+tflops_start = false
+expect = "interesting"
+expected_symptom = "(non-fatal) System-out of memory"
+expected_rule = "alias else"
+
+[[cases]]
+description = "oom_kill event is bad during job"
+line = "0: oom_kill event in StepId"
+tflops_start = true
+expect = "bad"
+expected_symptom = "System-out of memory"
+expected_rule = "alias else"
+
+[[cases]]
+description = "oom_kill event is interesting outside job"
+line = "0: oom_kill event in StepId"
+tflops_start = false
+expect = "interesting"
+expected_symptom = "(non-fatal) System-out of memory"
+expected_rule = "alias else"
+
+[[cases]]
+description = "wandb comm error timeout is bad during job"
+line = "0: wandb.errors.CommError: Run initialization has timed out"
+tflops_start = true
+expect = "bad"
+expected_symptom = "wandb.errors.CommError: Run initialization has timed out"
+expected_rule = "alias else"
+
+[[cases]]
+description = "wandb comm error timeout is interesting outside job"
+line = "0: wandb.errors.CommError: Run initialization has timed out"
+tflops_start = false
+expect = "interesting"
+expected_symptom = "(non-fatal) wandb.errors.CommError: Run initialization has timed out"
+expected_rule = "alias else"
+
+# --- production parity for migrated applog_leaf_rules.toml stanzas ---------------
+# These six declarative leaves (ported out of applog_rules.py) previously had no
+# end-to-end case, so process_check never exercised their symptom + credit. Each
+# line below is verified to match the stanza's match_re in applog_leaf_rules.toml.
+
+# DistributedTimeoutMinutes: emits Application.megatron-lm.runtime_args with the
+# raw captured minutes as a string payload.
+[[cases]]
+description = "distributed timeout minutes emits application event no node finding"
+line = "0: torchrun --distributed-timeout-minutes 30 --other 1"
+
+[[cases.expected_events]]
+event_type = "Application.megatron-lm.runtime_args"
+rule = "distributed timeout minutes"
+payload = { pytorch_timeout_minutes = "30" }
+
+# DistributedInitTimeout: seconds=90 -> int(round(90/60))=2; payload must carry "2".
+[[cases]]
+description = "distributed init timeout normalizes seconds and emits application event"
+line = "0: Initialized distributed training with timeout 90"
+
+[[cases.expected_events]]
+event_type = "Application.megatron-lm.runtime_args"
+rule = "distributed timeout (init line, normalized)"
+payload = { pytorch_timeout_minutes = "2" }
+
+# BusErrorKeyword: generic lowercase "bus error" -> bad "bus error" / "alias else".
+[[cases]]
+description = "bus error keyword is bad during job"
+line = "0: child process exited with bus error"
+tflops_start = true
+expect = "bad"
+expected_symptom = "bus error"
+expected_rule = "alias else"
+
+# AddressAlreadyInUse: line passes the when-guard (no ras/client_support.cc NCCL
+# bind noise) -> bad "Address already in use" / "address-in-use".
+[[cases]]
+description = "address already in use keyword is bad during job"
+line = "0: OSError: [Errno 98] Address already in use"
+tflops_start = true
+expect = "bad"
+expected_symptom = "Address already in use"
+expected_rule = "address-in-use"
+
+# NcclWarnMessageTruncated: dedicated slug, no demotion -> bad even without MFU.
+[[cases]]
+description = "nccl warn message truncated is bad during job"
+line = "0: misc/socket.cc:47 NCCL WARN Message truncated : received 1024 bytes instead of 256"
+tflops_start = true
+expect = "bad"
+expected_symptom = "NCCL invalid NIC selection"
+expected_rule = "nccl-invalid-nic-selection"
+
+# No such file or directory: line WITHOUT "error: pyxis:" passes the guard ->
+# bad "No such file or directory" / "alias else".
+[[cases]]
+description = "no such file or directory is bad during job"
+line = "0: FileNotFoundError: [Errno 2] No such file or directory: '/data/x'"
+tflops_start = true
+expect = "bad"
+expected_symptom = "No such file or directory"
+expected_rule = "alias else"
+
+# MFU: verify the regex matches and emits Application.mfu, including when an
+# Nsight progress prefix precedes the timestamp.
+[[cases]]
+description = "MFU line emits Application.mfu event"
+line = " 6143:  [2024-02-23 09:59:14] iteration   516520/  900692 | consumed samples:   1067990784 | elapsed time per iteration (ms): 8096.8 | throughput per GPU (TFLOP/s/GPU): 399.3 | learning rate: 4.838E-05 | decoupled learning rate: 2.190E-04 | global batch size:  2304 | lm loss: 1.437022E+00 | loss scale: 1.0 | grad norm: 0.217 | num zeros: 1640372992.0 | number of skipped iterations:   0 | number of nan iterations:   0 | "
+tflops_start = false
+
+[[cases.expected_events]]
+event_type = "Application.mfu"
+rule = "MFU"
+
+[[cases]]
+description = "MFU line with Nsight progress prefix emits Application.mfu event"
+line = "[1/1] [=======39%                [2026-05-27 17:14:21] iteration      156/    1000 | consumed samples:         2496 | elapsed time per iteration (ms): 8526.6 | throughput per GPU (TFLOP/s/GPU): 49.5 | learning rate: 6.000000E-04 | global batch size:    16 | lm loss: 5.626674E-03 | loss scale: 1.0 | grad norm: 0.020 | num zeros: 864181824.0 | params norm: 1167.536 | number of skipped iterations:   0 | number of nan iterations:   0 |"
+tflops_start = false
+
+[[cases.expected_events]]
+event_type = "Application.mfu"
+rule = "MFU"

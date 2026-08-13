@@ -1,0 +1,1311 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: LicenseRef-NvidiaProprietary
+#
+# NVIDIA CORPORATION, its affiliates and licensors retain all intellectual
+# property and proprietary rights in and to this material, related
+# documentation and any modifications thereto. Any use, reproduction,
+# disclosure or distribution of this material and related documentation
+# without an express license agreement from NVIDIA CORPORATION or
+# its affiliates is strictly prohibited.
+
+[meta]
+runner = "syslog_single_line_mfu"
+
+[[cases]]
+description = "unknown xid is interesting"
+line = "NVRM: Xid 31"
+expect = "interesting"
+expected_symptom = "XID-unknown"
+expected_rule = "unknown-xid-event"
+
+[[cases]]
+description = "known xid matrix"
+expansion = "syslog_xid_matrix"
+job_phases = ["during", "outside"]
+multi_gpu_values = [true, false]
+
+[[cases.catalog]]
+line = "NVRM: Xid (PCI:0000:bf:00): 1,"
+symptom = "XID-1-FIFO_METHOD"
+
+[[cases.catalog]]
+line = "NVRM: Xid (PCI:0000:bf:00): 2,"
+symptom = "XID-2-SW_METHOD"
+
+[[cases.catalog]]
+line = "NVRM: Xid (PCI:0000:bf:00): 3,"
+symptom = "XID-3-UNK_METHOD"
+
+[[cases.catalog]]
+line = "NVRM: Xid (PCI:0000:bf:00): 4,"
+symptom = "XID-4-CHANNEL_BUSY"
+
+[[cases.catalog]]
+line = "NVRM: Xid (PCI:0000:bf:00): 5,"
+symptom = "XID-5-RUNOUT_OVERFLOW"
+
+[[cases.catalog]]
+line = "NVRM: Xid (PCI:0000:bf:00): 6,"
+symptom = "XID-6-PARSE_ERR"
+
+[[cases.catalog]]
+line = "NVRM: Xid (PCI:0000:bf:00): 7,"
+symptom = "XID-7-PTE_ERR"
+
+[[cases.catalog]]
+line = "NVRM: Xid (PCI:0000:bf:00): 8,"
+symptom = "XID-8-IDLE_TIMEOUT"
+
+[[cases.catalog]]
+line = "NVRM: Xid (PCI:0000:bf:00): 9,"
+symptom = "XID-9-GR_ERROR_INSTANCE"
+
+[[cases.catalog]]
+line = "NVRM: Xid (PCI:0000:bf:00): 10,"
+symptom = "XID-10-GR_ERROR_SINGLE_STEP"
+
+[[cases.catalog]]
+line = "NVRM: Xid (PCI:0000:bf:00): 11,"
+symptom = "XID-11-GR_ERROR_MISSING_HW"
+
+[[cases.catalog]]
+line = "NVRM: Xid (PCI:0000:bf:00): 12,"
+symptom = "XID-12-GR_ERROR_SW_METHOD"
+
+[[cases.catalog]]
+line = "NVRM: Xid (PCI:0000:bf:00): 13,"
+symptom = "XID-13-GR_EXCEPTION /\nGR_ERROR_SW_NOTIFY"
+
+[[cases.catalog]]
+line = "NVRM: Xid (PCI:0000:bf:00): 14,"
+symptom = "XID-14-FAKE_ERROR"
+
+[[cases.catalog]]
+line = "NVRM: Xid (PCI:0000:bf:00): 15,"
+symptom = "XID-15-SCANLINE_TIMEOUT"
+
+[[cases.catalog]]
+line = "NVRM: Xid (PCI:0000:bf:00): 16,"
+symptom = "XID-16-VBLANK_CALLBACK_TIMEOUT"
+
+[[cases.catalog]]
+line = "NVRM: Xid (PCI:0000:bf:00): 17,"
+symptom = "XID-17-PARAMETER_ERROR"
+
+[[cases.catalog]]
+line = "NVRM: Xid (PCI:0000:bf:00): 18,"
+symptom = "XID-18-BUS_MASTER_TIMEOUT_ERROR"
+
+[[cases.catalog]]
+line = "NVRM: Xid (PCI:0000:bf:00): 19,"
+symptom = "XID-19-DISP_MISSED_NOTIFIER"
+
+[[cases.catalog]]
+line = "NVRM: Xid (PCI:0000:bf:00): 20,"
+symptom = "XID-20-MPEG_ERROR_SW_METHOD"
+
+[[cases.catalog]]
+line = "NVRM: Xid (PCI:0000:bf:00): 21,"
+symptom = "XID-21-ME_ERROR_SW_METHOD"
+
+[[cases.catalog]]
+line = "NVRM: Xid (PCI:0000:bf:00): 22,"
+symptom = "XID-22-VP_ERROR_SW_METHOD"
+
+[[cases.catalog]]
+line = "NVRM: Xid (PCI:0000:bf:00): 23,"
+symptom = "XID-23-RC_LOGGING_ENABLED"
+
+[[cases.catalog]]
+line = "NVRM: Xid (PCI:0000:bf:00): 24,"
+symptom = "XID-24-GR_SEMAPHORE_TIMEOUT"
+
+[[cases.catalog]]
+line = "NVRM: Xid (PCI:0000:bf:00): 25,"
+symptom = "XID-25-GR_ILLEGAL_NOTIFY"
+
+[[cases.catalog]]
+line = "NVRM: Xid (PCI:0000:bf:00): 26,"
+symptom = "XID-26-FBISTATE_TIMEOUT"
+
+[[cases.catalog]]
+line = "NVRM: Xid (PCI:0000:bf:00): 27,"
+symptom = "XID-27-VP_ERROR"
+
+[[cases.catalog]]
+line = "NVRM: Xid (PCI:0000:bf:00): 28,"
+symptom = "XID-28-VP2_ERROR"
+
+[[cases.catalog]]
+line = "NVRM: Xid (PCI:0000:bf:00): 29,"
+symptom = "XID-29-BSP_ERROR"
+
+[[cases.catalog]]
+line = "NVRM: Xid (PCI:0000:bf:00): 30,"
+symptom = "XID-30-BAD_ADDR_ACCESS"
+
+[[cases.catalog]]
+line = "NVRM: Xid (PCI:0000:bf:00): 31,"
+symptom = "XID-31-MMU_ERR_FLT"
+
+[[cases.catalog]]
+line = "NVRM: Xid (PCI:0000:bf:00): 32,"
+symptom = "XID-32-PBDMA_ERROR"
+
+[[cases.catalog]]
+line = "NVRM: Xid (PCI:0000:bf:00): 33,"
+symptom = "XID-33-SEC_ERROR"
+
+[[cases.catalog]]
+line = "NVRM: Xid (PCI:0000:bf:00): 34,"
+symptom = "XID-34-MSVLD_ERROR"
+
+[[cases.catalog]]
+line = "NVRM: Xid (PCI:0000:bf:00): 35,"
+symptom = "XID-35-MSPDEC_ERROR"
+
+[[cases.catalog]]
+line = "NVRM: Xid (PCI:0000:bf:00): 36,"
+symptom = "XID-36-MSPPP_ERROR"
+
+[[cases.catalog]]
+line = "NVRM: Xid (PCI:0000:bf:00): 37,"
+symptom = "XID-37-FECS_ERR_UNIMP_FIRMWARE_METHOD"
+
+[[cases.catalog]]
+line = "NVRM: Xid (PCI:0000:bf:00): 38,"
+symptom = "XID-38-FECS_ERR_WATCHDOG_TIMEOUT"
+
+[[cases.catalog]]
+line = "NVRM: Xid (PCI:0000:bf:00): 39,"
+symptom = "XID-39-CE0_ERROR"
+
+[[cases.catalog]]
+line = "NVRM: Xid (PCI:0000:bf:00): 40,"
+symptom = "XID-40-CE1_ERROR"
+
+[[cases.catalog]]
+line = "NVRM: Xid (PCI:0000:bf:00): 41,"
+symptom = "XID-41-CE2_ERROR"
+
+[[cases.catalog]]
+line = "NVRM: Xid (PCI:0000:bf:00): 42,"
+symptom = "XID-42-VIC_ERROR"
+
+[[cases.catalog]]
+line = "NVRM: Xid (PCI:0000:bf:00): 43,"
+symptom = "XID-43-RESETCHANNEL_VERIF_ERROR"
+
+[[cases.catalog]]
+line = "NVRM: Xid (PCI:0000:bf:00): 44,"
+symptom = "XID-44-GR_FAULT_DURING_CTXSW"
+
+[[cases.catalog]]
+line = "NVRM: Xid (PCI:0000:bf:00): 45,"
+symptom = "XID-45-PREEMPTIVE_REMOVAL"
+
+[[cases.catalog]]
+line = "NVRM: Xid (PCI:0000:bf:00): 46,"
+symptom = "XID-46-GPU_TIMEOUT_ERROR"
+
+[[cases.catalog]]
+line = "NVRM: Xid (PCI:0000:bf:00): 47,"
+symptom = "XID-47-NVENC0_ERROR"
+
+[[cases.catalog]]
+line = "NVRM: Xid (PCI:0000:bf:00): 48,"
+symptom = "XID-48-GPU_ECC_DBE"
+
+[[cases.catalog]]
+line = "NVRM: Xid (PCI:0000:bf:00): 49,"
+symptom = "XID-49-SILENT_RUNNING_CONSTANT_LEVEL_SET_BY_REGISTRY"
+
+[[cases.catalog]]
+line = "NVRM: Xid (PCI:0000:bf:00): 50,"
+symptom = "XID-50-SILENT_RUNNING_LEVEL_TRANSITION_DUE_TO_RC_ERROR"
+
+[[cases.catalog]]
+line = "NVRM: Xid (PCI:0000:bf:00): 51,"
+symptom = "XID-51-SILENT_RUNNING_STRESS_TEST_FAILURE"
+
+[[cases.catalog]]
+line = "NVRM: Xid (PCI:0000:bf:00): 52,"
+symptom = "XID-52-SILENT_RUNNING_LEVEL_TRANS_DUE_TO_TEMP_RISE"
+
+[[cases.catalog]]
+line = "NVRM: Xid (PCI:0000:bf:00): 53,"
+symptom = "XID-53-SILENT_RUNNING_TEMP_REDUCED_CLOCKING"
+
+[[cases.catalog]]
+line = "NVRM: Xid (PCI:0000:bf:00): 54,"
+symptom = "XID-54-SILENT_RUNNING_PWR_REDUCED_CLOCKING"
+
+[[cases.catalog]]
+line = "NVRM: Xid (PCI:0000:bf:00): 55,"
+symptom = "XID-55-SILENT_RUNNING_TEMPERATURE_READ_ERROR"
+
+[[cases.catalog]]
+line = "NVRM: Xid (PCI:0000:bf:00): 56,"
+symptom = "XID-56-DISPLAY_CHANNEL_EXCEPTION"
+
+[[cases.catalog]]
+line = "NVRM: Xid (PCI:0000:bf:00): 57,"
+symptom = "XID-57-FB_LINK_TRAINING_FAILURE_ERROR"
+
+[[cases.catalog]]
+line = "NVRM: Xid (PCI:0000:bf:00): 58,"
+symptom = "XID-58-FB_MEMORY_ERROR"
+
+[[cases.catalog]]
+line = "NVRM: Xid (PCI:0000:bf:00): 59,"
+symptom = "XID-59-PMU_ERROR"
+
+[[cases.catalog]]
+line = "NVRM: Xid (PCI:0000:bf:00): 60,"
+symptom = "XID-60-SEC2_ERROR"
+
+[[cases.catalog]]
+line = "NVRM: Xid (PCI:0000:bf:00): 61,"
+symptom = "XID-61-PMU_BREAKPOINT"
+
+[[cases.catalog]]
+line = "NVRM: Xid (PCI:0000:bf:00): 62,"
+symptom = "XID-62-PMU_HALT_ERROR"
+
+[[cases.catalog]]
+line = "NVRM: Xid (PCI:0000:bf:00): 63,"
+symptom = "XID-63-INFOROM_DRAM_RETIREMENT_EVENT"
+
+[[cases.catalog]]
+line = "NVRM: Xid (PCI:0000:bf:00): 64,"
+symptom = "XID-64-INFOROM_DRAM_RETIREMENT_FAILURE"
+
+[[cases.catalog]]
+line = "NVRM: Xid (PCI:0000:bf:00): 65,"
+symptom = "XID-65-NVENC1_ERROR"
+
+[[cases.catalog]]
+line = "NVRM: Xid (PCI:0000:bf:00): 66,"
+symptom = "XID-66-FECS_ERR_REG_ACCESS_VIOLATION"
+
+[[cases.catalog]]
+line = "NVRM: Xid (PCI:0000:bf:00): 67,"
+symptom = "XID-67-FECS_ERR_VERIF_VIOLATION"
+
+[[cases.catalog]]
+line = "NVRM: Xid (PCI:0000:bf:00): 68,"
+symptom = "XID-68-NVDEC0_ERROR"
+
+[[cases.catalog]]
+line = "NVRM: Xid (PCI:0000:bf:00): 69,"
+symptom = "XID-69-GR_CLASS_ERROR"
+
+[[cases.catalog]]
+line = "NVRM: Xid (PCI:0000:bf:00): 70,"
+symptom = "XID-70-CE3_ERROR"
+
+[[cases.catalog]]
+line = "NVRM: Xid (PCI:0000:bf:00): 71,"
+symptom = "XID-71-CE4_ERROR"
+
+[[cases.catalog]]
+line = "NVRM: Xid (PCI:0000:bf:00): 72,"
+symptom = "XID-72-CE5_ERROR"
+
+[[cases.catalog]]
+line = "NVRM: Xid (PCI:0000:bf:00): 73,"
+symptom = "XID-73-NVENC2_ERROR"
+
+[[cases.catalog]]
+line = "NVRM: Xid (PCI:0000:bf:00): 74,"
+symptom = "XID-74-NVLINK_ERROR"
+
+[[cases.catalog]]
+line = "NVRM: Xid (PCI:0000:bf:00): 75,"
+symptom = "XID-75-CE6_ERROR"
+
+[[cases.catalog]]
+line = "NVRM: Xid (PCI:0000:bf:00): 76,"
+symptom = "XID-76-CE7_ERROR"
+
+[[cases.catalog]]
+line = "NVRM: Xid (PCI:0000:bf:00): 77,"
+symptom = "XID-77-CE8_ERROR"
+
+[[cases.catalog]]
+line = "NVRM: Xid (PCI:0000:bf:00): 78,"
+symptom = "XID-78-VGPU_START_ERROR"
+
+[[cases.catalog]]
+line = "NVRM: Xid (PCI:0000:bf:00): 79,"
+symptom = "XID-79-GPU_HAS_FALLEN_OFF_THE_BUS"
+
+[[cases.catalog]]
+line = "NVRM: Xid (PCI:0000:bf:00): 80,"
+symptom = "XID-80-PBDMA_PUSHBUFFER_CRC_MISMATCH"
+
+[[cases.catalog]]
+line = "NVRM: Xid (PCI:0000:bf:00): 81,"
+symptom = "XID-81-VGA_SUBSYSTEM_ERROR"
+
+[[cases.catalog]]
+line = "NVRM: Xid (PCI:0000:bf:00): 82,"
+symptom = "XID-82-NVJPG0_ERROR"
+
+[[cases.catalog]]
+line = "NVRM: Xid (PCI:0000:bf:00): 83,"
+symptom = "XID-83-NVDEC1_ERROR"
+
+[[cases.catalog]]
+line = "NVRM: Xid (PCI:0000:bf:00): 84,"
+symptom = "XID-84-NVDEC2_ERROR"
+
+[[cases.catalog]]
+line = "NVRM: Xid (PCI:0000:bf:00): 85,"
+symptom = "XID-85-CE9_ERROR"
+
+[[cases.catalog]]
+line = "NVRM: Xid (PCI:0000:bf:00): 86,"
+symptom = "XID-86-OFA0_ERROR"
+
+[[cases.catalog]]
+line = "NVRM: Xid (PCI:0000:bf:00): 87,"
+symptom = "XID-87-NVTELEMETRY_DRIVER_REPORT"
+
+[[cases.catalog]]
+line = "NVRM: Xid (PCI:0000:bf:00): 88,"
+symptom = "XID-88-NVDEC3_ERROR"
+
+[[cases.catalog]]
+line = "NVRM: Xid (PCI:0000:bf:00): 89,"
+symptom = "XID-89-NVDEC4_ERROR"
+
+[[cases.catalog]]
+line = "NVRM: Xid (PCI:0000:bf:00): 90,"
+symptom = "XID-90-LTC_ERROR"
+
+[[cases.catalog]]
+line = "NVRM: Xid (PCI:0000:bf:00): 91,"
+symptom = "XID-91-RESERVED_XID"
+
+[[cases.catalog]]
+line = "NVRM: Xid (PCI:0000:bf:00): 92,"
+symptom = "XID-92-EXCESSIVE_SBE_INTERRUPTS"
+
+[[cases.catalog]]
+line = "NVRM: Xid (PCI:0000:bf:00): 93,"
+symptom = "XID-93-INFOROM_ERASE_LIMIT_EXCEEDED"
+
+[[cases.catalog]]
+line = "NVRM: Xid (PCI:0000:bf:00): 94,"
+symptom = "XID-94-CONTAINED_ERROR"
+
+[[cases.catalog]]
+line = "NVRM: Xid (PCI:0000:bf:00): 95,"
+symptom = "XID-95-UNCONTAINED_ERROR"
+
+[[cases.catalog]]
+line = "NVRM: Xid (PCI:0000:bf:00): 96,"
+symptom = "XID-96-NVDEC5_ERROR"
+
+[[cases.catalog]]
+line = "NVRM: Xid (PCI:0000:bf:00): 97,"
+symptom = "XID-97-NVDEC6_ERROR"
+
+[[cases.catalog]]
+line = "NVRM: Xid (PCI:0000:bf:00): 98,"
+symptom = "XID-98-NVDEC7_ERROR"
+
+[[cases.catalog]]
+line = "NVRM: Xid (PCI:0000:bf:00): 99,"
+symptom = "XID-99-NVJPG1_ERROR"
+
+[[cases.catalog]]
+line = "NVRM: Xid (PCI:0000:bf:00): 100,"
+symptom = "XID-100-NVJPG2_ERROR"
+
+[[cases.catalog]]
+line = "NVRM: Xid (PCI:0000:bf:00): 101,"
+symptom = "XID-101-NVJPG3_ERROR"
+
+[[cases.catalog]]
+line = "NVRM: Xid (PCI:0000:bf:00): 102,"
+symptom = "XID-102-NVJPG4_ERROR"
+
+[[cases.catalog]]
+line = "NVRM: Xid (PCI:0000:bf:00): 103,"
+symptom = "XID-103-NVJPG5_ERROR"
+
+[[cases.catalog]]
+line = "NVRM: Xid (PCI:0000:bf:00): 104,"
+symptom = "XID-104-NVJPG6_ERROR"
+
+[[cases.catalog]]
+line = "NVRM: Xid (PCI:0000:bf:00): 105,"
+symptom = "XID-105-NVJPG7_ERROR"
+
+[[cases.catalog]]
+line = "NVRM: Xid (PCI:0000:bf:00): 106,"
+symptom = "XID-106-SMBPBI_TEST_MESSAGE"
+
+[[cases.catalog]]
+line = "NVRM: Xid (PCI:0000:bf:00): 107,"
+symptom = "XID-107-SMBPBI_TEST_MESSAGE_SILENT"
+
+[[cases.catalog]]
+line = "NVRM: Xid (PCI:0000:bf:00): 108,"
+symptom = "XID-108-NVLINK_REMOTE_TRANSLATION_ERROR"
+
+[[cases.catalog]]
+line = "NVRM: Xid (PCI:0000:bf:00): 109,"
+symptom = "XID-109-CTXSW_TIMEOUT_ERROR"
+
+[[cases.catalog]]
+line = "NVRM: Xid (PCI:0000:bf:00): 110,"
+symptom = "XID-110-SEC_FAULT_ERROR"
+
+[[cases.catalog]]
+line = "NVRM: Xid (PCI:0000:bf:00): 111,"
+symptom = "XID-111-BUNDLE_ERROR_EVENT"
+
+[[cases.catalog]]
+line = "NVRM: Xid (PCI:0000:bf:00): 112,"
+symptom = "XID-112-DISP_SUPERVISOR_ERROR"
+
+[[cases.catalog]]
+line = "NVRM: Xid (PCI:0000:bf:00): 113,"
+symptom = "XID-113-DP_LT_FAILURE"
+
+[[cases.catalog]]
+line = "NVRM: Xid (PCI:0000:bf:00): 114,"
+symptom = "XID-114-HEAD_RG_UNDERFLOW"
+
+[[cases.catalog]]
+line = "NVRM: Xid (PCI:0000:bf:00): 115,"
+symptom = "XID-115-CORE_CHANNEL_REGS"
+
+[[cases.catalog]]
+line = "NVRM: Xid (PCI:0000:bf:00): 116,"
+symptom = "XID-116-WINDOW_CHANNEL_REGS"
+
+[[cases.catalog]]
+line = "NVRM: Xid (PCI:0000:bf:00): 117,"
+symptom = "XID-117-CURSOR_CHANNEL_REGS"
+
+[[cases.catalog]]
+line = "NVRM: Xid (PCI:0000:bf:00): 118,"
+symptom = "XID-118-HEAD_REGS"
+
+[[cases.catalog]]
+line = "NVRM: Xid (PCI:0000:bf:00): 119,"
+symptom = "XID-119-GSP_RPC_TIMEOUT"
+
+[[cases.catalog]]
+line = "NVRM: Xid (PCI:0000:bf:00): 120,"
+symptom = "XID-120-GSP_ERROR"
+
+[[cases.catalog]]
+line = "NVRM: Xid (PCI:0000:bf:00): 121,"
+symptom = "XID-121-C2C_ERROR"
+
+[[cases.catalog]]
+line = "NVRM: Xid (PCI:0000:bf:00): 122,"
+symptom = "XID-122-SPI_PMU_RPC_READ_FAIL"
+
+[[cases.catalog]]
+line = "NVRM: Xid (PCI:0000:bf:00): 123,"
+symptom = "XID-123-SPI_PMU_RPC_WRITE_FAIL"
+
+[[cases.catalog]]
+line = "NVRM: Xid (PCI:0000:bf:00): 124,"
+symptom = "XID-124-SPI_PMU_RPC_ERASE_FAIL"
+
+[[cases.catalog]]
+line = "NVRM: Xid (PCI:0000:bf:00): 125,"
+symptom = "XID-125-INFOROM_FS_ERROR"
+
+[[cases.catalog]]
+line = "NVRM: Xid (PCI:0000:bf:00): 126,"
+symptom = "XID-126-CE10_ERROR"
+
+[[cases.catalog]]
+line = "NVRM: Xid (PCI:0000:bf:00): 127,"
+symptom = "XID-127-CE11_ERROR"
+
+[[cases.catalog]]
+line = "NVRM: Xid (PCI:0000:bf:00): 128,"
+symptom = "XID-128-CE12_ERROR"
+
+[[cases.catalog]]
+line = "NVRM: Xid (PCI:0000:bf:00): 129,"
+symptom = "XID-129-CE13_ERROR"
+
+[[cases.catalog]]
+line = "NVRM: Xid (PCI:0000:bf:00): 130,"
+symptom = "XID-130-CE14_ERROR"
+
+[[cases.catalog]]
+line = "NVRM: Xid (PCI:0000:bf:00): 131,"
+symptom = "XID-131-CE15_ERROR"
+
+[[cases.catalog]]
+line = "NVRM: Xid (PCI:0000:bf:00): 132,"
+symptom = "XID-132-CE16_ERROR"
+
+[[cases.catalog]]
+line = "NVRM: Xid (PCI:0000:bf:00): 133,"
+symptom = "XID-133-CE17_ERROR"
+
+[[cases.catalog]]
+line = "NVRM: Xid (PCI:0000:bf:00): 134,"
+symptom = "XID-134-CE18_ERROR"
+
+[[cases.catalog]]
+line = "NVRM: Xid (PCI:0000:bf:00): 135,"
+symptom = "XID-135-CE19_ERROR"
+
+[[cases.catalog]]
+line = "NVRM: Xid (PCI:0000:bf:00): 136,"
+symptom = "XID-136-ALI_TRAINING_FAIL"
+
+[[cases.catalog]]
+line = "NVRM: Xid (PCI:0000:bf:00): 137,"
+symptom = "XID-137-NVLINK_PRIV_ERR"
+
+[[cases.catalog]]
+line = "NVRM: Xid (PCI:0000:bf:00): 138,"
+symptom = "XID-138-DLA_ERROR"
+
+[[cases.catalog]]
+line = "NVRM: Xid (PCI:0000:bf:00): 139,"
+symptom = "XID-139-OFA1_ERROR"
+
+[[cases.catalog]]
+line = "NVRM: Xid (PCI:0000:bf:00): 140,"
+symptom = "XID-140-UNRECOVERABLE_ECC_ERROR_ESCAPE"
+
+[[cases.catalog]]
+line = "NVRM: Xid (PCI:0000:bf:00): 141,"
+symptom = "XID-141-FAST_PATH_ERROR "
+
+[[cases.catalog]]
+line = "NVRM: Xid (PCI:0000:bf:00): 142,"
+symptom = "XID-142-NVENC3_ERROR"
+
+[[cases.catalog]]
+line = "NVRM: Xid (PCI:0000:bf:00): 143,"
+symptom = "XID-143-GPU_INIT_ERROR"
+
+[[cases.catalog]]
+line = "NVRM: Xid (PCI:0000:bf:00): 151,"
+symptom = "XID-151-KEY_ROTATION_ERROR"
+
+[[cases.catalog]]
+line = "NVRM: Xid (PCI:0000:bf:00): 152,"
+symptom = "XID-152-DLA_SMMU_ERROR"
+
+[[cases.catalog]]
+line = "NVRM: Xid (PCI:0000:bf:00): 153,"
+symptom = "XID-153-DLA_TIMEOUT"
+
+[[cases.catalog]]
+line = "NVRM: Xid (PCI:0000:bf:00): 155,"
+symptom = "XID-155-NVLINK_SW_DEFINED_ERROR"
+
+[[cases.catalog]]
+line = "NVRM: Xid (PCI:0000:bf:00): 156,"
+symptom = "XID-156-RESOURCE_RETIREMENT_EVENT"
+
+[[cases.catalog]]
+line = "NVRM: Xid (PCI:0000:bf:00): 157,"
+symptom = "XID-157-RESOURCE_RETIREMENT_FAILURE"
+
+[[cases.catalog]]
+line = "NVRM: Xid (PCI:0000:bf:00): 158,"
+symptom = "XID-158-GPU_FATAL_TIMEOUT"
+
+[[cases.catalog]]
+line = "NVRM: Xid (PCI:0000:bf:00): 159,"
+symptom = "XID-159-CHI_NON_DATA_ERROR"
+
+[[cases.catalog]]
+line = "NVRM: Xid (PCI:0000:bf:00): 160,"
+symptom = "XID-160-CHANNEL_RETIREMENT_EVENT "
+
+[[cases.catalog]]
+line = "NVRM: Xid (PCI:0000:bf:00): 161,"
+symptom = "XID-161-CHANNEL_RETIREMENT_FAILURE"
+
+[[cases.catalog]]
+line = "NVRM: Xid (PCI:0000:bf:00): 162,"
+symptom = "XID-162-PSHC_REENGAGED"
+
+[[cases.catalog]]
+line = "NVRM: Xid (PCI:0000:bf:00): 163,"
+symptom = "XID-163-PSHC_DISENGAGED"
+
+[[cases.catalog]]
+line = "NVRM: Xid (PCI:0000:bf:00): 164,"
+symptom = "XID-164-PSHC_LOW_LIFETIME"
+
+[[cases.catalog]]
+line = "NVRM: Xid (PCI:0000:bf:00): 165,"
+symptom = "XID-165-PSHC_ZERO_LIFETIME"
+
+[[cases.catalog]]
+line = "NVRM: Xid (PCI:0000:bf:00): 166,"
+symptom = "XID-166-NVLINK_SECURE_CRYPTO_ERR"
+
+[[cases.catalog]]
+line = "NVRM: Xid (PCI:0000:bf:00): 167,"
+symptom = "XID-167-PCIE_FATAL_TIMEOUT"
+
+[[cases.catalog]]
+line = "NVRM: Xid (PCI:0000:bf:00): 168,"
+symptom = "XID-168-REDUCED_GPU_MEMORY_CAPACITY"
+
+[[cases.catalog]]
+line = "NVRM: Xid (PCI:0000:bf:00): 169,"
+symptom = "XID-169-SEC2_HALT_ERROR"
+
+[[cases.catalog]]
+line = "NVRM: Xid (PCI:0000:bf:00): 170,"
+symptom = "XID-170-NVLINK_SECURE_OTHER"
+
+[[cases.catalog]]
+line = "NVRM: Xid (PCI:0000:bf:00): 171,"
+symptom = "XID-171-UNCORRECTABLE_DRAM_ERROR"
+
+[[cases.catalog]]
+line = "NVRM: Xid (PCI:0000:bf:00): 172,"
+symptom = "XID-172-UNCORRECTABLE_SRAM_ERROR"
+
+[[cases]]
+description = "nv err insufficient resources is bad"
+line = "NVRM: nvCheckOkFailedNoLog: Check failed: Ran out of a critical resource, other than memory [NV_ERR_INSUFFICIENT_RESOURCES] (0x0000001A) returned from status @ mem_multicast_fabric.c:2917"
+expect = "bad"
+expected_symptom = "NV_ERR_INSUFFICIENT_RESOURCES mem_multicast_fabric.c"
+expected_rule = "NV_ERR_"
+
+[[cases]]
+description = "collect nvlink status failure is bad"
+line = "Failed to collect nvlink status info!"
+expect = "bad"
+expected_symptom = "Failed to collect nvlink status info"
+expected_rule = "collect-nvlink-status-failure"
+
+[[cases]]
+description = "controller stop is bad"
+line = "update_node: node node01 reason set to: Node was stopped by CMDaemon"
+expect = "bad"
+expected_symptom = "Node stopped by controller"
+expected_rule = "node-stopped-by-controller"
+
+[[cases]]
+description = "update rx detect link mask failure is bad"
+line = "Failed to update Rx Detect Link mask!"
+expect = "bad"
+expected_symptom = "Failed to update Rx Detect Link mask!"
+expected_rule = "update-rx-detect-link-mask-failure"
+
+[[cases]]
+description = "imex service stoppage is bad"
+line = "Stopping nvidia-imex.service"
+expect = "bad"
+expected_symptom = "Stopping nvidia-imex.service"
+expected_rule = "imex-service-stoppage"
+
+[[cases]]
+description = "kernel paging request is bad"
+line = "Unable to handle kernel paging request at virtual address 0000000000000042"
+expect = "bad"
+expected_symptom = "kernel invalid memory access"
+expected_rule = "kernel-invalid-memory-access"
+
+[[cases]]
+description = "kernel null dereference is bad"
+line = "Unable to handle kernel NULL pointer dereference at virtual address 0000000000000010"
+expect = "bad"
+expected_symptom = "kernel invalid memory access"
+expected_rule = "kernel-invalid-memory-access"
+
+[[cases]]
+description = "kernel panic caused by soft-lockup hung tasks is classified specifically"
+line = "[36621.012637] Kernel panic - not syncing: softlockup: hung tasks\r\n"
+expect = "bad"
+expected_symptom = "kernel soft lockup"
+expected_rule = "kernel-soft-lockup"
+
+[[cases]]
+description = "other kernel panic wordings use the generic fallback"
+line = "[42.000000] Kernel panic - not syncing: fatal exception"
+expect = "bad"
+expected_symptom = "kernel panic"
+expected_rule = "kernel-panic"
+
+# Kernel oops cases. 
+[[cases]]
+description = "Internal error: Oops emits 'kernel oops' (data-abort ESR)"
+line = "[3731104.923279] Internal error: Oops: 0000000096000004 [#1] SMP"
+expect = "bad"
+expected_symptom = "kernel oops"
+expected_rule = "kernel-oops"
+
+[[cases]]
+description = "Internal error: Oops emits 'kernel oops' (BUG_ON / BRK ESR)"
+line = "[ 1234.567890] Internal error: Oops: 00000000bf000002 [#1] SMP"
+expect = "bad"
+expected_symptom = "kernel oops"
+expected_rule = "kernel-oops"
+
+[[cases]]
+description = "Internal error: Oops still matches when forwarded with `kernel:` syslog prefix"
+line = "Apr 24 12:04:49 test-node-001 kernel: [3588119.546745] Internal error: Oops: 0000000096000007 [#1] SMP"
+expect = "bad"
+expected_symptom = "kernel oops"
+expected_rule = "kernel-oops"
+
+[[cases]]
+description = "Internal error: Oops - FPAC emits 'kernel oops' (ARM64 pointer-auth fault)"
+line = "[2288200.381318] Internal error: Oops - FPAC: 0000000072000000 [#1]  SMP"
+expect = "bad"
+expected_symptom = "kernel oops"
+expected_rule = "kernel-oops"
+
+[[cases]]
+description = "slurmd 'Internal error: Oops handler' debug string must not match"
+line = "[1234.567890] slurmd: Internal error: Oops handler invoked but no callback registered"
+expect = "no_match"
+
+[[cases]]
+description = "nv warn is interesting"
+line = "[2321]: hadda stop; [NV_WARN_WIDGETS_GIZMOING_TOO_HARD]: returned from status @ mem_multicast_fabric.c:2917"
+expect = "interesting"
+expected_symptom = "NV_WARN_WIDGETS_GIZMOING_TOO_HARD mem_multicast_fabric.c"
+expected_rule = "NV_WARN_"
+
+[[cases]]
+description = "invalid xid is ignored"
+line = "Apr 24 12:04:49 test-node-001 kernel: NVRM: Xid (PCI:0000:e4:00): 10241024, pid='<unknown>', name=<unknown>, Uncontained: PCIE. RST: Yes, D-RST: No"
+node = "test-node-001"
+severity = "info"
+inject_mfu = false
+expect = "no_match"
+
+[[cases]]
+description = "fm lost connection to gpu is bad"
+line = "Lost connection to GPU"
+inject_mfu = false
+expect = "bad"
+expected_symptom = "Fabric manager lost connection to GPU"
+expected_rule = "fm-lost-connection-to-gpu"
+
+# Order parity: when a gpuGUID is present, the FM_parser tracking event MUST be
+# emitted BEFORE the bad node, matching origin/main's
+# syslog_fm_lost_connection_to_gpu. Reversing the try_all order fails this case.
+[[cases]]
+description = "fm lost connection to gpu with guid emits tracking then bad in order"
+runner = "syslog_single_line_events"
+line = "Lost connection to GPU on nodeId 13, systemGuid 0x1, gpuGUID 0xfb843fc93d454d89, port LID 0x1, GPU state Error."
+
+[[cases.expectations]]
+expect = "bad"
+expected_symptom = "Fabric manager lost connection to GPU"
+expected_rule = "fm-lost-connection-to-gpu"
+
+[[cases]]
+description = "imex lost connection is attributed to affected node"
+line = "Connection lost to node 42: host-359412e9"
+extra_nodes = ["host-359412e9"]
+inject_mfu = false
+expect = "interesting"
+expected_node = "host-359412e9"
+expected_symptom = "IMEX lost connection"
+expected_rule = "imex-lost-connection"
+
+[[cases]]
+description = "xid 154 is ignored"
+line = "NVRM: Xid (PCI:0009:01:00): 154, GPU recovery action changed from 0x0 (None) to 0x4 (Drain and Reset)"
+inject_mfu = false
+expect = "no_match"
+
+[[cases]]
+description = "xid zero fake is ignored"
+line = "NVRM: Xid (PCI:0009:01:00): 0, Fake!"
+inject_mfu = false
+expect = "no_match"
+
+[[cases]]
+description = "nv err fake is ignored"
+line = "[NV_ERR_FAKE"
+inject_mfu = false
+expect = "no_match"
+
+[[cases]]
+description = "nv warn fake is ignored"
+line = "[NV_WARN_FAKE"
+inject_mfu = false
+expect = "no_match"
+
+[[cases]]
+description = "line from node outside job is ignored"
+line = "Nov 15 10:30:00 test-node-001 kernel: NVRM: Xid (PCI:0000:e4:00): 172, pid=5678, name=python, UNCORRECTABLE_SRAM_ERROR"
+node = "not_a_real_node"
+inject_mfu = false
+expect = "no_match"
+
+[[cases]]
+description = "line before job start is ignored"
+line = "Nov 15 10:30:00 test-node-001 kernel: NVRM: Xid (PCI:0000:e4:00): 172, pid=5678, name=python, UNCORRECTABLE_SRAM_ERROR"
+inject_mfu = false
+# 1 second before the synthetic syslog job starts (1741860016)
+timestamp_s = 1741860015
+expect = "no_match"
+
+[[cases]]
+description = "line after job end is ignored"
+line = "Nov 15 10:30:00 test-node-001 kernel: NVRM: Xid (PCI:0000:e4:00): 172, pid=5678, name=python, UNCORRECTABLE_SRAM_ERROR"
+inject_mfu = false
+# 1 second after the synthetic syslog job ends (1744734448)
+timestamp_s = 1744734449
+expect = "no_match"
+
+[[cases]]
+description = "known sxid projects the catalog nice_name and credits known-sxid-event"
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 79,"
+expect = "interesting"
+expected_symptom = "XID-79-GPU_HAS_FALLEN_OFF_THE_BUS"
+expected_rule = "known-sxid-event"
+
+[[cases]]
+description = "unknown sxid is interesting"
+line = "nvidia-nvswitch0: SXid 31012"
+expect = "interesting"
+expected_symptom = "SXID-unknown"
+expected_rule = "unknown-sxid-event"
+
+[[cases]]
+description = "sxid zero is interesting"
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 0,"
+expect = "interesting"
+expected_symptom = "SXID-0"
+expected_rule = "sxid-id-missing-in-catalog"
+
+[[cases]]
+description = "gsp rm alloc failed is bad"
+line = " NVRM: rpcRmApiAlloc_GSP: GspRmAlloc failed"
+expect = "bad"
+expected_symptom = "GspRmAlloc failed"
+expected_rule = "gsp-failure"
+
+[[cases]]
+description = "numa node memory exhaustion is bad"
+line = "NVRM: nvAssertFailedNoLog: Assertion failed: (status == NV_OK) || ((status == NV_ERR_NO_MEMORY)"
+expect = "bad"
+expected_symptom = "NUMA node memory exhaustion"
+expected_rule = "numa-node-memory-exhaustion"
+
+[[cases]]
+description = "eap failure is bad"
+line = " CTRL-EVENT-EAP-FAILURE EAP authentication failed"
+expect = "bad"
+expected_symptom = "EAP authentication failed"
+expected_rule = "eap-failure"
+
+[[cases]]
+description = "eap success is bad"
+line = "CTRL-EVENT-EAP-SUCCESS EAP authentication completed successfully"
+expect = "bad"
+expected_symptom = "EAP authentication recovery"
+expected_rule = "eap-success"
+
+[[cases]]
+description = "system powering down is bad"
+line = "System is powering down"
+expect = "bad"
+expected_symptom = "System is powering down"
+expected_rule = "system-powering-down"
+
+[[cases]]
+description = "oom killed sssd service is bad"
+line = "Out of memory: Killed process 1676776 (sssd_nss) total-vm:70244kB, anon-rss:1664kB, file-rss:36800kB, shmem-rss:0kB, UID:0 pgtables:176kB oom_score_adj:1000"
+expect = "bad"
+expected_symptom = "OOM kill of system service"
+expected_rule = "system-service-oom-kill"
+
+[[cases]]
+description = "oom killed supervisord is bad"
+line = "Out of memory: Killed process 1676149 (supervisord) total-vm:35884kB, anon-rss:16640kB, file-rss:10084kB, shmem-rss:0kB, UID:0 pgtables:108kB oom_score_adj:1000"
+expect = "bad"
+expected_symptom = "OOM kill of system service"
+expected_rule = "system-service-oom-kill"
+
+[[cases]]
+description = "oom killed slurmd is bad"
+line = "Out of memory: Killed process 1234 (slurmd) total-vm:100kB, anon-rss:100kB, file-rss:0kB, shmem-rss:0kB, UID:0 pgtables:48kB oom_score_adj:0"
+expect = "bad"
+expected_symptom = "OOM kill of system service"
+expected_rule = "system-service-oom-kill"
+
+[[cases]]
+description = "oom killed munged is bad"
+line = "Out of memory: Killed process 2234 (munged) total-vm:100kB, anon-rss:100kB, file-rss:0kB, shmem-rss:0kB, UID:0 pgtables:48kB oom_score_adj:0"
+expect = "bad"
+expected_symptom = "OOM kill of system service"
+expected_rule = "system-service-oom-kill"
+
+[[cases]]
+description = "oom killed helper shell is recorded as interesting"
+line = "Out of memory: Killed process 1676744 (bash) total-vm:4708kB, anon-rss:0kB, file-rss:3412kB, shmem-rss:0kB, UID:0 pgtables:48kB oom_score_adj:1000"
+expect = "interesting"
+expected_symptom = "OOM kill (other)"
+expected_rule = "oom-kill-other"
+
+[[cases]]
+description = "oom killed non-critical system daemon is recorded as interesting"
+line = "Out of memory: Killed process 3234 (chronyd) total-vm:100kB, anon-rss:100kB, file-rss:0kB, shmem-rss:0kB, UID:0 pgtables:48kB oom_score_adj:0"
+expect = "interesting"
+expected_symptom = "OOM kill (other)"
+expected_rule = "oom-kill-other"
+
+[[cases]]
+description = "cgroup oom kill of user task (pytorch dataloader) is bad"
+line = "Memory cgroup out of memory: Killed process 2689927 (pt_data_worker) total-vm:491913536kB, anon-rss:51355264kB, file-rss:0kB, shmem-rss:2081792kB, UID:25857 pgtables:8256kB oom_score_adj:0"
+expect = "bad"
+expected_symptom = "OOM kill of user task"
+expected_rule = "user-task-oom-kill"
+
+[[cases]]
+description = "cgroup oom kill of generic user python process is bad"
+line = "Memory cgroup out of memory: Killed process 12345 (python3) total-vm:200000kB, anon-rss:150000kB, file-rss:0kB, shmem-rss:0kB, UID:1001 pgtables:512kB oom_score_adj:0"
+expect = "bad"
+expected_symptom = "OOM kill of user task"
+expected_rule = "user-task-oom-kill"
+
+[[cases]]
+description = "cgroup oom kill of slurmstepd falls through to system-service rule"
+line = "Memory cgroup out of memory: Killed process 9999 (slurmstepd) total-vm:50000kB, anon-rss:20000kB, file-rss:0kB, shmem-rss:0kB, UID:0 pgtables:48kB oom_score_adj:-1000"
+expect = "bad"
+expected_symptom = "OOM kill of system service"
+expected_rule = "system-service-oom-kill"
+
+[[cases]]
+description = "cgroup oom kill of unknown root process is recorded as interesting (root oom != failure)"
+line = "Memory cgroup out of memory: Killed process 7777 (kubelet) total-vm:60000kB, anon-rss:30000kB, file-rss:0kB, shmem-rss:0kB, UID:0 pgtables:48kB oom_score_adj:0"
+expect = "interesting"
+expected_symptom = "OOM kill (other)"
+expected_rule = "oom-kill-other"
+
+[[cases]]
+description = "lepton pod-slice oom kill (leaf) is user-attributed without container identity"
+line = "kubepods-besteffort-pod239fec60_2cf7_4396_827c_dc8167f7a1b1.slice: A process of this unit has been killed by the OOM killer."
+expect = "bad"
+expected_symptom = "OOM kill of user task"
+expected_rule = "pod-slice-oom-kill"
+
+[[cases]]
+description = "lepton pod-slice oom kill (guaranteed qos leaf) is user-attributed"
+line = "kubepods-pod239fec60_2cf7_4396_827c_dc8167f7a1b1.slice: A process of this unit has been killed by the OOM killer."
+expect = "bad"
+expected_symptom = "OOM kill of user task"
+expected_rule = "pod-slice-oom-kill"
+
+[[cases]]
+description = "lepton pod-slice oom kill with full syslog prefix is user-attributed"
+line = "2026-05-06T01:32:32.722348+00:00 test-node-0814 systemd[1]: kubepods-besteffort-pod239fec60_2cf7_4396_827c_dc8167f7a1b1.slice: A process of this unit has been killed by the OOM killer."
+expect = "bad"
+expected_symptom = "OOM kill of user task"
+expected_rule = "pod-slice-oom-kill"
+
+[[cases]]
+description = "parent kubepods.slice oom message does NOT fire (avoids triplet with leaf pod slice)"
+line = "kubepods.slice: A process of this unit has been killed by the OOM killer."
+expect = "no_match"
+
+[[cases]]
+description = "parent kubepods-besteffort.slice oom message does NOT fire (avoids triplet with leaf pod slice)"
+line = "kubepods-besteffort.slice: A process of this unit has been killed by the OOM killer."
+expect = "no_match"
+
+[[cases]]
+description = "kubelet status patch with slurmd OOMKilled is bad"
+line = 'Patch status for pod containerStatuses:[{"name":"slurmd","ready":false,"lastState":{"terminated":{"exitCode":137,"reason":"OOMKilled"}}}]'
+expect = "bad"
+expected_symptom = "OOM kill of a system pod"
+expected_rule = "kubelet-container-oomkilled-system-pod"
+
+[[cases]]
+description = "co-fired pod-slice and slurmd kubelet OOMKilled prefers system pod"
+line = 'kubepods-besteffort-pod239fec60_2cf7_4396_827c_dc8167f7a1b1.slice: A process of this unit has been killed by the OOM killer. Patch status for pod containerStatuses:[{"name":"slurmd","ready":false,"lastState":{"terminated":{"exitCode":137,"reason":"OOMKilled"}}}]'
+expect = "bad"
+expected_symptom = "OOM kill of a system pod"
+expected_rule = "kubelet-container-oomkilled-system-pod"
+
+[[cases]]
+description = "kubelet status patch with mixed-case slurmd OOMKilled is bad"
+line = 'Patch status for pod containerStatuses:[{"name":"SLURMD","ready":false,"lastState":{"terminated":{"exitCode":137,"reason":"OOMKilled"}}}]'
+expect = "bad"
+expected_symptom = "OOM kill of a system pod"
+expected_rule = "kubelet-container-oomkilled-system-pod"
+
+[[cases]]
+description = "kubelet status patch with non-slurmd OOMKilled is user-attributed"
+line = 'Patch status for pod containerStatuses:[{"name":"trainer","ready":false,"lastState":{"terminated":{"exitCode":137,"reason":"OOMKilled"}}}]'
+expect = "bad"
+expected_symptom = "OOM kill of user task"
+expected_rule = "kubelet-container-oomkilled-user-task"
+
+[[cases]]
+description = "OOMKilled name without containerStatuses context does NOT fire"
+line = '{"name":"slurmd","ready":false,"lastState":{"terminated":{"exitCode":137,"reason":"OOMKilled"}}}'
+expect = "no_match"
+
+[[cases]]
+description = "kubelet patch with multiple containers picks the OOMKilled victim (slurmd), not earlier healthy container"
+line = 'Patch status for pod containerStatuses:[{"name":"sidecar","ready":true,"state":{"running":{}}},{"name":"slurmd","ready":false,"lastState":{"terminated":{"reason":"OOMKilled"}}}]'
+expect = "bad"
+expected_symptom = "OOM kill of a system pod"
+expected_rule = "kubelet-container-oomkilled-system-pod"
+
+[[cases]]
+description = "kubelet status patch with escaped JSON slurmd OOMKilled is bad"
+line = 'Patch status for pod containerStatuses:[{\"name\":\"slurmd\",\"ready\":false,\"lastState\":{\"terminated\":{\"exitCode\":137,\"reason\":\"OOMKilled\"}}}]'
+expect = "bad"
+expected_symptom = "OOM kill of a system pod"
+expected_rule = "kubelet-container-oomkilled-system-pod"
+
+[[cases]]
+description = "iscsi ping timeout is bad"
+line = "connection2:0: ping timeout, taking conn down (last ping 2s ago)"
+expect = "bad"
+expected_symptom = "iSCSI detected conn error"
+expected_rule = "iscsi-detected-conn-error"
+
+[[cases]]
+description = "iscsi detected conn error is bad"
+line = "connection2:0: detected conn error (1020)"
+expect = "bad"
+expected_symptom = "iSCSI detected conn error"
+expected_rule = "iscsi-detected-conn-error"
+
+[[cases]]
+description = "nfs not responding is bad"
+line = "nfs: server nfs01 not responding, still trying"
+expect = "bad"
+expected_symptom = "nfs not responding"
+expected_rule = "nfs-not-responding"
+
+[[cases]]
+description = "fabric manager not present is bad"
+line = "NV_ERR_FABRIC_MANAGER_NOT_PRESENT"
+expect = "bad"
+expected_symptom = "NV_ERR_FABRIC_MANAGER_NOT_PRESENT"
+expected_rule = "fabric-manager-not-present"
+
+[[cases]]
+description = "nmi watchdog hard lockup is bad"
+line = "NMI watchdog: Watchdog detected hard LOCKUP"
+expect = "bad"
+expected_symptom = "NMI watchdog hard LOCKUP"
+expected_rule = "nmi-watchdog-hard-lockup"
+
+[[cases]]
+description = "general protection fault is bad"
+line = "general protection fault"
+expect = "bad"
+expected_symptom = "general protection fault"
+expected_rule = "general-protection-fault"
+
+[[cases]]
+description = "kernel stack frame pointer is bad"
+line = "WARNING: kernel stack frame pointer at 00000000f4bfd280 in pt_main_thread:2697472 has bad value"
+expect = "bad"
+expected_symptom = "bad kernel stack frame pointer in pt_main_thread"
+expected_rule = "kernel-stack-frame-pointer"
+
+[[cases]]
+description = "lustre network init failed is interesting"
+line = "LustreError: 52716:0:(events.c:651:ptlrpc_init_portals()) network initialisation failed"
+expect = "interesting"
+expected_symptom = "(non-fatal) LustreError"
+expected_rule = "lustre-error-non-fatal"
+
+[[cases]]
+description = "exact lustre inode revalidate EINTR emits only non-fatal event"
+runner = "syslog_single_line_events"
+line = "LustreError: 1597603:0:(file.c:5582:ll_inode_revalidate_fini()) test-lustre-client: revalidate FID [0xc540001cea:0x65:0x0] error: rc = -4"
+
+[[cases.expected_events]]
+event_type = "Attribution.node.interesting"
+rule = "lustre-error-eintr"
+payload = { symptom = "(non-fatal) LustreError" }
+
+[[cases]]
+description = "lustre inode revalidate non-EINTR keeps fatal event"
+runner = "syslog_single_line_events"
+line = "LustreError: 1597603:0:(file.c:5582:ll_inode_revalidate_fini()) test-lustre-client: revalidate FID [0xc540001cea:0x65:0x0] error: rc = -5"
+
+[[cases.expected_events]]
+event_type = "Attribution.node.bad"
+rule = "lustre-error"
+payload = { symptom = "LustreError" }
+
+[[cases.expected_events]]
+event_type = "Attribution.node.interesting"
+rule = "lustre-error-non-fatal"
+payload = { symptom = "(non-fatal) LustreError" }
+
+[[cases]]
+description = "exact lustre inode revalidate EINTR stays interesting near watchdog"
+runner = "syslog_single_line_events"
+line = "LustreError: 1597603:0:(file.c:5582:ll_inode_revalidate_fini()) test-lustre-client: revalidate FID [0xc540001cea:0x65:0x0] error: rc = -4"
+expect = "interesting"
+expected_symptom = "(non-fatal) LustreError"
+expected_rule = "lustre-error-eintr"
+timestamp_s = 1741906816
+
+[[cases.events]]
+event_type = "Application.mfu"
+time_kind = "job_start"
+line_num = 5
+
+[[cases.events]]
+event_type = "Application.pytorch.nccl_watchdog"
+time_kind = "none"
+raw_error_time = "16:00:17"
+timeout_seconds = 600
+line_num = 10
+
+[[cases]]
+description = "lustre client evicted is bad"
+line = "LustreError: 167-0: testfs-OST001c-osc-ffff94dc5684f800: This client was evicted by testfs-OST001c; in progress operations using this service will fail."
+expect = "bad"
+expected_symptom = "Lustre Client Evicted"
+expected_rule = "lustre-client-evicted"
+
+[[cases]]
+description = "lustre watchdog is bad and non-fatal"
+runner = "syslog_single_line_events"
+line = "LustreError: 167-0: testfs-OST001c-osc-ffff94dc5684f800: This client was evicted by testfs-OST001c; in progress operations using this service will fail."
+
+[[cases.expectations]]
+expect = "bad"
+expected_symptom = "Lustre Client Evicted"
+expected_rule = "lustre-client-evicted"
+
+[[cases.expectations]]
+expect = "interesting"
+expected_symptom = "(non-fatal) LustreError"
+expected_rule = "lustre-error-non-fatal-watchdog"
+
+[[cases]]
+description = "lustre watchdog nonfatal is interesting"
+runner = "syslog_single_line_events"
+line = "LustreError: 167-0: testfs-OST001c-osc-ffff94dc5684f800: This client was evicted by testfs-OST001c; in progress operations using this service will fail."
+expect = "interesting"
+expected_symptom = "(non-fatal) LustreError"
+expected_rule = "lustre-error-non-fatal-watchdog"
+timestamp_s = 1741860076
+
+[[cases.events]]
+event_type = "Application.mfu"
+time_kind = "job_start"
+line_num = 5
+datum = "<pseudo mfu>"
+
+[[cases.events]]
+event_type = "Application.pytorch.nccl_watchdog"
+time_kind = "none"
+raw_error_time = "16:00:17"
+timeout_seconds = 600
+line_num = 10
+datum = "<pseudo mfu>"
+
+[[cases]]
+description = "lustre watchdog dataloader is bad"
+runner = "syslog_single_line_events"
+line = "LustreError: 167-0: testfs-OST001c-osc-ffff94dc5684f800: This client was evicted by testfs-OST001c; in progress operations using this service will fail."
+expect = "bad"
+expected_symptom = "LustreError"
+expected_rule = "lustre-error"
+timestamp_s = 1741860046
+
+[[cases.events]]
+event_type = "Application.mfu"
+time_kind = "job_start"
+line_num = 5
+datum = "<pseudo mfu>"
+
+[[cases.events]]
+event_type = "Application.dataloader.exception"
+time_kind = "offset_from_job_start"
+offset_seconds = 20
+line_num = 10
+datum = "<pseudo dataloader>"
+
+[[cases]]
+description = "lustre watchdog dataloader demote is interesting"
+runner = "syslog_single_line_events"
+line = "LustreError: 167-0: testfs-OST001c-osc-ffff94dc5684f800: This client was evicted by testfs-OST001c; in progress operations using this service will fail."
+expect = "interesting"
+expected_symptom = "(non-fatal) LustreError"
+expected_rule = "lustre-error-non-fatal-dataloader-exception"
+timestamp_s = 1741860026
+
+[[cases.events]]
+event_type = "Application.mfu"
+time_kind = "offset_from_job_start"
+offset_seconds = 20
+line_num = 5
+datum = "<pseudo mfu>"
+
+[[cases.events]]
+event_type = "Application.dataloader.exception"
+time_kind = "none"
+line_num = 10
+datum = "<pseudo dataloader>"
+
+[[cases]]
+description = "fm lost connection all gpus aggregates"
+runner = "syslog_fm_gpu_series"
+gpu_guids = [0, 1, 2, 3, 4, 5, 6, 7]
+
+[[cases.expectations]]
+expect = "bad"
+symptom = "Fabric manager lost connection to all GPUs"
+rule = "fm-lost-connection-to-all-gpus"
+
+[[cases.expectations]]
+expect = "absent"
+symptom = "Fabric manager lost connection to GPU"
+rule = "fm-lost-connection-to-gpu"
+
+[[cases]]
+description = "fm lost connection below threshold stays individual"
+runner = "syslog_fm_gpu_series"
+gpu_guids = [0, 1, 2, 3, 4, 5, 6]
+
+[[cases.expectations]]
+expect = "bad"
+symptom = "Fabric manager lost connection to GPU"
+rule = "fm-lost-connection-to-gpu"
+
+[[cases.expectations]]
+expect = "absent"
+symptom = "Fabric manager lost connection to all GPUs"
+rule = "fm-lost-connection-to-all-gpus"
+
+[[cases]]
+description = "fm lost connection duplicate guids do not aggregate"
+runner = "syslog_fm_gpu_series"
+gpu_guids = [0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1]
+
+[[cases.expectations]]
+expect = "bad"
+symptom = "Fabric manager lost connection to GPU"
+rule = "fm-lost-connection-to-gpu"
+
+[[cases.expectations]]
+expect = "absent"
+symptom = "Fabric manager lost connection to all GPUs"
+rule = "fm-lost-connection-to-all-gpus"

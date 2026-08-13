@@ -1,0 +1,288 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: LicenseRef-NvidiaProprietary
+#
+# NVIDIA CORPORATION, its affiliates and licensors retain all intellectual
+# property and proprietary rights in and to this material, related
+# documentation and any modifications thereto. Any use, reproduction,
+# disclosure or distribution of this material and related documentation
+# without an express license agreement from NVIDIA CORPORATION or
+# its affiliates is strictly prohibited.
+#
+# Second declarative port wave: the remaining PORTABLE syslog rules that were
+# NOT pure single leaves (the syslog_leaf_rules.toml set). Each stanza keeps the
+# Python rule's NAME so the declarative engine and the Python side never disagree
+# on identity, and sets `derived_rule` to the credit slug the rule emitted via
+# source.derived(rule=...), so the credited source.rule matches origin byte-for-
+# byte. Parity is enforced by syslog_rules.test.toml through process_check.
+#
+# Rules ported here:
+#   SyslogXidUnknown / SyslogSXidUnknown  -- interesting_node leaf with a negative
+#       `not search(<PCI form>, datum)` guard (the PCI form is handled by the
+#       catalog-backed SyslogXid / SyslogSXid rules, still Python).
+#   SyslogLustreError                     -- pick_one: exact EINTR -> interesting;
+#       otherwise try_all(bad + pick_one(evicted/default)), carrying the demotion
+#       map on fatal Lustre events.
+#   SyslogFmLostConnectionToGpu           -- try_all: unconditional bad + an
+#       OPTIONAL FM_parser tracking event gated on a gpuGUID being present.
+#   ImexLostConnection                    -- attributes to a CAPTURED node, so it
+#       is a generic_event emitting Attribution.node.interesting on {hostname}.
+#
+# Still NOT ported (need an unbuilt feature): SyslogXid (processor),
+# SyslogSXid (catalog_lookup / xid record table), SyslogOomKill &
+# KubeletContainerOomKilled (custom helpers), SyslogImexShutdown /
+# SyslogRxDetectLinkMask (function-prefix helper).
+
+author  = "NVIDIA Attribution team"
+sources = ["SYSLOG"]
+
+
+# --- Kernel panic: soft-lockup classification with a generic fallback -----------
+# The panic banner is the authoritative signal. Classify the observed hung-task
+# variant specifically; retain a generic panic symptom for all other wordings.
+
+[[extractor]]
+name     = "SyslogKernelPanic"
+match_re = 'Kernel panic'
+
+[extractor.emit]
+type = "pick_one"
+
+[[extractor.emit.branches]]
+type         = "bad_node"
+symptom      = "kernel soft lockup"
+derived_rule = "kernel-soft-lockup"
+when         = '"softlockup: hung tasks" in datum'
+
+[extractor.emit.default]
+type         = "bad_node"
+symptom      = "kernel panic"
+derived_rule = "kernel-panic"
+
+[[extractor.cases]]
+description = "soft-lockup panic selects the specific symptom"
+expect      = "bad"
+line        = "[36621.012637] Kernel panic - not syncing: softlockup: hung tasks\r\n"
+symptom     = "kernel soft lockup"
+
+[[extractor.cases]]
+description = "an unrecognized panic wording uses the generic fallback"
+expect      = "bad"
+line        = "[42.000000] Kernel panic - not syncing: fatal exception"
+symptom     = "kernel panic"
+
+
+# --- negative-guard interesting leaves ------------------------------------------
+# main: `if re.search(<PCI form>, source.datum): return []` then _interesting(...).
+# Ported as an interesting_node leaf whose `when` is the negated PCI-form search
+# over `datum` (the full line), which the loader injects into every eval namespace.
+
+[[extractor]]
+name     = "SyslogXidUnknown"
+match_re = 'NVRM:\s+Xid '
+
+[extractor.emit]
+type         = "interesting_node"
+symptom      = "XID-unknown"
+derived_rule = "unknown-xid-event"
+when         = 'not search(r"NVRM:\s+Xid \(PCI:[0-9a-fA-F.:]+\): \d+", datum)'
+
+# when:true -- no PCI form, so the negated search is true and we emit.
+[[extractor.cases]]
+expect  = "interesting"
+line    = "NVRM: Xid 31"
+symptom = "XID-unknown"
+# when:false -- PCI form present (SyslogXid handles it), negated search is false.
+[[extractor.cases]]
+expect = "no_match"
+line   = "NVRM: Xid (PCI:0000:bf:00): 1,"
+
+
+[[extractor]]
+name     = "SyslogSXidUnknown"
+match_re = ' SXid '
+
+[extractor.emit]
+type         = "interesting_node"
+symptom      = "SXID-unknown"
+derived_rule = "unknown-sxid-event"
+when         = 'not search(r" SXid \(PCI:[0-9a-fA-F.:]+\): \d+", datum)'
+
+# when:true -- no PCI form.
+[[extractor.cases]]
+expect  = "interesting"
+line    = "nvidia-nvswitch0: SXid 31012"
+symptom = "SXID-unknown"
+# when:false -- PCI form present (SyslogSXid handles it).
+[[extractor.cases]]
+expect = "no_match"
+line   = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 0,"
+
+
+# --- SyslogLustreError: pick_one(eintr / default->try_all(bad, evicted/default))
+# EINTR: exact ll_inode_revalidate_fini() ... rc = -4 -> interesting only.
+# otherwise: bad "LustreError" (rule lustre-error) + demotion map, then:
+#            evicted line -> bad "Lustre Client Evicted" (lustre-client-evicted)
+#            else         -> interesting "(non-fatal) LustreError" (lustre-error-non-fatal)
+
+[[extractor]]
+name     = "SyslogLustreError"
+match_re = 'LustreError'
+
+[extractor.emit]
+type = "pick_one"
+
+[[extractor.emit.branches]]
+type         = "interesting_node"
+symptom      = "(non-fatal) LustreError"
+derived_rule = "lustre-error-eintr"
+when         = 'search(r"ll_inode_revalidate_fini\(\).*error:\s*rc\s*=\s*-4\b", datum)'
+
+[extractor.emit.default]
+type = "try_all"
+
+# Non-EINTR event[0]: bad "LustreError" carrying the demotion map. Demotion
+# keys are DemotionTypes member NAMES, resolved to enum members at load.
+[[extractor.emit.default.events]]
+type         = "bad_node"
+symptom      = "LustreError"
+derived_rule = "lustre-error"
+demotion     = { NOT_NEAR_WATCHDOG_EVENT_DEMOTION = "lustre-error-non-fatal-watchdog", BEFORE_DATALOADER_DEMOTION = "lustre-error-non-fatal-dataloader-exception" }
+
+# Non-EINTR event[1]: evicted -> bad, otherwise interesting. The branch inspects
+# the full source line through `datum`.
+[[extractor.emit.default.events]]
+type = "pick_one"
+
+[[extractor.emit.default.events.branches]]
+type         = "bad_node"
+symptom      = "Lustre Client Evicted"
+derived_rule = "lustre-client-evicted"
+when         = 'match(r".*This client was evicted by.*in progress operations using this service will fail\.", datum)'
+
+[extractor.emit.default.events.default]
+type         = "interesting_node"
+symptom      = "(non-fatal) LustreError"
+derived_rule = "lustre-error-non-fatal"
+
+# Cover the EINTR branch plus the non-EINTR nested branch and default.
+[[extractor.cases]]
+line    = "LustreError: 1597603:0:(file.c:5582:ll_inode_revalidate_fini()) test-lustre-client: revalidate FID [0xc540001cea:0x65:0x0] error: rc = -4"
+symptom = "(non-fatal) LustreError"
+expect  = "interesting"
+
+[[extractor.cases]]
+line    = "LustreError: 167-0: testfs-OST001c-osc-ffff94dc5684f800: This client was evicted by testfs-OST001c; in progress operations using this service will fail."
+symptom = "Lustre Client Evicted"
+expect  = "bad"
+[[extractor.cases]]
+line    = "LustreError: 52716:0:(events.c:651:ptlrpc_init_portals()) network initialisation failed"
+symptom = "(non-fatal) LustreError"
+expect  = "interesting"
+
+
+# --- SyslogFmLostConnectionToGpu: try_all( optional FM_parser tracking , bad ) --
+# when a gpuGUID is present: first emit FM_parser.lost_gpu_connection with
+#         {node = <source node>, gpu_guid = <guid>} (fm-lost-gpu-tracking), THEN
+# always: bad "Fabric manager lost connection to GPU" (fm-lost-connection-to-gpu).
+# This event order (tracking, then bad) matches origin/main's
+# syslog_fm_lost_connection_to_gpu, which appends the tracking event before the
+# bad node. main extracts the guid with a secondary re.search; here it is an
+# OPTIONAL named capture appended to match_re and gated with `gpu_guid is not None`.
+
+[[extractor]]
+name     = "SyslogFmLostConnectionToGpu"
+match_re = 'Lost connection to GPU(?:.*?gpuGUID\s+(?P<gpu_guid>0x[0-9a-fA-F]+))?'
+
+[extractor.emit]
+type = "try_all"
+
+# event[0]: per-node GPU tracking, only when a gpuGUID is present. The payload key
+# "node" carries the SOURCE node string (injected into the eval namespace) and
+# "gpu_guid" the captured GUID, byte-for-byte with main's _other_event payload.
+# Emitted FIRST, matching origin/main's event order.
+[[extractor.emit.events]]
+type         = "generic_event"
+event_type   = "FM_parser.lost_gpu_connection"
+derived_rule = "fm-lost-gpu-tracking"
+when         = "gpu_guid is not None"
+payload      = { node = "{node}", gpu_guid = "{gpu_guid}" }
+
+# event[1]: unconditional bad.
+[[extractor.emit.events]]
+type         = "bad_node"
+symptom      = "Fabric manager lost connection to GPU"
+derived_rule = "fm-lost-connection-to-gpu"
+
+# event[0].when:true -- gpuGUID present. event[1]:emit covered too.
+[[extractor.cases]]
+expect  = "bad"
+line    = "Lost connection to GPU on nodeId 13, gpuGUID 0xfb843fc93d454d89, nvswitch 0"
+symptom = "Fabric manager lost connection to GPU"
+# event[0].when:false -- no gpuGUID.
+[[extractor.cases]]
+expect  = "bad"
+line    = "Lost connection to GPU"
+symptom = "Fabric manager lost connection to GPU"
+
+
+# --- ImexLostConnection: attribute to the CAPTURED node -------------------------
+# main: _interesting(groups["hostname"], "IMEX lost connection", rule=...), i.e.
+# the finding lands on the node named in the line, NOT the source node. That is a
+# generic_event emitting Attribution.node.interesting with payload {node, symptom}
+# exactly as _interesting builds it.
+
+[[extractor]]
+name     = "ImexLostConnection"
+match_re = 'Connection lost to node \d+: (?P<hostname>[\w-]+)'
+
+[extractor.emit]
+type         = "generic_event"
+event_type   = "Attribution.node.interesting"
+derived_rule = "imex-lost-connection"
+payload      = { node = "{hostname}", symptom = "IMEX lost connection" }
+
+[[extractor.cases]]
+expect = "interesting"
+line   = "Connection lost to node 42: host-359412e9"
+
+
+# --- SyslogOomKill: 3-way pick_one classification of kernel OOM-killer lines ----
+# main's syslog_oom_kill: system-service victims are infra failures (bad); a
+# cgroup OOM of a UID>0 task is a user-task failure (bad); everything else is
+# recorded as interesting context. The branch-2 `when` guards the OPTIONAL cgroup
+# and uid captures with `is not None` (load-time optional-capture guard).
+[[extractor]]
+name = "SyslogOomKill"
+match_re = '(?P<cgroup>Memory cgroup )?[Oo]ut of memory: Killed process \d+ \((?P<process_name>[^)]+)\)(?:.*?UID:(?P<uid>\d+))?'
+[extractor.emit]
+type = "pick_one"
+[[extractor.emit.branches]]
+when = "is_system_service_process(process_name)"
+type = "bad_node"
+symptom = "OOM kill of system service"
+derived_rule = "system-service-oom-kill"
+[[extractor.emit.branches]]
+when = "cgroup is not None and uid is not None and int(uid) > 0"
+type = "bad_node"
+symptom = "OOM kill of user task"
+derived_rule = "user-task-oom-kill"
+[extractor.emit.default]
+type = "interesting_node"
+symptom = "OOM kill (other)"
+derived_rule = "oom-kill-other"
+
+# branch 1: system-service victim (slurmd) -> bad, system-service symptom.
+[[extractor.cases]]
+expect  = "bad"
+line    = "Out of memory: Killed process 4242 (slurmd) total-vm:100kB"
+symptom = "OOM kill of system service"
+# branch 2: cgroup OOM of a UID>0 task -> bad, user-task symptom.
+[[extractor.cases]]
+expect  = "bad"
+line    = "Memory cgroup out of memory: Killed process 123 (python) total-vm:200kB, UID:1000"
+symptom = "OOM kill of user task"
+# default: global OOM, no cgroup/UID, non-service process -> interesting, other.
+[[extractor.cases]]
+expect  = "interesting"
+line    = "Out of memory: Killed process 999 (python) total-vm:200kB"
+symptom = "OOM kill (other)"

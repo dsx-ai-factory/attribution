@@ -1,0 +1,40 @@
+[attribution]
+service_url = "http://127.0.0.1:8000"
+timeout_seconds = 60
+
+[eca]
+component = "static"
+
+[eca.static]
+id = "job-user-oom"
+start_time = "2026-05-27T20:50:43+00:00"
+end_time = "2026-05-27T21:15:44+00:00"
+nodes = ["node-a-001"]
+state = "OUT_OF_MEMORY"
+name = "vlm-eval-oom"
+user_name = "charlie"
+workload_type = "slurm"
+workload_framework = "pytorch"
+std_out = "docs/sample-data/static/applog/stdout.log"
+std_err = "docs/sample-data/static/applog/stderr.log"
+
+[workload]
+gpus_per_node = 2
+
+[log.applog]
+component = "local_file"
+
+[log.applog.local_file]
+paths = ["{std_out}", "{std_err}"]
+
+[log.syslog]
+component = "local_file"
+
+[log.syslog.local_file]
+paths = ["docs/sample-data/static/syslog"]
+
+[output.db]
+component = "sqlite"
+
+[output.db.sqlite]
+path = "docs/sample-data/static/out/attributions.db"

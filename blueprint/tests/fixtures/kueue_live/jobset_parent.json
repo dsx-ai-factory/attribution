@@ -1,0 +1,111 @@
+{
+    "apiVersion": "jobset.x-k8s.io/v1alpha2",
+    "kind": "JobSet",
+    "metadata": {
+        "annotations": {
+            "kubectl.kubernetes.io/last-applied-configuration": "{\"apiVersion\":\"jobset.x-k8s.io/v1alpha2\",\"kind\":\"JobSet\",\"metadata\":{\"annotations\":{},\"labels\":{\"kueue.x-k8s.io/queue-name\":\"dev\"},\"name\":\"bp-train-fail\",\"namespace\":\"kueue-demo\"},\"spec\":{\"failurePolicy\":{\"maxRestarts\":0},\"replicatedJobs\":[{\"name\":\"trainer\",\"replicas\":1,\"template\":{\"spec\":{\"backoffLimit\":0,\"completions\":2,\"parallelism\":2,\"template\":{\"spec\":{\"containers\":[{\"command\":[\"sh\",\"-c\",\"echo rank=$JOB_COMPLETION_INDEX; if [ \\\"$JOB_COMPLETION_INDEX\\\" = \\\"1\\\" ]; then sleep 5; echo CUDA-error; exit 42; else sleep 30; echo done; fi\"],\"env\":[{\"name\":\"JOB_COMPLETION_INDEX\",\"valueFrom\":{\"fieldRef\":{\"fieldPath\":\"metadata.annotations['batch.kubernetes.io/job-completion-index']\"}}}],\"image\":\"busybox:1.36\",\"name\":\"trainer\",\"resources\":{\"requests\":{\"cpu\":\"50m\",\"memory\":\"16Mi\"}}}],\"restartPolicy\":\"Never\"}}}}}]}}\n"
+        },
+        "creationTimestamp": "2026-05-21T23:17:01Z",
+        "generation": 2,
+        "labels": {
+            "kueue.x-k8s.io/queue-name": "dev"
+        },
+        "name": "bp-train-fail",
+        "namespace": "kueue-demo",
+        "resourceVersion": "527555",
+        "uid": "1f47dee2-f919-4d3b-bfc0-99397653a9da"
+    },
+    "spec": {
+        "failurePolicy": {
+            "restartStrategy": "Recreate"
+        },
+        "network": {
+            "enableDNSHostnames": true,
+            "publishNotReadyAddresses": true
+        },
+        "replicatedJobs": [
+            {
+                "name": "trainer",
+                "replicas": 1,
+                "template": {
+                    "metadata": {},
+                    "spec": {
+                        "backoffLimit": 0,
+                        "completionMode": "Indexed",
+                        "completions": 2,
+                        "parallelism": 2,
+                        "template": {
+                            "metadata": {},
+                            "spec": {
+                                "containers": [
+                                    {
+                                        "command": [
+                                            "sh",
+                                            "-c",
+                                            "echo rank=$JOB_COMPLETION_INDEX; if [ \"$JOB_COMPLETION_INDEX\" = \"1\" ]; then sleep 5; echo CUDA-error; exit 42; else sleep 30; echo done; fi"
+                                        ],
+                                        "env": [
+                                            {
+                                                "name": "JOB_COMPLETION_INDEX",
+                                                "valueFrom": {
+                                                    "fieldRef": {
+                                                        "fieldPath": "metadata.annotations['batch.kubernetes.io/job-completion-index']"
+                                                    }
+                                                }
+                                            }
+                                        ],
+                                        "image": "busybox:1.36",
+                                        "name": "trainer",
+                                        "resources": {
+                                            "requests": {
+                                                "cpu": "50m",
+                                                "memory": "16Mi"
+                                            }
+                                        }
+                                    }
+                                ],
+                                "restartPolicy": "Never"
+                            }
+                        }
+                    }
+                }
+            }
+        ],
+        "startupPolicy": {
+            "startupPolicyOrder": "AnyOrder"
+        },
+        "successPolicy": {
+            "operator": "All"
+        },
+        "suspend": false
+    },
+    "status": {
+        "conditions": [
+            {
+                "lastTransitionTime": "2026-05-21T23:17:01Z",
+                "message": "jobset is resumed",
+                "reason": "ResumeJobs",
+                "status": "False",
+                "type": "Suspended"
+            },
+            {
+                "lastTransitionTime": "2026-05-21T23:17:33Z",
+                "message": "jobset failed due to reaching max number of restarts (first failed job: bp-train-fail-trainer-0)",
+                "reason": "ReachedMaxRestarts",
+                "status": "True",
+                "type": "Failed"
+            }
+        ],
+        "replicatedJobsStatus": [
+            {
+                "active": 0,
+                "failed": 1,
+                "name": "trainer",
+                "ready": 0,
+                "succeeded": 0,
+                "suspended": 0
+            }
+        ],
+        "terminalState": "Failed"
+    }
+}

@@ -1,0 +1,3 @@
+2026-08-07T08:46:00+00:00 node-0085 systemd[1]: Started sample training scope for workload-0085.
+2026-08-07T08:56:00+00:00 node-0085 kernel: Out of memory: Killed process 1234 (slurmd) total-vm:100kB, anon-rss:100kB, file-rss:0kB, shmem-rss:0kB, pgtables:48kB oom_score_adj:0
+2026-08-07T09:26:00+00:00 node-0085 systemd[1]: Stopped sample training scope for workload-0085.

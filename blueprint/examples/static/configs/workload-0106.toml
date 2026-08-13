@@ -1,0 +1,48 @@
+[attribution]
+service_url = "http://127.0.0.1:8000"
+timeout_seconds = 60
+
+[eca]
+component = "static"
+
+[eca.static]
+id = "workload-0106"
+attempt_id = "workload-0106-attempt"
+start_time = "2026-08-08T21:57:00+00:00"
+end_time = "2026-08-09T01:27:00+00:00"
+nodes = [
+  "node-0101",
+  "node-0106-peer-0001",
+  "node-0106-peer-0002",
+  "node-0106-peer-0003",
+  "node-0106-peer-0004",
+  "node-0106-peer-0005"
+]
+state = "NODE_FAIL"
+name = "workload-0106"
+user_name = "riley"
+workload_type = "slurm"
+workload_framework = "pytorch"
+std_out = "blueprint/docs/sample-data/static/applog/workload-0106/application.log"
+std_err = "blueprint/docs/sample-data/static/applog/workload-0106/application.log"
+
+[workload]
+gpus_per_node = 8
+
+[log.applog]
+component = "local_file"
+
+[log.applog.local_file]
+paths = ["blueprint/docs/sample-data/static/applog/workload-0106"]
+
+[log.syslog]
+component = "local_file"
+
+[log.syslog.local_file]
+paths = ["blueprint/docs/sample-data/static/syslog/workload-0106"]
+
+[output.db]
+component = "sqlite"
+
+[output.db.sqlite]
+path = ".attribution-sample/attributions.db"

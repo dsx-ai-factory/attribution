@@ -1,0 +1,11 @@
+GOVERNING DOWNLOAD TERMS: Use of the software is governed by the NVIDIA
+Software and Model Evaluation License, available at
+https://www.nvidia.com/en-us/agreements/enterprise-software/nvidia-software-and-model-evaluation-license/
+
+By accessing or using this software, you agree to the terms of that license.
+
+The Attribution Service (service/) contains proprietary NVIDIA components.
+These components are identified by the LICENSE files within that directory
+and are subject to the NVIDIA Proprietary License terms included therein.
+
+Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.

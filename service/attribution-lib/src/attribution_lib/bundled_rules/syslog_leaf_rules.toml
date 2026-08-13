@@ -1,0 +1,298 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: LicenseRef-NvidiaProprietary
+#
+# NVIDIA CORPORATION, its affiliates and licensors retain all intellectual
+# property and proprietary rights in and to this material, related
+# documentation and any modifications thereto. Any use, reproduction,
+# disclosure or distribution of this material and related documentation
+# without an express license agreement from NVIDIA CORPORATION or
+# its affiliates is strictly prohibited.
+#
+# First real declarative port: the PURE single-leaf syslog rules formerly
+# defined as @extractor_def functions in bundled_rules/syslog_rules.py.
+#
+# Each stanza keeps the Python rule's NAME (e.g. SyslogGspFailure) so the
+# declarative engine and the Python side never disagree on identity, and sets
+# `derived_rule` to the credit slug the rule emitted via
+# source.derived(rule=...) (e.g. "gsp-failure"), so the credited source.rule
+# matches main byte-for-byte. `match_re` and `symptom` are copied verbatim from
+# main. Parity is enforced by syslog_rules.test.toml through process_check.
+#
+# Rules NOT ported here (not pure single leaves): SyslogXid (processor),
+# SyslogSXid (catalog_lookup), SyslogXidUnknown / SyslogSXidUnknown
+# (negative-lookahead over datum), SyslogOomKill (pick_one),
+# KubeletContainerOomKilled (branch on container), SyslogLustreError /
+# SyslogFmLostConnectionToGpu (try_all), ImexLostConnection (emits on a captured
+# node).
+
+author  = "NVIDIA Attribution team"
+sources = ["SYSLOG"]
+
+
+# --- literal-symptom bad_node leaves --------------------------------------------
+
+[[extractor]]
+name         = "SyslogGspFailure"
+match_re     = ' NVRM: rpcRmApiAlloc_GSP: GspRmAlloc failed'
+emit         = { type = "bad_node", symptom = "GspRmAlloc failed", derived_rule = "gsp-failure" }
+[[extractor.cases]]
+expect  = "bad"
+line    = " NVRM: rpcRmApiAlloc_GSP: GspRmAlloc failed"
+symptom = "GspRmAlloc failed"
+
+[[extractor]]
+name         = "SyslogNumaMemoryExhaustion"
+match_re     = 'NVRM: nvAssertFailedNoLog: Assertion failed: \(status == NV_OK\) \|\| \(\(status == NV_ERR_NO_MEMORY\)'
+emit         = { type = "bad_node", symptom = "NUMA node memory exhaustion", derived_rule = "numa-node-memory-exhaustion" }
+[[extractor.cases]]
+expect  = "bad"
+line    = "NVRM: nvAssertFailedNoLog: Assertion failed: (status == NV_OK) || ((status == NV_ERR_NO_MEMORY)"
+symptom = "NUMA node memory exhaustion"
+
+[[extractor]]
+name         = "SyslogEapFailure"
+match_re     = ' CTRL-EVENT-EAP-FAILURE EAP authentication failed'
+emit         = { type = "bad_node", symptom = "EAP authentication failed", derived_rule = "eap-failure" }
+[[extractor.cases]]
+expect  = "bad"
+line    = " CTRL-EVENT-EAP-FAILURE EAP authentication failed"
+symptom = "EAP authentication failed"
+
+[[extractor]]
+name         = "SyslogEapSuccess"
+match_re     = 'CTRL-EVENT-EAP-SUCCESS EAP authentication completed successfully'
+emit         = { type = "bad_node", symptom = "EAP authentication recovery", derived_rule = "eap-success" }
+[[extractor.cases]]
+expect  = "bad"
+line    = "CTRL-EVENT-EAP-SUCCESS EAP authentication completed successfully"
+symptom = "EAP authentication recovery"
+
+[[extractor]]
+name         = "SyslogSystemPowerDown"
+match_re     = 'System is powering down'
+emit         = { type = "bad_node", symptom = "System is powering down", derived_rule = "system-powering-down" }
+[[extractor.cases]]
+expect  = "bad"
+line    = "System is powering down"
+symptom = "System is powering down"
+
+# Leaf pod-cgroup OOM kill: systemd reports the kill at the kubepods-pod<UUID>.slice level.
+[[extractor]]
+name         = "SyslogPodSliceOomKill"
+match_re     = 'kubepods[\w\-]*-pod[0-9a-f_]+\.slice: A process of this unit has been killed by the OOM killer'
+emit         = { type = "bad_node", symptom = "OOM kill of user task", derived_rule = "pod-slice-oom-kill" }
+[[extractor.cases]]
+expect  = "bad"
+line    = "kubepods-besteffort-pod239fec60_2cf7_4396_827c_dc8167f7a1b1.slice: A process of this unit has been killed by the OOM killer."
+symptom = "OOM kill of user task"
+[[extractor.cases]]
+expect  = "bad"
+line    = "kubepods-pod239fec60_2cf7_4396_827c_dc8167f7a1b1.slice: A process of this unit has been killed by the OOM killer."
+symptom = "OOM kill of user task"
+[[extractor.cases]]
+expect  = "bad"
+line    = "2026-05-06T01:32:32.722348+00:00 test-node-0814 systemd[1]: kubepods-besteffort-pod239fec60_2cf7_4396_827c_dc8167f7a1b1.slice: A process of this unit has been killed by the OOM killer."
+symptom = "OOM kill of user task"
+
+[[extractor]]
+name         = "SyslogFabricManagerNotPresent"
+match_re     = 'NV_ERR_FABRIC_MANAGER_NOT_PRESENT'
+emit         = { type = "bad_node", symptom = "NV_ERR_FABRIC_MANAGER_NOT_PRESENT", derived_rule = "fabric-manager-not-present" }
+[[extractor.cases]]
+expect  = "bad"
+line    = "NV_ERR_FABRIC_MANAGER_NOT_PRESENT"
+symptom = "NV_ERR_FABRIC_MANAGER_NOT_PRESENT"
+
+[[extractor]]
+name         = "SyslogNmiWatchdog"
+match_re     = 'NMI watchdog: Watchdog detected hard LOCKUP'
+emit         = { type = "bad_node", symptom = "NMI watchdog hard LOCKUP", derived_rule = "nmi-watchdog-hard-lockup" }
+[[extractor.cases]]
+expect  = "bad"
+line    = "NMI watchdog: Watchdog detected hard LOCKUP"
+symptom = "NMI watchdog hard LOCKUP"
+
+[[extractor]]
+name         = "SyslogGeneralProtectionFault"
+match_re     = 'general protection fault'
+emit         = { type = "bad_node", symptom = "general protection fault", derived_rule = "general-protection-fault" }
+[[extractor.cases]]
+expect  = "bad"
+line    = "general protection fault"
+symptom = "general protection fault"
+
+[[extractor]]
+name         = "SyslogNvlinkStatusFailure"
+match_re     = 'Failed to collect nvlink status info!'
+emit         = { type = "bad_node", symptom = "Failed to collect nvlink status info", derived_rule = "collect-nvlink-status-failure" }
+[[extractor.cases]]
+expect  = "bad"
+line    = "Failed to collect nvlink status info!"
+symptom = "Failed to collect nvlink status info"
+
+[[extractor]]
+name         = "SyslogControllerStop"
+match_re     = 'Node was stopped by CMDaemon'
+emit         = { type = "bad_node", symptom = "Node stopped by controller", derived_rule = "node-stopped-by-controller" }
+[[extractor.cases]]
+expect  = "bad"
+line    = "update_node: node node01 reason set to: Node was stopped by CMDaemon"
+symptom = "Node stopped by controller"
+
+[[extractor]]
+name         = "SyslogImexServiceStop"
+match_re     = 'Stopping nvidia-imex\.service'
+emit         = { type = "bad_node", symptom = "Stopping nvidia-imex.service", derived_rule = "imex-service-stoppage" }
+[[extractor.cases]]
+expect  = "bad"
+line    = "Stopping nvidia-imex.service"
+symptom = "Stopping nvidia-imex.service"
+
+[[extractor]]
+name         = "SyslogKernelInvalidMemoryAccess"
+match_re     = 'Unable to handle kernel'
+emit         = { type = "bad_node", symptom = "kernel invalid memory access", derived_rule = "kernel-invalid-memory-access" }
+[[extractor.cases]]
+expect  = "bad"
+line    = "Unable to handle kernel paging request at virtual address 0000000000000042"
+symptom = "kernel invalid memory access"
+[[extractor.cases]]
+expect  = "bad"
+line    = "Unable to handle kernel NULL pointer dereference at virtual address 0000000000000010"
+symptom = "kernel invalid memory access"
+
+# Generic kernel die() banner. Matches the classic "Oops:" form and ARM64 tagged
+# forms like "Oops - FPAC:" / "Oops - SError:" whether or not the printk-uptime
+# prefix survives log forwarding. Excludes slurmd "Internal error: Oops handler"
+# debug strings (no colon after Oops / Oops - TAG).
+[[extractor]]
+name         = "SyslogKernelOops"
+match_re     = 'Internal error: Oops(?: - [^:]+)?:'
+emit         = { type = "bad_node", symptom = "kernel oops", derived_rule = "kernel-oops" }
+[[extractor.cases]]
+expect  = "bad"
+line    = "[3731104.923279] Internal error: Oops: 0000000096000004 [#1] SMP"
+symptom = "kernel oops"
+[[extractor.cases]]
+expect  = "bad"
+line    = "[ 1234.567890] Internal error: Oops: 00000000bf000002 [#1] SMP"
+symptom = "kernel oops"
+[[extractor.cases]]
+expect  = "bad"
+line    = "Apr 24 12:04:09 test-node-001 kernel: [3588119.546745] Internal error: Oops: 0000000096000007 [#1] SMP"
+symptom = "kernel oops"
+[[extractor.cases]]
+expect  = "bad"
+line    = "[1234.567890] Internal error: Oops - FPAC: 0000000096000045 [#1] SMP"
+symptom = "kernel oops"
+[[extractor.cases]]
+expect  = "bad"
+line    = "[1234.567890] Internal error: Oops - SError: 0000000096000045 [#1] SMP"
+symptom = "kernel oops"
+
+
+# --- templated-symptom leaves (captures interpolated) ---------------------------
+
+[[extractor]]
+name         = "SyslogKernelStackFrame"
+match_re     = 'kernel stack frame pointer at .* in (?P<process>\S+):'
+emit         = { type = "bad_node", symptom = "bad kernel stack frame pointer in {process}", derived_rule = "kernel-stack-frame-pointer" }
+[[extractor.cases]]
+expect  = "bad"
+line    = "WARNING: kernel stack frame pointer at 00000000f4bfd280 in pt_main_thread:2697472 has bad value"
+symptom = "bad kernel stack frame pointer in pt_main_thread"
+
+# NV_ERR_<CODE> [@ <file:line>]. file_line is an OPTIONAL capture, so the template
+# guards it; main does NOT strip, so the trailing space is preserved when absent.
+[[extractor]]
+name         = "SyslogNvErr"
+match_re     = '\[(?P<error_code>NV_ERR_[A-Z_]+)\](?:.*?@ (?P<file_line>[\w\.]+))?'
+emit         = { type = "bad_node", symptom = "{error_code} {file_line if file_line else ''}", derived_rule = "NV_ERR_" }
+[[extractor.cases]]
+expect  = "bad"
+line    = "NVRM: nvCheckOkFailedNoLog: Check failed: Ran out of a critical resource, other than memory [NV_ERR_INSUFFICIENT_RESOURCES] (0x0000001A) returned from status @ mem_multicast_fabric.c:2917"
+symptom = "NV_ERR_INSUFFICIENT_RESOURCES mem_multicast_fabric.c"
+# Absent-file_line branch: main does NOT strip, so the trailing space survives
+# (SyslogNvErr fidelity: symptom = f"{error_code} {file_line or ''}").
+[[extractor.cases]]
+expect  = "bad"
+line    = "NVRM: nvCheckOkFailedNoLog: Check failed [NV_ERR_INVALID_STATE] (0x0000001A) returned from status"
+symptom = "NV_ERR_INVALID_STATE "
+
+[[extractor]]
+name         = "SyslogNvWarn"
+match_re     = '\[(?P<warning_code>NV_WARN_[A-Z_]+)\](?:.*?@ (?P<file_line>[\w\.]+))?'
+emit         = { type = "interesting_node", symptom = "{warning_code} {file_line if file_line else ''}", derived_rule = "NV_WARN_" }
+[[extractor.cases]]
+expect  = "interesting"
+line    = "[2321]: hadda stop; [NV_WARN_WIDGETS_GIZMOING_TOO_HARD]: returned from status @ mem_multicast_fabric.c:2917"
+symptom = "NV_WARN_WIDGETS_GIZMOING_TOO_HARD mem_multicast_fabric.c"
+# Absent-file_line branch: trailing space preserved, same as NV_ERR.
+[[extractor.cases]]
+expect  = "interesting"
+line    = "[2321]: hadda stop; [NV_WARN_WIDGETS_GIZMOING_TOO_HARD]: returned from status"
+symptom = "NV_WARN_WIDGETS_GIZMOING_TOO_HARD "
+
+
+# --- shared-slug leaves via derived_rule -----------------------------------------
+# SyslogIscsiTimeout and SyslogIscsiConnError are two DISTINCT rules that both
+# credit the single finding "iscsi-detected-conn-error"; each keeps its own stanza
+# name (matching its Python rule) and sets the shared slug as derived_rule.
+[[extractor]]
+name         = "SyslogIscsiTimeout"
+match_re     = 'connection2:0:\ ping\ timeout'
+emit         = { type = "bad_node", symptom = "iSCSI detected conn error", derived_rule = "iscsi-detected-conn-error" }
+[[extractor.cases]]
+expect  = "bad"
+line    = "connection2:0: ping timeout, taking conn down (last ping 2s ago)"
+symptom = "iSCSI detected conn error"
+
+[[extractor]]
+name         = "SyslogIscsiConnError"
+match_re     = 'detected\ conn\ error'
+emit         = { type = "bad_node", symptom = "iSCSI detected conn error", derived_rule = "iscsi-detected-conn-error" }
+[[extractor.cases]]
+expect  = "bad"
+line    = "connection2:0: detected conn error (1020)"
+symptom = "iSCSI detected conn error"
+
+[[extractor]]
+name         = "SyslogNfsNotResponding"
+match_re     = 'not\ responding,\ still\ trying'
+emit         = { type = "bad_node", symptom = "nfs not responding", derived_rule = "nfs-not-responding" }
+[[extractor.cases]]
+expect  = "bad"
+line    = "nfs: server nfs01 not responding, still trying"
+symptom = "nfs not responding"
+
+
+# --- helper-templated leaves (extract_fn_prefix over `datum`) --------------------
+# The symptom prepends the originating kernel function name when the log line
+# carried one; the @expr_helper `extract_fn_prefix` (registered in syslog_rules.py)
+# does the regex work. See Plan 5a.
+
+[[extractor]]
+name     = "SyslogImexShutdown"
+match_re = 'Abrupt nvidia-imex daemon shutdown detected, robust channel recovery invoked!'
+emit     = { type = "bad_node", symptom = "{extract_fn_prefix(datum, 'Abrupt nvidia-imex daemon shutdown detected, robust channel recovery invoked!')}", derived_rule = "imex-daemon-shutdown" }
+[[extractor.cases]]
+expect  = "bad"
+line    = "imexd: Abrupt nvidia-imex daemon shutdown detected, robust channel recovery invoked!"
+symptom = "imexd: Abrupt nvidia-imex daemon shutdown detected, robust channel recovery invoked!"
+[[extractor.cases]]
+expect  = "bad"
+line    = "Abrupt nvidia-imex daemon shutdown detected, robust channel recovery invoked!"
+symptom = "Abrupt nvidia-imex daemon shutdown detected, robust channel recovery invoked!"
+
+[[extractor]]
+name     = "SyslogRxDetectLinkMask"
+match_re = 'Failed to update Rx Detect Link mask!'
+emit     = { type = "bad_node", symptom = "{extract_fn_prefix(datum, 'Failed to update Rx Detect Link mask!')}", derived_rule = "update-rx-detect-link-mask-failure" }
+[[extractor.cases]]
+expect  = "bad"
+line    = "imex_worker: Failed to update Rx Detect Link mask!"
+symptom = "imex_worker: Failed to update Rx Detect Link mask!"
+[[extractor.cases]]
+expect  = "bad"
+line    = "Failed to update Rx Detect Link mask!"
+symptom = "Failed to update Rx Detect Link mask!"

@@ -1,0 +1,1609 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: LicenseRef-NvidiaProprietary
+#
+# NVIDIA CORPORATION, its affiliates and licensors retain all intellectual
+# property and proprietary rights in and to this material, related
+# documentation and any modifications thereto. Any use, reproduction,
+# disclosure or distribution of this material and related documentation
+# without an express license agreement from NVIDIA CORPORATION or
+# its affiliates is strictly prohibited.
+
+[meta]
+runner = "syslog_single_line_mfu"
+
+[[cases]]
+description = "known sxid catalog"
+expansion = "fixed_catalog"
+expect = "interesting"
+expected_rule = "known-sxid-event"
+tflops_start = true
+multi_gpu = true
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 10001,"
+symptom = "SXID-10001-HOST_PRIV_ERROR"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 10002,"
+symptom = "SXID-10002-HOST_PRIV_TIMEOUT"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 10003,"
+symptom = "SXID-10003-HOST_UNHANDLED_INTERRUPT"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 10004,"
+symptom = "SXID-10004-HOST_THERMAL_EVENT_START"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 10005,"
+symptom = "SXID-10005-HOST_THERMAL_EVENT_END"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 10006,"
+symptom = "SXID-10006-HOST_THERMAL_SHUTDOWN"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 10007,"
+symptom = "SXID-10007-HOST_IO_FAILURE"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 10008,"
+symptom = "SXID-10008-HOST_FIRMWARE_INITIALIZATION_FAILURE"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 11001,"
+symptom = "SXID-11001-NPORT_INGRESS_CMDDECODEERR"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 11002,"
+symptom = "SXID-11002-NPORT_INGRESS_BDFMISMATCHERR"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 11003,"
+symptom = "SXID-11003-NPORT_INGRESS_BUBBLEDETECT"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 11004,"
+symptom = "SXID-11004-NPORT_INGRESS_ACLFAIL"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 11005,"
+symptom = "SXID-11005-NPORT_INGRESS_PKTPOISONSET"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 11006,"
+symptom = "SXID-11006-NPORT_INGRESS_ECCSOFTLIMITERR"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 11007,"
+symptom = "SXID-11007-NPORT_INGRESS_ECCHDRDOUBLEBITERR"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 11008,"
+symptom = "SXID-11008-NPORT_INGRESS_INVALIDCMD"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 11009,"
+symptom = "SXID-11009-NPORT_INGRESS_INVALIDVCSET"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 11010,"
+symptom = "SXID-11010-NPORT_INGRESS_ERRORINFO"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 11011,"
+symptom = "SXID-11011-NPORT_INGRESS_REQCONTEXTMISMATCHERR"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 11012,"
+symptom = "SXID-11012-NPORT_INGRESS_NCISOC_HDR_ECC_LIMIT_ERR"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 11013,"
+symptom = "SXID-11013-NPORT_INGRESS_NCISOC_HDR_ECC_DBE_ERR"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 11014,"
+symptom = "SXID-11014-NPORT_INGRESS_ADDRBOUNDSERR"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 11015,"
+symptom = "SXID-11015-NPORT_INGRESS_RIDTABCFGERR"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 11016,"
+symptom = "SXID-11016-NPORT_INGRESS_RLANTABCFGERR"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 11017,"
+symptom = "SXID-11017-NPORT_INGRESS_REMAPTAB_ECC_DBE_ERR"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 11018,"
+symptom = "SXID-11018-NPORT_INGRESS_RIDTAB_ECC_DBE_ERR"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 11019,"
+symptom = "SXID-11019-NPORT_INGRESS_RLANTAB_ECC_DBE_ERR"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 11020,"
+symptom = "SXID-11020-NPORT_INGRESS_NCISOC_PARITY_ERR"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 11021,"
+symptom = "SXID-11021-NPORT_INGRESS_REMAPTAB_ECC_LIMIT_ERR"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 11022,"
+symptom = "SXID-11022-NPORT_INGRESS_RIDTAB_ECC_LIMIT_ERR"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 11023,"
+symptom = "SXID-11023-NPORT_INGRESS_RLANTAB_ECC_LIMIT_ERR"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 11024,"
+symptom = "SXID-11024-NPORT_INGRESS_ADDRTYPEERR"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 11025,"
+symptom = "SXID-11025-NPORT_INGRESS_EXTAREMAPTAB_INDEX_ERR"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 11026,"
+symptom = "SXID-11026-NPORT_INGRESS_EXTBREMAPTAB_INDEX_ERR"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 11027,"
+symptom = "SXID-11027-NPORT_INGRESS_MCREMAPTAB_INDEX_ERR"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 11028,"
+symptom = "SXID-11028-NPORT_INGRESS_EXTAREMAPTAB_ECC_DBE_ERR"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 11029,"
+symptom = "SXID-11029-NPORT_INGRESS_EXTBREMAPTAB_ECC_DBE_ERR"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 11030,"
+symptom = "SXID-11030-NPORT_INGRESS_MCREMAPTAB_ECC_DBE_ERR"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 11031,"
+symptom = "SXID-11031-NPORT_INGRESS_EXTAREMAPTAB_REQCONTEXTMISMATCHERR"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 11032,"
+symptom = "SXID-11032-NPORT_INGRESS_EXTBREMAPTAB_REQCONTEXTMISMATCHERR"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 11033,"
+symptom = "SXID-11033-NPORT_INGRESS_MCREMAPTAB_REQCONTEXTMISMATCHERR"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 11034,"
+symptom = "SXID-11034-NPORT_INGRESS_EXTAREMAPTAB_ACLFAIL"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 11035,"
+symptom = "SXID-11035-NPORT_INGRESS_EXTBREMAPTAB_ACLFAIL"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 11036,"
+symptom = "SXID-11036-NPORT_INGRESS_MCREMAPTAB_ACLFAIL"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 11037,"
+symptom = "SXID-11037-NPORT_INGRESS_EXTAREMAPTAB_ADDRBOUNDSERR"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 11038,"
+symptom = "SXID-11038-NPORT_INGRESS_EXTBREMAPTAB_ADDRBOUNDSERR"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 11039,"
+symptom = "SXID-11039-NPORT_INGRESS_MCREMAPTAB_ADDRBOUNDSERR"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 11040,"
+symptom = "SXID-11040-NPORT_INGRESS_EXTAREMAPTAB_ECC_LIMIT_ERR"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 11041,"
+symptom = "SXID-11041-NPORT_INGRESS_EXTBREMAPTAB_ECC_LIMIT_ERR"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 11042,"
+symptom = "SXID-11042-NPORT_INGRESS_MCREMAPTAB_ECC_LIMIT_ERR"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 11043,"
+symptom = "SXID-11043-NPORT_INGRESS_MCCMDTOUCADDRERR"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 11044,"
+symptom = "SXID-11044-NPORT_INGRESS_READMCREFLECTMEMERR"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 11045,"
+symptom = "SXID-11045-NPORT_INGRESS_EXTAREMAPTAB_ADDRTYPEERR"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 11046,"
+symptom = "SXID-11046-NPORT_INGRESS_EXTBREMAPTAB_ADDRTYPEERR"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 11047,"
+symptom = "SXID-11047-NPORT_INGRESS_MCREMAPTAB_ADDRTYPEERR"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 12001,"
+symptom = "SXID-12001-NPORT_EGRESS_EGRESSBUFERR"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 12002,"
+symptom = "SXID-12002-NPORT_EGRESS_PKTROUTEERR"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 12003,"
+symptom = "SXID-12003-NPORT_EGRESS_ECCSINGLEBITLIMITERR0"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 12004,"
+symptom = "SXID-12004-NPORT_EGRESS_ECCHDRDOUBLEBITERR0"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 12005,"
+symptom = "SXID-12005-NPORT_EGRESS_ECCDATADOUBLEBITERR0"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 12006,"
+symptom = "SXID-12006-NPORT_EGRESS_ECCSINGLEBITLIMITERR1"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 12007,"
+symptom = "SXID-12007-NPORT_EGRESS_ECCHDRDOUBLEBITERR1"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 12008,"
+symptom = "SXID-12008-NPORT_EGRESS_ECCDATADOUBLEBITERR1"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 12009,"
+symptom = "SXID-12009-NPORT_EGRESS_NCISOCHDRCREDITOVFL"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 12010,"
+symptom = "SXID-12010-NPORT_EGRESS_NCISOCDATACREDITOVFL"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 12011,"
+symptom = "SXID-12011-NPORT_EGRESS_ADDRMATCHERR"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 12012,"
+symptom = "SXID-12012-NPORT_EGRESS_TAGCOUNTERR"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 12013,"
+symptom = "SXID-12013-NPORT_EGRESS_FLUSHRSPERR"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 12014,"
+symptom = "SXID-12014-NPORT_EGRESS_DROPNPURRSPERR"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 12015,"
+symptom = "SXID-12015-NPORT_EGRESS_POISONERR"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 12016,"
+symptom = "SXID-12016-NPORT_EGRESS_PACKET_HEADER"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 12017,"
+symptom = "SXID-12017-NPORT_EGRESS_BUFFER_DATA"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 12018,"
+symptom = "SXID-12018-NPORT_EGRESS_NCISOC_CREDITS"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 12019,"
+symptom = "SXID-12019-NPORT_EGRESS_TAG_DATA"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 12020,"
+symptom = "SXID-12020-NPORT_EGRESS_SEQIDERR"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 12021,"
+symptom = "SXID-12021-NPORT_EGRESS_NXBAR_HDR_ECC_LIMIT_ERR"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 12022,"
+symptom = "SXID-12022-NPORT_EGRESS_NXBAR_HDR_ECC_DBE_ERR"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 12023,"
+symptom = "SXID-12023-NPORT_EGRESS_RAM_OUT_HDR_ECC_LIMIT_ERR"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 12024,"
+symptom = "SXID-12024-NPORT_EGRESS_RAM_OUT_HDR_ECC_DBE_ERR"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 12025,"
+symptom = "SXID-12025-NPORT_EGRESS_NCISOCCREDITOVFL"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 12026,"
+symptom = "SXID-12026-NPORT_EGRESS_REQTGTIDMISMATCHERR"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 12027,"
+symptom = "SXID-12027-NPORT_EGRESS_RSPREQIDMISMATCHERR"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 12028,"
+symptom = "SXID-12028-NPORT_EGRESS_PRIVRSPERR"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 12029,"
+symptom = "SXID-12029-NPORT_EGRESS_HWRSPERR"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 12030,"
+symptom = "SXID-12030-NPORT_EGRESS_NXBAR_HDR_PARITY_ERR"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 12031,"
+symptom = "SXID-12031-NPORT_EGRESS_NCISOC_CREDIT_PARITY_ERR"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 12032,"
+symptom = "SXID-12032-NPORT_EGRESS_NXBAR_FLITTYPE_MISMATCH_ERR"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 12033,"
+symptom = "SXID-12033-NPORT_EGRESS_CREDIT_TIME_OUT_ERR"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 12034,"
+symptom = "SXID-12034-NPORT_EGRESS_INVALIDVCSET_ERR"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 12035,"
+symptom = "SXID-12035-NPORT_EGRESS_NXBAR_SIDEBAND_PD_PARITY_ERR"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 12036,"
+symptom = "SXID-12036-NPORT_EGRESS_NXBAR_REDUCTION_HDR_ECC_LIMIT_ERR"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 12037,"
+symptom = "SXID-12037-NPORT_EGRESS_NXBAR_REDUCTION_HDR_ECC_DBE_ERR"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 12038,"
+symptom = "SXID-12038-NPORT_EGRESS_MCRSPCTRLSTORE_ECC_LIMIT_ERR"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 12039,"
+symptom = "SXID-12039-NPORT_EGRESS_MCRSPCTRLSTORE_ECC_DBE_ERR"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 12040,"
+symptom = "SXID-12040-NPORT_EGRESS_RBCTRLSTORE_ECC_LIMIT_ERR"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 12041,"
+symptom = "SXID-12041-NPORT_EGRESS_RBCTRLSTORE_ECC_DBE_ERR"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 12042,"
+symptom = "SXID-12042-NPORT_EGRESS_MCREDSGT_ECC_LIMIT_ERR"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 12043,"
+symptom = "SXID-12043-NPORT_EGRESS_MCREDSGT_ECC_DBE_ERR"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 12044,"
+symptom = "SXID-12044-NPORT_EGRESS_MCREDBUF_ECC_LIMIT_ERR"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 12045,"
+symptom = "SXID-12045-NPORT_EGRESS_MCREDBUF_ECC_DBE_ERR"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 12046,"
+symptom = "SXID-12046-NPORT_EGRESS_MCRSP_RAM_HDR_ECC_LIMIT_ERR"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 12047,"
+symptom = "SXID-12047-NPORT_EGRESS_MCRSP_RAM_HDR_ECC_DBE_ERR"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 12048,"
+symptom = "SXID-12048-NPORT_EGRESS_NXBAR_REDUCTION_HDR_PARITY_ERR"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 12049,"
+symptom = "SXID-12049-NPORT_EGRESS_NXBAR_REDUCTION_FLITTYPE_MISMATCH_ERR"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 12050,"
+symptom = "SXID-12050-NPORT_EGRESS_MCRSP_CNT_ERR"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 12051,"
+symptom = "SXID-12051-NPORT_EGRESS_RBRSP_CNT_ERR"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 13001,"
+symptom = "SXID-13001-NPORT_FSTATE_TAGPOOLBUFERR"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 13002,"
+symptom = "SXID-13002-NPORT_FSTATE_CRUMBSTOREBUFERR"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 13003,"
+symptom = "SXID-13003-NPORT_FSTATE_SINGLEBITECCLIMITERR_CRUMBSTORE"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 13004,"
+symptom = "SXID-13004-NPORT_FSTATE_UNCORRECTABLEECCERR_CRUMBSTORE"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 13005,"
+symptom = "SXID-13005-NPORT_FSTATE_SINGLEBITECCLIMITERR_TAGSTORE"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 13006,"
+symptom = "SXID-13006-NPORT_FSTATE_UNCORRECTABLEECCERR_TAGSTORE"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 13007,"
+symptom = "SXID-13007-NPORT_FSTATE_SINGLEBITECCLIMITERR_FLUSHREQSTORE"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 13008,"
+symptom = "SXID-13008-NPORT_FSTATE_UNCORRECTABLEECCERR_FLUSHREQSTORE"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 14001,"
+symptom = "SXID-14001-NPORT_TSTATE_TAGPOOLBUFERR"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 14002,"
+symptom = "SXID-14002-NPORT_TSTATE_CRUMBSTOREBUFERR"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 14003,"
+symptom = "SXID-14003-NPORT_TSTATE_SINGLEBITECCLIMITERR_CRUMBSTORE"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 14004,"
+symptom = "SXID-14004-NPORT_TSTATE_UNCORRECTABLEECCERR_CRUMBSTORE"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 14005,"
+symptom = "SXID-14005-NPORT_TSTATE_SINGLEBITECCLIMITERR_TAGSTORE"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 14006,"
+symptom = "SXID-14006-NPORT_TSTATE_UNCORRECTABLEECCERR_TAGSTORE"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 14007,"
+symptom = "SXID-14007-NPORT_TSTATE_TAGPOOL_ECC_LIMIT_ERR"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 14008,"
+symptom = "SXID-14008-NPORT_TSTATE_TAGPOOL_ECC_DBE_ERR"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 14009,"
+symptom = "SXID-14009-NPORT_TSTATE_CRUMBSTORE_ECC_LIMIT_ERR"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 14010,"
+symptom = "SXID-14010-NPORT_TSTATE_CRUMBSTORE_ECC_DBE_ERR"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 14011,"
+symptom = "SXID-14011-NPORT_TSTATE_COL_CRUMBSTOREBUFERR"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 14012,"
+symptom = "SXID-14012-NPORT_TSTATE_COL_CRUMBSTORE_ECC_LIMIT_ERR"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 14013,"
+symptom = "SXID-14013-NPORT_TSTATE_COL_CRUMBSTORE_ECC_DBE_ERR"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 14014,"
+symptom = "SXID-14014-NPORT_TSTATE_TD_TID_RAMBUFERR"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 14015,"
+symptom = "SXID-14015-NPORT_TSTATE_TD_TID_RAM_ECC_LIMIT_ERR"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 14016,"
+symptom = "SXID-14016-NPORT_TSTATE_TD_TID_RAM_ECC_DBE_ERR"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 14017,"
+symptom = "SXID-14017-NPORT_TSTATE_ATO_ERR"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 14018,"
+symptom = "SXID-14018-NPORT_TSTATE_CAMRSP_ERR"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 15001,"
+symptom = "SXID-15001-NPORT_ROUTE_ROUTEBUFERR"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 15002,"
+symptom = "SXID-15002-NPORT_ROUTE_NOPORTDEFINEDERR"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 15003,"
+symptom = "SXID-15003-NPORT_ROUTE_INVALIDROUTEPOLICYERR"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 15004,"
+symptom = "SXID-15004-NPORT_ROUTE_ECCLIMITERR"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 15005,"
+symptom = "SXID-15005-NPORT_ROUTE_UNCORRECTABLEECCERR"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 15006,"
+symptom = "SXID-15006-NPORT_ROUTE_TRANSDONERESVERR"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 15007,"
+symptom = "SXID-15007-NPORT_ROUTE_PACKET_HEADER"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 15008,"
+symptom = "SXID-15008-NPORT_ROUTE_GLT_ECC_LIMIT_ERR"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 15009,"
+symptom = "SXID-15009-NPORT_ROUTE_GLT_ECC_DBE_ERR"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 15010,"
+symptom = "SXID-15010-NPORT_ROUTE_PDCTRLPARERR"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 15011,"
+symptom = "SXID-15011-NPORT_ROUTE_NVS_ECC_LIMIT_ERR"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 15012,"
+symptom = "SXID-15012-NPORT_ROUTE_NVS_ECC_DBE_ERR"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 15013,"
+symptom = "SXID-15013-NPORT_ROUTE_CDTPARERR"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 15014,"
+symptom = "SXID-15014-NPORT_ROUTE_MCRID_ECC_LIMIT_ERR"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 15015,"
+symptom = "SXID-15015-NPORT_ROUTE_MCRID_ECC_DBE_ERR"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 15016,"
+symptom = "SXID-15016-NPORT_ROUTE_EXTMCRID_ECC_LIMIT_ERR"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 15017,"
+symptom = "SXID-15017-NPORT_ROUTE_EXTMCRID_ECC_DBE_ERR"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 15018,"
+symptom = "SXID-15018-NPORT_ROUTE_RAM_ECC_LIMIT_ERR"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 15019,"
+symptom = "SXID-15019-NPORT_ROUTE_RAM_ECC_DBE_ERR"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 15020,"
+symptom = "SXID-15020-NPORT_ROUTE_INVALID_MCRID_ERR"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 16001,"
+symptom = "SXID-16001-NPORT_DATAPOISONED"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 16002,"
+symptom = "SXID-16002-NPORT_UCINTERNAL"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 16003,"
+symptom = "SXID-16003-NPORT_CINTERNAL"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 17001,"
+symptom = "SXID-17001-NVLCTRL_INGRESSECCSOFTLIMITERR"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 17002,"
+symptom = "SXID-17002-NVLCTRL_INGRESSECCHDRDOUBLEBITERR"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 17003,"
+symptom = "SXID-17003-NVLCTRL_INGRESSECCDATADOUBLEBITERR"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 17004,"
+symptom = "SXID-17004-NVLCTRL_INGRESSBUFFERERR"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 17005,"
+symptom = "SXID-17005-NVLCTRL_EGRESSECCSOFTLIMITERR"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 17006,"
+symptom = "SXID-17006-NVLCTRL_EGRESSECCHDRDOUBLEBITERR"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 17007,"
+symptom = "SXID-17007-NVLCTRL_EGRESSECCDATADOUBLEBITERR"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 17008,"
+symptom = "SXID-17008-NVLCTRL_EGRESSBUFFERERR"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 18001,"
+symptom = "SXID-18001-NVLIPT_DLPROTOCOL"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 18002,"
+symptom = "SXID-18002-NVLIPT_DATAPOISONED"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 18003,"
+symptom = "SXID-18003-NVLIPT_FLOWCONTROL"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 18004,"
+symptom = "SXID-18004-NVLIPT_RESPONSETIMEOUT"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 18005,"
+symptom = "SXID-18005-NVLIPT_TARGETERROR"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 18006,"
+symptom = "SXID-18006-NVLIPT_UNEXPECTEDRESPONSE"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 18007,"
+symptom = "SXID-18007-NVLIPT_RECEIVEROVERFLOW"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 18008,"
+symptom = "SXID-18008-NVLIPT_MALFORMEDPACKET"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 18009,"
+symptom = "SXID-18009-NVLIPT_STOMPEDPACKETRECEIVED"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 18010,"
+symptom = "SXID-18010-NVLIPT_UNSUPPORTEDREQUEST"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 18011,"
+symptom = "SXID-18011-NVLIPT_UCINTERNAL"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 18012,"
+symptom = "SXID-18012-NVLIPT_PHYRECEIVER"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 18013,"
+symptom = "SXID-18013-NVLIPT_BADAN0PKT"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 18014,"
+symptom = "SXID-18014-NVLIPT_REPLAYTIMEOUT"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 18015,"
+symptom = "SXID-18015-NVLIPT_ADVISORYERROR"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 18016,"
+symptom = "SXID-18016-NVLIPT_CINTERNAL"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 18017,"
+symptom = "SXID-18017-NVLIPT_HEADEROVERFLOW"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 18018,"
+symptom = "SXID-18018-NVLIPT_RSTSEQ_PHYARB_TIMEOUT"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 18019,"
+symptom = "SXID-18019-NVLIPT_RSTSEQ_PLL_TIMEOUT"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 18020,"
+symptom = "SXID-18020-NVLIPT_CLKCTL_ILLEGAL_REQUEST"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 19001,"
+symptom = "SXID-19001-NVLTLC_TXHDRCREDITOVFERR"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 19002,"
+symptom = "SXID-19002-NVLTLC_TXDATACREDITOVFERR"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 19003,"
+symptom = "SXID-19003-NVLTLC_TXDLCREDITOVFERR"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 19004,"
+symptom = "SXID-19004-NVLTLC_TXDLCREDITPARITYERR"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 19005,"
+symptom = "SXID-19005-NVLTLC_TXRAMHDRPARITYERR"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 19006,"
+symptom = "SXID-19006-NVLTLC_TXRAMDATAPARITYERR"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 19007,"
+symptom = "SXID-19007-NVLTLC_TXUNSUPVCOVFERR"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 19008,"
+symptom = "SXID-19008-NVLTLC_TXSTOMPDET"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 19009,"
+symptom = "SXID-19009-NVLTLC_TXPOISONDET"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 19010,"
+symptom = "SXID-19010-NVLTLC_TARGETERR"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 19011,"
+symptom = "SXID-19011-NVLTLC_TX_PACKET_HEADER"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 19012,"
+symptom = "SXID-19012-NVLTLC_UNSUPPORTEDREQUESTERR"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 19013,"
+symptom = "SXID-19013-NVLTLC_RXDLHDRPARITYERR"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 19014,"
+symptom = "SXID-19014-NVLTLC_RXDLDATAPARITYERR"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 19015,"
+symptom = "SXID-19015-NVLTLC_RXDLCTRLPARITYERR"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 19016,"
+symptom = "SXID-19016-NVLTLC_RXRAMDATAPARITYERR"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 19017,"
+symptom = "SXID-19017-NVLTLC_RXRAMHDRPARITYERR"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 19018,"
+symptom = "SXID-19018-NVLTLC_RXINVALIDAEERR"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 19019,"
+symptom = "SXID-19019-NVLTLC_RXINVALIDBEERR"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 19020,"
+symptom = "SXID-19020-NVLTLC_RXINVALIDADDRALIGNERR"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 19021,"
+symptom = "SXID-19021-NVLTLC_RXPKTLENERR"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 19022,"
+symptom = "SXID-19022-NVLTLC_RSVCMDENCERR"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 19023,"
+symptom = "SXID-19023-NVLTLC_RSVDATLENENCERR"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 19024,"
+symptom = "SXID-19024-NVLTLC_RSVADDRTYPEERR"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 19025,"
+symptom = "SXID-19025-NVLTLC_RSVRSPSTATUSERR"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 19026,"
+symptom = "SXID-19026-NVLTLC_RSVPKTSTATUSERR"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 19027,"
+symptom = "SXID-19027-NVLTLC_RSVCACHEATTRPROBEREQERR"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 19028,"
+symptom = "SXID-19028-NVLTLC_RSVCACHEATTRPROBERSPERR"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 19029,"
+symptom = "SXID-19029-NVLTLC_DATLENGTATOMICREQMAXERR"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 19030,"
+symptom = "SXID-19030-NVLTLC_DATLENGTRMWREQMAXERR"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 19031,"
+symptom = "SXID-19031-NVLTLC_DATLENLTATRRSPMINERR"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 19032,"
+symptom = "SXID-19032-NVLTLC_INVALIDCACHEATTRPOERR"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 19033,"
+symptom = "SXID-19033-NVLTLC_INVALIDCRERR"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 19034,"
+symptom = "SXID-19034-NVLTLC_RXRESPSTATUSTARGETERR"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 19035,"
+symptom = "SXID-19035-NVLTLC_RXRESPSTATUSUNSUPPORTEDREQUESTERR"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 19036,"
+symptom = "SXID-19036-NVLTLC_RXHDROVFERR"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 19037,"
+symptom = "SXID-19037-NVLTLC_RXDATAOVFERR"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 19038,"
+symptom = "SXID-19038-NVLTLC_STOMPDETERR"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 19039,"
+symptom = "SXID-19039-NVLTLC_RXPOISONERR"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 19040,"
+symptom = "SXID-19040-NVLTLC_CORRECTABLEINTERNALERR"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 19041,"
+symptom = "SXID-19041-NVLTLC_RXUNSUPVCOVFERR"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 19042,"
+symptom = "SXID-19042-NVLTLC_RXUNSUPNVLINKCREDITRELERR"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 19043,"
+symptom = "SXID-19043-NVLTLC_RXUNSUPNCISOCCREDITRELERR"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 19044,"
+symptom = "SXID-19044-NVLTLC_RX_PACKET_HEADER"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 19045,"
+symptom = "SXID-19045-NVLTLC_RX_ERR_HEADER"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 19046,"
+symptom = "SXID-19046-NVLTLC_TX_SYS_NCISOC_PARITY_ERR"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 19047,"
+symptom = "SXID-19047-NVLTLC_TX_SYS_NCISOC_HDR_ECC_DBE_ERR"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 19048,"
+symptom = "SXID-19048-NVLTLC_TX_SYS_NCISOC_DAT_ECC_DBE_ERR"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 19049,"
+symptom = "SXID-19049-NVLTLC_TX_SYS_NCISOC_ECC_LIMIT_ERR"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 19050,"
+symptom = "SXID-19050-NVLTLC_TX_SYS_TXRSPSTATUS_HW_ERR"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 19051,"
+symptom = "SXID-19051-NVLTLC_TX_SYS_TXRSPSTATUS_UR_ERR"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 19052,"
+symptom = "SXID-19052-NVLTLC_TX_SYS_TXRSPSTATUS_PRIV_ERR"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 19053,"
+symptom = "SXID-19053-NVLTLC_RX_SYS_NCISOC_PARITY_ERR"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 19054,"
+symptom = "SXID-19054-NVLTLC_RX_SYS_HDR_RAM_ECC_DBE_ERR"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 19055,"
+symptom = "SXID-19055-NVLTLC_RX_SYS_HDR_RAM_ECC_LIMIT_ERR"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 19056,"
+symptom = "SXID-19056-NVLTLC_RX_SYS_DAT0_RAM_ECC_DBE_ERR"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 19057,"
+symptom = "SXID-19057-NVLTLC_RX_SYS_DAT0_RAM_ECC_LIMIT_ERR"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 19058,"
+symptom = "SXID-19058-NVLTLC_RX_SYS_DAT1_RAM_ECC_DBE_ERR"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 19059,"
+symptom = "SXID-19059-NVLTLC_RX_SYS_DAT1_RAM_ECC_LIMIT_ERR"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 19060,"
+symptom = "SXID-19060-NVLTLC_TX_LNK_CREQ_RAM_HDR_ECC_DBE_ERR"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 19061,"
+symptom = "SXID-19061-NVLTLC_TX_LNK_CREQ_RAM_DAT_ECC_DBE_ERR"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 19062,"
+symptom = "SXID-19062-NVLTLC_TX_LNK_CREQ_RAM_ECC_LIMIT_ERR"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 19063,"
+symptom = "SXID-19063-NVLTLC_TX_LNK_RSP_RAM_HDR_ECC_DBE_ERR"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 19064,"
+symptom = "SXID-19064-NVLTLC_TX_LNK_RSP_RAM_DAT_ECC_DBE_ERR"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 19065,"
+symptom = "SXID-19065-NVLTLC_TX_LNK_RSP_RAM_ECC_LIMIT_ERR"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 19066,"
+symptom = "SXID-19066-NVLTLC_TX_LNK_COM_RAM_HDR_ECC_DBE_ERR"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 19067,"
+symptom = "SXID-19067-NVLTLC_TX_LNK_COM_RAM_DAT_ECC_DBE_ERR"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 19068,"
+symptom = "SXID-19068-NVLTLC_TX_LNK_COM_RAM_ECC_LIMIT_ERR"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 19069,"
+symptom = "SXID-19069-NVLTLC_TX_LNK_RSP1_RAM_HDR_ECC_DBE_ERR"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 19070,"
+symptom = "SXID-19070-NVLTLC_TX_LNK_RSP1_RAM_DAT_ECC_DBE_ERR"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 19071,"
+symptom = "SXID-19071-NVLTLC_TX_LNK_RSP1_RAM_ECC_LIMIT_ERR"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 19072,"
+symptom = "SXID-19072-NVLTLC_TX_LNK_AN1_TIMEOUT_VC0"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 19073,"
+symptom = "SXID-19073-NVLTLC_TX_LNK_AN1_TIMEOUT_VC1"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 19074,"
+symptom = "SXID-19074-NVLTLC_TX_LNK_AN1_TIMEOUT_VC2"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 19075,"
+symptom = "SXID-19075-NVLTLC_TX_LNK_AN1_TIMEOUT_VC3"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 19076,"
+symptom = "SXID-19076-NVLTLC_TX_LNK_AN1_TIMEOUT_VC4"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 19077,"
+symptom = "SXID-19077-NVLTLC_TX_LNK_AN1_TIMEOUT_VC5"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 19078,"
+symptom = "SXID-19078-NVLTLC_TX_LNK_AN1_TIMEOUT_VC6"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 19079,"
+symptom = "SXID-19079-NVLTLC_TX_LNK_AN1_TIMEOUT_VC7"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 19080,"
+symptom = "SXID-19080-NVLTLC_RX_LNK_RXRSPSTATUS_HW_ERR"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 19081,"
+symptom = "SXID-19081-NVLTLC_RX_LNK_RXRSPSTATUS_UR_ERR"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 19082,"
+symptom = "SXID-19082-NVLTLC_RX_LNK_RXRSPSTATUS_PRIV_ERR"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 19083,"
+symptom = "SXID-19083-NVLTLC_RX_LNK_INVALID_COLLAPSED_RESPONSE_ERR"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 19084,"
+symptom = "SXID-19084-NVLTLC_RX_LNK_AN1_HEARTBEAT_TIMEOUT_ERR"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 20001,"
+symptom = "SXID-20001-DLPL_TX_REPLAY"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 20002,"
+symptom = "SXID-20002-DLPL_TX_RECOVERY_SHORT"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 20003,"
+symptom = "SXID-20003-DLPL_TX_RECOVERY_LONG"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 20004,"
+symptom = "SXID-20004-DLPL_TX_FAULT_RAM"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 20005,"
+symptom = "SXID-20005-DLPL_TX_FAULT_INTERFACE"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 20006,"
+symptom = "SXID-20006-DLPL_TX_FAULT_SUBLINK_CHANGE"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 20007,"
+symptom = "SXID-20007-DLPL_RX_FAULT_SUBLINK_CHANGE"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 20008,"
+symptom = "SXID-20008-DLPL_RX_FAULT_DL_PROTOCOL"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 20009,"
+symptom = "SXID-20009-DLPL_RX_SHORT_ERROR_RATE"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 20010,"
+symptom = "SXID-20010-DLPL_RX_LONG_ERROR_RATE"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 20011,"
+symptom = "SXID-20011-DLPL_RX_ILA_TRIGGER"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 20012,"
+symptom = "SXID-20012-DLPL_RX_CRC_COUNTER"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 20013,"
+symptom = "SXID-20013-DLPL_LTSSM_FAULT"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 20014,"
+symptom = "SXID-20014-DLPL_LTSSM_PROTOCOL"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 20015,"
+symptom = "SXID-20015-DLPL_MINION_REQUEST"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 20016,"
+symptom = "SXID-20016-DLPL_FIFO_DRAIN_ERR"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 20017,"
+symptom = "SXID-20017-DLPL_CONST_DET_ERR"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 20018,"
+symptom = "SXID-20018-DLPL_OFF2SAFE_LINK_DET_ERR"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 20019,"
+symptom = "SXID-20019-DLPL_SAFE2NO_LINK_DET_ERR"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 20020,"
+symptom = "SXID-20020-DLPL_SCRAM_LOCK_ERR"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 20021,"
+symptom = "SXID-20021-DLPL_SYM_LOCK_ERR"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 20022,"
+symptom = "SXID-20022-DLPL_SYM_ALIGN_END_ERR"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 20023,"
+symptom = "SXID-20023-DLPL_FIFO_SKEW_ERR"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 20024,"
+symptom = "SXID-20024-DLPL_TRAIN2SAFE_LINK_DET_ERR"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 20025,"
+symptom = "SXID-20025-DLPL_HS2SAFE_LINK_DET_ERR"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 20026,"
+symptom = "SXID-20026-DLPL_FENCE_ERR"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 20027,"
+symptom = "SXID-20027-DLPL_SAFE_NO_LD_ERR"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 20028,"
+symptom = "SXID-20028-DLPL_E2SAFE_LD_ERR"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 20029,"
+symptom = "SXID-20029-DLPL_RC_RXPWR_ERR"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 20030,"
+symptom = "SXID-20030-DLPL_RC_TXPWR_ERR"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 20031,"
+symptom = "SXID-20031-DLPL_RC_DEADLINE_ERR"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 20032,"
+symptom = "SXID-20032-DLPL_TX_HS2LP_ERR"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 20033,"
+symptom = "SXID-20033-DLPL_RX_HS2LP_ERR"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 20034,"
+symptom = "SXID-20034-DLPL_LTSSM_FAULT_UP"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 20035,"
+symptom = "SXID-20035-DLPL_LTSSM_FAULT_DOWN"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 20036,"
+symptom = "SXID-20036-DLPL_PHY_A"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 20037,"
+symptom = "SXID-20037-DLPL_TX_PL_ERROR"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 20038,"
+symptom = "SXID-20038-DLPL_RX_PL_ERROR"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 21001,"
+symptom = "SXID-21001-AFS_UC_INGRESS_CREDIT_OVERFLOW"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 21002,"
+symptom = "SXID-21002-AFS_UC_INGRESS_CREDIT_UNDERFLOW"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 21003,"
+symptom = "SXID-21003-AFS_UC_EGRESS_CREDIT_OVERFLOW"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 21004,"
+symptom = "SXID-21004-AFS_UC_EGRESS_CREDIT_UNDERFLOW"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 21005,"
+symptom = "SXID-21005-AFS_UC_INGRESS_NON_BURSTY_PKT_DETECTED"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 21006,"
+symptom = "SXID-21006-AFS_UC_INGRESS_NON_STICKY_PKT_DETECTED"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 21007,"
+symptom = "SXID-21007-AFS_UC_INGRESS_BURST_GT_17_DATA_VC_DETECTED"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 21008,"
+symptom = "SXID-21008-AFS_UC_INGRESS_BURST_GT_1_NONDATA_VC_DETECTED"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 21009,"
+symptom = "SXID-21009-AFS_UC_INVALID_DST"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 21010,"
+symptom = "SXID-21010-AFS_UC_PKT_MISROUTE"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 22001,"
+symptom = "SXID-22001-MINION_UCODE_IMEM"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 22002,"
+symptom = "SXID-22002-MINION_UCODE_DMEM"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 22003,"
+symptom = "SXID-22003-MINION_HALT"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 22004,"
+symptom = "SXID-22004-MINION_BOOT_ERROR"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 22005,"
+symptom = "SXID-22005-MINION_TIMEOUT"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 22006,"
+symptom = "SXID-22006-MINION_DLCMD_FAULT"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 22007,"
+symptom = "SXID-22007-MINION_DLCMD_TIMEOUT"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 22008,"
+symptom = "SXID-22008-MINION_DLCMD_FAIL"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 22009,"
+symptom = "SXID-22009-MINION_FATAL_INTR"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 22010,"
+symptom = "SXID-22010-MINION_WATCHDOG"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 22011,"
+symptom = "SXID-22011-MINION_EXTERR"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 22012,"
+symptom = "SXID-22012-MINION_FATAL_LINK_INTR"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 22013,"
+symptom = "SXID-22013-MINION_NONFATAL"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 23001,"
+symptom = "SXID-23001-NXBAR_TILE_INGRESS_BUFFER_OVERFLOW"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 23002,"
+symptom = "SXID-23002-NXBAR_TILE_INGRESS_BUFFER_UNDERFLOW"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 23003,"
+symptom = "SXID-23003-NXBAR_TILE_EGRESS_CREDIT_OVERFLOW"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 23004,"
+symptom = "SXID-23004-NXBAR_TILE_EGRESS_CREDIT_UNDERFLOW"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 23005,"
+symptom = "SXID-23005-NXBAR_TILE_INGRESS_NON_BURSTY_PKT"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 23006,"
+symptom = "SXID-23006-NXBAR_TILE_INGRESS_NON_STICKY_PKT"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 23007,"
+symptom = "SXID-23007-NXBAR_TILE_INGRESS_BURST_GT_9_DATA_VC"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 23008,"
+symptom = "SXID-23008-NXBAR_TILE_INGRESS_PKT_INVALID_DST"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 23009,"
+symptom = "SXID-23009-NXBAR_TILE_INGRESS_PKT_PARITY_ERROR"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 23010,"
+symptom = "SXID-23010-NXBAR_TILEOUT_INGRESS_BUFFER_OVERFLOW"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 23011,"
+symptom = "SXID-23011-NXBAR_TILEOUT_INGRESS_BUFFER_UNDERFLOW"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 23012,"
+symptom = "SXID-23012-NXBAR_TILEOUT_EGRESS_CREDIT_OVERFLOW"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 23013,"
+symptom = "SXID-23013-NXBAR_TILEOUT_EGRESS_CREDIT_UNDERFLOW"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 23014,"
+symptom = "SXID-23014-NXBAR_TILEOUT_INGRESS_NON_BURSTY_PKT"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 23015,"
+symptom = "SXID-23015-NXBAR_TILEOUT_INGRESS_NON_STICKY_PKT"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 23016,"
+symptom = "SXID-23016-NXBAR_TILEOUT_INGRESS_BURST_GT_9_DATA_VC"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 23017,"
+symptom = "SXID-23017-NXBAR_TILEOUT_EGRESS_CDT_PARITY_ERROR"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 24001,"
+symptom = "SXID-24001-NPORT_SOURCETRACK_CREQ_TCEN0_CRUMBSTORE_ECC_LIMIT_ERR"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 24002,"
+symptom = "SXID-24002-NPORT_SOURCETRACK_CREQ_TCEN0_TD_CRUMBSTORE_ECC_LIMIT_ERR"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 24003,"
+symptom = "SXID-24003-NPORT_SOURCETRACK_CREQ_TCEN1_CRUMBSTORE_ECC_LIMIT_ERR"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 24004,"
+symptom = "SXID-24004-NPORT_SOURCETRACK_CREQ_TCEN0_CRUMBSTORE_ECC_DBE_ERR"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 24005,"
+symptom = "SXID-24005-NPORT_SOURCETRACK_CREQ_TCEN0_TD_CRUMBSTORE_ECC_DBE_ERR"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 24006,"
+symptom = "SXID-24006-NPORT_SOURCETRACK_CREQ_TCEN1_CRUMBSTORE_ECC_DBE_ERR"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 24007,"
+symptom = "SXID-24007-NPORT_SOURCETRACK_SOURCETRACK_TIME_OUT_ERR"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 24008,"
+symptom = "SXID-24008-NPORT_SOURCETRACK_DUP_CREQ_TCEN0_TAG_ERR"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 24009,"
+symptom = "SXID-24009-NPORT_SOURCETRACK_INVALID_TCEN0_RSP_ERR"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 24010,"
+symptom = "SXID-24010-NPORT_SOURCETRACK_INVALID_TCEN1_RSP_ERR"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 25001,"
+symptom = "SXID-25001-NVLIPT_LNK_ILLEGALLINKSTATEREQUEST"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 25002,"
+symptom = "SXID-25002-NVLIPT_LNK_FAILEDMINIONREQUEST"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 25003,"
+symptom = "SXID-25003-NVLIPT_LNK_RESERVEDREQUESTVALUE"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 25004,"
+symptom = "SXID-25004-NVLIPT_LNK_LINKSTATEWRITEWHILEBUSY"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 25005,"
+symptom = "SXID-25005-NVLIPT_LNK_LINK_STATE_REQUEST_TIMEOUT"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 25006,"
+symptom = "SXID-25006-NVLIPT_LNK_WRITE_TO_LOCKED_SYSTEM_REG_ERR"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 25007,"
+symptom = "SXID-25007-NVLIPT_LNK_SLEEPWHILEACTIVELINK"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 25008,"
+symptom = "SXID-25008-NVLIPT_LNK_RSTSEQ_PHYCTL_TIMEOUT"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 25009,"
+symptom = "SXID-25009-NVLIPT_LNK_RSTSEQ_CLKCTL_TIMEOUT"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 25010,"
+symptom = "SXID-25010-NVLIPT_LNK_ALI_TRAINING_FAIL"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 26001,"
+symptom = "SXID-26001-SOE_RESET"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 26002,"
+symptom = "SXID-26002-SOE_BOOTSTRAP"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 26003,"
+symptom = "SXID-26003-SOE_COMMAND_QUEUE"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 26004,"
+symptom = "SXID-26004-SOE_TIMEOUT"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 26005,"
+symptom = "SXID-26005-SOE_SHUTDOWN"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 26006,"
+symptom = "SXID-26006-SOE_HALT"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 26007,"
+symptom = "SXID-26007-SOE_EXTERR"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 26008,"
+symptom = "SXID-26008-SOE_WATCHDOG"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 27001,"
+symptom = "SXID-27001-CCI_RESET"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 27002,"
+symptom = "SXID-27002-CCI_INIT"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 27003,"
+symptom = "SXID-27003-CCI_TIMEOUT"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 27004,"
+symptom = "SXID-27004-CCI_SHUTDOWN"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 27005,"
+symptom = "SXID-27005-CCI_MODULE"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 27006,"
+symptom = "SXID-27006-CCI_MODULE_BOOT"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 27007,"
+symptom = "SXID-27007-CCI_MODULE_RECOVERY"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 28001,"
+symptom = "SXID-28001-OSFP_THERM_WARN_ACTIVATED"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 28002,"
+symptom = "SXID-28002-OSFP_THERM_WARN_DEACTIVATED"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 28003,"
+symptom = "SXID-28003-OSFP_THERM_OVERT_ACTIVATED"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 28004,"
+symptom = "SXID-28004-OSFP_THERM_OVERT_DEACTIVATED"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 28005,"
+symptom = "SXID-28005-OSFP_THERM_HEARTBEAT_SHUTDOWN"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 29001,"
+symptom = "SXID-29001-NPORT_MULTICASTTSTATE_TAGPOOL_ECC_LIMIT_ERR"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 29002,"
+symptom = "SXID-29002-NPORT_MULTICASTTSTATE_TAGPOOL_ECC_DBE_ERR"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 29003,"
+symptom = "SXID-29003-NPORT_MULTICASTTSTATE_CRUMBSTORE_ECC_LIMIT_ERR"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 29004,"
+symptom = "SXID-29004-NPORT_MULTICASTTSTATE_CRUMBSTORE_ECC_DBE_ERR"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 29005,"
+symptom = "SXID-29005-NPORT_MULTICASTTSTATE_CRUMBSTORE_BUF_OVERWRITE_ERR"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 29006,"
+symptom = "SXID-29006-NPORT_MULTICASTTSTATE_CRUMBSTORE_MCTO_ERR"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 30001,"
+symptom = "SXID-30001-NPORT_REDUCTIONTSTATE_TAGPOOL_ECC_LIMIT_ERR"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 30002,"
+symptom = "SXID-30002-NPORT_REDUCTIONTSTATE_TAGPOOL_ECC_DBE_ERR"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 30003,"
+symptom = "SXID-30003-NPORT_REDUCTIONTSTATE_CRUMBSTORE_ECC_LIMIT_ERR"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 30004,"
+symptom = "SXID-30004-NPORT_REDUCTIONTSTATE_CRUMBSTORE_ECC_DBE_ERR"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 30005,"
+symptom = "SXID-30005-NPORT_REDUCTIONTSTATE_CRUMBSTORE_BUF_OVERWRITE_ERR"
+
+[[cases.catalog]]
+line = "nvidia-nvswitch0: SXid (PCI:0000:cf:00.0): 30006,"
+symptom = "SXID-30006-NPORT_REDUCTIONTSTATE_CRUMBSTORE_RTO_ERR"
+

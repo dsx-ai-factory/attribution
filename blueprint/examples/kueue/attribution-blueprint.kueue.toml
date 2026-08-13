@@ -1,0 +1,55 @@
+# Attribution Blueprint configuration for Kueue Workloads.
+#
+# Replace every CHANGE_ME value. Paths are resolved from the directory where
+# the CLI is started. See README.md in this directory for the run command.
+
+[attribution]
+service_url = "http://127.0.0.1:8000"
+timeout_seconds = 60
+
+[workload]
+# The Blueprint assumes one training rank per GPU when it builds the explicit
+# node-to-ranks map sent to Attribution Service v2.
+gpus_per_node = 8
+
+[eca]
+component = "kueue"
+
+[eca.kueue]
+kubectl_path = "kubectl"
+kubeconfig = "/CHANGE_ME_PATH/kubeconfig"
+context = "CHANGE_ME_KUBECTL_CONTEXT"
+namespace = "CHANGE_ME_NAMESPACE"
+timeout_seconds = 60
+
+[log.applog]
+component = "kubectl_logs"
+
+[log.applog.kubectl_logs]
+# Connector settings are independent, so repeat kubeconfig and context here.
+kubectl_path = "kubectl"
+kubeconfig = "/CHANGE_ME_PATH/kubeconfig"
+context = "CHANGE_ME_KUBECTL_CONTEXT"
+# Preserve an application-provided rank prefix at the start of each line.
+timestamps = false
+since_context_start = true
+timeout_seconds = 60
+
+[log.syslog]
+component = "loki"
+
+[log.syslog.loki]
+endpoint = "https://CHANGE_ME_LOKI_HOST"
+# Doubled braces preserve literal LogQL braces during template rendering.
+query = '{{cluster="CHANGE_ME_CLUSTER_LABEL", component="loki.source.journal"}}'
+
+[log.syslog.loki.auth]
+type = "mtls"
+cert_path = "/CHANGE_ME_PATH/loki-mtls/tls.crt"
+key_path = "/CHANGE_ME_PATH/loki-mtls/tls.key"
+
+[output.db]
+component = "sqlite"
+
+[output.db.sqlite]
+path = ".attribution-kueue/attributions.db"

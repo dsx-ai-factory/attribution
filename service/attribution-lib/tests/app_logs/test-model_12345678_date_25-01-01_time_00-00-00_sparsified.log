@@ -1,0 +1,177 @@
+390: (3) mkdir -p $python_path/flashattn_hopper 
+498: (4) wget -P $python_path/flashattn_hopper http://www.example.com/url-d745bcba
+507:   warnings.warn(
+ 22:   warnings.warn(
+228: (3) mkdir -p $python_path/flashattn_hopper 
+ 87: (2) python_path=`python -c "import site; print(site.getsitepackages()[0])"` 
+ 51: (3) mkdir -p $python_path/flashattn_hopper 
+487: /redacted_path/8f791c52:108: UserWarning: To use flash-attn v3, please use the following commands to install: 
+189: /redacted_path/8f791c52:108: UserWarning: To use flash-attn v3, please use the following commands to install: 
+167: (1) pip install "git+http://www.example.com/url-e2cd3163" 
+461:   warnings.warn(
+357: (2) python_path=`python -c "import site; print(site.getsitepackages()[0])"` 
+387: Cutting vocab to first 130072 tokens.
+127: (3) mkdir -p $python_path/flashattn_hopper 
+482: Adding special tokens <SPECIAL_3>, ..., <SPECIAL_999>
+170: (1) pip install "git+http://www.example.com/url-e2cd3163" 
+119: Adding special tokens <SPECIAL_3>, ..., <SPECIAL_999>
+193:   scaled_e4m3_abstract = torch.library.impl_abstract("trt::quantize_fp8")(
+395: /redacted_path/8f791c52:108: UserWarning: To use flash-attn v3, please use the following commands to install: 
+392: (3) mkdir -p $python_path/flashattn_hopper 
+296: Adding special tokens <SPECIAL_3>, ..., <SPECIAL_999>
+259:   scaled_e4m3_abstract = torch.library.impl_abstract("trt::quantize_fp8")(
+354: Cutting vocab to first 130072 tokens.
+409: (2) python_path=`python -c "import site; print(site.getsitepackages()[0])"` 
+154: /redacted_path/8f791c52:108: UserWarning: To use flash-attn v3, please use the following commands to install: 
+328: Vocab size: 150000
+434:   scaled_e4m3_abstract = torch.library.impl_abstract("trt::quantize_fp8")(
+ 31: Adding special tokens <SPECIAL_3>, ..., <SPECIAL_999>
+  0: NCCL version 2.22.3+cuda12.6
+481: /redacted_path/9c647971:164: FutureWarning: `torch.cuda.amp.custom_fwd(args...)` is deprecated. Please use `torch.amp.custom_fwd(args..., device_type='cuda')` instead.
+505:   def forward(ctx, xz, conv1d_weight, conv1d_bias, x_proj_weight, delta_proj_weight,
+392: /redacted_path/9c647971:164: FutureWarning: `torch.cuda.amp.custom_fwd(args...)` is deprecated. Please use `torch.amp.custom_fwd(args..., device_type='cuda')` instead.
+160: /redacted_path/9c647971:164: FutureWarning: `torch.cuda.amp.custom_fwd(args...)` is deprecated. Please use `torch.amp.custom_fwd(args..., device_type='cuda')` instead.
+355:   def backward(ctx, dout):
+339:   def forward(ctx, xz, conv1d_weight, conv1d_bias, x_proj_weight, delta_proj_weight,
+337:   def backward(ctx, dout):
+280:   def forward(ctx, xz, conv1d_weight, conv1d_bias, x_proj_weight, delta_proj_weight,
+ 71: /redacted_path/9c647971:164: FutureWarning: `torch.cuda.amp.custom_fwd(args...)` is deprecated. Please use `torch.amp.custom_fwd(args..., device_type='cuda')` instead.
+402:   def forward(ctx, xz, conv1d_weight, conv1d_bias, x_proj_weight, delta_proj_weight,
+180: /redacted_path/9c647971:240: FutureWarning: `torch.cuda.amp.custom_bwd(args...)` is deprecated. Please use `torch.amp.custom_bwd(args..., device_type='cuda')` instead.
+179:   def backward(ctx, dout):
+292: /redacted_path/9c647971:164: FutureWarning: `torch.cuda.amp.custom_fwd(args...)` is deprecated. Please use `torch.amp.custom_fwd(args..., device_type='cuda')` instead.
+149:   def forward(ctx, xz, conv1d_weight, conv1d_bias, x_proj_weight, delta_proj_weight,
+384: /redacted_path/eee91220:986: FutureWarning: `torch.cuda.amp.custom_fwd(args...)` is deprecated. Please use `torch.amp.custom_fwd(args..., device_type='cuda')` instead.
+166: /redacted_path/eee91220:1045: FutureWarning: `torch.cuda.amp.custom_bwd(args...)` is deprecated. Please use `torch.amp.custom_bwd(args..., device_type='cuda')` instead.
+357:   def backward(ctx, dout, *args):
+ 70:   def forward(
+ 66:   def backward(ctx, dout, *args):
+333:   def forward(
+335: /redacted_path/eee91220:1045: FutureWarning: `torch.cuda.amp.custom_bwd(args...)` is deprecated. Please use `torch.amp.custom_bwd(args..., device_type='cuda')` instead.
+142: /redacted_path/eee91220:1045: FutureWarning: `torch.cuda.amp.custom_bwd(args...)` is deprecated. Please use `torch.amp.custom_bwd(args..., device_type='cuda')` instead.
+326: /redacted_path/2dc1a388:26: FutureWarning: `torch.cuda.amp.custom_fwd(args...)` is deprecated. Please use `torch.amp.custom_fwd(args..., device_type='cuda')` instead.
+ 94: /redacted_path/2dc1a388:62: FutureWarning: `torch.cuda.amp.custom_bwd(args...)` is deprecated. Please use `torch.amp.custom_bwd(args..., device_type='cuda')` instead.
+178:   def backward(ctx, grad_output):
+ 62: /redacted_path/2dc1a388:62: FutureWarning: `torch.cuda.amp.custom_bwd(args...)` is deprecated. Please use `torch.amp.custom_bwd(args..., device_type='cuda')` instead.
+427: /redacted_path/2dc1a388:26: FutureWarning: `torch.cuda.amp.custom_fwd(args...)` is deprecated. Please use `torch.amp.custom_fwd(args..., device_type='cuda')` instead.
+129: /redacted_path/2dc1a388:26: FutureWarning: `torch.cuda.amp.custom_fwd(args...)` is deprecated. Please use `torch.amp.custom_fwd(args..., device_type='cuda')` instead.
+507: /redacted_path/1542ce90:761: FutureWarning: `torch.cuda.amp.custom_fwd(args...)` is deprecated. Please use `torch.amp.custom_fwd(args..., device_type='cuda')` instead.
+392: /redacted_path/1542ce90:839: FutureWarning: `torch.cuda.amp.custom_bwd(args...)` is deprecated. Please use `torch.amp.custom_bwd(args..., device_type='cuda')` instead.
+194:   def backward(ctx, dout, *args):
+464:   def forward(ctx, zxbcdt, conv1d_weight, conv1d_bias, dt_bias, A, D, chunk_size, initial_states=None, seq_idx=None, dt_limit=(0.0, float("inf")), return_final_states=False, activation="silu",
+284: /redacted_path/1542ce90:761: FutureWarning: `torch.cuda.amp.custom_fwd(args...)` is deprecated. Please use `torch.amp.custom_fwd(args..., device_type='cuda')` instead.
+341: /redacted_path/1542ce90:839: FutureWarning: `torch.cuda.amp.custom_bwd(args...)` is deprecated. Please use `torch.amp.custom_bwd(args..., device_type='cuda')` instead.
+  1: /redacted_path/1542ce90:839: FutureWarning: `torch.cuda.amp.custom_bwd(args...)` is deprecated. Please use `torch.amp.custom_bwd(args..., device_type='cuda')` instead.
+275: /redacted_path/1542ce90:839: FutureWarning: `torch.cuda.amp.custom_bwd(args...)` is deprecated. Please use `torch.amp.custom_bwd(args..., device_type='cuda')` instead.
+  4: /redacted_path/1542ce90:761: FutureWarning: `torch.cuda.amp.custom_fwd(args...)` is deprecated. Please use `torch.amp.custom_fwd(args..., device_type='cuda')` instead.
+271:   def backward(ctx, dout, *args):
+ 61: /redacted_path/1542ce90:839: FutureWarning: `torch.cuda.amp.custom_bwd(args...)` is deprecated. Please use `torch.amp.custom_bwd(args..., device_type='cuda')` instead.
+247: /redacted_path/1542ce90:761: FutureWarning: `torch.cuda.amp.custom_fwd(args...)` is deprecated. Please use `torch.amp.custom_fwd(args..., device_type='cuda')` instead.
+ 97: /redacted_path/1542ce90:839: FutureWarning: `torch.cuda.amp.custom_bwd(args...)` is deprecated. Please use `torch.amp.custom_bwd(args..., device_type='cuda')` instead.
+  0:  - decoder.layers.42.mlp.linear_fc2.weight: 15228928
+  0: 	module.decoder.layers.10.mlp.linear_fc1.weight
+365: ure.
+466:   return torch.load(load_path, map_location='cpu')
+ 10: /redacted_path/46f14359:72: FutureWarning: You are using `torch.load` with `weights_only=False` (the current default value), which uses the default pickle module implicitly. It is possible to construct malicious pickle data which will execute arbitrary code during unpickling (See http://www.example.com/url-97b93591 for more details). In a future release, the default value for `weights_only` will be flipped to `True`. This limits the functions that could be executed during unpickling. Arbitrary objects will no longer be allowed to be loaded via this mode unless they are explicitly allowlisted by the user via `torch.serialization.add_safe_globals`. We recommend you start setting `weights_only=True` for any use case where you don't have full control of the loaded file. Please open an issue on GitHub for any issues related to this experimental feat
+432: ure.
+219: ure.
+207: ure.
+237: /redacted_path/46f14359:72: FutureWarning: You are using `torch.load` with `weights_only=False` (the current default value), which uses the default pickle module implicitly. It is possible to construct malicious pickle data which will execute arbitrary code during unpickling (See http://www.example.com/url-97b93591 for more details). In a future release, the default value for `weights_only` will be flipped to `True`. This limits the functions that could be executed during unpickling. Arbitrary objects will no longer be allowed to be loaded via this mode unless they are explicitly allowlisted by the user via `torch.serialization.add_safe_globals`. We recommend you start setting `weights_only=True` for any use case where you don't have full control of the loaded file. Please open an issue on GitHub for any issues related to this experimental feat
+ 35: ure.
+372: /redacted_path/46f14359:72: FutureWarning: You are using `torch.load` with `weights_only=False` (the current default value), which uses the default pickle module implicitly. It is possible to construct malicious pickle data which will execute arbitrary code during unpickling (See http://www.example.com/url-97b93591 for more details). In a future release, the default value for `weights_only` will be flipped to `True`. This limits the functions that could be executed during unpickling. Arbitrary objects will no longer be allowed to be loaded via this mode unless they are explicitly allowlisted by the user via `torch.serialization.add_safe_globals`. We recommend you start setting `weights_only=True` for any use case where you don't have full control of the loaded file. Please open an issue on GitHub for any issues related to this experimental feat
+430:   checkpoint.load_state_dict(
+331: /redacted_path/1183566c:822: FutureWarning: `load_state_dict` is deprecated and will be removed in future versions. Please use `load` instead.
+163: /redacted_path/1183566c:822: FutureWarning: `load_state_dict` is deprecated and will be removed in future versions. Please use `load` instead.
+443: /redacted_path/1183566c:822: FutureWarning: `load_state_dict` is deprecated and will be removed in future versions. Please use `load` instead.
+ 29: /redacted_path/1183566c:822: FutureWarning: `load_state_dict` is deprecated and will be removed in future versions. Please use `load` instead.
+ 86:   checkpoint.load_state_dict(
+  3:   checkpoint.load_state_dict(
+396: /redacted_path/1183566c:822: FutureWarning: `load_state_dict` is deprecated and will be removed in future versions. Please use `load` instead.
+210: /redacted_path/8ec7f396:213: FutureWarning: You are using `torch.load` with `weights_only=False` (the current default value), which uses the default pickle module implicitly. It is possible to construct malicious pickle data which will execute arbitrary code during unpickling (See http://www.example.com/url-97b93591 for more details). In a future release, the default value for `weights_only` will be flipped to `True`. This limits the functions that could be executed during unpickling. Arbitrary objects will no longer be allowed to be loaded via this mode unless they are explicitly allowlisted by the user via `torch.serialization.add_safe_globals`. We recommend you start setting `weights_only=True` for any use case where you don't have full control of the loaded file. Please open an issue on GitHub for any issues related to this experimental feature.
+289:   torch.load(value),
+ 97: /redacted_path/8ec7f396:213: FutureWarning: You are using `torch.load` with `weights_only=False` (the current default value), which uses the default pickle module implicitly. It is possible to construct malicious pickle data which will execute arbitrary code during unpickling (See http://www.example.com/url-97b93591 for more details). In a future release, the default value for `weights_only` will be flipped to `True`. This limits the functions that could be executed during unpickling. Arbitrary objects will no longer be allowed to be loaded via this mode unless they are explicitly allowlisted by the user via `torch.serialization.add_safe_globals`. We recommend you start setting `weights_only=True` for any use case where you don't have full control of the loaded file. Please open an issue on GitHub for any issues related to this experimental feature.
+ 89: /redacted_path/8ec7f396:213: FutureWarning: You are using `torch.load` with `weights_only=False` (the current default value), which uses the default pickle module implicitly. It is possible to construct malicious pickle data which will execute arbitrary code during unpickling (See http://www.example.com/url-97b93591 for more details). In a future release, the default value for `weights_only` will be flipped to `True`. This limits the functions that could be executed during unpickling. Arbitrary objects will no longer be allowed to be loaded via this mode unless they are explicitly allowlisted by the user via `torch.serialization.add_safe_globals`. We recommend you start setting `weights_only=True` for any use case where you don't have full control of the loaded file. Please open an issue on GitHub for any issues related to this experimental feature.
+172: /redacted_path/8ec7f396:213: FutureWarning: You are using `torch.load` with `weights_only=False` (the current default value), which uses the default pickle module implicitly. It is possible to construct malicious pickle data which will execute arbitrary code during unpickling (See http://www.example.com/url-97b93591 for more details). In a future release, the default value for `weights_only` will be flipped to `True`. This limits the functions that could be executed during unpickling. Arbitrary objects will no longer be allowed to be loaded via this mode unless they are explicitly allowlisted by the user via `torch.serialization.add_safe_globals`. We recommend you start setting `weights_only=True` for any use case where you don't have full control of the loaded file. Please open an issue on GitHub for any issues related to this experimental feature.
+459:   device = getattr(value, "device", None)
+385: /redacted_path/22e5c771:296: FutureWarning: Please use DTensor instead and we are deprecating ShardedTensor.
+207: /redacted_path/22e5c771:296: FutureWarning: Please use DTensor instead and we are deprecating ShardedTensor.
+ 12:   torch.load(cast(IO[bytes], file_slice), map_location="cpu"),
+133: /redacted_path/49a6d64e:657: FutureWarning: You are using `torch.load` with `weights_only=False` (the current default value), which uses the default pickle module implicitly. It is possible to construct malicious pickle data which will execute arbitrary code during unpickling (See http://www.example.com/url-97b93591 for more details). In a future release, the default value for `weights_only` will be flipped to `True`. This limits the functions that could be executed during unpickling. Arbitrary objects will no longer be allowed to be loaded via this mode unless they are explicitly allowlisted by the user via `torch.serialization.add_safe_globals`. We recommend you start setting `weights_only=True` for any use case where you don't have full control of the loaded file. Please open an issue on GitHub for any issues related to this experimental feature.
+375: /redacted_path/49a6d64e:657: FutureWarning: You are using `torch.load` with `weights_only=False` (the current default value), which uses the default pickle module implicitly. It is possible to construct malicious pickle data which will execute arbitrary code during unpickling (See http://www.example.com/url-97b93591 for more details). In a future release, the default value for `weights_only` will be flipped to `True`. This limits the functions that could be executed during unpickling. Arbitrary objects will no longer be allowed to be loaded via this mode unless they are explicitly allowlisted by the user via `torch.serialization.add_safe_globals`. We recommend you start setting `weights_only=True` for any use case where you don't have full control of the loaded file. Please open an issue on GitHub for any issues related to this experimental feature.
+  7: /redacted_path/49a6d64e:657: FutureWarning: You are using `torch.load` with `weights_only=False` (the current default value), which uses the default pickle module implicitly. It is possible to construct malicious pickle data which will execute arbitrary code during unpickling (See http://www.example.com/url-97b93591 for more details). In a future release, the default value for `weights_only` will be flipped to `True`. This limits the functions that could be executed during unpickling. Arbitrary objects will no longer be allowed to be loaded via this mode unless they are explicitly allowlisted by the user via `torch.serialization.add_safe_globals`. We recommend you start setting `weights_only=True` for any use case where you don't have full control of the loaded file. Please open an issue on GitHub for any issues related to this experimental feature.
+212:   torch.load(cast(IO[bytes], file_slice), map_location="cpu"),
+ 60:   torch.load(cast(IO[bytes], file_slice), map_location="cpu"),
+305:   torch.load(cast(IO[bytes], file_slice), map_location="cpu"),
+393: /redacted_path/49a6d64e:657: FutureWarning: You are using `torch.load` with `weights_only=False` (the current default value), which uses the default pickle module implicitly. It is possible to construct malicious pickle data which will execute arbitrary code during unpickling (See http://www.example.com/url-97b93591 for more details). In a future release, the default value for `weights_only` will be flipped to `True`. This limits the functions that could be executed during unpickling. Arbitrary objects will no longer be allowed to be loaded via this mode unless they are explicitly allowlisted by the user via `torch.serialization.add_safe_globals`. We recommend you start setting `weights_only=True` for any use case where you don't have full control of the loaded file. Please open an issue on GitHub for any issues related to this experimental feature.
+279:   torch.load(cast(IO[bytes], file_slice), map_location="cpu"),
+163: /redacted_path/c193842e:566: FutureWarning: You are using `torch.load` with `weights_only=False` (the current default value), which uses the default pickle module implicitly. It is possible to construct malicious pickle data which will execute arbitrary code during unpickling (See http://www.example.com/url-97b93591 for more details). In a future release, the default value for `weights_only` will be flipped to `True`. This limits the functions that could be executed during unpickling. Arbitrary objects will no longer be allowed to be loaded via this mode unless they are explicitly allowlisted by the user via `torch.serialization.add_safe_globals`. We recommend you start setting `weights_only=True` for any use case where you don't have full control of the loaded file. Please open an issue on GitHub for any issues related to this experimental feature.
+470:   state = torch.load(state, map_location="cuda")
+365:   state = torch.load(state, map_location="cuda")
+345:   state = torch.load(state, map_location="cuda")
+271: INFO:megatron.core.optimizer.distrib_optimizer:Loading distributed optimizer sharded state of type fully_sharded_model_space
+311: INFO:megatron.core.optimizer.distrib_optimizer:Loading distributed optimizer sharded state of type fully_sharded_model_space
+178: INFO:megatron.core.optimizer.distrib_optimizer:Loading distributed optimizer sharded state of type fully_sharded_model_space
+463: INFO:megatron.core.optimizer.distrib_optimizer:Loading distributed optimizer sharded state of type fully_sharded_model_space
+170: INFO:megatron.core.optimizer.distrib_optimizer:Loading distributed optimizer sharded state of type fully_sharded_model_space
+ 73:   state = torch.load(state, map_location="cuda")
+ 44: /redacted_path/c193842e:566: FutureWarning: You are using `torch.load` with `weights_only=False` (the current default value), which uses the default pickle module implicitly. It is possible to construct malicious pickle data which will execute arbitrary code during unpickling (See http://www.example.com/url-97b93591 for more details). In a future release, the default value for `weights_only` will be flipped to `True`. This limits the functions that could be executed during unpickling. Arbitrary objects will no longer be allowed to be loaded via this mode unless they are explicitly allowlisted by the user via `torch.serialization.add_safe_globals`. We recommend you start setting `weights_only=True` for any use case where you don't have full control of the loaded file. Please open an issue on GitHub for any issues related to this experimental feature.
+289: INFO:megatron.core.optimizer.distrib_optimizer:Loading distributed optimizer sharded state of type fully_sharded_model_space
+508: INFO:megatron.core.optimizer.distrib_optimizer:Loading distributed optimizer sharded state of type fully_sharded_model_space
+  0: /redacted_path/training-corpus.jsonl', '/redacted_path/0a491bfa', '/redacted_path/14eddcb1', '/redacted_path/bfa4f81e', '/redacted_path/08bc7b06', '/redacted_path/5d822fd2
+  0: re_19/CC-MAIN-2019-30', '/redacted_path/48279294', '/redacted_path/289c7f91', '/redacted_path/1274abbd', '/redacted_path/d4cde467', '/redacted_path/1a39f744', '/redacted_path/62630d7a
+  0: INFO:megatron.core.datasets.gpt_dataset:	Load the sample index from a7ee76be62c3497b3453a24503b37dab-GPTDataset-train-sample_index.npy
+  0: INFO:megatron.core.datasets.indexed_dataset:Load the _IndexReader from /redacted_path/b21f30bc
+  0: INFO:megatron.core.datasets.indexed_dataset:> total number of documents: 11948936
+  0: INFO:megatron.core.datasets.gpt_dataset:	Load the document index from 14cd353f84e3430db6bfc4e2326c3428-GPTDataset-train-document_index.npy
+  0: INFO:megatron.core.datasets.indexed_dataset:	Extract the document indices
+  0: INFO:megatron.core.datasets.indexed_dataset:Load the _IndexReader from /redacted_path/395b1985
+  0: INFO:megatron.core.datasets.gpt_dataset:Load the GPTDataset train indices
+  0: INFO:megatron.core.datasets.indexed_dataset:	Extract the sequence pointers
+  0: INFO:megatron.core.datasets.indexed_dataset:	Extract the sequence pointers
+  0: INFO:megatron.core.datasets.indexed_dataset:> total number of documents: 3760999
+  0: INFO:megatron.core.datasets.gpt_dataset:> total number of samples: 1060357
+  0: INFO:megatron.core.datasets.gpt_dataset:	Load the sample index from e6680b947e93f510a1aa18b7b1c21d77-GPTDataset-train-sample_index.npy
+  0: INFO:megatron.core.datasets.indexed_dataset:	Extract the sequence lengths
+  0: INFO:megatron.core.datasets.gpt_dataset:> total number of samples: 1243844
+  0: INFO:megatron.core.datasets.indexed_dataset:	Extract the sequence pointers
+  0: INFO:megatron.core.datasets.gpt_dataset:	Load the sample index from f9a2aa5dcaa7932380e63f9391bb7cef-GPTDataset-train-sample_index.npy
+  0: INFO:megatron.core.datasets.gpt_dataset:Load the GPTDataset train indices
+  0: INFO:megatron.core.datasets.indexed_dataset:	Extract the sequence lengths
+  0: INFO:megatron.core.datasets.indexed_dataset:Load the _IndexReader from /redacted_path/47c351f2
+  0: INFO:megatron.core.datasets.gpt_dataset:> total number of samples: 461106
+  0: INFO:megatron.core.datasets.indexed_dataset:> total number of sequences: 7892726
+  0: INFO:megatron.core.datasets.gpt_dataset:	Load the document index from c7681af55e971d5f263f59d3783ec471-GPTDataset-train-document_index.npy
+  0: INFO:megatron.core.datasets.indexed_dataset:	Extract the sequence lengths
+  0: INFO:megatron.core.datasets.gpt_dataset:	Load the shuffle index from 93a6b1c63b60fc935e5c72e16af52ac0-GPTDataset-train-shuffle_index.npy
+  0: INFO:megatron.core.datasets.indexed_dataset:	Extract the sequence lengths
+  0: INFO:megatron.core.datasets.indexed_dataset:Load the _IndexReader from /redacted_path/27aefd09
+  0: INFO:megatron.core.datasets.gpt_dataset:> total number of samples: 383093
+  0: INFO:megatron.core.datasets.gpt_dataset:	Load the shuffle index from 089c11f7c51d4cc638577fdb819917bb-GPTDataset-train-shuffle_index.npy
+  0: INFO:megatron.core.datasets.indexed_dataset:> total number of documents: 1788661
+  0: INFO:megatron.core.datasets.indexed_dataset:Load the _IndexReader from /redacted_path/de2e819f
+  0: INFO:megatron.core.datasets.indexed_dataset:Load the _IndexReader from /redacted_path/6789609d
+  0: INFO:megatron.core.datasets.indexed_dataset:	Extract the sequence pointers
+  0: INFO:megatron.core.datasets.gpt_dataset:	Load the sample index from 661e3f44f6481f7cf9bd1bb574447dde-GPTDataset-train-sample_index.npy
+  0: INFO:megatron.core.datasets.gpt_dataset:	Load the sample index from 2e1792285387ff30e20b65b9c642e03a-GPTDataset-train-sample_index.npy
+511:  [2025-03-13 03:04:07] iteration     1730/   47683 | consumed samples:      2657280 | elapsed time per iteration (ms): 2149.7 | throughput per GPU (TFLOP/s/GPU): 271.3 | learning rate: 1.199771E-03 | global batch size:  1536 | lm loss: 2.005152E+00 | loss scale: 1.0 | grad norm: 0.098 | num zeros: 429160896.0 | params norm: 2460.151 | number of skipped iterations:   0 | number of nan iterations:   0 |
+ 80:   warnings.warn(
+325: (1) pip install "git+http://www.example.com/url-e2cd3163" 
+325: (2) python_path=`python -c "import site; print(site.getsitepackages()[0])"` 
+170: (1) pip install "git+http://www.example.com/url-e2cd3163" 
+246: (3) mkdir -p $python_path/flashattn_hopper 
+185: (1) pip install "git+http://www.example.com/url-e2cd3163" 
+325: /redacted_path/25e1152d:92: FutureWarning: `torch.library.impl_abstract` was renamed to `torch.library.register_fake`. Please use that instead; we will remove `torch.library.impl_abstract` in a future version of PyTorch.
+ 54: (4) wget -P $python_path/flashattn_hopper http://www.example.com/url-d745bcba
+287: (3) mkdir -p $python_path/flashattn_hopper 
+  1: (3) mkdir -p $python_path/flashattn_hopper 
+241: /redacted_path/25e1152d:92: FutureWarning: `torch.library.impl_abstract` was renamed to `torch.library.register_fake`. Please use that instead; we will remove `torch.library.impl_abstract` in a future version of PyTorch.
+470: (3) mkdir -p $python_path/flashattn_hopper 
+ 85: (1) pip install "git+http://www.example.com/url-e2cd3163" 
+ 75: (3) mkdir -p $python_path/flashattn_hopper 
+ 99:   scaled_e4m3_abstract = torch.library.impl_abstract("trt::quantize_fp8")(
+269:   scaled_e4m3_abstract = torch.library.impl_abstract("trt::quantize_fp8")(
+ 27: /redacted_path/25e1152d:92: FutureWarning: `torch.library.impl_abstract` was renamed to `torch.library.register_fake`. Please use that instead; we will remove `torch.library.impl_abstract` in a future version of PyTorch.
+  0:   successfully saved checkpoint from iteration    2000 to /redacted_path/39d73042
+511:  [2025-03-13 03:39:33] iteration     2570/   47683 | consumed samples:      3947520 | elapsed time per iteration (ms): 2650.6 | throughput per GPU (TFLOP/s/GPU): 220.0 | learning rate: 1.197773E-03 | global batch size:  1536 | lm loss: 1.877489E+00 | loss scale: 1.0 | grad norm: 0.090 | num zeros: 423246784.0 | params norm: 3195.826 | number of skipped iterations:   0 | number of nan iterations:   0 |
+315: [rank315]:[E313 03:45:59.927098680 ProcessGroupNCCL.cpp:1560] [PG 855 Rank 3] Process group watchdog thread terminated with exception: CUDA error: unspecified launch failure
+313: frame #3: c10d::ProcessGroupNCCL::WorkNCCL::finishedGPUExecutionInternal() const + 0x56 (0x1554f8841906 in /redacted_path/8ac3e580)

@@ -1,0 +1,67 @@
+# coding: utf-8
+
+# flake8: noqa
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: LicenseRef-NvidiaProprietary
+
+# NVIDIA CORPORATION, its affiliates and licensors retain all intellectual
+# property and proprietary rights in and to this material, related
+# documentation and any modifications thereto. Any use, reproduction,
+# disclosure or distribution of this material and related documentation
+# without an express license agreement from NVIDIA CORPORATION or
+# its affiliates is strictly prohibited.
+
+# import models into model package
+from nvidia_attribution_client.models.attribution_class_enum import AttributionClassEnum
+from nvidia_attribution_client.models.attribution_parameters import AttributionParameters
+from nvidia_attribution_client.models.attribution_response_v1 import AttributionResponseV1
+from nvidia_attribution_client.models.attribution_response_v2 import AttributionResponseV2
+from nvidia_attribution_client.models.attribution_source import AttributionSource
+from nvidia_attribution_client.models.attributions_inner import AttributionsInner
+from nvidia_attribution_client.models.attributions_inner1 import AttributionsInner1
+from nvidia_attribution_client.models.attributor_info_v1 import AttributorInfoV1
+from nvidia_attribution_client.models.attributor_info_v2 import AttributorInfoV2
+from nvidia_attribution_client.models.attributor_metadata import AttributorMetadata
+from nvidia_attribution_client.models.attributor_workload_info_v1 import AttributorWorkloadInfoV1
+from nvidia_attribution_client.models.attributor_workload_info_v2 import AttributorWorkloadInfoV2
+from nvidia_attribution_client.models.decision_action import DecisionAction
+from nvidia_attribution_client.models.decision_edge import DecisionEdge
+from nvidia_attribution_client.models.decision_graph import DecisionGraph
+from nvidia_attribution_client.models.decision_node import DecisionNode
+from nvidia_attribution_client.models.decision_node_type import DecisionNodeType
+from nvidia_attribution_client.models.duplicate_attributor_error import DuplicateAttributorError
+from nvidia_attribution_client.models.duplicate_observation_error import DuplicateObservationError
+from nvidia_attribution_client.models.errors import Errors
+from nvidia_attribution_client.models.format import Format
+from nvidia_attribution_client.models.global_attribution import GlobalAttribution
+from nvidia_attribution_client.models.http_validation_error import HTTPValidationError
+from nvidia_attribution_client.models.incompatible_observation_source_format_error import IncompatibleObservationSourceFormatError
+from nvidia_attribution_client.models.invalid_observation_body_error import InvalidObservationBodyError
+from nvidia_attribution_client.models.location_inner import LocationInner
+from nvidia_attribution_client.models.new_response_v1 import NewResponseV1
+from nvidia_attribution_client.models.new_response_v2 import NewResponseV2
+from nvidia_attribution_client.models.node_attribution import NodeAttribution
+from nvidia_attribution_client.models.node_source import NodeSource
+from nvidia_attribution_client.models.observation import Observation
+from nvidia_attribution_client.models.observation_context import ObservationContext
+from nvidia_attribution_client.models.observation_ingestion_error_response import ObservationIngestionErrorResponse
+from nvidia_attribution_client.models.observation_response_v1 import ObservationResponseV1
+from nvidia_attribution_client.models.observation_response_v2 import ObservationResponseV2
+from nvidia_attribution_client.models.recommendation_enum import RecommendationEnum
+from nvidia_attribution_client.models.resourceless_source import ResourcelessSource
+from nvidia_attribution_client.models.rule_parameters import RuleParameters
+from nvidia_attribution_client.models.single_attribution import SingleAttribution
+from nvidia_attribution_client.models.source import Source
+from nvidia_attribution_client.models.sourced_symptom import SourcedSymptom
+from nvidia_attribution_client.models.storage_attribution import StorageAttribution
+from nvidia_attribution_client.models.straggler_attribution import StragglerAttribution
+from nvidia_attribution_client.models.switch_attribution import SwitchAttribution
+from nvidia_attribution_client.models.symptoms_value_inner import SymptomsValueInner
+from nvidia_attribution_client.models.time_interval import TimeInterval
+from nvidia_attribution_client.models.unknown_attributor_id_error import UnknownAttributorIdError
+from nvidia_attribution_client.models.unknown_observation_format_error import UnknownObservationFormatError
+from nvidia_attribution_client.models.validation_error import ValidationError
+from nvidia_attribution_client.models.validation_error_response import ValidationErrorResponse
+from nvidia_attribution_client.models.verdict import Verdict
+from nvidia_attribution_client.models.workload_record import WorkloadRecord
+from nvidia_attribution_client.models.workload_type_enum import WorkloadTypeEnum

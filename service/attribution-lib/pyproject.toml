@@ -1,0 +1,146 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: LicenseRef-NvidiaProprietary
+#
+# NVIDIA CORPORATION, its affiliates and licensors retain all intellectual
+# property and proprietary rights in and to this material, related
+# documentation and any modifications thereto. Any use, reproduction,
+# disclosure or distribution of this material and related documentation
+# without an express license agreement from NVIDIA CORPORATION or
+# its affiliates is strictly prohibited.
+
+[project]
+name = "attribution-lib"
+version = "0.4.1.dev140"
+description = "NVIDIA Attribution Library"
+license = "LicenseRef-NvidiaProprietary"
+license-files = ["LICENSE"]
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "duckdb==1.4.3",
+    "loguru>=0.7.3",
+    "packaging>=24",
+    "pandas>=1.3.0",
+    "pyahocorasick>=2.0.0",
+    "pydantic>=2.11.7",
+    "simpleeval>=1.0",
+    "pytz>=2021.1",
+    "tzlocal>=4.0.0",
+]
+
+[build-system]
+requires = ["setuptools>=41", "wheel", "packaging>=24"]
+build-backend = "setuptools.build_meta"
+
+
+[tool.setuptools]
+py-modules = ["_attribution_lib_version"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+attribution_lib = [
+    "rules/*.csv",
+    "rules/*.json",
+    "bundled_rules/*.py",
+    "bundled_rules/*.toml",
+    "bundled_rules/*.json",
+    "bundled_rules/*.csv",
+    "bundled_rules/common/*.py",
+    "py.typed",
+]
+"attribution_lib.regex_accelerator" = ["py.typed"]
+"attribution_lib.xid_analyzer" = ["*.json"]
+
+[dependency-groups]
+dev = [
+    "mypy>=1.15.0",
+    "openpyxl>=3.1.3",
+    "ty>=0.0.19",
+    "pre-commit>=4.1.0",
+    "pytest>=8.3.5",
+    "pytest-benchmark>=4.0.0",
+    "pytest-cov>=6.0.0",
+    "pytest-loguru>=0.4.0",
+    "pytest-xdist>=3.8.0",
+    "ruff>=0.9.7",
+    "zstd>=1.5.6.6",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests/"]
+python_files = ["test_*.py", "*_test.py"]
+addopts = [
+    "--import-mode=importlib",
+]
+markers = [
+    "slow: marks tests as slow (deselect with '-m \"not slow\"')",
+    "benchmark: marks tests as benchmarks (deselect with '-m \"not benchmark\"')",
+]
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "def __repr__",
+    "if __name__ == .__main__.:",
+    "raise NotImplementedError",
+    "if TYPE_CHECKING:",
+    "pass",
+    "raise ImportError",
+]
+ignore_errors = true
+include = ["src/attribution_lib/**"]
+omit = [
+    "src/attribution_lib/bundled_rules/*",
+]
+
+[tool.mypy]
+python_version = "3.11"
+mypy_path = "stubs"
+exclude = ["src/attribution_lib/bundled_rules/", "src/attribution_lib/xid_analyzer/"]
+check_untyped_defs = true
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
+warn_return_any = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+no_implicit_optional = true
+strict_equality = true
+
+# Exempt files not yet annotated
+[[tool.mypy.overrides]]
+module = [
+    "attribution_lib.events",
+    "attribution_lib.core",
+    "attribution_lib.attributor",
+    "attribution_lib.outcome",
+    "attribution_lib.ufmlog_common",
+    "attribution_lib.observation.*",
+    "attribution_lib.resources.*",
+    "attribution_lib.symptoms.*",
+    "attribution_lib.stragglers.*",
+    "attribution_lib.logline_filtering.*",
+    "attribution_lib.filter",
+    "attribution_lib.event_helpers",
+    "attribution_lib.rule_helpers",
+]
+disallow_untyped_defs = false
+disallow_incomplete_defs = false
+warn_return_any = false
+warn_unused_ignores = false
+
+[[tool.mypy.overrides]]
+module = ["attribution_lib.xid_analyzer.*"]
+ignore_errors = true
+
+[tool.ruff.lint]
+select = ["E", "F", "PLC0415"]
+
+[tool.ty.src]
+exclude = ["src/attribution_lib/bundled_rules", "src/attribution_lib/xid_analyzer"]
+
+[tool.ty.environment]
+extra-paths = ["stubs"]
+
+[tool.ty.rules]
+unused-type-ignore-comment = "ignore"

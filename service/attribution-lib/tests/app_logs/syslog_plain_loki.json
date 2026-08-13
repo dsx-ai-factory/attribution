@@ -1,0 +1,56 @@
+[
+    {
+        "stream": {
+            "detected_level": "info",
+            "filename": "/var/log/kern.log",
+            "job": "varlogs",
+            "node_name": "host-ac28afcc",
+            "service_name": "varlogs"
+        },
+        "values": [
+            [
+                "1744734437830498000",
+                "Apr 24 12:04:06 host-ac28afcc kernel: message repeated 8 times: [ NVRM: subdeviceCtrlCmdBusGetNvlinkStatus_IMPL: Failed to collect nvlink status info!]"
+            ],
+            [
+                "1744734437830498000",
+                "Apr 24 12:04:16 host-ac28afcc kernel: NVRM: subdeviceCtrlCmdBusGetNvlinkStatus_IMPL: Failed to collect nvlink status info!"
+            ],
+            [
+                "1744734437830498000",
+                "Apr 24 12:04:46 host-ac28afcc kernel: message repeated 7 times: [ NVRM: subdeviceCtrlCmdBusGetNvlinkStatus_IMPL: Failed to collect nvlink status info!]"
+            ],
+            [
+                "1744734437830498000",
+                "Apr 24 12:04:49 host-ac28afcc kernel: NVRM: subdeviceCtrlCmdBusGetNvlinkStatus_IMPL: Failed to collect nvlink status info!"
+            ],
+            [
+                "1744734437830498000",
+                "Apr 24 12:04:49 host-ac28afcc kernel: NVRM: Xid (PCI:0000:e4:00): 95, pid='\\u003cunknown\\u003e', name=\\u003cunknown\\u003e, Uncontained: PCIE. RST: Yes, D-RST: No"
+            ]
+        ]
+    },
+    {
+        "stream": {
+            "detected_level": "info",
+            "filename": "/var/log/kern.log",
+            "job": "varlogs",
+            "node_name": "host-98f6741a",
+            "service_name": "varlogs"
+        },
+        "values": [
+            [
+                "1744734437830498000",
+                "Apr 24 12:04:06 host-98f6741a kernel: message repeated 8 times: [ NVRM: subdeviceCtrlCmdBusGetNvlinkStatus_IMPL: Failed to collect nvlink status info!]"
+            ],
+            [
+                "1744734437830498000",
+                "Apr 24 12:04:16 host-98f6741a kernel: NVRM: subdeviceCtrlCmdBusGetNvlinkStatus_IMPL: Failed to collect nvlink status info!"
+            ],
+            [
+                "1744734437830498000",
+                "Apr 24 12:04:49 host-98f6741a kernel: NVRM: Xid (PCI:0000:e4:00): 95, pid='\\u003cunknown\\u003e', name=\\u003cunknown\\u003e, Uncontained: PCIE. RST: Yes, D-RST: No"
+            ]
+        ]
+    }
+]

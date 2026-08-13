@@ -1,0 +1,123 @@
+{
+  "apiVersion": "v1",
+  "kind": "List",
+  "items": [
+    {
+      "apiVersion": "kueue.x-k8s.io/v1beta1",
+      "kind": "Workload",
+      "metadata": {
+        "name": "job-train-mnist-abc12",
+        "namespace": "team-alpha",
+        "uid": "uid-aaaa-1001",
+        "creationTimestamp": "2026-05-01T11:59:30Z",
+        "labels": {"user": "alice"},
+        "ownerReferences": [
+          {"apiVersion": "batch/v1", "kind": "Job", "name": "train-mnist", "uid": "owner-1001"}
+        ]
+      },
+      "spec": {
+        "queueName": "research-queue",
+        "priority": 100,
+        "podSets": [
+          {"name": "main", "count": 1, "template": {"spec": {"containers": [{"name": "trainer"}]}}}
+        ]
+      },
+      "status": {
+        "conditions": [
+          {"type": "QuotaReserved", "status": "True", "lastTransitionTime": "2026-05-01T11:59:55Z", "reason": "QuotaReserved"},
+          {"type": "Admitted", "status": "True", "lastTransitionTime": "2026-05-01T12:00:00Z", "reason": "Admitted"},
+          {"type": "PodsReady", "status": "True", "lastTransitionTime": "2026-05-01T12:00:30Z", "reason": "PodsReady"},
+          {"type": "Finished", "status": "True", "lastTransitionTime": "2026-05-01T12:30:00Z", "reason": "Succeeded"}
+        ]
+      }
+    },
+    {
+      "apiVersion": "kueue.x-k8s.io/v1beta1",
+      "kind": "Workload",
+      "metadata": {
+        "name": "job-llama-7b-pretrain-xyz77",
+        "namespace": "team-alpha",
+        "uid": "uid-bbbb-1002",
+        "creationTimestamp": "2026-05-01T12:59:30Z",
+        "labels": {"user": "bob"},
+        "ownerReferences": [
+          {"apiVersion": "batch/v1", "kind": "Job", "name": "llama-7b-pretrain", "uid": "owner-1002"}
+        ]
+      },
+      "spec": {
+        "queueName": "research-queue",
+        "priority": 200,
+        "podSets": [
+          {"name": "main", "count": 3}
+        ]
+      },
+      "status": {
+        "conditions": [
+          {"type": "Admitted", "status": "True", "lastTransitionTime": "2026-05-01T13:00:00Z", "reason": "Admitted"},
+          {"type": "PodsReady", "status": "True", "lastTransitionTime": "2026-05-01T13:00:45Z", "reason": "PodsReady"},
+          {"type": "Finished", "status": "True", "lastTransitionTime": "2026-05-01T13:45:00Z", "reason": "Failed"}
+        ]
+      }
+    },
+    {
+      "apiVersion": "kueue.x-k8s.io/v1beta1",
+      "kind": "Workload",
+      "metadata": {
+        "name": "job-hpl-bench-pp99",
+        "namespace": "team-beta",
+        "uid": "uid-cccc-1003",
+        "creationTimestamp": "2026-05-01T13:59:30Z",
+        "labels": {"user": "carol"},
+        "ownerReferences": [
+          {"apiVersion": "batch/v1", "kind": "Job", "name": "hpl-bench", "uid": "owner-1003"}
+        ]
+      },
+      "spec": {"queueName": "infra-queue"},
+      "status": {
+        "conditions": [
+          {"type": "Admitted", "status": "True", "lastTransitionTime": "2026-05-01T14:00:00Z", "reason": "Admitted"},
+          {"type": "Evicted", "status": "True", "lastTransitionTime": "2026-05-01T14:05:00Z", "reason": "Preempted"},
+          {"type": "Preempted", "status": "True", "lastTransitionTime": "2026-05-01T14:05:00Z", "reason": "Priority"}
+        ]
+      }
+    },
+    {
+      "apiVersion": "kueue.x-k8s.io/v1beta1",
+      "kind": "Workload",
+      "metadata": {
+        "name": "job-still-running-qq01",
+        "namespace": "team-alpha",
+        "uid": "uid-dddd-1004",
+        "creationTimestamp": "2026-05-02T07:59:30Z",
+        "labels": {"user": "dave"},
+        "ownerReferences": [
+          {"apiVersion": "batch/v1", "kind": "Job", "name": "still-running", "uid": "owner-1004"}
+        ]
+      },
+      "spec": {"queueName": "research-queue"},
+      "status": {
+        "conditions": [
+          {"type": "Admitted", "status": "True", "lastTransitionTime": "2026-05-02T08:00:00Z", "reason": "Admitted"},
+          {"type": "PodsReady", "status": "True", "lastTransitionTime": "2026-05-02T08:00:30Z", "reason": "PodsReady"}
+        ]
+      }
+    },
+    {
+      "apiVersion": "kueue.x-k8s.io/v1beta1",
+      "kind": "Workload",
+      "metadata": {
+        "name": "job-pending-quota-rr11",
+        "namespace": "team-alpha",
+        "uid": "uid-eeee-1005",
+        "creationTimestamp": "2026-05-02T08:59:30Z",
+        "labels": {"user": "erin"}
+      },
+      "spec": {"queueName": "research-queue"},
+      "status": {
+        "conditions": [
+          {"type": "QuotaReserved", "status": "False", "lastTransitionTime": "2026-05-02T08:59:35Z", "reason": "Pending"}
+        ]
+      }
+    }
+  ]
+}

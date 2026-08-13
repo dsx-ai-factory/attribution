@@ -1,0 +1,39 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: LicenseRef-NvidiaProprietary
+#
+# NVIDIA CORPORATION, its affiliates and licensors retain all intellectual
+# property and proprietary rights in and to this material, related
+# documentation and any modifications thereto. Any use, reproduction,
+# disclosure or distribution of this material and related documentation
+# without an express license agreement from NVIDIA CORPORATION or
+# its affiliates is strictly prohibited.
+#
+# Declarative port of the PORTABLE single-leaf NVRX rules formerly defined as
+# @extractor_def functions in bundled_rules/nvrx_rules.py.
+#
+# Each stanza keeps the Python rule's NAME so the declarative engine and the
+# Python side never disagree on identity. `match_re`, `symptom` / `payload`,
+# and `event_type` are copied verbatim from nvrx_rules.py.
+#
+# NVRXInjectedException emitted `_bad(node, "NVRx synthetic fault injection",
+# source)` (plain source, no derived rule, no demotion), so the finding is
+# credited to the stanza name. NVRX rules run on the APPLOG source.
+
+author  = "NVIDIA Attribution team"
+sources = ["APPLOG"]
+
+
+# --- bad_node leaf (credit the stanza name; no demotion) -------------------------
+# NVRXInjectedException: _bad(node, "NVRx synthetic fault injection", source).
+[[extractor]]
+name     = "NVRXInjectedException"
+match_re = 'nvidia_resiliency_ext\.shared_utils\.inject_fault\.InjectedException'
+emit     = { type = "bad_node", symptom = "NVRx synthetic fault injection" }
+[[extractor.cases]]
+expect  = "bad"
+line    = "5: [rank5]: nvidia_resiliency_ext.shared_utils.inject_fault.InjectedException"
+symptom = "NVRx synthetic fault injection"
+[[extractor.cases]]
+expect  = "bad"
+line    = "5: CRITICAL:nvidia_resiliency_ext.shared_utils.inject_fault:asynchronously raising <class 'nvidia_resiliency_ext.shared_utils.inject_fault.InjectedException'>"
+symptom = "NVRx synthetic fault injection"

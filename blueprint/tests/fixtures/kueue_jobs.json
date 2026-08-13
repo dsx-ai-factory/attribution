@@ -1,0 +1,30 @@
+{
+  "apiVersion": "v1",
+  "kind": "List",
+  "items": [
+    {
+      "apiVersion": "batch/v1",
+      "kind": "Job",
+      "metadata": {"name": "train-mnist", "namespace": "team-alpha", "uid": "owner-1001"},
+      "spec": {"activeDeadlineSeconds": 3600}
+    },
+    {
+      "apiVersion": "batch/v1",
+      "kind": "Job",
+      "metadata": {"name": "llama-7b-pretrain", "namespace": "team-alpha", "uid": "owner-1002"},
+      "spec": {"activeDeadlineSeconds": 7200}
+    },
+    {
+      "apiVersion": "batch/v1",
+      "kind": "Job",
+      "metadata": {"name": "hpl-bench", "namespace": "team-beta", "uid": "owner-1003"},
+      "spec": {}
+    },
+    {
+      "apiVersion": "batch/v1",
+      "kind": "Job",
+      "metadata": {"name": "still-running", "namespace": "team-alpha", "uid": "owner-1004"},
+      "spec": {}
+    }
+  ]
+}

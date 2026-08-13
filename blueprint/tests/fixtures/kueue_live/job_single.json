@@ -1,0 +1,104 @@
+{
+    "apiVersion": "batch/v1",
+    "kind": "Job",
+    "metadata": {
+        "annotations": {
+            "kubectl.kubernetes.io/last-applied-configuration": "{\"apiVersion\":\"batch/v1\",\"kind\":\"Job\",\"metadata\":{\"annotations\":{},\"labels\":{\"kueue.x-k8s.io/queue-name\":\"dev\"},\"name\":\"bp-fail-fast\",\"namespace\":\"kueue-demo\"},\"spec\":{\"backoffLimit\":0,\"completions\":1,\"parallelism\":1,\"suspend\":true,\"template\":{\"metadata\":{\"labels\":{\"app\":\"bp-fail-fast\"}},\"spec\":{\"containers\":[{\"command\":[\"sh\",\"-c\",\"echo starting; sleep 3; echo about-to-fail; exit 7\"],\"image\":\"busybox:1.36\",\"name\":\"c\",\"resources\":{\"requests\":{\"cpu\":\"50m\",\"memory\":\"16Mi\"}}}],\"restartPolicy\":\"Never\"}}}}\n"
+        },
+        "creationTimestamp": "2026-05-21T23:16:10Z",
+        "generation": 2,
+        "labels": {
+            "kueue.x-k8s.io/queue-name": "dev"
+        },
+        "name": "bp-fail-fast",
+        "namespace": "kueue-demo",
+        "resourceVersion": "527284",
+        "uid": "b84df28c-93d6-4cdf-ab8d-684adcf87dbb"
+    },
+    "spec": {
+        "backoffLimit": 0,
+        "completionMode": "NonIndexed",
+        "completions": 1,
+        "manualSelector": false,
+        "parallelism": 1,
+        "podReplacementPolicy": "TerminatingOrFailed",
+        "selector": {
+            "matchLabels": {
+                "batch.kubernetes.io/controller-uid": "b84df28c-93d6-4cdf-ab8d-684adcf87dbb"
+            }
+        },
+        "suspend": false,
+        "template": {
+            "metadata": {
+                "creationTimestamp": null,
+                "labels": {
+                    "app": "bp-fail-fast",
+                    "batch.kubernetes.io/controller-uid": "b84df28c-93d6-4cdf-ab8d-684adcf87dbb",
+                    "batch.kubernetes.io/job-name": "bp-fail-fast",
+                    "controller-uid": "b84df28c-93d6-4cdf-ab8d-684adcf87dbb",
+                    "job-name": "bp-fail-fast"
+                }
+            },
+            "spec": {
+                "containers": [
+                    {
+                        "command": [
+                            "sh",
+                            "-c",
+                            "echo starting; sleep 3; echo about-to-fail; exit 7"
+                        ],
+                        "image": "busybox:1.36",
+                        "imagePullPolicy": "IfNotPresent",
+                        "name": "c",
+                        "resources": {
+                            "requests": {
+                                "cpu": "50m",
+                                "memory": "16Mi"
+                            }
+                        },
+                        "terminationMessagePath": "/dev/termination-log",
+                        "terminationMessagePolicy": "File"
+                    }
+                ],
+                "dnsPolicy": "ClusterFirst",
+                "restartPolicy": "Never",
+                "schedulerName": "default-scheduler",
+                "securityContext": {},
+                "terminationGracePeriodSeconds": 30
+            }
+        }
+    },
+    "status": {
+        "conditions": [
+            {
+                "lastProbeTime": "2026-05-21T23:16:11Z",
+                "lastTransitionTime": "2026-05-21T23:16:11Z",
+                "message": "Job resumed",
+                "reason": "JobResumed",
+                "status": "False",
+                "type": "Suspended"
+            },
+            {
+                "lastProbeTime": "2026-05-21T23:16:19Z",
+                "lastTransitionTime": "2026-05-21T23:16:19Z",
+                "message": "Job has reached the specified backoff limit",
+                "reason": "BackoffLimitExceeded",
+                "status": "True",
+                "type": "FailureTarget"
+            },
+            {
+                "lastProbeTime": "2026-05-21T23:16:19Z",
+                "lastTransitionTime": "2026-05-21T23:16:19Z",
+                "message": "Job has reached the specified backoff limit",
+                "reason": "BackoffLimitExceeded",
+                "status": "True",
+                "type": "Failed"
+            }
+        ],
+        "failed": 1,
+        "ready": 0,
+        "startTime": "2026-05-21T23:16:11Z",
+        "terminating": 0,
+        "uncountedTerminatedPods": {}
+    }
+}

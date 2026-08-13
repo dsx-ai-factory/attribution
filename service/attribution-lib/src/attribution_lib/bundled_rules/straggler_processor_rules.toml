@@ -1,0 +1,24 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: LicenseRef-NvidiaProprietary
+#
+# NVIDIA CORPORATION, its affiliates and licensors retain all intellectual
+# property and proprietary rights in and to this material, related
+# documentation and any modifications thereto. Any use, reproduction,
+# disclosure or distribution of this material and related documentation
+# without an express license agreement from NVIDIA CORPORATION or
+# its affiliates is strictly prohibited.
+#
+# Declarative processor stanzas: bespoke Megatron straggler rules whose event
+# production isn't a fixed emit shape keep their Python bodies (registered with
+# @rule_processor in straggler_rules.py) while TOML owns identity + matching.
+# derived_rules mirror the module constants verbatim. Parity via process_check.
+
+author  = "NVIDIA Attribution team"
+sources = ["APPLOG"]
+
+[[extractor]]
+name                = "MegatronStragglerTop"
+match_re            = 'Top\s+(?P<count>\d+)\s+Ranks\s+with\s+highest\s+Etpt\(TF\):\s*(?P<ranks>.*)'
+processor           = "straggler:MegatronStragglerTop"
+derived_rules       = ["Megatron Straggler Top Ranks", "Megatron Straggler Score Type", "Megatron Straggler Qualifier Type"]
+derived_event_types = ["Application.MegatronStraggler.top"]

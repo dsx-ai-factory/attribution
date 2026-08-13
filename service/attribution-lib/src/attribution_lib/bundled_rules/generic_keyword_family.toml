@@ -1,0 +1,123 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: LicenseRef-NvidiaProprietary
+#
+# NVIDIA CORPORATION, its affiliates and licensors retain all intellectual
+# property and proprietary rights in and to this material, related
+# documentation and any modifications thereto. Any use, reproduction,
+# disclosure or distribution of this material and related documentation
+# without an express license agreement from NVIDIA CORPORATION or
+# its affiliates is strictly prohibited.
+#
+# Declarative port of the generic-keyword family formerly stamped by a Python
+# loop over _GENERIC_KEYWORD_RULES in bundled_rules/applog_rules.py.
+#
+# Each row is one (keyword, symptom, credit) tuple, with the bucket logic
+# resolved into explicit columns at migration time: symptom defaults to the
+# keyword; rows whose original bucket was a "retire now" bucket ("cudaError" /
+# "io-error") credit and demote their own symptom, all other rows credit and
+# demote their bucket name (e.g. "alias else"). The pattern is the literal
+# keyword; the engine re.escape()s it, so regex metacharacters in a keyword
+# (parens, dots, backslashes) match literally. Generated rule names are
+# "generic-keyword:<keyword>"; parity asserts the CREDIT (source.rule), which
+# derived_rule = "{rule}" reproduces. Parity is enforced by
+# applog_rules.test.toml through process_check (tests/test_rule_data.py).
+
+author  = "NVIDIA Attribution team"
+sources = ["APPLOG"]
+
+
+[[family]]
+name    = "generic-keyword"
+pattern = "{key}"
+emit    = { type = "bad_node", symptom = "{symptom}", demotion = "{demotion}", derived_rule = "{rule}" }
+rows = [
+  { key = "Unexpected error from cudaGetDeviceCount()", symptom = "Unexpected error from cudaGetDeviceCount()", rule = "Unexpected error from cudaGetDeviceCount()", demotion = "Unexpected error from cudaGetDeviceCount()" },
+  { key = "local catastrophic error", symptom = "local catastrophic error", rule = "local catastrophic error", demotion = "local catastrophic error" },
+  { key = "ibv_open_device failed", symptom = "ibv_open_device failed", rule = "ibv_open_device failed", demotion = "ibv_open_device failed" },
+  { key = "Segmentation fault", symptom = "Segmentation fault", rule = "alias else", demotion = "alias else" },
+  { key = "terminate called", symptom = "terminate called", rule = "alias else", demotion = "alias else" },
+  { key = "No CUDA runtime is found", symptom = "No CUDA runtime is found", rule = "alias else", demotion = "alias else" },
+  { key = "Disk quota exceeded", symptom = "Disk quota exceeded", rule = "alias else", demotion = "alias else" },
+  { key = "ncclUnhandledCudaError", symptom = "ncclUnhandledCudaError", rule = "alias else", demotion = "alias else" },
+  { key = "ncclSystemError", symptom = "ncclSystemError", rule = "alias else", demotion = "alias else" },
+  { key = "ncclInternalError", symptom = "ncclInternalError", rule = "alias else", demotion = "alias else" },
+  { key = "ncclInvalidArgument", symptom = "ncclInvalidArgument", rule = "alias else", demotion = "alias else" },
+  { key = "ncclInvalidUsage", symptom = "ncclInvalidUsage", rule = "alias else", demotion = "alias else" },
+  { key = "ncclRemoteError", symptom = "ncclRemoteError", rule = "alias else", demotion = "alias else" },
+  { key = "ncclTimeout", symptom = "ncclTimeout", rule = "alias else", demotion = "alias else" },
+  { key = "Unconvertible NCCL type", symptom = "Unconvertible NCCL type", rule = "alias else", demotion = "alias else" },
+  { key = "BrokenPipeError", symptom = "BrokenPipeError", rule = "alias else", demotion = "alias else" },
+  { key = "megatron.core.dist_checkpointing.core.CheckpointingException", symptom = "megatron.core.dist_checkpointing.core.CheckpointingException", rule = "alias else", demotion = "alias else" },
+  { key = "wandb.Error", symptom = "wandb.Error", rule = "alias else", demotion = "alias else" },
+  { key = "distributed.comm.core.CommClosedError", symptom = "distributed.comm.core.CommClosedError", rule = "alias else", demotion = "alias else" },
+  { key = "Exception: Failed to write dataset materials to the data cache directory", symptom = "Dataset cache write failure", rule = "alias else", demotion = "alias else" },
+  { key = "file write failed", symptom = "file write failed", rule = "alias else", demotion = "alias else" },
+  { key = "failed to import docker image", symptom = "failed to import docker image", rule = "alias else", demotion = "alias else" },
+  { key = "pyxis: couldn't start container", symptom = "pyxis: couldn't start container", rule = "alias else", demotion = "alias else" },
+  { key = "error: pyxis:     [ERROR] No such file or directory", symptom = "pyxis: cannot find container file", rule = "pyxis: cannot find container file", demotion = "pyxis: cannot find container file" },
+  { key = "98-nvidia.sh exited with return code", symptom = "pyxis: nvidia hook failed", rule = "alias else", demotion = "alias else" },
+  { key = "10-cgroups.sh exited with return code", symptom = "pyxis: cgroup hook failed", rule = "alias else", demotion = "alias else" },
+  { key = "nvidia-container-cli: mount error", symptom = "pyxis: nvidia-container-cli mount error", rule = "alias else", demotion = "alias else" },
+  { key = "nvidia-container-cli: initialization error", symptom = "pyxis: nvidia-container-cli init error", rule = "alias else", demotion = "alias else" },
+  { key = "nvidia-container-cli: device error", symptom = "pyxis: nvidia-container-cli device error", rule = "alias else", demotion = "alias else" },
+  { key = "Unknown NVIDIA driver capability", symptom = "pyxis: nvidia unknown driver capability", rule = "alias else", demotion = "alias else" },
+  { key = "nvidia-container-cli: requirement error", symptom = "pyxis: nvidia-container-cli requirement error", rule = "alias else", demotion = "alias else" },
+  { key = "nvidia-container-cli: ldcache error", symptom = "pyxis: nvidia-container-cli ldcache error", rule = "alias else", demotion = "alias else" },
+  { key = "nvidia-container-cli: detection error", symptom = "pyxis: nvidia-container-cli detection error", rule = "alias else", demotion = "alias else" },
+  { key = "[ERROR] Command not found: nvidia-container-cli", symptom = "pyxis: nvidia-container-cli not installed", rule = "alias else", demotion = "alias else" },
+  { key = "99-mellanox.sh exited with return code", symptom = "pyxis: mellanox hook failed", rule = "alias else", demotion = "alias else" },
+  { key = "[ERROR] Invalid image reference:", symptom = "enroot: invalid image reference", rule = "alias else", demotion = "alias else" },
+  { key = "[ERROR] Could not retrieve digest from", symptom = "enroot: digest error", rule = "alias else", demotion = "alias else" },
+  { key = "[ERROR] Could not parse digest information from", symptom = "enroot: digest error", rule = "alias else", demotion = "alias else" },
+  { key = "curl: (56) CONNECT tunnel failed", symptom = "enroot: curl tunnel failure", rule = "alias else", demotion = "alias else" },
+  { key = "curl: (28) Operation timed out", symptom = "enroot: curl transfer timeout", rule = "alias else", demotion = "alias else" },
+  { key = "curl: (52) Empty reply from server", symptom = "enroot: curl empty reply from server", rule = "alias else", demotion = "alias else" },
+  { key = "curl: (6) Could not resolve host:", symptom = "enroot: DNS resolution failed", rule = "alias else", demotion = "alias else" },
+  { key = "[ERROR] Could not process JSON input", symptom = "enroot: JSON parse failed", rule = "alias else", demotion = "alias else" },
+  { key = "/*stdin*\\", symptom = "enroot: corrupted cache layer", rule = "alias else", demotion = "alias else" },
+  { key = "[ERROR] Could not acquire rootfs lock", symptom = "enroot: rootfs lock contention", rule = "alias else", demotion = "alias else" },
+  { key = "[ERROR] Invalid image format:", symptom = "enroot: invalid image format", rule = "alias else", demotion = "alias else" },
+  { key = "FATAL ERROR: File system corruption detected", symptom = "unsquashfs: file system corruption", rule = "alias else", demotion = "alias else" },
+  { key = "enroot-switchroot: failed to execute", symptom = "enroot: switchroot exec failed", rule = "alias else", demotion = "alias else" },
+  { key = "pyxis: --container-image specified multiple times", symptom = "pyxis: --container-image specified multiple times", rule = "alias else", demotion = "alias else" },
+  { key = "pyxis: mount source must be", symptom = "pyxis: mount source invalid", rule = "alias else", demotion = "alias else" },
+  { key = "\"create\" flag was passed to --container-name but the container already exists", symptom = "pyxis: container name already exists", rule = "alias else", demotion = "alias else" },
+  { key = "pyxis: failed to create container filesystem", symptom = "pyxis: failed to create container filesystem", rule = "alias else", demotion = "alias else" },
+  { key = "pyxis: received SIGTERM, forwarding to child", symptom = "pyxis: cancelled by SIGTERM", rule = "alias else", demotion = "alias else" },
+  { key = "pyxis: container start error: Interrupted system call", symptom = "pyxis: cancelled by SIGTERM", rule = "alias else", demotion = "alias else" },
+  { key = "container was not started successfully by another task", symptom = "pyxis: cascade from peer task", rule = "alias else", demotion = "alias else" },
+  { key = "error: pyxis", symptom = "error: pyxis", rule = "alias else", demotion = "alias else" },
+  { key = "RuntimeError: Numpy is not available", symptom = "RuntimeError: Numpy is not available", rule = "alias else", demotion = "alias else" },
+  { key = "ValueError: Tasks not found", symptom = "ValueError: Tasks not found", rule = "alias else", demotion = "alias else" },
+  { key = "Stopping cuda profiler", symptom = "Stopping cuda profiler", rule = "alias else", demotion = "alias else" },
+  { key = "Stale file handle", symptom = "Stale file handle", rule = "alias else", demotion = "alias else" },
+  { key = " port error", symptom = "link down(east-west)", rule = "link down(east-west)", demotion = "link down(east-west)" },
+  { key = "DUE TO TIME LIMIT", symptom = "Cancelled by Timeout", rule = "alias else", demotion = "alias else" },
+  { key = "DUE TO TASK FAILURE", symptom = "Cancelled due to task failure", rule = "alias else", demotion = "alias else" },
+  { key = "GPU is lost", symptom = "GPU is lost reported by slurm", rule = "GPU is lost reported by slurm", demotion = "GPU is lost reported by slurm" },
+  { key = "botocore.exceptions", symptom = "S3 Exception", rule = "alias else", demotion = "alias else" },
+  { key = "s3_indexed_dataset.py", symptom = "S3 Exception", rule = "alias else", demotion = "alias else" },
+  { key = "S3Error: Exception", symptom = "S3 Exception", rule = "alias else", demotion = "alias else" },
+  { key = "device is incompatible with the local", symptom = "NCCL IB device incompatibility", rule = "alias else", demotion = "alias else" },
+  { key = "NCCL Error 1: unhandled cuda error", symptom = "ncclUnhandledCudaError", rule = "alias else", demotion = "alias else" },
+  { key = "NCCL Error 3: internal error", symptom = "ncclInternalError", rule = "alias else", demotion = "alias else" },
+  { key = "torch.OutOfMemoryError", symptom = "cudaError out of memory", rule = "cudaError out of memory", demotion = "cudaError out of memory" },
+  { key = "torch.cuda.OutOfMemoryError", symptom = "cudaError out of memory", rule = "cudaError out of memory", demotion = "cudaError out of memory" },
+  { key = "CANCELLED AT", symptom = "Cancelled by user", rule = "alias else", demotion = "alias else" },
+  { key = "collective timeout seq", symptom = "pmix collective timeout", rule = "alias else", demotion = "alias else" },
+  { key = "Unexpected result inf", symptom = "Bad Token", rule = "alias else", demotion = "alias else" },
+  { key = "RESOURCE_EXHAUSTED: Out of memory", symptom = "cudaError out of memory", rule = "cudaError out of memory", demotion = "cudaError out of memory" },
+  { key = "wandb.errors.CommError: Run initialization has timed out", symptom = "wandb.errors.CommError: Run initialization has timed out", rule = "alias else", demotion = "alias else" },
+  { key = "http.client.RemoteDisconnected", symptom = "http.client.RemoteDisconnected", rule = "alias else", demotion = "alias else" },
+  { key = "EOFError: Ran out of input", symptom = "EOFError: Ran out of input", rule = "alias else", demotion = "alias else" },
+  { key = "[Errno 5] Input/output error", symptom = "IO error", rule = "IO error", demotion = "IO error" },
+  { key = "RuntimeError: Rank", symptom = "RuntimeError: Rank, node host", rule = "alias else", demotion = "alias else" },
+  { key = "oom_kill event in StepId", symptom = "System-out of memory", rule = "alias else", demotion = "alias else" },
+  { key = "oom_kill events in StepId", symptom = "System-out of memory", rule = "alias else", demotion = "alias else" },
+  { key = "sigkill_handler] Killing subprocess", symptom = "sigkill_handler] Killing subprocess", rule = "alias else", demotion = "alias else" },
+  { key = "Call to ibv_set_ece failed", symptom = "Call to ibv_set_ece failed", rule = "Call to ibv_set_ece failed", demotion = "Call to ibv_set_ece failed" },
+]
+
+[[family.cases]]
+expansion = "rows"
+expect    = "bad"
