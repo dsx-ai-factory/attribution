@@ -92,6 +92,7 @@ class RegisteredSymptoms(Enum):
     OOM_KILL_OTHER = "OOM kill (other)"
     STOPPING_CUDA_PROFILER = "Stopping cuda profiler"
     NMI_WATCHDOG_HARD_LOCKUP = "NMI watchdog hard LOCKUP"
+    NODE_REBOOT_INITIATED = "Node reboot initiated"
     NODE_UNEXPECTEDLY_REBOOTED = "Node unexpectedly rebooted"
     NODE_FAILURE_REPORTED_BY_SLURM = "Node failure reported by slurm"
     GPU_IS_LOST_REPORTED_BY_SLURM = "GPU is lost reported by slurm"

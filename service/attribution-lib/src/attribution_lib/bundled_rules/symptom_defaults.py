@@ -539,14 +539,30 @@ outcome_symptom(
 
 outcome_symptom(
     "System is powering down",
-    outcome="Fail InfraHW",
-    priority=OutcomePriority.HIGH_HW,
+    outcome="Fail InfraSW",
+    priority=OutcomePriority.LOW,
     doc="system-is-powering-down",
-    hw_cause="Known HW Cause - Node",
     cascade_discards=(
         "Not responding",
         "Node unexpectedly rebooted",
         "Node failure reported by slurm",
+        "node offline",
+        "Fabric manager lost connection to all GPUs",
+        "Stopping nvidia-imex.service",
+    ),
+)
+
+outcome_symptom(
+    "Node reboot initiated",
+    outcome="Fail InfraSW",
+    priority=OutcomePriority.LOW,
+    doc="node-unexpectedly-rebooted",
+    cascade_discards=(
+        "Node unexpectedly rebooted",
+        "Node failure reported by slurm",
+        "Not responding",
+        "node offline",
+        "System is powering down",
         "Fabric manager lost connection to all GPUs",
         "Stopping nvidia-imex.service",
     ),
@@ -766,6 +782,110 @@ outcome_symptom(
     outcome="Fail InfraSW",
     priority=OutcomePriority.MEDIUM_SW,
     doc="nv-err-insufficient-resources",
+    hw_cause="Driver bug",
+)
+
+outcome_symptom(
+    "NV_ERR_BUSY_RETRY",
+    outcome="Fail InfraSW",
+    priority=OutcomePriority.MEDIUM_SW,
+    doc="nv-err-busy-retry",
+    hw_cause="Driver bug",
+)
+
+outcome_symptom(
+    "NV_ERR_NO_MEMORY",
+    outcome="Fail InfraSW",
+    priority=OutcomePriority.MEDIUM_SW,
+    doc="nv-err-no-memory",
+    hw_cause="Driver bug",
+)
+
+outcome_symptom(
+    "NV_ERR_INSUFFICIENT_PERMISSIONS",
+    outcome="Fail InfraSW",
+    priority=OutcomePriority.MEDIUM_SW,
+    doc="nv-err-insufficient-permissions",
+    hw_cause="Driver bug",
+)
+
+outcome_symptom(
+    "NV_ERR_FABRIC_STATE_OUT_OF_SYNC",
+    outcome="Fail InfraSW",
+    priority=OutcomePriority.MEDIUM_SW,
+    doc="nv-err-fabric-state-out-of-sync",
+    hw_cause="Driver bug",
+)
+
+outcome_symptom(
+    "NV_ERR_RESET_REQUIRED",
+    outcome="Fail InfraSW",
+    priority=OutcomePriority.MEDIUM_SW,
+    doc="gpu-reset-required",
+    hw_cause="Driver bug",
+)
+
+outcome_symptom(
+    "NV_ERR_BUFFER_TOO_SMALL",
+    outcome="Fail InfraSW",
+    priority=OutcomePriority.MEDIUM_SW,
+    doc="nv-err-buffer-too-small",
+    hw_cause="Driver bug",
+)
+
+outcome_symptom(
+    "NV_ERR_INVALID_OBJECT",
+    outcome="Fail InfraSW",
+    priority=OutcomePriority.MEDIUM_SW,
+    doc="nv-err-invalid-object",
+    hw_cause="Driver bug",
+)
+
+outcome_symptom(
+    "NV_ERR_TIMEOUT",
+    outcome="Fail InfraSW",
+    priority=OutcomePriority.MEDIUM_SW,
+    doc="nv-err-timeout",
+    hw_cause="Driver bug",
+)
+
+outcome_symptom(
+    "NV_ERR_INVALID_STATE",
+    outcome="Fail InfraSW",
+    priority=OutcomePriority.MEDIUM_SW,
+    doc="nv-err-invalid-state",
+    hw_cause="Driver bug",
+)
+
+outcome_symptom(
+    "NV_ERR_OBJECT_NOT_FOUND",
+    outcome="Fail InfraSW",
+    priority=OutcomePriority.MEDIUM_SW,
+    doc="nv-err-object-not-found",
+    hw_cause="Driver bug",
+)
+
+outcome_symptom(
+    "NV_ERR_GENERIC",
+    outcome="Fail InfraSW",
+    priority=OutcomePriority.MEDIUM_SW,
+    doc="nv-err-generic",
+    hw_cause="Driver bug",
+)
+
+outcome_symptom(
+    "NV_ERR_INVALID_ARGUMENT",
+    outcome="Fail InfraSW",
+    priority=OutcomePriority.MEDIUM_SW,
+    doc="nv-err-invalid-argument",
+    hw_cause="Driver bug",
+)
+
+outcome_symptom(
+    "NV_ERR_OVERLAPPING_UVM_COMMIT",
+    outcome="Fail InfraSW",
+    priority=OutcomePriority.MEDIUM_SW,
+    doc="nv-err-overlapping-uvm-commit",
     hw_cause="Driver bug",
 )
 
@@ -1455,7 +1575,7 @@ outcome_symptom(
 
 outcome_symptom(
     "NVRx unhealthy node",
-    outcome="Fail Undetermined",
+    outcome="Fail MultiCategory",
     priority=OutcomePriority.LOW_GENERIC,
     doc="nvrx-unhealthy-node",
 )
@@ -2297,8 +2417,6 @@ known_symptom("IB Error-12 Vendor-129 (IBV_WC_RETRY_EXC_ERR)")
 known_symptom("IB Error-5 (IBV_WC_WR_FLUSH_ERR)")
 
 known_symptom("IB firmware outdated")
-
-known_symptom("NV_ERR_INVALID_STATE")
 
 known_symptom("NV_ERR_INVALID_STATE nv_gpu_ops.c")
 

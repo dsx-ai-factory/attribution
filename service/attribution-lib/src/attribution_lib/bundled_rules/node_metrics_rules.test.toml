@@ -76,6 +76,22 @@ timestamp = 1744734450
 expect = "no_match"
 
 [[cases]]
+description = "correlated node reboot is bad"
+metric = "node_reboot_correlated"
+value = 1
+timestamp = 1744734450
+expect = "bad"
+expected_symptom = "Node unexpectedly rebooted"
+expected_rule = "node-metric-reboot-correlated"
+
+[[cases]]
+description = "uncorrelated node reboot marker is ignored"
+metric = "node_reboot_correlated"
+value = 0
+timestamp = 1744734450
+expect = "no_match"
+
+[[cases]]
 description = "dcgm nvlink physical link down above zero is interesting"
 metric = "DCGM_FI_DEV_NVLINK_PPCNT_PHYSICAL_LINK_DOWN_COUNTER"
 value = 1

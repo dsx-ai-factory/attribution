@@ -526,6 +526,13 @@ def covered_family_obligations(
     ``match_re`` covers ``rule:<that gen-name>``. A single line may cover several
     generated rules when one literal is a substring of another (harmless overlap).
     """
+    # ``expansion = "rows"`` creates one case from every generated rule's own
+    # synthesized matching line. Each rule is therefore covered by
+    # construction; comparing every generated case with every generated rule
+    # would only repeat that proof with O(n^2) regex searches.
+    if any(case.get("expansion") == "rows" for case in cases):
+        return family_obligations(generated)
+
     hits: set[str] = set()
     for case in cases:
         line = case["line"]

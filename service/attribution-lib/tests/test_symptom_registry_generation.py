@@ -72,6 +72,50 @@ def test_cuda_not_ready_and_not_supported_classify_as_multicategory():
         assert match.outcome == "Fail MultiCategory", f"{symptom} -> {match.outcome}"
 
 
+def test_nv_err_busy_retry_maps_to_infrasw():
+    """Classify NV_ERR_BUSY_RETRY driver failures as infrastructure software."""
+    registry = _load_committed_registry()
+
+    match = registry.outcome_for(["NV_ERR_BUSY_RETRY mem_multicast_fabric.c"])
+
+    assert match is not None
+    assert match.matched_prefix == "NV_ERR_BUSY_RETRY"
+    assert match.outcome == "Fail InfraSW"
+
+
+@pytest.mark.parametrize(
+    ("code", "symptom"),
+    [
+        ("NV_ERR_NO_MEMORY", "NV_ERR_NO_MEMORY mem_desc.c"),
+        ("NV_ERR_INSUFFICIENT_PERMISSIONS", "NV_ERR_INSUFFICIENT_PERMISSIONS kern_profiler_v2_ctrl.c"),
+        ("NV_ERR_FABRIC_STATE_OUT_OF_SYNC", "NV_ERR_FABRIC_STATE_OUT_OF_SYNC mem_multicast_fabric.c"),
+        ("NV_ERR_RESET_REQUIRED", "NV_ERR_RESET_REQUIRED gpu_fabric_probe.c"),
+        ("NV_ERR_BUFFER_TOO_SMALL", "NV_ERR_BUFFER_TOO_SMALL journal.c"),
+        ("NV_ERR_INVALID_OBJECT", "NV_ERR_INVALID_OBJECT mem_multicast_fabric.c"),
+        ("NV_ERR_TIMEOUT", "NV_ERR_TIMEOUT nv_gpu_ops.c"),
+        ("NV_ERR_INVALID_STATE", "NV_ERR_INVALID_STATE nv_gpu_ops.c"),
+        ("NV_ERR_OBJECT_NOT_FOUND", "NV_ERR_OBJECT_NOT_FOUND mem_multicast_fabric.c"),
+        ("NV_ERR_GENERIC", "NV_ERR_GENERIC mem_multicast_fabric.c"),
+        ("NV_ERR_INVALID_ARGUMENT", "NV_ERR_INVALID_ARGUMENT mem_multicast_fabric.c"),
+        ("NV_ERR_OVERLAPPING_UVM_COMMIT", "NV_ERR_OVERLAPPING_UVM_COMMIT kernel_channel.c"),
+    ],
+)
+def test_observed_nv_err_symptoms_map_to_infrasw(code: str, symptom: str):
+    """Classify observed Resource Manager errors as infrastructure software.
+
+    Args:
+        code: Exact NV_ERR status code that must receive a specific mapping.
+        symptom: Representative normalized symptom recorded by Attribution.
+    """
+    registry = _load_committed_registry()
+
+    match = registry.outcome_for([symptom])
+
+    assert match is not None
+    assert match.matched_prefix == code
+    assert match.outcome == "Fail InfraSW"
+
+
 def test_nvrx_detected_failure_maps_to_fail_undetermined():
     registry = _load_committed_registry()
 
@@ -82,13 +126,14 @@ def test_nvrx_detected_failure_maps_to_fail_undetermined():
     assert match.tier_index == OUTCOME_PRIORITIES.index(OutcomePriority.LOW_GENERIC)
 
 
-def test_nvrx_unhealthy_node_maps_to_fail_undetermined():
+def test_nvrx_unhealthy_node_maps_to_fail_multicategory():
+    """Classify an unhealthy NVRx node without asserting its root cause."""
     registry = _load_committed_registry()
 
     match = registry.outcome_for(["NVRx unhealthy node"])
 
     assert match is not None
-    assert match.outcome == "Fail Undetermined"
+    assert match.outcome == "Fail MultiCategory"
     assert match.tier_index == OUTCOME_PRIORITIES.index(OutcomePriority.LOW_GENERIC)
 
 

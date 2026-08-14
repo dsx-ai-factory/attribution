@@ -9,7 +9,7 @@
 # its affiliates is strictly prohibited.
 
 import copy
-from datetime import datetime
+from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
 import pytest
@@ -50,7 +50,7 @@ from attribution_lib.rules_engine import (
     RuleLocation,
     register_pre_filter,
 )
-from test_support.helpers import make_node_to_ranks
+from test_support.helpers import make_node_to_ranks, make_syslog_entry
 
 # APPLOG registers "error" as an include-keyword.
 APPLOG_INCLUDE_TERM = "error"
@@ -144,6 +144,53 @@ def test_successful_attribution(request, event_manager, job_info, sample_observa
     result = attributor.attribute()
     assert result is not None
     # Add more specific assertions about the attribution result based on your needs
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        "System is rebooting.",
+        "sudo: alice : TTY=pts/0 ; PWD=/tmp ; USER=root ; COMMAND=/usr/bin/systemctl reboot",
+    ],
+)
+def test_initiated_reboot_log_produces_infra_sw_with_raw_evidence(request, event_manager, job_info, line):
+    """Attribute explicit reboot logs to infrastructure software.
+
+    Args:
+        request: Pytest request fixture used to name the event stream.
+        event_manager: Event manager fixture used to create the event stream.
+        job_info: Job information fixture for the attribution run.
+        line: Reboot log line that must retain raw evidence.
+    """
+    event_stream = event_manager.create_stream(request.node.name)
+    attributor = Attributor.new(event_stream, job_info)
+    reboot_time = job_info.job_start_time + timedelta(minutes=1)
+    context = ObservationContext(
+        time_interval=TimeInterval(job_info.job_start_time, job_info.job_end_time),
+        resources=AllJobResources,
+        source=ObservationSource.SYSLOG,
+        format=ObservationFormat.RAW_LOKI_STREAMS,
+        timezone=job_info.timezone,
+    )
+    observation = InboundObservation(
+        context,
+        [
+            make_syslog_entry(
+                line,
+                node="node1",
+                timestamp_ns=int(reboot_time.timestamp() * 1e9),
+            )
+        ],
+    )
+
+    attributor.ingest(observation)
+    result = attributor.attribute()
+
+    outcome = result.outcome_attr.value()
+    assert outcome.outcome == "Fail InfraSW"
+    assert outcome.hw_cause == "Not Applicable"
+    assert "Node reboot initiated" in result.bad_nodes_attr.my_bad_nodes["node1"]
+    assert result.event_stream.query_raw("SELECT source_datum FROM events WHERE source_datum = ?", [line])
 
 
 def test_ingested_observation_state(sample_observation):
