@@ -1,0 +1,35 @@
+name: Assign Pull Request
+
+on:
+  pull_request_target:
+    types:
+      - opened
+
+permissions:
+  pull-requests: write
+
+jobs:
+  assign:
+    name: Assign Author and Reviewers
+    runs-on: linux-arm64-cpu16
+    steps:
+      - name: Assign author and request attribution team review
+        uses: actions/github-script@v9
+        with:
+          script: |
+            const pullRequest = context.payload.pull_request;
+            const { owner, repo } = context.repo;
+
+            await github.rest.issues.addAssignees({
+              owner,
+              repo,
+              issue_number: pullRequest.number,
+              assignees: [pullRequest.user.login],
+            });
+
+            await github.rest.pulls.requestReviewers({
+              owner,
+              repo,
+              pull_number: pullRequest.number,
+              team_reviewers: ["attribution"],
+            });
