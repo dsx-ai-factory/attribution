@@ -1,5 +1,68 @@
-# Repository-specific override
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: LicenseRef-NvidiaProprietary
+#
+# NVIDIA CORPORATION, its affiliates and licensors retain all intellectual
+# property and proprietary rights in and to this material, related
+# documentation and any modifications thereto. Any use, reproduction,
+# disclosure or distribution of this material and related documentation
+# without an express license agreement from NVIDIA CORPORATION or
+# its affiliates is strictly prohibited.
+
+# yaml-language-server: $schema=https://coderabbit.ai/integrations/schema.v2.json
+
+# Repository-specific review guidance for NVIDIA Attribution.
 reviews:
   profile: assertive
   auto_review:
     enabled: true
+
+  path_instructions:
+    - path: "**"
+      instructions: |
+        - Newly added, manually maintained source and configuration files that support comments must include the repository-standard NVIDIA SPDX copyright and license header.
+        - For generated files, ensure the generator or template emits the header instead of recommending manual edits to generated output.
+        - Do not require source-code headers on vendored files, lockfiles, fixtures, sample data, binaries, or file formats that cannot carry comments.
+
+    - path: "service/attribution-lib/src/attribution_lib/bundled_rules/**"
+      instructions: |
+        - Every behavior-changing rule addition or modification must include focused, co-located regression tests. Prefer TOML tests for table-shaped cases and Python tests for procedural, stateful, or mocked behavior.
+        - Treat rule names, symptom names, event types, priorities, and outcome taxonomy as compatibility contracts. Flag removals or renames unless downstream compatibility and migration are addressed.
+        - Rule selection, ordering, deduplication, tie-breaking, and emitted results must remain deterministic.
+
+    - path: "service/attribution-lib/src/attribution_lib/**"
+      instructions: |
+        - Keep core attribution logic deterministic and free of external I/O.
+        - Preserve partial evidence during multi-source processing; do not replace complementary fields through last-write-wins behavior.
+        - Distinguish None from valid falsy values such as 0, false, empty strings, and empty collections when their meanings differ.
+        - Flag silently swallowed exceptions or discarded observations that lack sufficient diagnostic context.
+
+    - path: "service/service-app/**"
+      instructions: |
+        - Preserve the documented V1 and V2 HTTP contracts. V1 remains backward compatible, and /latest must remain aligned with V2.
+        - When an API model, route, response, or error contract changes, keep OpenAPI documentation, contract tests, and the generated Python client synchronized.
+        - Validate external workload and observation data at the API boundary. Client-fixable failures must remain structured 4xx responses rather than unexpected 500 errors.
+        - Do not expose credentials, tokens, or sensitive workload and user data in logs or error responses.
+
+    - path: "service/service-app/nvidia_attribution_client/**"
+      instructions: |
+        - This client is generated from the service OpenAPI schema. Do not comment on generated implementation details, formatting, style, or structure.
+        - Only flag when the generated client is inconsistent with API models, routes, or error contracts changed in the same PR, or appears not to have been regenerated.
+
+    - path: "blueprint/**"
+      instructions: |
+        - Preserve the capability boundaries documented in blueprint/CLAUDE.md: Attribution is post-hoc, does not probe hardware, and does not make replace-or-return-to-service decisions.
+        - Missing or failed telemetry sources must reduce evidence coverage rather than fabricate observations or certainty. Preserve honest connector_reports behavior.
+        - Keep connector configuration, implementation, examples, documentation, and focused tests synchronized.
+        - Preserve deterministic taxonomy normalization and output behavior.
+        - Keep committed examples, fixtures, and sample telemetry sanitized; do not include credentials, internal endpoints, usernames, or other sensitive environment data.
+
+    - path: "docs/**"
+      instructions: |
+        - Keep public documentation synchronized with API behavior, configuration, taxonomy, and supported capability boundaries.
+        - Do not include credentials, internal endpoints, usernames, proprietary identifiers, or other sensitive environment data.
+
+    - path: "**/tests/**"
+      instructions: |
+        - Regression tests should reproduce the behavior or failure being fixed and assert externally observable behavior where possible.
+        - Cover relevant None, empty, zero, malformed, partial-data, boundary, and mixed-input cases.
+        - Keep public fixtures and sample data sanitized; do not include credentials, internal endpoints, usernames, or other sensitive environment data.
