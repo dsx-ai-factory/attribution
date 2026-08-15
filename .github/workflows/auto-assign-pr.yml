@@ -11,7 +11,7 @@ permissions:
 jobs:
   assign:
     name: Assign Author and Reviewers
-    runs-on: linux-arm64-cpu16
+    runs-on: ubuntu-latest
     steps:
       - name: Assign author and request attribution team review
         uses: actions/github-script@v9

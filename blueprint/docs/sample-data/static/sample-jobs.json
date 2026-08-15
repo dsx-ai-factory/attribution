@@ -37215,7 +37215,7 @@
     },
     {
       "id": "workload-0099",
-      "expected_outcome": "Fail InfraHW",
+      "expected_outcome": "Fail InfraSW",
       "root_cause_symptom": "System is powering down",
       "state": "NODE_FAIL",
       "nodes": [
@@ -38253,7 +38253,7 @@
     },
     {
       "id": "workload-0100",
-      "expected_outcome": "Fail InfraHW",
+      "expected_outcome": "Fail InfraSW",
       "root_cause_symptom": "System is powering down",
       "state": "NODE_FAIL",
       "nodes": [
