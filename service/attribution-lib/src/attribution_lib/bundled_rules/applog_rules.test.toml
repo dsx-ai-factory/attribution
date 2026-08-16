@@ -812,6 +812,14 @@ expected_symptom = "(non-fatal) Unexpected error from cudaGetDeviceCount()"
 expected_rule = "Unexpected error from cudaGetDeviceCount()"
 
 [[cases]]
+description = "serialized cuda compat status is interesting evidence"
+line = '0: "_CUDA_COMPAT_STATUS": "System has unsupported display driver / cuda driver combination (CUDA_ERROR_SYSTEM_DRIVER_MISMATCH) cuInit()=803"'
+tflops_start = true
+expect = "interesting"
+expected_symptom = "cudaErrorSystemDriverMismatch"
+expected_rule = "cudaErrorSystemDriverMismatch"
+
+[[cases]]
 description = "gpu is lost is bad during job"
 line = "0: GPU is lost"
 tflops_start = true

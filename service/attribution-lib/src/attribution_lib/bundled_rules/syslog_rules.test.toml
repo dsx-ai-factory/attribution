@@ -688,6 +688,13 @@ expected_symptom = "NV_ERR_INSUFFICIENT_RESOURCES mem_multicast_fabric.c"
 expected_rule = "NV_ERR_"
 
 [[cases]]
+description = "nv err busy retry is bad"
+line = "NVRM: nvCheckOkFailedNoLog: Check failed: System is busy, retry later [NV_ERR_BUSY_RETRY] (0x00000003) returned from status @ mem_multicast_fabric.c:3039"
+expect = "bad"
+expected_symptom = "NV_ERR_BUSY_RETRY mem_multicast_fabric.c"
+expected_rule = "NV_ERR_"
+
+[[cases]]
 description = "collect nvlink status failure is bad"
 line = "Failed to collect nvlink status info!"
 expect = "bad"
@@ -925,6 +932,67 @@ line = "System is powering down"
 expect = "bad"
 expected_symptom = "System is powering down"
 expected_rule = "system-powering-down"
+
+[[cases]]
+description = "system reboot initiation is bad"
+line = "System is rebooting."
+expect = "bad"
+expected_symptom = "Node reboot initiated"
+expected_rule = "node-reboot-initiated"
+
+[[cases]]
+description = "kexec reboot initiation is bad"
+line = "System is rebooting with kexec."
+expect = "bad"
+expected_symptom = "Node reboot initiated"
+expected_rule = "node-reboot-initiated"
+
+[[cases]]
+description = "userspace reboot initiation is bad"
+line = "System userspace is rebooting."
+expect = "bad"
+expected_symptom = "Node reboot initiated"
+expected_rule = "node-reboot-initiated"
+
+[[cases]]
+description = "userspace kexec reboot initiation is bad"
+line = "System userspace is rebooting with kexec."
+expect = "bad"
+expected_symptom = "Node reboot initiated"
+expected_rule = "node-reboot-initiated"
+
+[[cases]]
+description = "systemd shutdown reboot execution is bad"
+line = "systemd-shutdown[1]: Rebooting."
+expect = "bad"
+expected_symptom = "Node reboot initiated"
+expected_rule = "node-reboot-initiated"
+
+[[cases]]
+description = "prefix-stripped kernel reboot execution is bad"
+line = "reboot: Restarting system"
+expect = "bad"
+expected_symptom = "Node reboot initiated"
+expected_rule = "node-reboot-initiated"
+
+[[cases]]
+description = "sudo reboot initiation is bad"
+line = "sudo: alice : TTY=pts/0 ; PWD=/tmp ; USER=root ; COMMAND=/usr/bin/systemctl reboot"
+expect = "bad"
+expected_symptom = "Node reboot initiated"
+expected_rule = "node-reboot-initiated"
+
+[[cases]]
+description = "unrelated service rebooting message is not a node reboot"
+line = "example-service[42]: Rebooting."
+inject_mfu = false
+expect = "no_match"
+
+[[cases]]
+description = "sudo service restart is not a node reboot"
+line = "sudo: alice : TTY=pts/0 ; PWD=/tmp ; USER=root ; COMMAND=/usr/bin/systemctl restart example-service"
+inject_mfu = false
+expect = "no_match"
 
 [[cases]]
 description = "oom killed sssd service is bad"

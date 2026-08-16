@@ -336,6 +336,7 @@ _NON_IB_ROOT_CAUSE_PATTERNS = [
     "%Page Retirement%",
     "%Segmentation fault%",
     "%Node unexpectedly rebooted%",
+    "%Node reboot initiated%",
     "%Disk quota exceeded%",
     "%error running nvidia-smi%",
     "%CE deadlock DETECTED%",
@@ -871,6 +872,7 @@ def cancellation_resolution(context: RefinerContext):
 
     if "Cancelled by Timeout" in symptoms:
         symptoms.discard("Cancelled by user")
+        symptoms.discard("BrokenPipeError")
 
     if "Cancelled due to task failure" in symptoms:
         symptoms.discard("Cancelled by user")

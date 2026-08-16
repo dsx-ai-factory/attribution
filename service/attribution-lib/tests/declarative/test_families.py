@@ -4,7 +4,12 @@ import pytest
 
 from attribution_lib.declarative import load_toml_rules
 from attribution_lib.declarative.catalogs import Tables
-from attribution_lib.declarative.coverage import check_family_coverage, expand_family_cases
+from attribution_lib.declarative.coverage import (
+    check_family_coverage,
+    covered_family_obligations,
+    expand_family_cases,
+    family_obligations,
+)
 from attribution_lib.declarative.emit import LoadError
 from attribution_lib.declarative.errors import FinalizeError
 from attribution_lib.declarative.families import GeneratedRule, _subst_emit, stamp_family, substitute_columns
@@ -374,3 +379,21 @@ def test_expand_family_cases_preserves_per_case_data():
         assert expanded["expect"] == "bad"
         assert expanded["at_end_of_job"] is True
         assert expanded["expansion"] == "rows"
+
+
+def test_family_rows_expansion_skips_redundant_regex_checks(monkeypatch):
+    """Skip regex searches when row expansion guarantees family coverage.
+
+    Args:
+        monkeypatch: Pytest fixture used to reject unexpected regex searches.
+    """
+    generated = stamp_family(FAM, Tables())
+    cases = expand_family_cases([{"expansion": "rows", "expect": "bad"}], generated)
+
+    def fail_search(*_args, **_kwargs):
+        """Fail when row-expanded coverage performs a regex search."""
+        raise AssertionError("rows expansion must not re-check every generated regex")
+
+    monkeypatch.setattr("attribution_lib.declarative.coverage.re.search", fail_search)
+
+    assert covered_family_obligations(generated, cases) == family_obligations(generated)

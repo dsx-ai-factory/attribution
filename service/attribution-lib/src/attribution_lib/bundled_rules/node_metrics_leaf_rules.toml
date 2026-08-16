@@ -47,6 +47,18 @@ expect = "none"
 line   = "metric_name: up, metric_value: 1"
 
 [[extractor]]
+name     = "NodeMetrics_reboot_correlated"
+match_re = "metric_name: node_reboot_correlated, metric_value: (?P<value>[^,]+)"
+emit     = { type = "bad_node", when = "float(value) == 1", symptom = "Node unexpectedly rebooted", derived_rule = "node-metric-reboot-correlated" }
+[[extractor.cases]]
+expect  = "bad"
+line    = "metric_name: node_reboot_correlated, metric_value: 1"
+symptom = "Node unexpectedly rebooted"
+[[extractor.cases]]
+expect = "none"
+line   = "metric_name: node_reboot_correlated, metric_value: 0"
+
+[[extractor]]
 name     = "NodeMetrics_dcgm_nvlink_physical_link_down"
 match_re = "metric_name: DCGM_FI_DEV_NVLINK_PPCNT_PHYSICAL_LINK_DOWN_COUNTER, metric_value: (?P<value>[^,]+)"
 emit     = { type = "interesting_node", when = "float(value) > 0", symptom = "link down(nvlink physical layer)", derived_rule = "node-metric-dcgm-nvlink-physical-link-down" }

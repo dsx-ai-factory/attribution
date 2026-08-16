@@ -76,6 +76,15 @@ expect  = "bad"
 line    = "System is powering down"
 symptom = "System is powering down"
 
+[[extractor]]
+name     = "SyslogNodeRebootInitiated"
+match_re = 'System(?: userspace)? is rebooting(?: with kexec)?\.|systemd-shutdown\[1\]: Rebooting\.|reboot: Restarting system|COMMAND=/usr/bin/systemctl\s+reboot(?:\s|$)'
+emit     = { type = "bad_node", symptom = "Node reboot initiated", derived_rule = "node-reboot-initiated" }
+[[extractor.cases]]
+expect  = "bad"
+line    = "System is rebooting."
+symptom = "Node reboot initiated"
+
 # Leaf pod-cgroup OOM kill: systemd reports the kill at the kubepods-pod<UUID>.slice level.
 [[extractor]]
 name         = "SyslogPodSliceOomKill"

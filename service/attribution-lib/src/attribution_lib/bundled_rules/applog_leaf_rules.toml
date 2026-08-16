@@ -382,7 +382,7 @@ match_re = '(?:Unexpected error from cudaGetDeviceCount\(\).*?[Ee]rror\s*803\b|C
 type = "pick_one"
 
 [[extractor.emit.branches]]
-when         = "'_CUDA_COMPAT_STATUS=' in datum"
+when         = "'_CUDA_COMPAT_STATUS' in datum"
 type         = "interesting_node"
 symptom      = "cudaErrorSystemDriverMismatch"
 derived_rule = "cudaErrorSystemDriverMismatch"
@@ -404,6 +404,13 @@ rule        = "cudaErrorSystemDriverMismatch"
 description = "compatibility status exposes the symbolic and numeric mismatch"
 expect      = "interesting"
 line        = "_CUDA_COMPAT_STATUS=System has unsupported display driver / cuda driver combination (CUDA_ERROR_SYSTEM_DRIVER_MISMATCH) cuInit()=803"
+symptom     = "cudaErrorSystemDriverMismatch"
+rule        = "cudaErrorSystemDriverMismatch"
+
+[[extractor.cases]]
+description = "serialized compatibility status exposes the symbolic and numeric mismatch"
+expect      = "interesting"
+line        = '"_CUDA_COMPAT_STATUS": "System has unsupported display driver / cuda driver combination (CUDA_ERROR_SYSTEM_DRIVER_MISMATCH) cuInit()=803"'
 symptom     = "cudaErrorSystemDriverMismatch"
 rule        = "cudaErrorSystemDriverMismatch"
 

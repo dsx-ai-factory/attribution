@@ -31,7 +31,7 @@ from attribution_lib.bundled_rules.tests._shared import default_job_info
 from attribution_lib.job_info import JobInfo, JobInfoBuilder
 from attribution_lib.observation import Context as ObservationContext
 from attribution_lib.observation.inbound import Format as ObsFormat, Id, Source as ObsSource, TimeInterval
-from attribution_lib.outcome import OutcomeAttribution
+from attribution_lib.outcome import OutcomeAttribution, calculate_outcome
 from attribution_lib.resources import AllJobResources, Node, ResourceSet
 from attribution_lib.rules_engine import RefinerContext, RuleEngine
 from attribution_lib.sources import Source, SourceSet, SymptomSet
@@ -402,6 +402,38 @@ class TestIBSymptomCleanup:
 
         assert "Python Exception" in symptoms
         assert "IB Error-5 (IBV_WC_WR_FLUSH_ERR)" not in symptoms
+
+    @pytest.mark.parametrize("lifecycle", ["Node reboot initiated", "System is powering down"])
+    def test_orderly_lifecycle_discards_cross_node_ib_aftermath(self, stream, obs_ctx, job_info, lifecycle):
+        """Treat orderly lifecycle evidence as the root cause of IB aftermath.
+
+        Args:
+            stream: Event stream fixture used by the refiner.
+            obs_ctx: Observation context fixture used to create symptoms.
+            job_info: Job information fixture containing the participating nodes.
+            lifecycle: Orderly lifecycle symptom under test.
+        """
+        job_info.nodes.append("node02")
+        symptoms = _make_symptoms(
+            obs_ctx,
+            lifecycle,
+            "IB Error-12 (IBV_WC_RETRY_EXC_ERR)",
+        )
+        bad_nodes = _make_bad_nodes(
+            obs_ctx,
+            {
+                "node01": [lifecycle],
+                "node02": ["IB Error-12 (IBV_WC_RETRY_EXC_ERR)"],
+            },
+        )
+
+        _run_ib_cleanup(stream, job_info, symptoms, bad_nodes)
+
+        assert lifecycle in symptoms
+        assert "IB Error-12 (IBV_WC_RETRY_EXC_ERR)" not in symptoms
+        outcome = calculate_outcome(symptoms).value()
+        assert outcome.outcome == "Fail InfraSW"
+        assert outcome.root_cause_symptom == lifecycle
 
     def test_non_ib_root_cause_cleans_all_nodes(self, stream, obs_ctx, job_info):
         """Per-node root cause cleanup iterates ALL nodes, not just the first match."""
@@ -805,9 +837,22 @@ class TestCancellationResolution:
 
     def test_timeout_adds_cancelled_by_timeout(self, stream, obs_ctx):
         ji = _job_info_with(state="TIMEOUT")
-        symptoms = _make_symptoms(obs_ctx)
+        symptoms = _make_symptoms(obs_ctx, "BrokenPipeError")
         _run(stream, ji, symptoms)
         assert "Cancelled by Timeout" in symptoms
+        assert "BrokenPipeError" not in symptoms
+
+    def test_non_timeout_keeps_broken_pipe(self, stream, obs_ctx):
+        """Retain BrokenPipeError as a failure symptom for non-timeout jobs.
+
+        Args:
+            stream: Event stream fixture used by the refiner.
+            obs_ctx: Observation context fixture used to create symptoms.
+        """
+        ji = _job_info_with(state="FAILED")
+        symptoms = _make_symptoms(obs_ctx, "BrokenPipeError")
+        _run(stream, ji, symptoms)
+        assert "BrokenPipeError" in symptoms
 
     def test_cancelled_by_timeout_discards_cancelled_by_user(self, stream, obs_ctx):
         ji = _job_info_with(state="TIMEOUT")
@@ -2918,15 +2963,102 @@ class TestDagCascadePruning:
         assert "XID-48-GPU_ECC_DBE" in symptoms
 
     def test_system_powering_down_prunes_not_responding(self, stream, obs_ctx, job_info):
-        """System powering down prunes Not responding via DAG."""
+        """System powering down prunes generic node-loss symptoms via DAG."""
+        aftermath = ["Not responding", "node offline"]
         bad_nodes = _make_bad_nodes(
             obs_ctx,
-            {"node01": ["System is powering down", "Not responding"]},
+            {"node01": ["System is powering down", *aftermath]},
         )
-        symptoms = _make_symptoms(obs_ctx, "System is powering down", "Not responding")
+        symptoms = _make_symptoms(obs_ctx, "System is powering down", *aftermath)
         _run(stream, job_info, symptoms, bad_nodes)
         assert "System is powering down" in symptoms
-        assert "Not responding" not in symptoms
+        for symptom in aftermath:
+            assert symptom not in symptoms
+        outcome = calculate_outcome(symptoms).value()
+        assert outcome.outcome == "Fail InfraSW"
+        assert outcome.hw_cause == "Not Applicable"
+
+    @pytest.mark.parametrize(
+        ("lifecycle", "hardware"),
+        [
+            ("System is powering down", "gpu unavailable"),
+            ("Node reboot initiated", "XID-48-GPU_ECC_DBE"),
+        ],
+    )
+    def test_hardware_root_outranks_orderly_lifecycle(self, stream, obs_ctx, job_info, lifecycle, hardware):
+        """Prefer hardware evidence over orderly lifecycle evidence.
+
+        Args:
+            stream: Event stream fixture used by the refiner.
+            obs_ctx: Observation context fixture used to create symptoms.
+            job_info: Job information fixture used by the refiner.
+            lifecycle: Orderly lifecycle symptom under test.
+            hardware: Hardware root-cause symptom that must outrank it.
+        """
+        bad_nodes = _make_bad_nodes(
+            obs_ctx,
+            {"node01": [lifecycle, hardware]},
+        )
+        symptoms = _make_symptoms(obs_ctx, lifecycle, hardware)
+
+        _run(stream, job_info, symptoms, bad_nodes)
+
+        outcome = calculate_outcome(symptoms).value()
+        assert outcome.outcome == "Fail InfraHW"
+        assert outcome.root_cause_symptom == hardware
+
+    def test_reboot_initiation_prunes_generic_aftermath(self, stream, obs_ctx, job_info):
+        """Prune generic reboot aftermath after an initiated reboot.
+
+        Args:
+            stream: Event stream fixture used by the refiner.
+            obs_ctx: Observation context fixture used to create symptoms.
+            job_info: Job information fixture used by the refiner.
+        """
+        aftermath = [
+            "Node unexpectedly rebooted",
+            "Node failure reported by slurm",
+            "Not responding",
+            "node offline",
+            "System is powering down",
+            "Fabric manager lost connection to all GPUs",
+            "Stopping nvidia-imex.service",
+        ]
+        bad_nodes = _make_bad_nodes(obs_ctx, {"node01": ["Node reboot initiated", *aftermath]})
+        symptoms = _make_symptoms(obs_ctx, "Node reboot initiated", *aftermath)
+
+        _run(stream, job_info, symptoms, bad_nodes)
+
+        assert "Node reboot initiated" in symptoms
+        for symptom in aftermath:
+            assert symptom not in symptoms
+        assert calculate_outcome(symptoms).value().outcome == "Fail InfraSW"
+
+    def test_unexpected_reboot_on_other_node_outranks_initiated_reboot(self, stream, obs_ctx, job_info):
+        """Keep an unexpected reboot when it occurred on another node.
+
+        Args:
+            stream: Event stream fixture used by the refiner.
+            obs_ctx: Observation context fixture used to create symptoms.
+            job_info: Job information fixture containing the participating nodes.
+        """
+        job_info.nodes.append("node02")
+        bad_nodes = _make_bad_nodes(
+            obs_ctx,
+            {
+                "node01": ["Node reboot initiated"],
+                "node02": ["Node unexpectedly rebooted"],
+            },
+        )
+        symptoms = _make_symptoms(obs_ctx, "Node reboot initiated", "Node unexpectedly rebooted")
+
+        _run(stream, job_info, symptoms, bad_nodes)
+
+        assert "Node reboot initiated" in symptoms
+        assert "Node unexpectedly rebooted" in symptoms
+        outcome = calculate_outcome(symptoms).value()
+        assert outcome.outcome == "Fail InfraHW"
+        assert outcome.root_cause_symptom == "Node unexpectedly rebooted"
 
     def test_multi_node_partial_pruning(self, stream, obs_ctx, job_info):
         """Xid171Cascade refiner removes XID-48 globally; DAG then confirms per-node."""
