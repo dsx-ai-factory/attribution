@@ -28,8 +28,34 @@ env:
   UV_PYTHON: "3.14.6"
 
 jobs:
+  secret-scan:
+    name: secret-scan
+    runs-on: linux-arm64-cpu16
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - name: Scan for secrets
+        run: |
+          docker run --rm \
+            --volume "$PWD:/repo:ro" \
+            --workdir /repo \
+            ghcr.io/trufflesecurity/trufflehog@sha256:ff4c95e9df7d645daf2140e3ca1039031c63106268d5fbb25feb43ceca1bcc33 \
+            git file:///repo \
+            --no-json \
+            --no-verification \
+            --fail \
+            --exclude-detectors=Lob \
+            --exclude-paths=/repo/.trufflehog-exclude-paths \
+            --branch HEAD \
+            --max-depth 100 \
+            --no-update \
+            --github-actions
+
   python-tests:
     name: ${{ matrix.suite }}
+    needs: secret-scan
+    if: ${{ always() }}
     runs-on: linux-arm64-cpu16
     strategy:
       fail-fast: false
@@ -41,6 +67,9 @@ jobs:
     env:
       COVERAGE: "true"
     steps:
+      - name: Require successful secret scan
+        if: ${{ needs.secret-scan.result != 'success' }}
+        run: exit 1
       - uses: actions/checkout@v6
       - uses: astral-sh/setup-uv@v7
         with:
@@ -53,10 +82,15 @@ jobs:
 
   frontend-tests:
     name: frontend
+    needs: secret-scan
+    if: ${{ always() }}
     runs-on: linux-arm64-cpu16
     env:
       COVERAGE: "true"
     steps:
+      - name: Require successful secret scan
+        if: ${{ needs.secret-scan.result != 'success' }}
+        run: exit 1
       - uses: actions/checkout@v6
       - uses: actions/setup-node@v6
         with:
@@ -70,8 +104,13 @@ jobs:
 
   quickstart:
     name: quickstart
+    needs: secret-scan
+    if: ${{ always() }}
     runs-on: linux-arm64-cpu16
     steps:
+      - name: Require successful secret scan
+        if: ${{ needs.secret-scan.result != 'success' }}
+        run: exit 1
       - uses: actions/checkout@v6
       - uses: astral-sh/setup-uv@v7
         with:

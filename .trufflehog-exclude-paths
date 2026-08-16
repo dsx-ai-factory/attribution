@@ -1,0 +1,2 @@
+# sentry_sdk distribution hashes match the legacy Sentry token pattern.
+^service/service-app/uv\.lock$
