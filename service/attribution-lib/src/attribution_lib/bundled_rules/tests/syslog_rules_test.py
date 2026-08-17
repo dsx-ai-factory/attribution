@@ -787,6 +787,32 @@ def test_xid_pci_mapping_extraction(simple_job_factory, sys_tst_bldr):
     assert xid_pci_mappings["XID-119"] == "test-node-001:0000:e4:00"
 
 
+def test_xid_150_omits_error_status_from_symptom_and_pci_mapping(simple_job_factory, sys_tst_bldr):
+    """Verify XID 150 omits error status from both emitted identifiers."""
+    job_info = simple_job_factory()
+    test_syslog_data = [
+        make_syslog_entry(
+            body=(
+                "NVRM: Xid (PCI:0000:01:00): 150, SAW_MSEFW Fatal XC0 i0 Link 0 "
+                "(0x00000002 0xffffffff 0x00000000 0x00000000 0x00000000 0x00000000)"
+            ),
+            node="test-node-001",
+            timestamp_ns=1700005000000000000,
+        ),
+    ]
+
+    result = sys_tst_bldr(job_info, test_syslog_data)
+    nodes = result.get_node_attributions()
+    symptoms = set(nodes.attributions["test-node-001"].attributions.symptoms())
+
+    assert "XID-150-SAW_MSEFW" in symptoms
+    assert "XID-150-SAW_MSEFW-4294967295" not in symptoms
+
+    xid_pci_mappings = SyslogAttributionParams.collect_xid_pci_mapping(result.event_stream)
+    assert xid_pci_mappings["XID-150-SAW_MSEFW"] == "test-node-001:0000:01:00"
+    assert "XID-150-SAW_MSEFW-4294967295" not in xid_pci_mappings
+
+
 def test_xid_154_action_matches_public_catalog(simple_job_factory, sys_tst_bldr):
     """Verify XID 154 reports the action encoded in the driver message."""
 

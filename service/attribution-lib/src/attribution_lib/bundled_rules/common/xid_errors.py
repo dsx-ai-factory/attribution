@@ -375,7 +375,9 @@ def format_xid_with_subcode(xid: int, syslog_line: str = "") -> str:
     if xid == 149 and port_down_reason_code and port_down_reason_code_value:
         # For XID-149: print XID-149.4-NETIR_LINK_DOWN-ALIGNMENT_LOSS-0
         return f"XID-{xid}.{port_down_reason_code_value}-{subcode}-{port_down_reason_code}-{error_status_decimal}"
-    elif 144 <= xid <= 150:
+    elif xid == 150:
+        return f"XID-{xid}-{subcode}"
+    elif 144 <= xid <= 149:
         # For XID-145 and others: print XID-145-RLW_REMAP-1
         return f"XID-{xid}-{subcode}-{error_status_decimal}"
     else:
@@ -403,7 +405,9 @@ def create_symptom_nvl(xid_number: int, decoded_data: dict, error_status_decimal
         return (
             f"XID-{xid_number}.{port_down_reason_code_value}-{subcode}-{port_down_reason_code}-{error_status_decimal}"
         )
-    elif 144 <= xid_number <= 150:
+    elif xid_number == 150:
+        return f"XID-{xid_number}-{subcode}"
+    elif 144 <= xid_number <= 149:
         # For XID-145 and others: print XID-145-RLW_REMAP-1
         return f"XID-{xid_number}-{subcode}-{error_status_decimal}"
     else:
