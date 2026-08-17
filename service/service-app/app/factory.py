@@ -9,7 +9,7 @@
 # its affiliates is strictly prohibited.
 
 import asyncio
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 from typing import Union
 
 from attribution_lib.core import setup_rules
@@ -65,10 +65,19 @@ def create_app() -> FastAPI:
         instrumentator.expose(app)
         # Keep a strong ref to avoid garbage collection of the task.
         app.state.cleanup_task = asyncio.create_task(_cleanup_expired_attributors(global_aim))
-        yield
-        if otlp_provider is not None:
-            otlp_provider.force_flush(timeout_millis=5000)
-            otlp_provider.shutdown()
+        try:
+            yield
+        finally:
+            app.state.cleanup_task.cancel()
+            try:
+                with suppress(asyncio.CancelledError):
+                    await app.state.cleanup_task
+            finally:
+                if otlp_provider is not None:
+                    try:
+                        otlp_provider.force_flush(timeout_millis=5000)
+                    finally:
+                        otlp_provider.shutdown()
 
     lapp = FastAPI(
         title="NVIDIA Attribution Service",
