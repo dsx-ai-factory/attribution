@@ -2116,6 +2116,13 @@ outcome_symptom(
 )
 
 outcome_symptom(
+    "wandb.Error",
+    outcome="Fail User",
+    priority=OutcomePriority.LOW_USER,
+    doc="wandb-error",
+)
+
+outcome_symptom(
     "ValueError: Tasks not found",
     outcome="Fail User",
     priority=OutcomePriority.LOW_USER,

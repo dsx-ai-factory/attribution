@@ -83,6 +83,18 @@ def test_nv_err_busy_retry_maps_to_infrasw():
     assert match.outcome == "Fail InfraSW"
 
 
+def test_wandb_error_maps_to_low_priority_fail_user():
+    """Classify a generic W&B application exception as a low-priority user failure."""
+    registry = _load_committed_registry()
+
+    match = registry.outcome_for(["wandb.Error"])
+
+    assert match is not None
+    assert match.matched_prefix == "wandb.Error"
+    assert match.outcome == "Fail User"
+    assert match.tier_index == OUTCOME_PRIORITIES.index(OutcomePriority.LOW_USER)
+
+
 @pytest.mark.parametrize(
     ("code", "symptom"),
     [
