@@ -86,6 +86,12 @@ class Source(str, Enum):
        CSP event events indicating infrastructure-level host failures,
        repairs, or maintenance actions reported by the cloud service provider.
 
+    - `maintenance_fault`
+
+       Formats: `[maintenance_fault_list]`. Timestamps should be in seconds.
+
+       Structured snapshots of maintenance faults associated with job nodes.
+
     """
 
     UNDEFINED = ""
@@ -101,6 +107,7 @@ class Source(str, Enum):
     NETWORK_SYSLOG = "network_syslog"
     UFMLOG = "ufmlog"
     CSP_EVENT = "csp_event"
+    MAINTENANCE_FAULT = "maintenance_fault"
 
 
 class Format(str, Enum):
@@ -246,6 +253,14 @@ class Format(str, Enum):
         }
       ]
       ```
+
+    - `maintenance_fault_list`:
+
+      JSON-based.
+
+      An array of maintenance-fault records. Each record includes a hostname,
+      event timestamp in seconds, event ID, and fault ID. A fault component is
+      optional.
     """
 
     UNDEFINED = ""
@@ -257,6 +272,7 @@ class Format(str, Enum):
     UFMLOG = "ufmlog"
     PROMETHEUS_METRICS = "prometheus_metrics"
     CSP_EVENT_LIST = "csp_event_list"
+    MAINTENANCE_FAULT_LIST = "maintenance_fault_list"
 
 
 class TimeInterval(NamedTuple):
@@ -323,6 +339,17 @@ class CspEventEntry(TypedDict):
 
 
 CspEventEntrySeries: TypeAlias = list[CspEventEntry]
+
+
+class MaintenanceFaultEntry(TypedDict):
+    hostname: NodeStr
+    event_timestamp_s: float
+    event_id: str
+    fault_id: str
+    fault_component: NotRequired[str]
+
+
+MaintenanceFaultEntrySeries: TypeAlias = list[MaintenanceFaultEntry]
 
 StringList: TypeAlias = list[str]
 

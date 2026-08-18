@@ -8,6 +8,7 @@
 # without an express license agreement from NVIDIA CORPORATION or
 # its affiliates is strictly prohibited.
 import json
+import math
 import re
 from abc import ABC, abstractmethod
 from collections.abc import Callable, Generator, Iterable, Iterator
@@ -40,6 +41,7 @@ from attribution_lib.observation.inbound import (
     LokiAppEntry,
     LokiHealthCheckEntry,
     LokiSyslogEntry,
+    MaintenanceFaultEntry,
     NodeStr,
     RawLogLine,
     Source as ObservationSource,
@@ -125,6 +127,8 @@ class EntrySourceBase(ABC, Generic[E, T_co]):
                 return PrometheusMetricsEntrySource(observation)
             case Format.CSP_EVENT_LIST:
                 return CspEventEntrySource(observation)
+            case Format.MAINTENANCE_FAULT_LIST:
+                return MaintenanceFaultEntrySource(observation)
             case _:
                 raise UnknownObservationFormatError(observation.context.format)
 
@@ -742,6 +746,171 @@ class CspEventEntrySource(EntrySourceBase[CspEventEntry, CspEventEntryObj]):
 
     def make_line_base(self, pos: int, line: CspEventEntry) -> CspEventEntryObj:
         return CspEventEntryObj(context=self.context, pos=pos, entry=line)
+
+
+class MaintenanceFaultEntryObj(EntryBase):
+    """Processed maintenance-fault record with validated structured fields."""
+
+    def __init__(self, context: Context, pos: int, entry: MaintenanceFaultEntry):
+        """Initialize a maintenance-fault entry.
+
+        Args:
+            context: Observation context that owns the entry.
+            pos: One-based position of the entry in the observation.
+            entry: Validated maintenance-fault fields.
+        """
+        self._context = context
+        self._pos = pos
+        self._hostname = entry["hostname"]
+        self._event_timestamp_s = entry["event_timestamp_s"]
+        self._event_id = entry["event_id"]
+        self._fault_id = entry["fault_id"]
+        self._fault_component = entry.get("fault_component")
+
+    @method_cache
+    def time(self) -> datetime:
+        """Return the maintenance event time in the observation timezone.
+
+        Returns:
+            The timezone-aware event timestamp.
+        """
+        return datetime.fromtimestamp(self._event_timestamp_s, self._context.timezone)
+
+    def body(self) -> str:
+        """Serialize deterministic maintenance-fault evidence.
+
+        Returns:
+            The maintenance-fault prefix followed by compact sorted JSON.
+        """
+        payload = {"event_id": self._event_id, "fault_id": self._fault_id}
+        if self._fault_component is not None:
+            payload["fault_component"] = self._fault_component
+        return f"maintenance_fault:{json.dumps(payload, sort_keys=True, separators=(',', ':'))}"
+
+    @method_cache
+    def node(self, job_info: JobInfo) -> NodeStr:
+        """Verify and normalize the maintenance-fault hostname for a job.
+
+        Args:
+            job_info: Job metadata used to validate the hostname.
+
+        Returns:
+            The normalized hostname from ``job_info``.
+        """
+        return job_info.verify_node(self._hostname)
+
+    def resources(self, job_info: Optional[JobInfo] = None) -> ResourceSet:
+        """Return the resource scope for this maintenance-fault entry.
+
+        Args:
+            job_info: Optional job metadata used to resolve the hostname.
+
+        Returns:
+            Any resource without job metadata, or the validated node resource.
+        """
+        if job_info is None:
+            return ResourceSetClass.ANY
+        return ResourceSetClass([NodeResource(hostname=self.node(job_info))])
+
+
+class MaintenanceFaultEntrySource(EntrySourceBase[MaintenanceFaultEntry, MaintenanceFaultEntryObj]):
+    """Validate and process structured maintenance-fault records."""
+
+    @classmethod
+    def make_line_iter(cls, lines: Any) -> Iterator[MaintenanceFaultEntry]:
+        """Iterate maintenance-fault records without altering their order.
+
+        Args:
+            lines: Incoming maintenance-fault observation records.
+
+        Returns:
+            An iterator over the incoming records.
+        """
+        return cast(Iterator[MaintenanceFaultEntry], iter(lines))
+
+    def make_line_base(self, pos: int, line: MaintenanceFaultEntry) -> MaintenanceFaultEntryObj:
+        """Validate one raw record and construct its processed entry.
+
+        Args:
+            pos: One-based position of the record in the observation.
+            line: Raw maintenance-fault record.
+
+        Returns:
+            A processed maintenance-fault entry.
+
+        Raises:
+            PydanticCustomError: If the record does not meet the public contract.
+        """
+        if not isinstance(line, dict):
+            raise PydanticCustomError(
+                "dict_type",
+                "Expected dictionary for maintenance fault data, got {input_type}",
+                {"input_type": type(line).__name__},
+            )
+
+        required_string_fields = ("hostname", "event_id", "fault_id")
+        for field_name in required_string_fields:
+            field_value = line.get(field_name)
+            if field_name not in line:
+                raise PydanticCustomError("missing", "Field required: {field}", {"field": field_name})
+            if not isinstance(field_value, str) or not field_value.strip():
+                raise PydanticCustomError(
+                    "string_type",
+                    "Field must be a nonblank string: {field}",
+                    {"field": field_name},
+                )
+
+        if "fault_component" in line:
+            fault_component = line["fault_component"]
+            if not isinstance(fault_component, str) or not fault_component.strip():
+                raise PydanticCustomError(
+                    "string_type",
+                    "Field must be a nonblank string: fault_component",
+                    {},
+                )
+
+        if "event_timestamp_s" not in line:
+            raise PydanticCustomError("missing", "Field required: event_timestamp_s", {})
+        raw_timestamp_s = line["event_timestamp_s"]
+        if isinstance(raw_timestamp_s, bool) or not isinstance(raw_timestamp_s, (int, float)):
+            raise PydanticCustomError(
+                "float_type",
+                "Field must be a numeric timestamp: event_timestamp_s",
+                {},
+            )
+
+        try:
+            timestamp_s = float(raw_timestamp_s)
+        except OverflowError as error:
+            raise PydanticCustomError(
+                "finite_number",
+                "Field must be a finite timestamp: event_timestamp_s",
+                {},
+            ) from error
+        if not math.isfinite(timestamp_s):
+            raise PydanticCustomError(
+                "finite_number",
+                "Field must be a finite timestamp: event_timestamp_s",
+                {},
+            )
+        try:
+            datetime.fromtimestamp(timestamp_s, self.context.timezone)
+        except (OverflowError, OSError, ValueError) as error:
+            raise PydanticCustomError(
+                "datetime_range",
+                "Field must be a timestamp representable as a datetime: event_timestamp_s",
+                {},
+            ) from error
+
+        entry = MaintenanceFaultEntry(
+            hostname=cast(NodeStr, line["hostname"]),
+            event_timestamp_s=timestamp_s,
+            event_id=cast(str, line["event_id"]),
+            fault_id=cast(str, line["fault_id"]),
+        )
+        if "fault_component" in line:
+            entry["fault_component"] = cast(str, line["fault_component"])
+        return MaintenanceFaultEntryObj(context=self.context, pos=pos, entry=entry)
 
 
 class PrometheusMetricsEntrySource(EntrySourceBase[dict[str, Any], MetricEntry]):
