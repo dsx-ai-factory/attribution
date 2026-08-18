@@ -362,7 +362,7 @@ def test_maintenance_fault_rejects_incompatible_formats_during_batch_cache_hit(r
 
     cached = Attributor.new(event_manager.create_stream(f"{request.node.name}_{fmt.value}"), job_info)
     with pytest.raises(MismatchedSourceAndFormatError):
-        cached.ingest_batch([make_maintenance_observation([], fmt=fmt)], backend)
+        cached.ingest_batch([make_maintenance_observation([make_maintenance_fault(0)], fmt=fmt)], backend)
 
 
 def test_maintenance_fault_unchanged_snapshot_reuses_cached_extraction(request, event_manager, job_info):
