@@ -101,6 +101,40 @@ def make_observation(source: ObservationSource, fmt: ObservationFormat):
     return Observation.from_inbound_observation(make_inbound_observation(source, fmt))
 
 
+def make_maintenance_observation(lines: list[object], *, fmt=ObservationFormat.MAINTENANCE_FAULT_LIST):
+    """Build a structured maintenance snapshot for cache behavior tests.
+
+    Args:
+        lines: Ordered fault records forming one complete source snapshot.
+        fmt: Inbound format to validate against the maintenance source.
+
+    Returns:
+        A maintenance-fault observation with the regular test job interval.
+    """
+    timezone = ZoneInfo("America/Los_Angeles")
+    context = ObservationContext(
+        time_interval=TimeInterval(
+            start=datetime(2024, 1, 1, 12, 0, tzinfo=timezone),
+            end=datetime(2024, 1, 1, 13, 0, tzinfo=timezone),
+        ),
+        resources=AllJobResources,
+        source=ObservationSource.MAINTENANCE_FAULT,
+        format=fmt,
+        timezone=timezone,
+    )
+    return InboundObservation(context, lines)
+
+
+def make_maintenance_fault(index: int) -> dict[str, object]:
+    """Return one distinct maintenance fault inside the test job interval."""
+    return {
+        "event_timestamp_s": datetime(2024, 1, 1, 12, 30, tzinfo=ZoneInfo("America/Los_Angeles")).timestamp(),
+        "hostname": "node1",
+        "event_id": f"event-{index}",
+        "fault_id": f"fault-{index}",
+    }
+
+
 @pytest.fixture
 def sample_observation():
     return make_inbound_observation(ObservationSource.JOB_KEYWORDS, fmt=ObservationFormat.STRING_LIST)
@@ -307,12 +341,63 @@ def test_unhandled_sources(request, event_manager, job_info):
             ObservationSource.JOB_KEYWORDS,
             ObservationSource.UFMLOG,
             ObservationSource.CSP_EVENT,
+            ObservationSource.MAINTENANCE_FAULT,
         ]
     )
     for source in unhandled_sources:
         observation = make_observation(source, ObservationFormat.RAW_LOG_LINES)
         with pytest.raises(UnhandledObservationSourceError):
             _ = ConsumedObservation.new(event_stream, job_info, observation)
+
+
+@pytest.mark.parametrize(
+    "fmt",
+    [fmt for fmt in ObservationFormat if fmt is not ObservationFormat.MAINTENANCE_FAULT_LIST],
+)
+def test_maintenance_fault_rejects_incompatible_formats_during_batch_cache_hit(request, event_manager, job_info, fmt):
+    """A cached snapshot cannot bypass source/format compatibility validation."""
+    backend = MemoryCheckpointBackend()
+    first = Attributor.new(event_manager.create_stream(f"{request.node.name}_first"), job_info)
+    first.ingest_batch([make_maintenance_observation([make_maintenance_fault(0)])], backend)
+
+    cached = Attributor.new(event_manager.create_stream(f"{request.node.name}_{fmt.value}"), job_info)
+    with pytest.raises(MismatchedSourceAndFormatError):
+        cached.ingest_batch([make_maintenance_observation([], fmt=fmt)], backend)
+
+
+def test_maintenance_fault_unchanged_snapshot_reuses_cached_extraction(request, event_manager, job_info):
+    """An identical complete maintenance snapshot restores the existing extraction cache."""
+    backend = MemoryCheckpointBackend()
+    snapshot = [make_maintenance_fault(index) for index in range(10)]
+    first = Attributor.new(event_manager.create_stream(f"{request.node.name}_first"), job_info)
+    first.ingest_batch([make_maintenance_observation(snapshot)], backend)
+
+    cached = Attributor.new(event_manager.create_stream(f"{request.node.name}_cached"), job_info)
+    cached.ingest_batch([make_maintenance_observation(snapshot)], backend)
+
+    assert cached.event_stream.mgr is first.event_stream.mgr
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        lambda snapshot: snapshot[:2] + [make_maintenance_fault(99)] + snapshot[2:],
+        lambda snapshot: [*snapshot[:2], make_maintenance_fault(99), *snapshot[3:]],
+        lambda snapshot: [*snapshot[:2], snapshot[7], *snapshot[3:7], snapshot[2], *snapshot[8:]],
+    ],
+    ids=["insert-middle", "replace-unsampled-entry", "reorder-unsampled-entries"],
+)
+def test_maintenance_fault_snapshot_mutations_force_full_reextraction(request, event_manager, job_info, mutation):
+    """Maintenance snapshots are replace-only, including mutations old append heuristics miss."""
+    backend = MemoryCheckpointBackend()
+    snapshot = [make_maintenance_fault(index) for index in range(10)]
+    first = Attributor.new(event_manager.create_stream(f"{request.node.name}_first"), job_info)
+    first.ingest_batch([make_maintenance_observation(snapshot)], backend)
+
+    changed = Attributor.new(event_manager.create_stream(f"{request.node.name}_changed"), job_info)
+    changed.ingest_batch([make_maintenance_observation(mutation(snapshot))], backend)
+
+    assert changed.event_stream.mgr is not first.event_stream.mgr
 
 
 def test_ingest_stores_fingerprints(request, event_manager, job_info):

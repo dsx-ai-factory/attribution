@@ -130,6 +130,16 @@ outcome_symptom(
 )
 
 outcome_symptom(
+    "Maintenance Hardware Fault",
+    outcome="Fail InfraHW",
+    category=SymptomCategory.CSP_EVENT,
+    priority=OutcomePriority.CSP,
+    doc="csp-event-hardware-fault",
+    hw_cause="Known HW Cause - Node",
+    cascade_discards=("Node failure reported by slurm", "Not responding"),
+)
+
+outcome_symptom(
     "CSP Event CPU Fault",
     outcome="Fail InfraHW",
     category=SymptomCategory.CSP_EVENT,

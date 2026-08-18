@@ -42,6 +42,7 @@ from attribution_lib.observation import (
     Observation,
 )
 from attribution_lib.observation.inbound import (
+    Context as InboundObservationContext,
     Format as ObservationFormat,
     Id as ObservationId,
     Observation as InboundObservation,
@@ -187,7 +188,12 @@ class Attributor:
         if new_observation.context.source == ObservationSource.JOB_KEYWORDS:
             self._raw_keywords_observation = new_observation
         else:
-            fingerprint = compute_data_fingerprint(observation.lines)
+            fingerprint_lines = (
+                [observation.lines]
+                if new_observation.context.source is ObservationSource.MAINTENANCE_FAULT
+                else observation.lines
+            )
+            fingerprint = compute_data_fingerprint(fingerprint_lines)
             if fingerprint is not None:
                 self._source_fingerprints[new_observation.context.source.value] = fingerprint
 
@@ -274,6 +280,8 @@ class Attributor:
 
         extraction_observations = []
         for observation in observations:
+            if observation.context.source is ObservationSource.MAINTENANCE_FAULT:
+                _validate_source_format(observation.context)
             if observation.context.source == ObservationSource.JOB_KEYWORDS:
                 self._raw_keywords_observation = Observation.from_inbound_observation(observation)
             else:
@@ -283,7 +291,12 @@ class Attributor:
         observations_by_source: dict[str, InboundObservation] = {}
         for observation in extraction_observations:
             source_name = observation.context.source.value
-            fingerprint = compute_data_fingerprint(observation.lines)
+            fingerprint_lines = (
+                [observation.lines]
+                if observation.context.source is ObservationSource.MAINTENANCE_FAULT
+                else observation.lines
+            )
+            fingerprint = compute_data_fingerprint(fingerprint_lines)
             if fingerprint is not None:
                 current_fingerprints[source_name] = fingerprint
             observations_by_source[source_name] = observation
@@ -427,7 +440,7 @@ def _extract_observations(
         )
 
 
-def _validate_source_format(context: ObservationContext) -> None:
+def _validate_source_format(context: InboundObservationContext) -> None:
     """Validate that observation source and format are compatible."""
     match context.source:
         case ObservationSource.JOB_KEYWORDS:
@@ -460,6 +473,9 @@ def _validate_source_format(context: ObservationContext) -> None:
                 raise MismatchedSourceAndFormatError(context.source, context.format)
         case ObservationSource.CSP_EVENT:
             if context.format not in [ObservationFormat.CSP_EVENT_LIST]:
+                raise MismatchedSourceAndFormatError(context.source, context.format)
+        case ObservationSource.MAINTENANCE_FAULT:
+            if context.format is not ObservationFormat.MAINTENANCE_FAULT_LIST:
                 raise MismatchedSourceAndFormatError(context.source, context.format)
         case (
             ObservationSource.IB_METRICS

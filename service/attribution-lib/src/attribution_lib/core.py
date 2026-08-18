@@ -108,6 +108,13 @@ register_source_config(
         requires_nodes=True,
     ),
 )
+register_source_config(
+    ObservationSource.MAINTENANCE_FAULT,
+    SourceProcessingConfig(
+        time_start=lambda ji: ji.job_start_time,
+        requires_nodes=True,
+    ),
+)
 
 
 def process_check(
