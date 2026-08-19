@@ -347,6 +347,32 @@ def decode_xid_error_from_syslog(xid: int, syslog_line: str) -> dict:
     return {}
 
 
+def _format_nvlink_xid_identifier(xid: int, decoded_data: dict, error_status_decimal: str) -> str:
+    """Format an NVLink XID identifier.
+
+    Args:
+        xid: XID number.
+        decoded_data: Decoded error event data.
+        error_status_decimal: ErrorStatus in decimal format.
+
+    Returns:
+        Identifier used for symptoms and PCI mapping keys.
+    """
+    subcode = decoded_data.get("subcode", "")
+    port_down_reason_code = decoded_data.get("port_down_reason_code", "")
+    port_down_reason_code_value = decoded_data.get("port_down_reason_code_value", "")
+
+    if xid == 149 and port_down_reason_code != "" and port_down_reason_code_value != "":
+        # For XID-149: print XID-149.4-NETIR_LINK_DOWN-ALIGNMENT_LOSS-0
+        return f"XID-{xid}.{port_down_reason_code_value}-{subcode}-{port_down_reason_code}-{error_status_decimal}"
+    if xid == 150:
+        return f"XID-{xid}-{subcode}"
+    if 144 <= xid <= 149:
+        # For XID-145 and others: print XID-145-RLW_REMAP-1
+        return f"XID-{xid}-{subcode}-{error_status_decimal}"
+    return f"XID-{xid}"
+
+
 def format_xid_with_subcode(xid: int, syslog_line: str = "") -> str:
     """Format XID with subcode for consistent mapping keys
 
@@ -368,18 +394,7 @@ def format_xid_with_subcode(xid: int, syslog_line: str = "") -> str:
             except ValueError:
                 error_status_decimal = "0"
 
-    subcode = decoded_data.get("subcode", "")
-    port_down_reason_code = decoded_data.get("port_down_reason_code", "")
-    port_down_reason_code_value = decoded_data.get("port_down_reason_code_value", "")
-
-    if xid == 149 and port_down_reason_code and port_down_reason_code_value:
-        # For XID-149: print XID-149.4-NETIR_LINK_DOWN-ALIGNMENT_LOSS-0
-        return f"XID-{xid}.{port_down_reason_code_value}-{subcode}-{port_down_reason_code}-{error_status_decimal}"
-    elif 144 <= xid <= 150:
-        # For XID-145 and others: print XID-145-RLW_REMAP-1
-        return f"XID-{xid}-{subcode}-{error_status_decimal}"
-    else:
-        return f"XID-{xid}"
+    return _format_nvlink_xid_identifier(xid, decoded_data, error_status_decimal)
 
 
 def create_symptom_nvl(xid_number: int, decoded_data: dict, error_status_decimal: str = "0") -> str:
@@ -394,20 +409,7 @@ def create_symptom_nvl(xid_number: int, decoded_data: dict, error_status_decimal
     Returns:
         symptom_nvl formatted string
     """
-    subcode = decoded_data.get("subcode", "")
-    port_down_reason_code = decoded_data.get("port_down_reason_code", "")
-    port_down_reason_code_value = decoded_data.get("port_down_reason_code_value", "")
-
-    if xid_number == 149 and port_down_reason_code and port_down_reason_code_value:
-        # For XID-149: print XID-149.4-NETIR-NETIR_LINK_DOWN-ALIGNMENT_LOSS-0
-        return (
-            f"XID-{xid_number}.{port_down_reason_code_value}-{subcode}-{port_down_reason_code}-{error_status_decimal}"
-        )
-    elif 144 <= xid_number <= 150:
-        # For XID-145 and others: print XID-145-RLW_REMAP-1
-        return f"XID-{xid_number}-{subcode}-{error_status_decimal}"
-    else:
-        return f"XID-{xid_number}"
+    return _format_nvlink_xid_identifier(xid_number, decoded_data, error_status_decimal)
 
 
 # fmt: off
