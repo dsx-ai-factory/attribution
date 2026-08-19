@@ -1,6 +1,7 @@
 .uv-cache/
 __pycache__/
 *.pyc
+*.egg-info/
 .pytest_cache/
 .quickstart-validate/
 node_modules/
