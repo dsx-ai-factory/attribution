@@ -24,7 +24,7 @@ from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
-    from attribution_lib.rules_engine import RuleContext
+    from attribution_lib.rule_types.definitions import RuleContext
     from attribution_lib.sources import Source
 
 from attribution_lib.utils import is_event_at_end_of_job

@@ -8,7 +8,7 @@
 # without an express license agreement from NVIDIA CORPORATION or
 # its affiliates is strictly prohibited.
 
-"""Exercise record-table projection through ``catalog_lookup`` on a fresh engine.
+"""Exercise record-table projection through ``catalog_lookup`` on a fresh loader.
 
 The fixture covers a record table whose row columns are projected into emitted
 events, including both catalog-hit and catalog-miss behavior.
@@ -19,16 +19,16 @@ from pathlib import Path
 
 from attribution_lib.declarative import load_toml_rules
 from attribution_lib.resources.resource_set import AllJobResources
-from attribution_lib.rules_engine import RuleContext, RuleEngine
+from attribution_lib.rules_engine import RuleContext, RuleLoader
 from attribution_lib.sources import Source
 
 FIX = Path(__file__).parent / "fixtures" / "record_table_project.toml"
 
 
 def _load():
-    """Load the fixture into a FRESH engine (coverage is enforced at load)."""
-    engine = RuleEngine()
-    return load_toml_rules(engine, str(FIX))["SxidRecordProject"]
+    """Load the fixture into a fresh loader (coverage is enforced at load)."""
+    loader = RuleLoader()
+    return load_toml_rules(loader, str(FIX))["SxidRecordProject"]
 
 
 def _run(rule, line, dummy_ctx):
@@ -65,8 +65,8 @@ def test_record_miss_emits_fallback_and_credits_missing_rule(dummy_ctx):
 
 
 def test_record_fixture_loads_with_coverage():
-    """Loading on a fresh engine enforces row-complete coverage; if the cases did
+    """Loading on a fresh loader enforces row-complete coverage; if the cases did
     not cover every row plus not_found the load would raise LoadError."""
-    engine = RuleEngine()
-    added = load_toml_rules(engine, str(FIX))
+    loader = RuleLoader()
+    added = load_toml_rules(loader, str(FIX))
     assert set(added) == {"SxidRecordProject"}

@@ -13,7 +13,7 @@ Common helper functions for filter and refiner rule files.
 """
 
 from attribution_lib.events import DemotionTypes
-from attribution_lib.rules_engine import EventTriple
+from attribution_lib.rule_types.definitions import EventTriple
 from attribution_lib.sources import Source
 
 

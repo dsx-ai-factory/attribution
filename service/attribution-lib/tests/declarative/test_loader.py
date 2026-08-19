@@ -7,7 +7,7 @@ from attribution_lib.declarative import load_toml_rules
 from attribution_lib.declarative.errors import FinalizeError, RegistrationError, UnknownKeyError
 from attribution_lib.observation.inbound import Source as ObsSource
 from attribution_lib.resources.resource_set import AllJobResources
-from attribution_lib.rules_engine import ExtractorRule, RuleContext, RuleEngine
+from attribution_lib.rules_engine import ExtractorRule, RuleContext, RuleLoader
 from attribution_lib.sources import Source
 
 
@@ -30,15 +30,15 @@ match_re = " NVRM: rpcRmApiAlloc_GSP: GspRmAlloc failed"
 emit = { type = "bad_node", symptom = "GspRmAlloc failed" }
 untested = "coverage exercised in test_cases_coverage"
 """
-    engine = RuleEngine()
-    added = load_toml_rules(engine, _write(tmp_path, toml))
+    loader = RuleLoader()
+    added = load_toml_rules(loader, _write(tmp_path, toml))
     assert "SyslogGspFailure" in added
     rule = added["SyslogGspFailure"]
     assert isinstance(rule, ExtractorRule)
     assert rule.match_re == " NVRM: rpcRmApiAlloc_GSP: GspRmAlloc failed"
     assert rule.source_filters == frozenset({ObsSource.SYSLOG})
-    # Registered on the engine under the same path @extractor_def uses.
-    assert engine.extractor_rules["SyslogGspFailure"] is rule
+    # Registered on the loader under the same path @extractor_def uses.
+    assert loader.extractor_rules["SyslogGspFailure"] is rule
 
 
 def test_file_level_tags_land_on_the_registered_rule(tmp_path):
@@ -51,7 +51,7 @@ match_re = "GspRmAlloc failed"
 emit = { type = "bad_node", symptom = "GspRmAlloc failed" }
 untested = "validation"
 """
-    added = load_toml_rules(RuleEngine(), _write(tmp_path, toml))
+    added = load_toml_rules(RuleLoader(), _write(tmp_path, toml))
     assert added["SyslogGspFailure"].tags == ("external",)
 
 
@@ -74,7 +74,7 @@ emit = { type = "bad_node", symptom = "y" }
 untested = "validation"
 tags = ["oom", "external"]
 """
-    added = load_toml_rules(RuleEngine(), _write(tmp_path, toml))
+    added = load_toml_rules(RuleLoader(), _write(tmp_path, toml))
     assert added["Disjoint"].tags == ("external", "oom")
     assert added["Overlapping"].tags == ("external", "oom")
 
@@ -88,7 +88,7 @@ match_re = "x"
 emit = { type = "bad_node", symptom = "y" }
 untested = "validation"
 """
-    added = load_toml_rules(RuleEngine(), _write(tmp_path, toml))
+    added = load_toml_rules(RuleLoader(), _write(tmp_path, toml))
     assert added["R"].tags == ()
 
 
@@ -101,8 +101,8 @@ match_re = "GspRmAlloc failed"
 emit = { type = "bad_node", symptom = "GspRmAlloc failed" }
 untested = "processor behavior asserted directly below"
 """
-    engine = RuleEngine()
-    added = load_toml_rules(engine, _write(tmp_path, toml))
+    loader = RuleLoader()
+    added = load_toml_rules(loader, _write(tmp_path, toml))
     rule = added["SyslogGspFailure"]
     assert isinstance(rule, ExtractorRule)
     src = Source(
@@ -130,7 +130,7 @@ emit = {{ type = "bad_node", symptom = "y" }}
 untested = "validation"
 """
     with pytest.raises(Exception, match="reserved"):
-        load_toml_rules(RuleEngine(), _write(tmp_path, toml))
+        load_toml_rules(RuleLoader(), _write(tmp_path, toml))
 
 
 def test_unknown_source_raises(tmp_path):
@@ -141,9 +141,9 @@ name = "R"
 match_re = "x"
 emit = { type = "bad_node", symptom = "y" }
 """
-    engine = RuleEngine()
+    loader = RuleLoader()
     with pytest.raises(FinalizeError):
-        load_toml_rules(engine, _write(tmp_path, toml))
+        load_toml_rules(loader, _write(tmp_path, toml))
 
 
 def test_processor_stanza_unsupported(tmp_path):
@@ -154,9 +154,9 @@ name = "R"
 match_re = "x"
 processor = "some.module:fn"
 """
-    engine = RuleEngine()
+    loader = RuleLoader()
     with pytest.raises(RegistrationError):
-        load_toml_rules(engine, _write(tmp_path, toml))
+        load_toml_rules(loader, _write(tmp_path, toml))
 
 
 def test_unguarded_optional_capture_is_load_error(tmp_path):
@@ -168,7 +168,7 @@ match_re = "code (?P<code>\\\\w+)(?: at (?P<loc>\\\\S+))?"
 emit = { type = "bad_node", symptom = "{code} {loc}" }
 """
     with pytest.raises(FinalizeError):
-        load_toml_rules(RuleEngine(), _write(tmp_path, toml))
+        load_toml_rules(RuleLoader(), _write(tmp_path, toml))
 
 
 def test_capture_named_datum_is_load_error(tmp_path):
@@ -183,7 +183,7 @@ emit = { type = "bad_node", symptom = "x" }
 untested = "guard rejects load before coverage"
 """
     with pytest.raises(FinalizeError, match="datum"):
-        load_toml_rules(RuleEngine(), _write(tmp_path, toml))
+        load_toml_rules(RuleLoader(), _write(tmp_path, toml))
 
 
 def test_guarded_optional_capture_loads(tmp_path):
@@ -195,7 +195,7 @@ match_re = "code (?P<code>\\\\w+)(?: at (?P<loc>\\\\S+))?"
 emit = { type = "bad_node", symptom = "{code}{loc if loc else ''}" }
 untested = "guard behavior asserted by load success"
 """
-    added = load_toml_rules(RuleEngine(), _write(tmp_path, toml))
+    added = load_toml_rules(RuleLoader(), _write(tmp_path, toml))
     assert "R" in added
 
 
@@ -209,7 +209,7 @@ match_re = "code (?P<code>\\\\w+)(?: at (?P<loc>\\\\S+))?"
 emit = { type = "bad_node", symptom = "{code} {loc}", when = "loc is not None" }
 untested = "when-dominance asserted by load success"
 """
-    added = load_toml_rules(RuleEngine(), _write(tmp_path, toml))
+    added = load_toml_rules(RuleLoader(), _write(tmp_path, toml))
     assert "R" in added
 
 
@@ -226,11 +226,11 @@ match_re = "hello"
 emit = { type = "bad_node", symptom = "bad", when = "node is not None" }
 untested = "node is always None during coverage evaluation"
 """
-    added = load_toml_rules(RuleEngine(), _write(tmp_path, toml))
+    added = load_toml_rules(RuleLoader(), _write(tmp_path, toml))
     assert "R" in added
 
 
-def test_engine_load_dispatches_toml(tmp_path):
+def test_loader_load_dispatches_toml(tmp_path):
     toml = """
 sources = ["SYSLOG"]
 [[extractor]]
@@ -240,8 +240,8 @@ emit = { type = "bad_node", symptom = "hi" }
 untested = "dispatch-only test"
 """
     p = _write(tmp_path, toml)
-    engine = RuleEngine()
-    added = engine.load(p)
+    loader = RuleLoader()
+    added = loader.load(p)
     assert "R" in added
 
 
@@ -257,9 +257,9 @@ match_re = "hello"
 emit = {{ type = "bad_node", symptom = "{symptom}" }}
 untested = "hash test"
 ''')
-    engine = RuleEngine()
-    load_toml_rules(engine, str(p))
-    return engine.extractor_hash()
+    loader = RuleLoader()
+    load_toml_rules(loader, str(p))
+    return loader.build().extractor_hash()
 
 
 def test_extractor_hash_covers_emit_symptom(tmp_path):
@@ -288,7 +288,7 @@ match_re = "val (?P<value>\\\\d+)"
 emit = { type = "bad_node", symptom = "bad {valeu}" }
 """
     with pytest.raises(FinalizeError, match="undeclared name 'valeu'"):
-        load_toml_rules(RuleEngine(), _write(tmp_path, toml))
+        load_toml_rules(RuleLoader(), _write(tmp_path, toml))
 
 
 def test_payload_value_typo_is_load_error(tmp_path):
@@ -300,7 +300,7 @@ match_re = "val (?P<value>\\\\d+)"
 emit = { type = "generic_event", event_type = "E", payload = { amount = "{valeu}" } }
 """
     with pytest.raises(FinalizeError, match="undeclared name 'valeu'"):
-        load_toml_rules(RuleEngine(), _write(tmp_path, toml))
+        load_toml_rules(RuleLoader(), _write(tmp_path, toml))
 
 
 def test_catalog_project_column_typo_is_load_error(tmp_path):
@@ -321,7 +321,7 @@ project = { type = "interesting_node", symptom = "{nice_naem}" }
 not_found = "none"
 """
     with pytest.raises(FinalizeError, match="undeclared name 'nice_naem'"):
-        load_toml_rules(RuleEngine(), _write(tmp_path, toml))
+        load_toml_rules(RuleLoader(), _write(tmp_path, toml))
 
 
 def test_catalog_key_typo_is_load_error(tmp_path):
@@ -341,7 +341,7 @@ project = { type = "interesting_node", symptom = "{nice_name}" }
 not_found = "none"
 """
     with pytest.raises(FinalizeError, match="undeclared name 'coed'"):
-        load_toml_rules(RuleEngine(), _write(tmp_path, toml))
+        load_toml_rules(RuleLoader(), _write(tmp_path, toml))
 
 
 def test_catalog_key_set_literal_loads_without_stray_brace_error(tmp_path):
@@ -365,7 +365,7 @@ key = "datum if datum in {'foo', 'bar'} else 'foo'"
 project = { type = "interesting_node", symptom = "{nice_name}" }
 not_found = "none"
 """
-    added = load_toml_rules(RuleEngine(), _write(tmp_path, toml))
+    added = load_toml_rules(RuleLoader(), _write(tmp_path, toml))
     assert "R" in added
 
 
@@ -387,7 +387,7 @@ project = { type = "interesting_node", symptom = "{nice_name}" }
 not_found = "none"
 """
     with pytest.raises(FinalizeError, match=r"\[rows\.xid\]\.1 must be a table"):
-        load_toml_rules(RuleEngine(), _write(tmp_path, toml))
+        load_toml_rules(RuleLoader(), _write(tmp_path, toml))
 
 
 def test_when_typo_is_load_error(tmp_path):
@@ -400,7 +400,7 @@ match_re = "val (?P<value>\\\\d+)"
 emit = { type = "bad_node", symptom = "bad {value}", when = "valeu > 0" }
 """
     with pytest.raises(FinalizeError, match="undeclared name 'valeu'"):
-        load_toml_rules(RuleEngine(), _write(tmp_path, toml))
+        load_toml_rules(RuleLoader(), _write(tmp_path, toml))
 
 
 def test_catalog_when_typo_is_load_error(tmp_path):
@@ -421,7 +421,7 @@ project = { type = "interesting_node", symptom = "{nice_name}" }
 not_found = "none"
 """
     with pytest.raises(FinalizeError, match="undeclared name 'codee'"):
-        load_toml_rules(RuleEngine(), _write(tmp_path, toml))
+        load_toml_rules(RuleLoader(), _write(tmp_path, toml))
 
 
 def test_valid_template_names_load(tmp_path):
@@ -434,15 +434,15 @@ match_re = "val (?P<value>\\\\d+)"
 emit = { type = "bad_node", symptom = "bad {value} in {datum} ({int(value)})" }
 untested = "name-resolution asserted by load success"
 """
-    added = load_toml_rules(RuleEngine(), _write(tmp_path, toml))
+    added = load_toml_rules(RuleLoader(), _write(tmp_path, toml))
     assert "R" in added
 
 
 def test_rows_provider_collision_with_catalog(tmp_path):
-    engine = RuleEngine()
-    engine.record_tables["x"] = {"a": {}}
+    loader = RuleLoader()
+    loader.declarative_ctx.record_tables["x"] = {"a": {}}
     with pytest.raises(RegistrationError, match="collides with.*catalog"):
-        load_toml_rules(engine, _write(tmp_path, "[catalog.x]\na = { type = 'bad_node', symptom = 'x' }"))
+        load_toml_rules(loader, _write(tmp_path, "[catalog.x]\na = { type = 'bad_node', symptom = 'x' }"))
 
 
 def test_element_catalog_row_name_typo_is_load_error(tmp_path):
@@ -462,7 +462,7 @@ key = "capture"
 not_found = "none"
 """
     with pytest.raises(FinalizeError, match="undeclared name 'captuer'"):
-        load_toml_rules(RuleEngine(), _write(tmp_path, toml))
+        load_toml_rules(RuleLoader(), _write(tmp_path, toml))
 
 
 def test_element_catalog_row_unguarded_optional_capture_is_load_error(tmp_path):
@@ -482,7 +482,7 @@ key = "level or 'low'"
 not_found = "none"
 """
     with pytest.raises(FinalizeError, match="possibly-absent capture"):
-        load_toml_rules(RuleEngine(), _write(tmp_path, toml))
+        load_toml_rules(RuleLoader(), _write(tmp_path, toml))
 
 
 @pytest.mark.parametrize(
@@ -494,7 +494,7 @@ not_found = "none"
 )
 def test_loader_rejects_malformed_registration_stanzas(tmp_path, extractor, message):
     with pytest.raises(RegistrationError, match=message):
-        load_toml_rules(RuleEngine(), _write(tmp_path, f"[[extractor]]\n{extractor}\n"))
+        load_toml_rules(RuleLoader(), _write(tmp_path, f"[[extractor]]\n{extractor}\n"))
 
 
 @pytest.mark.parametrize(
@@ -514,7 +514,7 @@ def test_loader_rejects_malformed_registration_stanzas(tmp_path, extractor, mess
 )
 def test_loader_wraps_emit_finalize_errors(tmp_path, stanza, message):
     with pytest.raises(FinalizeError, match=message):
-        load_toml_rules(RuleEngine(), _write(tmp_path, f"[[extractor]]\n{stanza}\n"))
+        load_toml_rules(RuleLoader(), _write(tmp_path, f"[[extractor]]\n{stanza}\n"))
 
 
 def test_loader_wraps_unknown_source(tmp_path):
@@ -527,15 +527,15 @@ emit = { type = "bad_node", symptom = "x" }
 untested = "validation"
 """
     with pytest.raises(FinalizeError, match="unknown source"):
-        load_toml_rules(RuleEngine(), _write(tmp_path, text))
+        load_toml_rules(RuleLoader(), _write(tmp_path, text))
 
 
 def test_processor_missing_match_is_wrapped(tmp_path):
-    engine = RuleEngine()
-    engine.rule_processors["p"] = lambda groups: []
+    loader = RuleLoader()
+    loader.declarative_ctx.rule_processors["p"] = lambda groups: []
     text = "[[extractor]]\nname = 'r'\nprocessor = 'p'\n"
     with pytest.raises(FinalizeError, match="missing required 'match_re'"):
-        load_toml_rules(engine, _write(tmp_path, text))
+        load_toml_rules(loader, _write(tmp_path, text))
 
 
 def test_processor_preserves_existing_finalize_error(tmp_path, monkeypatch):
@@ -545,11 +545,11 @@ def test_processor_preserves_existing_finalize_error(tmp_path, monkeypatch):
         raise error
 
     monkeypatch.setattr(declarative_loader, "compile_processor", fail)
-    engine = RuleEngine()
-    engine.rule_processors["p"] = lambda groups: []
+    loader = RuleLoader()
+    loader.declarative_ctx.rule_processors["p"] = lambda groups: []
     text = "[[extractor]]\nname = 'r'\nprocessor = 'p'\nmatch_re = 'x'\n"
     with pytest.raises(FinalizeError) as caught:
-        load_toml_rules(engine, _write(tmp_path, text))
+        load_toml_rules(loader, _write(tmp_path, text))
     assert caught.value is error
 
 
@@ -568,7 +568,7 @@ emit = { type = "bad_node", symptom = "x" }
 untested = "validation"
 """
     with pytest.raises(FinalizeError) as caught:
-        load_toml_rules(RuleEngine(), _write(tmp_path, text))
+        load_toml_rules(RuleLoader(), _write(tmp_path, text))
     assert caught.value is error
 
 
@@ -587,7 +587,7 @@ emit      = { type = "bad_node", symptom = "bad", when = "xid is not None" }
 untested  = "validation"
 """
     with pytest.raises(FinalizeError, match="undeclared name 'xid'"):
-        load_toml_rules(RuleEngine(), _write(tmp_path, toml))
+        load_toml_rules(RuleLoader(), _write(tmp_path, toml))
 
 
 _TAGGED_STANZA = """
@@ -606,7 +606,7 @@ def test_file_level_internal_and_external_tags_are_rejected_naming_the_file(tmp_
     text = _TAGGED_STANZA.format(file_tags='tags = ["internal", "external"]', stanza_tags="")
     path = _write(tmp_path, text)
     with pytest.raises(RegistrationError, match=re.escape(path)):
-        load_toml_rules(RuleEngine(), path)
+        load_toml_rules(RuleLoader(), path)
 
 
 @pytest.mark.parametrize(
@@ -619,7 +619,7 @@ def test_file_level_internal_and_external_tags_are_rejected_naming_the_file(tmp_
 def test_stanza_internal_and_external_tags_are_rejected_naming_the_file(tmp_path, file_tags, stanza_tags):
     path = _write(tmp_path, _TAGGED_STANZA.format(file_tags=file_tags, stanza_tags=stanza_tags))
     with pytest.raises(FinalizeError, match=re.escape(path)):
-        load_toml_rules(RuleEngine(), path)
+        load_toml_rules(RuleLoader(), path)
 
 
 def test_stanza_bare_string_tags_is_load_error(tmp_path):
@@ -627,7 +627,7 @@ def test_stanza_bare_string_tags_is_load_error(tmp_path):
     # per character, which is what merging it unvalidated would do.
     path = _write(tmp_path, _TAGGED_STANZA.format(file_tags="", stanza_tags='tags = "external"'))
     with pytest.raises(FinalizeError, match=re.escape(path)):
-        load_toml_rules(RuleEngine(), path)
+        load_toml_rules(RuleLoader(), path)
 
 
 def test_family_preserves_existing_finalize_error(tmp_path, monkeypatch):
@@ -638,7 +638,7 @@ def test_family_preserves_existing_finalize_error(tmp_path, monkeypatch):
 
     monkeypatch.setattr(declarative_loader, "stamp_family", fail)
     with pytest.raises(FinalizeError) as caught:
-        load_toml_rules(RuleEngine(), _write(tmp_path, '[[family]]\nname = "f"\n'))
+        load_toml_rules(RuleLoader(), _write(tmp_path, '[[family]]\nname = "f"\n'))
     assert caught.value is error
 
 
@@ -694,16 +694,16 @@ untested = "validation"
 )
 def test_unknown_key_at_any_declaration_level_is_rejected(tmp_path, text):
     with pytest.raises(UnknownKeyError):
-        load_toml_rules(RuleEngine(), _write(tmp_path, text))
+        load_toml_rules(RuleLoader(), _write(tmp_path, text))
 
 
 def test_non_table_extractor_is_not_reported_as_an_unknown_key(tmp_path):
     with pytest.raises(RegistrationError) as caught:
-        load_toml_rules(RuleEngine(), _write(tmp_path, 'extractor = "nope"\n'))
+        load_toml_rules(RuleLoader(), _write(tmp_path, 'extractor = "nope"\n'))
     assert not isinstance(caught.value, UnknownKeyError)
 
 
-def test_file_level_unknown_key_leaves_the_engine_untouched(tmp_path):
+def test_file_level_unknown_key_leaves_the_loader_untouched(tmp_path):
     text = """
 sources = ["SYSLOG"]
 tag = ["typo"]
@@ -715,8 +715,8 @@ match_re = "x"
 emit = { type = "bad_node", symptom = "y" }
 untested = "validation"
 """
-    engine = RuleEngine()
+    loader = RuleLoader()
     with pytest.raises(UnknownKeyError):
-        load_toml_rules(engine, _write(tmp_path, text))
-    assert engine.extractor_rules == {}
-    assert engine.const_values == {}
+        load_toml_rules(loader, _write(tmp_path, text))
+    assert loader.extractor_rules == {}
+    assert loader.declarative_ctx.const_values == {}

@@ -8,7 +8,6 @@
 # without an express license agreement from NVIDIA CORPORATION or
 # its affiliates is strictly prohibited.
 
-import glob
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import timedelta
@@ -38,6 +37,7 @@ from attribution_lib.rules_engine import (
     SOURCE_CONFIGS,
     RuleEngine,
     RuleId,
+    RuleLoader,
     RuleParameters,
     SourceProcessingConfig,
     process_observation_source,
@@ -162,9 +162,10 @@ def setup_rules(
             (e.g., ['monitor-', 'scanner-'])
         node_domain_resolver: Optional callback that maps a node hostname to a
             hardware domain identifier. Return None for nodes without a domain.
-        rules_paths: Directories to scan for rule plugin files (``*.py``).
+        rules_paths: Directories to scan for rule plugin files (``*.py`` and
+            ``*.toml``, excluding ``*.test.toml``).
             - ``None`` (default): loads the bundled rules shipped with this package.
-            - ``[]``: skips rule loading entirely (no rule engine).
+            - ``[]``: loads no rule files and creates an empty ``RuleEngine``.
             - Explicit list: loads only from the given paths. Use
               ``[get_bundled_rules_path(), my_extra_path]`` to extend the
               bundled set with additional rules.
@@ -192,13 +193,7 @@ def setup_rules(
     _PRE_FILTERS.clear()
     _METRIC_SPECS.clear()
 
-    attribution_lib._rules_engine = RuleEngine()
-    for path in rules_paths:
-        for pattern in ("*.py", "*.toml"):
-            for file in sorted(glob.glob(pattern, root_dir=path)):
-                if file.endswith(".test.toml"):
-                    continue  # co-located test files are run by the test suite, not loaded
-                attribution_lib._rules_engine.load(str(path / file))
+    attribution_lib._rules_engine = RuleLoader.load_all(rules_paths)
 
     # Compile loaded declarations into the runtime symptom registry once per
     # initialization. Per-job attribution reads this cached snapshot; it is only

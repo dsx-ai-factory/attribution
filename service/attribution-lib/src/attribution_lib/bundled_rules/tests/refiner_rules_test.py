@@ -33,7 +33,7 @@ from attribution_lib.observation import Context as ObservationContext
 from attribution_lib.observation.inbound import Format as ObsFormat, Id, Source as ObsSource, TimeInterval
 from attribution_lib.outcome import OutcomeAttribution, calculate_outcome
 from attribution_lib.resources import AllJobResources, Node, ResourceSet
-from attribution_lib.rules_engine import RefinerContext, RuleEngine
+from attribution_lib.rules_engine import RefinerContext, RuleLoader
 from attribution_lib.sources import Source, SourceSet, SymptomSet
 from attribution_lib.symptoms.symptom_enums import RegisteredSymptoms
 
@@ -42,10 +42,11 @@ from attribution_lib.symptoms.symptom_enums import RegisteredSymptoms
 def rules_engine():
     """Load filter and refiner rule modules."""
     original_engine = attribution_lib._rules_engine
-    attribution_lib._rules_engine = RuleEngine()
+    loader = RuleLoader()
     rules_dir = get_bundled_rules_path()
-    attribution_lib.get_rules_engine().load(str(rules_dir / "filter_rules.py"))
-    attribution_lib.get_rules_engine().load(str(rules_dir / "refiner_rules.py"))
+    loader.load(str(rules_dir / "filter_rules.py"))
+    loader.load(str(rules_dir / "refiner_rules.py"))
+    attribution_lib._rules_engine = loader.build()
 
     yield attribution_lib.get_rules_engine()
 

@@ -13,7 +13,7 @@ from attribution_lib.declarative.coverage import (
 from attribution_lib.declarative.emit import LoadError
 from attribution_lib.declarative.errors import FinalizeError
 from attribution_lib.declarative.families import GeneratedRule, _subst_emit, stamp_family, substitute_columns
-from attribution_lib.rules_engine import RuleEngine
+from attribution_lib.rules_engine import RuleLoader
 
 
 def test_substitute_columns():
@@ -139,13 +139,13 @@ symptom = "Segmentation fault"
 key = "OOM"
 symptom = "out of memory"
 """
-    engine = RuleEngine()
-    added = load_toml_rules(engine, _write(tmp_path, toml))
+    loader = RuleLoader()
+    added = load_toml_rules(loader, _write(tmp_path, toml))
     assert "gk:Segmentation fault" in added
     assert "gk:OOM" in added
     rule = added["gk:Segmentation fault"]
     assert rule.match_re == re.escape("Segmentation fault")
-    assert engine.extractor_rules["gk:OOM"] is added["gk:OOM"]
+    assert loader.extractor_rules["gk:OOM"] is added["gk:OOM"]
 
 
 # --- Task 2: patterns (indexed) + rows_from a record table ----------------------
@@ -203,8 +203,8 @@ rule = "B"
 expansion = "rows"
 expect = "bad"
 """
-    engine = RuleEngine()
-    added = load_toml_rules(engine, _write(tmp_path, toml))
+    loader = RuleLoader()
+    added = load_toml_rules(loader, _write(tmp_path, toml))
     assert "gk:Segmentation fault" in added and "gk:OOM" in added
 
 
@@ -220,9 +220,9 @@ emit = { type = "bad_node", symptom = "{symptom}" }
 key = "OOM"
 symptom = "out of memory"
 """
-    engine = RuleEngine()
+    loader = RuleLoader()
     with pytest.raises(LoadError):
-        load_toml_rules(engine, _write(tmp_path, toml))
+        load_toml_rules(loader, _write(tmp_path, toml))
 
 
 def test_family_untested_rows_waives_a_row(tmp_path):
@@ -247,8 +247,8 @@ symptom = "rare thing"
 line = "OOM"
 expect = "bad"
 """
-    engine = RuleEngine()
-    added = load_toml_rules(engine, _write(tmp_path, toml))
+    loader = RuleLoader()
+    added = load_toml_rules(loader, _write(tmp_path, toml))
     assert "gk:OOM" in added and "gk:rare" in added
 
 
@@ -274,9 +274,9 @@ symptom = "rare thing"
 line = "nomatch"
 expect = "none"
 """
-    engine = RuleEngine()
+    loader = RuleLoader()
     with pytest.raises(LoadError):
-        load_toml_rules(engine, _write(tmp_path, toml))
+        load_toml_rules(loader, _write(tmp_path, toml))
 
 
 def test_family_declares_generated_credit_names(tmp_path):
@@ -301,10 +301,10 @@ rule = "B"
 expansion = "rows"
 expect = "bad"
 """
-    engine = RuleEngine()
-    load_toml_rules(engine, _write(tmp_path, toml))
-    assert "A" in engine.declared_rule_names
-    assert "B" in engine.declared_rule_names
+    loader = RuleLoader()
+    load_toml_rules(loader, _write(tmp_path, toml))
+    assert "A" in loader.declared_rule_names
+    assert "B" in loader.declared_rule_names
 
 
 def test_family_tags_merge_with_file_tags_on_every_generated_row(tmp_path):
@@ -337,7 +337,7 @@ symptom = "out of memory"
 key = "rare"
 symptom = "rare thing"
 """
-    added = load_toml_rules(RuleEngine(), _write(tmp_path, toml))
+    added = load_toml_rules(RuleLoader(), _write(tmp_path, toml))
     assert len(added) == 4
     # Every generated row carries both layers; the sibling gets the file layer alone.
     assert {rule.tags for rule in added.values()} == {("external", "oom"), ("oom",)}
@@ -361,7 +361,7 @@ symptom = "out of memory"
 """
     path = _write(tmp_path, toml)
     with pytest.raises(FinalizeError, match=re.escape(path)):
-        load_toml_rules(RuleEngine(), path)
+        load_toml_rules(RuleLoader(), path)
 
 
 def test_expand_family_cases_preserves_per_case_data():

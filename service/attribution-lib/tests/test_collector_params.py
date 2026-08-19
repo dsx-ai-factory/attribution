@@ -28,7 +28,7 @@ from attribution_lib.core import (
 from attribution_lib.events import EventManager
 from attribution_lib.rules_engine import (
     CollectorRule,
-    RuleEngine,
+    RuleLoader,
     RuleLocation,
     RuleParameters,
 )
@@ -70,8 +70,8 @@ class TestRunCollectorsParams:
 
     @pytest.fixture(autouse=True)
     def _setup(self, simple_job_factory):
-        self.engine = RuleEngine()
-        self.mgr = EventManager(rules_engine=self.engine)
+        self.loader = RuleLoader()
+        self.mgr = EventManager(rules_engine=self.loader.build())
         self.stream = self.mgr.create_stream("collector-params-test")
         self.job_info = simple_job_factory(state="RUNNING", nodes=["node0"])
         yield
@@ -84,8 +84,8 @@ class TestRunCollectorsParams:
             captured.append(params)
             return {}
 
-        self.engine.register_rule(_make_collector("C.NoModel", proc))
-        self.engine.run_collectors(self.stream, self.job_info)
+        self.loader.register_rule(_make_collector("C.NoModel", proc))
+        self.loader.build().run_collectors(self.stream, self.job_info)
 
         assert captured == [None]
 
@@ -96,8 +96,8 @@ class TestRunCollectorsParams:
             captured.append(params)
             return {}
 
-        self.engine.register_rule(_make_collector("C.Demo", proc, params_model=_DemoParams))
-        self.engine.run_collectors(self.stream, self.job_info)
+        self.loader.register_rule(_make_collector("C.Demo", proc, params_model=_DemoParams))
+        self.loader.build().run_collectors(self.stream, self.job_info)
 
         assert captured == [_DemoParams()]
 
@@ -108,8 +108,8 @@ class TestRunCollectorsParams:
             captured.append(params)
             return {}
 
-        self.engine.register_rule(_make_collector("C.Demo", proc, params_model=_DemoParams))
-        self.engine.run_collectors(
+        self.loader.register_rule(_make_collector("C.Demo", proc, params_model=_DemoParams))
+        self.loader.build().run_collectors(
             self.stream, self.job_info, rule_params={"C.Demo": RuleParameters(params={"threshold": 0.9})}
         )
 
@@ -118,17 +118,17 @@ class TestRunCollectorsParams:
 
     def test_omitting_rule_params_matches_legacy_digest(self):
         """run_collectors() with no rule_params produces the same digest as today."""
-        self.engine.register_rule(_make_collector("C.NoModel", lambda _es, _ji, _p: {"k": 1}))
+        self.loader.register_rule(_make_collector("C.NoModel", lambda _es, _ji, _p: {"k": 1}))
 
-        assert self.engine.run_collectors(self.stream, self.job_info) == {"k": 1}
-        assert self.engine.run_collectors(self.stream, self.job_info, rule_params=None) == {"k": 1}
-        assert self.engine.run_collectors(self.stream, self.job_info, rule_params={}) == {"k": 1}
+        assert self.loader.build().run_collectors(self.stream, self.job_info) == {"k": 1}
+        assert self.loader.build().run_collectors(self.stream, self.job_info, rule_params=None) == {"k": 1}
+        assert self.loader.build().run_collectors(self.stream, self.job_info, rule_params={}) == {"k": 1}
 
     def test_entries_for_unregistered_collectors_are_ignored(self):
         """Lib is permissive: caller validates RuleIds upstream; unknown keys no-op."""
-        self.engine.register_rule(_make_collector("C.NoModel", lambda _es, _ji, _p: {"k": 1}))
+        self.loader.register_rule(_make_collector("C.NoModel", lambda _es, _ji, _p: {"k": 1}))
 
-        digest = self.engine.run_collectors(
+        digest = self.loader.build().run_collectors(
             self.stream, self.job_info, rule_params={"Not.A.Real.Collector": RuleParameters(params={"foo": "bar"})}
         )
 
@@ -142,12 +142,12 @@ class TestRunCollectorsParams:
             sibling_called.append(params)
             return {"sibling": True}
 
-        self.engine.register_rule(
+        self.loader.register_rule(
             _make_collector("C.Demo", lambda _es, _ji, _p: {"never": True}, params_model=_DemoParams)
         )
-        self.engine.register_rule(_make_collector("C.Sibling", sibling))
+        self.loader.register_rule(_make_collector("C.Sibling", sibling))
 
-        digest = self.engine.run_collectors(
+        digest = self.loader.build().run_collectors(
             self.stream, self.job_info, rule_params={"C.Demo": RuleParameters(params={"threshold": "not a number"})}
         )
 
@@ -160,10 +160,10 @@ class TestRunCollectorsParams:
         def bombing(_es, _ji, _p):
             raise RuntimeError("kaboom")
 
-        self.engine.register_rule(_make_collector("C.Bomb", bombing))
-        self.engine.register_rule(_make_collector("C.Sibling", lambda _es, _ji, _p: {"sibling": True}))
+        self.loader.register_rule(_make_collector("C.Bomb", bombing))
+        self.loader.register_rule(_make_collector("C.Sibling", lambda _es, _ji, _p: {"sibling": True}))
 
-        digest = self.engine.run_collectors(self.stream, self.job_info)
+        digest = self.loader.build().run_collectors(self.stream, self.job_info)
 
         assert digest == {"sibling": True}
 
@@ -174,16 +174,25 @@ class TestAttributeRunCollectors:
     @pytest.fixture(autouse=True)
     def _setup(self, simple_job_factory):
         self._original_engine = attribution_lib._rules_engine
-        attribution_lib._rules_engine = RuleEngine()
-        self.engine = attribution_lib._rules_engine
-        self.mgr = EventManager(rules_engine=self.engine)
+        self.loader = RuleLoader()
+        self._publish()
+        self.mgr = EventManager(rules_engine=attribution_lib.get_rules_engine())
         self.stream = self.mgr.create_stream("attribute-run-collectors-test")
         self.job_info = simple_job_factory(state="FAILED", exit_code_signal=1, nodes=["node0"])
         yield
         self.mgr.close()
         attribution_lib._rules_engine = self._original_engine
 
+    def _publish(self):
+        """Install what the loader holds now as the process-global engine.
+
+        The engine is immutable, so a test registering a collector has to
+        rebuild and reinstall before attribute() will see it.
+        """
+        attribution_lib._rules_engine = self.loader.build()
+
     def _call_attribute(self, **overrides):
+        self._publish()
         return attribute(
             event_stream=self.stream,
             job_info=self.job_info,
@@ -200,7 +209,7 @@ class TestAttributeRunCollectors:
         assert result.collectors == {}
 
     def test_default_does_not_populate_collectors(self):
-        self.engine.register_rule(_make_collector("Collect.Test", lambda _es, _ji, _p: {"never_run": True}))
+        self.loader.register_rule(_make_collector("Collect.Test", lambda _es, _ji, _p: {"never_run": True}))
         result = self._call_attribute()
         assert result.collectors == {}
 
@@ -211,7 +220,7 @@ class TestAttributeRunCollectors:
             captured.append((es, ji, params))
             return {"emitted": True}
 
-        self.engine.register_rule(_make_collector("Collect.Test", collector))
+        self.loader.register_rule(_make_collector("Collect.Test", collector))
 
         result = self._call_attribute(run_collectors=True)
 
@@ -228,7 +237,7 @@ class TestAttributeRunCollectors:
         def collector(_es, _ji, params):
             return {"threshold_seen": params.threshold}
 
-        self.engine.register_rule(_make_collector("Collect.Test", collector, params_model=_DemoParams))
+        self.loader.register_rule(_make_collector("Collect.Test", collector, params_model=_DemoParams))
 
         result = self._call_attribute(
             run_collectors=True,
@@ -244,7 +253,7 @@ class TestAttributeRunCollectors:
             captured.append(params)
             return {}
 
-        self.engine.register_rule(_make_collector("Collect.Test", collector, params_model=_DemoParams))
+        self.loader.register_rule(_make_collector("Collect.Test", collector, params_model=_DemoParams))
 
         self._call_attribute(run_collectors=True)
 

@@ -46,7 +46,7 @@ from attribution_lib.rules_engine import (
     EventTriple,
     ExtractorRule,
     PreFilterSpec,
-    RuleEngine,
+    RuleLoader,
     RuleLocation,
     register_pre_filter,
 )
@@ -547,10 +547,10 @@ def _emit_one_event(groups, hostname, source, context):
 def prefilter_env():
     """Process-global rules engine + prefilter carrying only test-local rules.
 
-    Installs a fresh engine with one APPLOG extractor (fires on the trigger sentinel) and an
-    exclude-only prefilter, then restores both globals on teardown so nothing leaks."""
-    engine = RuleEngine()
-    engine.register_rule(
+    Builds and installs an engine with one APPLOG extractor (fires on the trigger sentinel) and
+    an exclude-only prefilter, then restores both globals on teardown so nothing leaks."""
+    loader = RuleLoader()
+    loader.register_rule(
         ExtractorRule(
             name=_TEST_RULE_NAME,
             author="test",
@@ -560,15 +560,16 @@ def prefilter_env():
             source_filters=frozenset({ObservationSource.APPLOG}),
         )
     )
-    engine.declared_event_types.add(_TEST_EVENT_TYPE)
+    loader.declared_event_types.add(_TEST_EVENT_TYPE)
 
+    built = loader.build()
     saved_engine = attribution_lib._rules_engine
     saved_filters = copy.deepcopy(_PRE_FILTERS)
-    attribution_lib._rules_engine = engine
+    attribution_lib._rules_engine = built
     _PRE_FILTERS.clear()
     register_pre_filter(ObservationSource.APPLOG, PreFilterSpec(exclude_terms=[_EXCLUDE_SENTINEL]))
 
-    manager = EventManager(rules_engine=engine)
+    manager = EventManager(rules_engine=built)
     try:
         yield manager
     finally:

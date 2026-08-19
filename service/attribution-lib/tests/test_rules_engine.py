@@ -17,15 +17,19 @@ import pytest
 import attribution_lib
 from attribution_lib.events import EventManager
 from attribution_lib.exceptions import InvalidRuleParams, RuleAcceptsNoParamsError
+from attribution_lib.observation.inbound import Source as ObservationSource
 from attribution_lib.rules_engine import (
     CascadeScope,
     CollectorRule,
     DuplicateRuleError,
+    ExtractorAccumulatorRule,
+    ExtractorRule,
     FilterPriority,
     FilterRule,
     OutcomePriority,
     RuleEngine,
     RuleIngestionError,
+    RuleLoader,
     RuleLocation,
     RuleParameters,
     RuleParamsBase,
@@ -58,11 +62,11 @@ def test_symptom_declarations_register_during_load(tmp_path):
         )
     )
 
-    engine = RuleEngine()
-    engine.load(str(rule_file))
+    loader = RuleLoader()
+    loader.load(str(rule_file))
 
-    assert len(engine.symptom_declarations) == 3
-    outcome_decl = engine.symptom_declarations[0]
+    assert len(loader.symptom_declarations) == 3
+    outcome_decl = loader.symptom_declarations[0]
     assert outcome_decl.prefix == "bus error"
     assert outcome_decl.outcome == "Fail MultiCategory"
     assert outcome_decl.priority == OutcomePriority.LOW_USER
@@ -72,12 +76,12 @@ def test_symptom_declarations_register_during_load(tmp_path):
     assert outcome_decl.scope is CascadeScope.NODE
     assert outcome_decl.location is not None
 
-    domain_decl = engine.symptom_declarations[1]
+    domain_decl = loader.symptom_declarations[1]
     assert domain_decl.prefix == "bus error"
     assert domain_decl.cascade_discards == ("XID-145",)
     assert domain_decl.scope is CascadeScope.NVL_DOMAIN
 
-    cascade_decl = engine.symptom_declarations[2]
+    cascade_decl = loader.symptom_declarations[2]
     assert cascade_decl.prefix == "Python bug"
     assert cascade_decl.outcome is None
     assert cascade_decl.priority is None
@@ -102,9 +106,9 @@ def test_outcome_symptom_requires_doc_anchor(tmp_path):
         )
     )
 
-    engine = RuleEngine()
+    loader = RuleLoader()
     with pytest.raises(RuleIngestionError, match="requires a non-empty doc anchor"):
-        engine.load(str(rule_file))
+        loader.load(str(rule_file))
 
 
 def test_known_symptom_registers_vocabulary_only_declaration(tmp_path):
@@ -119,11 +123,11 @@ def test_known_symptom_registers_vocabulary_only_declaration(tmp_path):
         )
     )
 
-    engine = RuleEngine()
-    engine.load(str(rule_file))
+    loader = RuleLoader()
+    loader.load(str(rule_file))
 
-    assert len(engine.symptom_declarations) == 1
-    declaration = engine.symptom_declarations[0]
+    assert len(loader.symptom_declarations) == 1
+    declaration = loader.symptom_declarations[0]
     assert declaration.prefix == "BrokenPipeError"
     assert declaration.outcome is None
     assert declaration.priority is None
@@ -155,10 +159,10 @@ def test_duplicate_identical_symptom_declaration_is_ignored(tmp_path):
         )
     )
 
-    engine = RuleEngine()
-    engine.load(str(rule_file))
+    loader = RuleLoader()
+    loader.load(str(rule_file))
 
-    assert len(engine.symptom_declarations) == 1
+    assert len(loader.symptom_declarations) == 1
 
 
 def test_conflicting_symptom_declaration_raises(tmp_path):
@@ -184,10 +188,10 @@ def test_conflicting_symptom_declaration_raises(tmp_path):
         )
     )
 
-    engine = RuleEngine()
+    loader = RuleLoader()
     with pytest.raises(RuleIngestionError, match="Conflicting symptom declaration"):
-        engine.load(str(rule_file))
-    assert engine.symptom_declarations == []
+        loader.load(str(rule_file))
+    assert loader.symptom_declarations == []
 
 
 def test_failed_load_restores_symptom_predicates(tmp_path):
@@ -212,11 +216,44 @@ def test_failed_load_restores_symptom_predicates(tmp_path):
         )
     )
 
-    engine = RuleEngine()
+    loader = RuleLoader()
     with pytest.raises(RuntimeError, match="load failed"):
-        engine.load(str(rule_file))
+        loader.load(str(rule_file))
 
-    assert engine.symptom_predicates == {}
+    assert loader.symptom_predicates == {}
+
+
+def test_explicit_empty_accumulator_source_filters_override_rule_sources(tmp_path):
+    rule_file = tmp_path / "empty_accumulator_sources.py"
+    rule_file.write_text(
+        "\n".join(
+            [
+                "from attribution_lib.rules_engine import ExtractorAccumulator, ObservationSource, extractor_accumulator_def",
+                "",
+                "rule_sources = {ObservationSource.APPLOG}",
+                "",
+                "@extractor_accumulator_def('ExplicitEmpty', 'trigger', source_filters=set())",
+                "class ExplicitEmpty(ExtractorAccumulator):",
+                "    def process_line(self, source): pass",
+                "    @property",
+                "    def is_consuming(self): return False",
+                "    def finalize(self): return []",
+                "",
+                "@extractor_accumulator_def('Omitted', 'trigger')",
+                "class Omitted(ExplicitEmpty): pass",
+            ]
+        )
+    )
+
+    loader = RuleLoader()
+    loader.load(str(rule_file))
+
+    explicit = loader.rules["ExplicitEmpty"]
+    omitted = loader.rules["Omitted"]
+    assert isinstance(explicit, ExtractorAccumulatorRule)
+    assert isinstance(omitted, ExtractorAccumulatorRule)
+    assert explicit.source_filters == frozenset()
+    assert omitted.source_filters == frozenset({ObservationSource.APPLOG})
 
 
 # Filter priority ordering tests
@@ -226,7 +263,7 @@ class TestFilterPriorityOrdering:
     @pytest.fixture(autouse=True)
     def _setup(self):
         self.execution_log: list[str] = []
-        self.mgr = EventManager(RuleEngine())
+        self.mgr = EventManager(RuleLoader().build())
         yield
         self.mgr.close()
 
@@ -239,9 +276,9 @@ class TestFilterPriorityOrdering:
             priority=priority,
         )
 
-    def _run_filters(self, engine: RuleEngine, **kwargs) -> list[str]:
+    def _run_filters(self, loader: RuleLoader, **kwargs) -> list[str]:
         stream = self.mgr.create_stream("test")
-        engine.process_event_filters(stream, None, **kwargs)
+        loader.build().process_event_filters(stream, None, **kwargs)
         return list(self.execution_log)
 
     def test_default_priority_is_standard(self):
@@ -253,53 +290,68 @@ class TestFilterPriorityOrdering:
 
         phase=X runs only filters at that priority; phase=None runs all phases.
         """
-        engine = RuleEngine()
-        engine.register_rule(self._make_rule("Late", FilterPriority.LATE))
-        engine.register_rule(self._make_rule("Mid", FilterPriority.MID))
-        engine.register_rule(self._make_rule("Std", FilterPriority.STANDARD))
-        engine.register_rule(self._make_rule("Early", FilterPriority.EARLY))
+        loader = RuleLoader()
+        loader.register_rule(self._make_rule("Late", FilterPriority.LATE))
+        loader.register_rule(self._make_rule("Mid", FilterPriority.MID))
+        loader.register_rule(self._make_rule("Std", FilterPriority.STANDARD))
+        loader.register_rule(self._make_rule("Early", FilterPriority.EARLY))
 
-        assert self._run_filters(engine) == ["Early", "Mid", "Std", "Late"]
+        assert self._run_filters(loader) == ["Early", "Mid", "Std", "Late"]
 
         self.execution_log.clear()
-        assert self._run_filters(engine, phase=FilterPriority.MID) == ["Mid"]
+        assert self._run_filters(loader, phase=FilterPriority.MID) == ["Mid"]
 
     def test_stable_tiebreaking(self):
         """Rules with the same priority execute in registration order."""
-        engine = RuleEngine()
-        engine.register_rule(self._make_rule("A"))
-        engine.register_rule(self._make_rule("B"))
-        engine.register_rule(self._make_rule("C"))
+        loader = RuleLoader()
+        loader.register_rule(self._make_rule("A"))
+        loader.register_rule(self._make_rule("B"))
+        loader.register_rule(self._make_rule("C"))
 
-        assert self._run_filters(engine) == ["A", "B", "C"]
+        assert self._run_filters(loader) == ["A", "B", "C"]
 
     def test_mixed_priorities_and_tiebreaking(self):
         """Within the same priority, registration order wins."""
-        engine = RuleEngine()
-        engine.register_rule(self._make_rule("S1", FilterPriority.STANDARD))
-        engine.register_rule(self._make_rule("M1", FilterPriority.MID))
-        engine.register_rule(self._make_rule("S2", FilterPriority.STANDARD))
-        engine.register_rule(self._make_rule("M2", FilterPriority.MID))
+        loader = RuleLoader()
+        loader.register_rule(self._make_rule("S1", FilterPriority.STANDARD))
+        loader.register_rule(self._make_rule("M1", FilterPriority.MID))
+        loader.register_rule(self._make_rule("S2", FilterPriority.STANDARD))
+        loader.register_rule(self._make_rule("M2", FilterPriority.MID))
 
-        assert self._run_filters(engine) == ["M1", "M2", "S1", "S2"]
+        assert self._run_filters(loader) == ["M1", "M2", "S1", "S2"]
 
         self.execution_log.clear()
-        assert self._run_filters(engine, phase=FilterPriority.MID) == ["M1", "M2"]
+        assert self._run_filters(loader, phase=FilterPriority.MID) == ["M1", "M2"]
 
     def test_duplicate_filter_rule_raises(self):
-        engine = RuleEngine()
-        engine.register_rule(self._make_rule("Dup"))
+        loader = RuleLoader()
+        loader.register_rule(self._make_rule("Dup"))
 
         with pytest.raises(DuplicateRuleError, match="Duplicate rule 'Dup'"):
-            engine.register_rule(self._make_rule("Dup", FilterPriority.MID))
+            loader.register_rule(self._make_rule("Dup", FilterPriority.MID))
+
+    def test_duplicate_name_across_rule_types_raises(self):
+        """A name registered as one rule type cannot be reused as a different type."""
+        loader = RuleLoader()
+        loader.register_rule(
+            ExtractorRule(
+                name="Shared",
+                author="test",
+                location=RuleLocation("first.py", 7),
+                match_re=r"x",
+                processor=lambda groups, hostname, source, context: [],
+            )
+        )
+        with pytest.raises(DuplicateRuleError, match="first at first.py:7"):
+            loader.register_rule(self._make_rule("Shared", FilterPriority.MID))
 
     def test_backward_compatible_default_priority(self):
         """Existing rules without explicit priority preserve registration order."""
-        engine = RuleEngine()
+        loader = RuleLoader()
         for name in ["DemoteTflops", "DemoteWatchdog", "DemoteDataloader", "ProcessCompletes"]:
-            engine.register_rule(self._make_rule(name))
+            loader.register_rule(self._make_rule(name))
 
-        assert self._run_filters(engine) == ["DemoteTflops", "DemoteWatchdog", "DemoteDataloader", "ProcessCompletes"]
+        assert self._run_filters(loader) == ["DemoteTflops", "DemoteWatchdog", "DemoteDataloader", "ProcessCompletes"]
 
 
 class _SampleParams(RuleParamsBase):
@@ -349,12 +401,12 @@ def test_no_bundled_rule_resolves_to_engine_module():
     rules_engine.py (the registration machinery)."""
 
     d = os.path.join(os.path.dirname(attribution_lib.__file__), "bundled_rules")
-    engine = RuleEngine()
+    loader = RuleLoader()
     for f in sorted(glob.glob("*.py", root_dir=d)):
-        engine.load(os.path.join(d, f))
+        loader.load(os.path.join(d, f))
     offenders = [
         (name, r.location.file)
-        for name, r in engine.rules.items()
+        for name, r in loader.rules.items()
         if r.location and os.path.basename(r.location.file) == "rules_engine.py"
     ]
     assert not offenders, f"{len(offenders)} rules resolve to rules_engine.py, e.g. {offenders[:3]}"

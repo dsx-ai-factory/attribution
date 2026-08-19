@@ -30,7 +30,7 @@ from attribution_lib.observation.inbound import (
 )
 from attribution_lib.outcome import calculate_outcome
 from attribution_lib.resources import AllJobResources, Node, ResourceSet
-from attribution_lib.rules_engine import RuleEngine
+from attribution_lib.rules_engine import RuleLoader
 from attribution_lib.sources import Source, SourceSet, SymptomSet
 
 CONTROLLER_STOP = "Node stopped by controller"
@@ -42,10 +42,11 @@ CONTROLLER_STOP = "Node stopped by controller"
 @pytest.fixture(autouse=True)
 def rules_engine():
     original_engine = attribution_lib._rules_engine
-    attribution_lib._rules_engine = RuleEngine()
+    loader = RuleLoader()
     rules_dir = get_bundled_rules_path()
-    attribution_lib.get_rules_engine().load(str(rules_dir / "filter_rules.py"))
-    attribution_lib.get_rules_engine().load(str(rules_dir / "refiner_rules.py"))
+    loader.load(str(rules_dir / "filter_rules.py"))
+    loader.load(str(rules_dir / "refiner_rules.py"))
+    attribution_lib._rules_engine = loader.build()
     yield attribution_lib.get_rules_engine()
     attribution_lib._rules_engine = original_engine
 

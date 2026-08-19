@@ -19,14 +19,15 @@ from attribution_lib.exceptions import (
     UninitializedRuleEngineError,
     UninitializedSymptomRegistryError,
 )
-from attribution_lib.rules_engine import (
+from attribution_lib.prefilters import (
     get_metric_spec as get_metric_spec,
     get_pre_filter as _registered_pre_filter,
 )
 
 if TYPE_CHECKING:
     from attribution_lib.observation.inbound import Source as ObservationSource
-    from attribution_lib.rules_engine import PreFilterSpec, RuleEngine
+    from attribution_lib.prefilters import PreFilterSpec
+    from attribution_lib.rules_engine import RuleEngine
     from attribution_lib.symptoms.registry_generation import GeneratedSymptomRegistry
 
 ip_to_nodenames: dict[str, str] = {}

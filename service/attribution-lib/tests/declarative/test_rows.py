@@ -1,45 +1,43 @@
-"""Tests for the @rows record-table provider seam (Plan 5d, Task 1)."""
+"""Tests for ``@rows`` record-table providers."""
 
 import textwrap
+from contextlib import contextmanager
 
 import pytest
 
 from attribution_lib.declarative import load_toml_rules
+from attribution_lib.declarative.context import _using_rule_loader
 from attribution_lib.declarative.errors import LoadError
 from attribution_lib.rules_engine import (
-    RuleEngine,
     RuleIngestionError,
-    _rules_engine,
+    RuleLoader,
     rows,
 )
 
 
-def _with_engine():
-    engine = RuleEngine()
-    token = _rules_engine.set(engine)
-    return engine, token
+@contextmanager
+def _with_loader():
+    loader = RuleLoader()
+    with _using_rule_loader(loader):
+        yield loader
 
 
 def test_provider_registers_str_coerced_keys():
-    engine, token = _with_engine()
-    try:
+    with _with_loader() as loader:
 
         @rows("xid")
         def _x():
             return {63: {"nice_name": "GSP RPC Timeout"}, 74: {"nice_name": "NVLink Error"}}
 
-        assert engine.record_tables["xid"] == {
+        assert loader.declarative_ctx.record_tables["xid"] == {
             "63": {"nice_name": "GSP RPC Timeout"},
             "74": {"nice_name": "NVLink Error"},
         }
         assert _x()[63]["nice_name"] == "GSP RPC Timeout"  # returned unchanged
-    finally:
-        _rules_engine.reset(token)
 
 
 def test_duplicate_table_name_is_error():
-    engine, token = _with_engine()
-    try:
+    with _with_loader():
 
         @rows("xid")
         def _a():
@@ -50,45 +48,37 @@ def test_duplicate_table_name_is_error():
             @rows("xid")
             def _b():
                 return {2: {"nice_name": "b"}}
-    finally:
-        _rules_engine.reset(token)
 
 
 def test_provider_must_return_dict():
-    engine, token = _with_engine()
-    try:
+    with _with_loader():
         with pytest.raises(RuleIngestionError, match="must return a dict"):
 
             @rows("bad")
             def _bad():
                 return [(1, {"nice_name": "x"})]
-    finally:
-        _rules_engine.reset(token)
 
 
-def test_no_active_engine_is_error():
-    with pytest.raises(RuleIngestionError, match="No active rules engine"):
+def test_no_active_loader_is_error():
+    with pytest.raises(RuleIngestionError, match="No active rule loader"):
 
         @rows("orphan")
         def _x():
             return {1: {"nice_name": "x"}}
 
 
-def test_fresh_engine_starts_empty():
-    assert RuleEngine().record_tables == {}
+def test_fresh_loader_starts_empty():
+    assert RuleLoader().declarative_ctx.record_tables == {}
 
 
 def _load(tmp_path, toml_text, register=None):
-    engine = RuleEngine()
-    token = _rules_engine.set(engine)
-    try:
+    loader = RuleLoader()
+    with _using_rule_loader(loader):
         if register:
-            register()  # register @rows providers on this engine (mimics a sibling .py)
+            register()  # register @rows providers on this loader (mimics a sibling .py)
         f = tmp_path / "rules.toml"
         f.write_text(textwrap.dedent(toml_text))
-        return engine, load_toml_rules(engine, str(f))
-    finally:
-        _rules_engine.reset(token)
+        return loader, load_toml_rules(loader, str(f))
 
 
 def test_catalog_lookup_over_provider_record_table(tmp_path):
@@ -122,11 +112,11 @@ def test_catalog_lookup_over_provider_record_table(tmp_path):
     symptom = "SXID-999"
     rule = "sxid-id-missing-in-catalog"
     """
-    engine, added = _load(tmp_path, toml, register)
+    loader, added = _load(tmp_path, toml, register)
     assert "SXid" in added
     # both credits declared (hit via lookup derived_rule, miss via not_found)
-    assert "known-sxid-event" in engine.declared_rule_names
-    assert "sxid-id-missing-in-catalog" in engine.declared_rule_names
+    assert "known-sxid-event" in loader.declared_rule_names
+    assert "sxid-id-missing-in-catalog" in loader.declared_rule_names
 
 
 def test_provider_table_name_collides_with_inline_rows(tmp_path):
@@ -145,8 +135,8 @@ def test_provider_table_name_collides_with_inline_rows(tmp_path):
 
 
 def test_record_project_own_derived_rule_is_declared(tmp_path):
-    # A record project with its OWN derived_rule and no lookup derived_rule must be
-    # declared (the Plan 3 gap). No lookup derived_rule here.
+    # A record project with its own derived_rule and no lookup-derived rule must
+    # still declare that derived rule.
     def register():
         @rows("t")
         def _t():
@@ -172,5 +162,5 @@ def test_record_project_own_derived_rule_is_declared(tmp_path):
     expect = "no_match"
     line = "k=6"
     """
-    engine, added = _load(tmp_path, toml, register)
-    assert "project-own-credit" in engine.declared_rule_names
+    loader, added = _load(tmp_path, toml, register)
+    assert "project-own-credit" in loader.declared_rule_names

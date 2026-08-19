@@ -24,7 +24,7 @@ from attribution_lib.observation.inbound import (
     TimeInterval,
 )
 from attribution_lib.resources import AllJobResources, Node, ResourceSet
-from attribution_lib.rules_engine import RuleEngine
+from attribution_lib.rules_engine import RuleLoader
 from attribution_lib.sources import Source
 
 
@@ -51,7 +51,7 @@ class TestEnumPopulation:
 
     def test_obs_sources_populated_on_init(self):
         """Test that obs_sources table is populated with all Source enum values."""
-        mgr = EventManager(RuleEngine())
+        mgr = EventManager(RuleLoader().build())
 
         # Get all sources from the database
         actual_sources = [row[0] for row in mgr._conn.execute("SELECT name FROM obs_sources ORDER BY name").fetchall()]
@@ -66,7 +66,7 @@ class TestEnumPopulation:
 
     def test_obs_formats_populated_on_init(self):
         """Test that obs_formats table is populated with all Format enum values."""
-        mgr = EventManager(RuleEngine())
+        mgr = EventManager(RuleLoader().build())
 
         # Get all formats from the database
         actual_formats = [row[0] for row in mgr._conn.execute("SELECT name FROM obs_formats ORDER BY name").fetchall()]
@@ -81,7 +81,7 @@ class TestEnumPopulation:
 
     def test_enum_values_have_valid_ids(self):
         """Test that populated enum values can be looked up and have valid IDs."""
-        mgr = EventManager(RuleEngine())
+        mgr = EventManager(RuleLoader().build())
 
         # Test a few known source values
         for source in ["syslog", "applog", "health_check"]:
@@ -99,7 +99,7 @@ class TestEnumPopulation:
 
     def test_lookup_helpers_work_with_populated_enums(self):
         """Test that the lookup helpers can find the pre-populated enum values."""
-        mgr = EventManager(RuleEngine())
+        mgr = EventManager(RuleLoader().build())
 
         # Test obs_sources lookup helper
         syslog_id = mgr._obs_sources.get_id("syslog")
@@ -234,7 +234,7 @@ class TestTimestampAndTimezoneFlow:
 
     def test_timezone_preserved_through_roundtrip(self):
         """Test that a timezone-aware timestamp is preserved when stored and retrieved."""
-        mgr = EventManager(RuleEngine())
+        mgr = EventManager(RuleLoader().build())
         mgr.preload_rule_names({"test"})
         mgr.preload_event_types({"Test.event"})
         stream = mgr.create_stream("test-context")
@@ -297,7 +297,7 @@ class TestTimestampAndTimezoneFlow:
 
     def test_different_timezones_stored_correctly(self):
         """Test that multiple events with different timezones are stored correctly."""
-        mgr = EventManager(RuleEngine())
+        mgr = EventManager(RuleLoader().build())
         mgr.preload_rule_names({"test"})
         mgr.preload_event_types({"Test.event"})
         stream = mgr.create_stream("test-context")
@@ -365,7 +365,7 @@ class TestTimestampAndTimezoneFlow:
 
     def test_query_raw_returns_correct_timezone(self):
         """Test that query_raw returns timestamps with correct timezone information."""
-        mgr = EventManager(RuleEngine())
+        mgr = EventManager(RuleLoader().build())
         mgr.preload_rule_names({"test"})
         mgr.preload_event_types({"Test.event"})
         stream = mgr.create_stream("test-context")

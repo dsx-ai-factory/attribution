@@ -35,7 +35,7 @@ except ImportError:  # pragma: no cover
     import sre_parse as _sre_parse  # older fallback
 
 if TYPE_CHECKING:
-    from attribution_lib.rules_engine import RuleContext
+    from attribution_lib.rule_types.definitions import RuleContext
     from attribution_lib.sources import Source
 
 

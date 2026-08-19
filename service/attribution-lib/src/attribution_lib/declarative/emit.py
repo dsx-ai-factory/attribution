@@ -30,7 +30,7 @@ from attribution_lib.declarative.expressions import (
 )
 from attribution_lib.events import DemotionTypes
 from attribution_lib.rule_helpers import _bad, _interesting
-from attribution_lib.rules_engine import EventTriple, ExtractorProcessor, RuleContext
+from attribution_lib.rule_types.definitions import EventTriple, ExtractorProcessor, RuleContext
 from attribution_lib.sources import Source
 
 # Re-exported for callers that import ``LoadError`` from this module (loader, tests).

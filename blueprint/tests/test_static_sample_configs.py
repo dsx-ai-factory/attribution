@@ -189,7 +189,7 @@ def test_static_quickstart_prioritizes_slurm_node_failures_over_xid31():
     for workload in PRIORITIZED_NODE_FAILURE_WORKLOADS:
         job = jobs_by_id[workload]
         assert job["root_cause_symptom"] == "Node failure reported by slurm"
-        assert job["expected_outcome"] == "Fail InfraHW"
+        assert job["expected_outcome"] == "Fail InfraSW"
         assert XID31_PATTERN.search(_workload_sample_text(workload)) is not None
 
 

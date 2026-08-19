@@ -19,7 +19,7 @@ import attribution_lib.exceptions
 from attribution_lib.declarative.errors import RegistrationError
 from attribution_lib.declarative.loader import load_toml_rules
 from attribution_lib.observation.inbound import Source as ObservationSource
-from attribution_lib.rules_engine import _PRE_FILTERS, PreFilterSpec, RuleEngine, register_pre_filter
+from attribution_lib.rules_engine import _PRE_FILTERS, PreFilterSpec, RuleLoader, register_pre_filter
 
 
 @pytest.fixture
@@ -136,12 +136,12 @@ class TestBundledPrefilterRegistration:
 @pytest.mark.usefixtures("clean_registry", "initialized_lib")
 class TestTomlPrefilterLoading:
     def _load(self, toml_text: str) -> None:
-        engine = RuleEngine()
+        loader = RuleLoader()
         with tempfile.NamedTemporaryFile(suffix=".toml", mode="wb", delete=False) as f:
             f.write(textwrap.dedent(toml_text).encode())
             path = f.name
         try:
-            load_toml_rules(engine, path)
+            load_toml_rules(loader, path)
         finally:
             os.unlink(path)
 

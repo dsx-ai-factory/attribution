@@ -29,18 +29,19 @@ from attribution_lib.observation.inbound import (
     TimeInterval,
 )
 from attribution_lib.resources import AllJobResources, Node, ResourceSet
-from attribution_lib.rules_engine import RuleEngine
+from attribution_lib.rules_engine import RuleLoader
 from attribution_lib.sources import Source
 
 
 @pytest.fixture(autouse=True)
 def rules_engine():
     original_engine = attribution_lib._rules_engine
-    attribution_lib._rules_engine = RuleEngine()
+    loader = RuleLoader()
 
     # Load filter rules from the bundled rules directory
     rules_dir = get_bundled_rules_path()
-    attribution_lib.get_rules_engine().load(str(rules_dir / "filter_rules.py"))
+    loader.load(str(rules_dir / "filter_rules.py"))
+    attribution_lib._rules_engine = loader.build()
 
     yield attribution_lib.get_rules_engine()
 

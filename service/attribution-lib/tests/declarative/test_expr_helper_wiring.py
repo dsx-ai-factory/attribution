@@ -1,4 +1,4 @@
-"""A compiled closure and load-time coverage both see registered helpers (Plan 5a, Task 3).
+"""A compiled closure and load-time coverage both see registered helpers.
 
 Mirrors tests/declarative/test_emit.py: the `dummy_ctx` fixture (conftest), a real
 `Source`, and symptom read from `payload["symptom"]`.
@@ -10,12 +10,13 @@ import textwrap
 import pytest
 
 from attribution_lib.declarative import load_toml_rules
+from attribution_lib.declarative.context import _using_rule_loader
 from attribution_lib.declarative.coverage import check_coverage
 from attribution_lib.declarative.emit import compile_element
 from attribution_lib.declarative.errors import LoadError
 from attribution_lib.declarative.expressions import merge_functions
 from attribution_lib.resources.resource_set import AllJobResources
-from attribution_lib.rules_engine import RuleContext, RuleEngine, _rules_engine, expr_helper
+from attribution_lib.rules_engine import RuleContext, RuleLoader, expr_helper
 from attribution_lib.sources import Source
 
 
@@ -71,16 +72,13 @@ def test_coverage_evaluates_helper_when():
 
 
 def _load(tmp_path, toml_text, register=None):
-    engine = RuleEngine()
-    token = _rules_engine.set(engine)
-    try:
+    loader = RuleLoader()
+    with _using_rule_loader(loader):
         if register:
-            register()  # register helpers on this engine, mimicking a sibling .py
+            register()  # register helpers on this loader, mimicking a sibling .py
         f = tmp_path / "rules.toml"
         f.write_text(textwrap.dedent(toml_text))
-        return engine, load_toml_rules(engine, str(f))
-    finally:
-        _rules_engine.reset(token)
+        return loader, load_toml_rules(loader, str(f))
 
 
 def test_toml_rule_using_registered_helper_loads(tmp_path):
@@ -107,7 +105,7 @@ def test_toml_rule_using_registered_helper_loads(tmp_path):
     expect = "bad"
     line = "[ERROR] Not enough space left in /var/a"
     """
-    engine, added = _load(tmp_path, toml, register)
+    loader, added = _load(tmp_path, toml, register)
     assert "EnrootNotEnoughSpace" in added
 
 

@@ -1,4 +1,4 @@
-"""Per-match {source, ctx} injection reaches compiled closures (Plan 5c, Task 3)."""
+"""Per-match ``source`` and ``ctx`` injection reaches compiled closures."""
 
 import datetime
 import textwrap
@@ -7,11 +7,12 @@ import types
 import pytest
 
 from attribution_lib.declarative import load_toml_rules
+from attribution_lib.declarative.context import _using_rule_loader
 from attribution_lib.declarative.emit import compile_element
 from attribution_lib.declarative.errors import FinalizeError
 from attribution_lib.declarative.lifecycle import LIFECYCLE_INJECTIONS, LIFECYCLE_PREDICATES
 from attribution_lib.resources.resource_set import AllJobResources
-from attribution_lib.rules_engine import RuleContext, RuleEngine, _rules_engine
+from attribution_lib.rules_engine import RuleContext, RuleLoader
 from attribution_lib.sources import Source
 
 
@@ -45,14 +46,11 @@ def test_injecting_none_default_is_unaffected(dummy_ctx):
 
 
 def _load(tmp_path, toml_text):
-    engine = RuleEngine()
-    token = _rules_engine.set(engine)
-    try:
+    loader = RuleLoader()
+    with _using_rule_loader(loader):
         f = tmp_path / "rules.toml"
         f.write_text(textwrap.dedent(toml_text))
-        return engine, load_toml_rules(engine, str(f))
-    finally:
-        _rules_engine.reset(token)
+        return loader, load_toml_rules(loader, str(f))
 
 
 def test_rule_using_at_end_of_job_loads_with_lifecycle_cases(tmp_path):

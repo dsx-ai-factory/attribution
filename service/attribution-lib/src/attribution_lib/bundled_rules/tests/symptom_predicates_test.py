@@ -10,8 +10,8 @@
 
 """Characterize the conditional-discard predicates and their resolution.
 
-The predicate logic lives in bundled_rules; the resolution mechanism is an
-engine-scoped registry populated by ``@symptom_predicate`` at rule-load time. These
+The predicate logic lives in bundled_rules; the resolution mechanism is a
+loader-scoped registry populated by ``@symptom_predicate`` at rule-load time. These
 pin both.
 """
 
@@ -21,7 +21,7 @@ from attribution_lib.bundled_rules.symptom_predicates import (
     job_exceeded_time_limit,
 )
 from attribution_lib.core import get_bundled_rules_path
-from attribution_lib.rules_engine import RuleEngine
+from attribution_lib.rules_engine import RuleLoader
 from attribution_lib.sources import SymptomSet
 from test_support.helpers import create_source_set
 
@@ -59,18 +59,18 @@ def test_job_exceeded_time_limit(simple_job_factory):
     assert job_exceeded_time_limit(SymptomSet(), None) is False
 
 
-def test_predicates_register_onto_engine_on_load():
-    """Loading the predicate rule file registers each predicate onto that engine.
+def test_predicates_register_onto_loader_on_load():
+    """Loading the predicate rule file registers each predicate onto that loader.
 
-    Registration is engine-scoped (via @symptom_predicate against the engine loading
-    the file), so a fresh engine starts empty and gets exactly this file's predicates.
+    Registration is loader-scoped (via @symptom_predicate against the loader loading
+    the file), so a fresh loader starts empty and gets exactly this file's predicates.
     """
-    engine = RuleEngine()
-    engine.load(str(get_bundled_rules_path() / "symptom_predicates.py"))
+    loader = RuleLoader()
+    loader.load(str(get_bundled_rules_path() / "symptom_predicates.py"))
     for name in (
         "job_elapsed_below_eap_observation_window",
         "job_exceeded_time_limit",
         "contains_ibv_modify_qp_failure",
     ):
-        assert engine.symptom_predicates.get(name) is not None, name
-    assert engine.symptom_predicates.get("not_a_predicate") is None
+        assert loader.symptom_predicates.get(name) is not None, name
+    assert loader.symptom_predicates.get("not_a_predicate") is None

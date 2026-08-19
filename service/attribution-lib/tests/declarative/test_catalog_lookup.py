@@ -10,7 +10,7 @@ from attribution_lib.declarative.coverage import (
 from attribution_lib.declarative.emit import LoadError, compile_catalog_lookup
 from attribution_lib.declarative.loader import _check_catalog_guards, _collect_catalog_declarations
 from attribution_lib.resources.resource_set import AllJobResources
-from attribution_lib.rules_engine import RuleContext, RuleEngine
+from attribution_lib.rules_engine import RuleContext, RuleLoader
 from attribution_lib.sources import Source
 
 
@@ -384,7 +384,7 @@ line = "HC alpha"
 line = "HC beta"
 """
     with pytest.raises(LoadError, match="row:gamma"):
-        load_toml_rules(RuleEngine(), _write(tmp_path, _THREE_ROW.format(cases=cases)))
+        load_toml_rules(RuleLoader(), _write(tmp_path, _THREE_ROW.format(cases=cases)))
 
 
 def test_all_rows_plus_not_found_covers(tmp_path):
@@ -398,7 +398,7 @@ line = "HC gamma"
 [[extractor.cases]]
 line = "HC unknown_check"
 """
-    added = load_toml_rules(RuleEngine(), _write(tmp_path, _THREE_ROW.format(cases=cases)))
+    added = load_toml_rules(RuleLoader(), _write(tmp_path, _THREE_ROW.format(cases=cases)))
     assert "HC" in added
 
 
@@ -412,7 +412,7 @@ line = "HC beta"
 line = "HC gamma"
 """
     with pytest.raises(LoadError, match="not_found"):
-        load_toml_rules(RuleEngine(), _write(tmp_path, _THREE_ROW.format(cases=cases)))
+        load_toml_rules(RuleLoader(), _write(tmp_path, _THREE_ROW.format(cases=cases)))
 
 
 def test_untested_rows_waives_a_row(tmp_path):
@@ -435,7 +435,7 @@ line = "HC beta"
 [[extractor.cases]]
 line = "HC unknown_check"
 """
-    added = load_toml_rules(RuleEngine(), _write(tmp_path, toml))
+    added = load_toml_rules(RuleLoader(), _write(tmp_path, toml))
     assert "HC" in added
 
 
@@ -451,7 +451,7 @@ match_re = "HC (?P<check>\\\\w+)"
 emit = { type = "catalog_lookup", catalog = "hc", key = "check", not_found = "none" }
 """
     with pytest.raises(LoadError):
-        load_toml_rules(RuleEngine(), _write(tmp_path, toml))
+        load_toml_rules(RuleLoader(), _write(tmp_path, toml))
 
 
 # --- Part 2: the `catalog` expansion case form ---
@@ -475,7 +475,7 @@ line_template = "HC {key}"
 [[extractor.cases]]
 line = "HC unknown_check"
 """
-    added = load_toml_rules(RuleEngine(), _write(tmp_path, toml))
+    added = load_toml_rules(RuleLoader(), _write(tmp_path, toml))
     assert "HC" in added
 
 
@@ -494,7 +494,7 @@ expansion = "catalog"
 line_template = "HC {key}"
 """
     with pytest.raises(LoadError, match="not_found"):
-        load_toml_rules(RuleEngine(), _write(tmp_path, toml))
+        load_toml_rules(RuleLoader(), _write(tmp_path, toml))
 
 
 # --- Part 3: guard-check wired for catalog_lookup in the loader ---
@@ -517,7 +517,7 @@ line_template = "HC {key}"
 line = "HC nope at x"
 """
     with pytest.raises(LoadError, match="loc"):
-        load_toml_rules(RuleEngine(), _write(tmp_path, toml))
+        load_toml_rules(RuleLoader(), _write(tmp_path, toml))
 
 
 # --- Part 4: declare catalog-hit credit names ---
@@ -540,11 +540,11 @@ line_template = "HC {key}"
 [[extractor.cases]]
 line = "HC nope"
 """
-    engine = RuleEngine()
-    load_toml_rules(engine, _write(tmp_path, toml))
-    assert "X/alpha" in engine.declared_rule_names
-    assert "X/beta" in engine.declared_rule_names
-    assert "X/{key}" not in engine.declared_rule_names
+    loader = RuleLoader()
+    load_toml_rules(loader, _write(tmp_path, toml))
+    assert "X/alpha" in loader.declared_rule_names
+    assert "X/beta" in loader.declared_rule_names
+    assert "X/{key}" not in loader.declared_rule_names
 
 
 def test_catalog_lookup_declares_row_own_and_not_found(tmp_path):
@@ -564,8 +564,8 @@ line_template = "HC {key}"
 [[extractor.cases]]
 line = "HC nope"
 """
-    engine = RuleEngine()
-    load_toml_rules(engine, _write(tmp_path, toml))
-    assert "OWN/alpha" in engine.declared_rule_names  # row own wins
-    assert "X/beta" in engine.declared_rule_names  # lookup template for no-own row
-    assert "MISS/none" in engine.declared_rule_names  # not_found leaf credit
+    loader = RuleLoader()
+    load_toml_rules(loader, _write(tmp_path, toml))
+    assert "OWN/alpha" in loader.declared_rule_names  # row own wins
+    assert "X/beta" in loader.declared_rule_names  # lookup template for no-own row
+    assert "MISS/none" in loader.declared_rule_names  # not_found leaf credit

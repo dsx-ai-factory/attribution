@@ -1,4 +1,4 @@
-"""Tests for the [const] / @const seam (Plan 5b, Tasks 1-2)."""
+"""Tests for declarative ``[const]`` tables and ``@const`` providers."""
 
 import pytest
 
@@ -8,36 +8,26 @@ from attribution_lib.declarative.expressions import (
     referenced_const_names,
 )
 from attribution_lib.rules_engine import (
-    RuleEngine,
     RuleIngestionError,
-    _rules_engine,
+    RuleLoader,
     const,
 )
-
-
-def _with_engine():
-    engine = RuleEngine()
-    token = _rules_engine.set(engine)
-    return engine, token
+from tests.declarative.conftest import _with_loader
 
 
 def test_provider_merges_flat_names():
-    engine, token = _with_engine()
-    try:
+    with _with_loader() as loader:
 
         @const("nvlink")
         def _p():
             return {"plr_a": 0.05, "plr_b": 0.01}
 
-        assert engine.const_values == {"plr_a": 0.05, "plr_b": 0.01}
+        assert loader.declarative_ctx.const_values == {"plr_a": 0.05, "plr_b": 0.01}
         assert _p() == {"plr_a": 0.05, "plr_b": 0.01}  # returned unchanged
-    finally:
-        _rules_engine.reset(token)
 
 
 def test_two_providers_merge():
-    engine, token = _with_engine()
-    try:
+    with _with_loader() as loader:
 
         @const("a")
         def _a():
@@ -47,14 +37,11 @@ def test_two_providers_merge():
         def _b():
             return {"y": 2}
 
-        assert engine.const_values == {"x": 1, "y": 2}
-    finally:
-        _rules_engine.reset(token)
+        assert loader.declarative_ctx.const_values == {"x": 1, "y": 2}
 
 
 def test_duplicate_const_name_across_providers_is_error():
-    engine, token = _with_engine()
-    try:
+    with _with_loader():
 
         @const("a")
         def _a():
@@ -65,24 +52,19 @@ def test_duplicate_const_name_across_providers_is_error():
             @const("b")
             def _b():
                 return {"dup": 2}
-    finally:
-        _rules_engine.reset(token)
 
 
 def test_provider_must_return_dict():
-    engine, token = _with_engine()
-    try:
+    with _with_loader():
         with pytest.raises(RuleIngestionError, match="must return a dict"):
 
             @const("bad")
             def _bad():
                 return [("x", 1)]
-    finally:
-        _rules_engine.reset(token)
 
 
 def test_no_active_engine_is_error():
-    with pytest.raises(RuleIngestionError, match="No active rules engine"):
+    with pytest.raises(RuleIngestionError, match="No active rule loader"):
 
         @const("orphan")
         def _p():
@@ -90,7 +72,7 @@ def test_no_active_engine_is_error():
 
 
 def test_fresh_engine_starts_empty():
-    assert RuleEngine().const_values == {}
+    assert RuleLoader().declarative_ctx.const_values == {}
 
 
 def test_referenced_const_names():

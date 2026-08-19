@@ -8,10 +8,10 @@
 # without an express license agreement from NVIDIA CORPORATION or
 # its affiliates is strictly prohibited.
 
-"""Exercise ``SyslogLustreError`` event sets through the declarative engine.
+"""Exercise ``SyslogLustreError`` event sets through the declarative loader.
 
 The parity fixture mirrors the bundled TOML and is loaded into a fresh
-``RuleEngine`` so load-time branch coverage is enforced independently.
+``RuleLoader`` so load-time branch coverage is enforced independently.
 """
 
 import re
@@ -20,7 +20,7 @@ from pathlib import Path
 from attribution_lib.declarative import load_toml_rules
 from attribution_lib.events import DemotionTypes
 from attribution_lib.resources.resource_set import AllJobResources
-from attribution_lib.rules_engine import RuleContext, RuleEngine
+from attribution_lib.rules_engine import RuleContext, RuleLoader
 from attribution_lib.sources import Source
 
 FIX = Path(__file__).parent / "fixtures" / "syslog_lustre_rule.toml"
@@ -34,9 +34,9 @@ NONFATAL = "LustreError: 52716:0:(events.c:651:ptlrpc_init_portals()) network in
 
 
 def _load():
-    """Load the fixture into a FRESH engine (coverage is enforced at load)."""
-    engine = RuleEngine()
-    return load_toml_rules(engine, str(FIX))["SyslogLustreError"]
+    """Load the fixture into a fresh loader (coverage is enforced at load)."""
+    loader = RuleLoader()
+    return load_toml_rules(loader, str(FIX))["SyslogLustreError"]
 
 
 def _run(rule, line, dummy_ctx):
@@ -90,9 +90,9 @@ def test_lustre_nonfatal_emits_bad_plus_interesting(dummy_ctx):
 
 
 def test_lustre_rule_loads_with_coverage():
-    """Loading on a fresh engine enforces branch-complete coverage; if the cases
+    """Loading on a fresh loader enforces branch-complete coverage; if the cases
     did not cover the outer and nested pick_one paths, loading would fail."""
-    engine = RuleEngine()
-    added = load_toml_rules(engine, str(FIX))
+    loader = RuleLoader()
+    added = load_toml_rules(loader, str(FIX))
     assert set(added) == {"SyslogLustreError"}
-    assert engine.extractor_rules["SyslogLustreError"] is added["SyslogLustreError"]
+    assert loader.extractor_rules["SyslogLustreError"] is added["SyslogLustreError"]

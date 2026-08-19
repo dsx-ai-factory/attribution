@@ -38299,7 +38299,7 @@
     },
     {
       "id": "workload-0101",
-      "expected_outcome": "Fail InfraHW",
+      "expected_outcome": "Fail InfraSW",
       "root_cause_symptom": "Node failure reported by slurm",
       "state": "NODE_FAIL",
       "nodes": [
@@ -38494,7 +38494,7 @@
     },
     {
       "id": "workload-0111",
-      "expected_outcome": "Fail InfraHW",
+      "expected_outcome": "Fail InfraSW",
       "root_cause_symptom": "Node failure reported by slurm",
       "state": "NODE_FAIL",
       "nodes": [

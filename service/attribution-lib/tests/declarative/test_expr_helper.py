@@ -1,7 +1,8 @@
-"""Tests for the @expr_helper registration seam (Plan 5a, Task 1)."""
+"""Tests for ``@expr_helper`` registration."""
 
 import pytest
 
+from attribution_lib.declarative.context import _using_rule_loader
 from attribution_lib.declarative.errors import LoadError
 from attribution_lib.declarative.expressions import (
     _FIXED_FUNCS,
@@ -14,38 +15,27 @@ from attribution_lib.declarative.expressions import (
 from attribution_lib.rules_engine import (
     _EXPR_HELPER_RESERVED,
     EXPR_HELPER_INJECTED_PARAMS,
-    RuleEngine,
     RuleIngestionError,
-    _rules_engine,
+    RuleLoader,
     expr_helper,
 )
-
-
-def _with_engine():
-    """Context: an active engine bound to the _rules_engine ContextVar."""
-    engine = RuleEngine()
-    token = _rules_engine.set(engine)
-    return engine, token
+from tests.declarative.conftest import _with_loader
 
 
 def test_register_and_retrieve():
-    engine, token = _with_engine()
-    try:
+    with _with_loader() as loader:
 
         @expr_helper("is_user_path")
         def _impl(path):
             return path.startswith("/home/")
 
-        assert engine.expr_helpers["is_user_path"] is _impl
+        assert loader.declarative_ctx.expr_helpers["is_user_path"] is _impl
         # decorator returns the function unchanged (still directly callable)
         assert _impl("/home/x") is True
-    finally:
-        _rules_engine.reset(token)
 
 
 def test_duplicate_name_is_error():
-    engine, token = _with_engine()
-    try:
+    with _with_loader():
 
         @expr_helper("dup")
         def _a(x):
@@ -56,25 +46,19 @@ def test_duplicate_name_is_error():
             @expr_helper("dup")
             def _b(x):
                 return x
-    finally:
-        _rules_engine.reset(token)
 
 
 def test_shadowing_fixed_function_is_error():
-    engine, token = _with_engine()
-    try:
+    with _with_loader():
         with pytest.raises(RuleIngestionError, match="shadows a fixed function"):
 
             @expr_helper("int")
             def _impl(x):
                 return x
-    finally:
-        _rules_engine.reset(token)
 
 
 def test_injection_metadata_recorded():
-    engine, token = _with_engine()
-    try:
+    with _with_loader() as loader:
 
         @expr_helper("needs_ctx")
         def _h(x, *, ctx):
@@ -88,24 +72,86 @@ def test_injection_metadata_recorded():
         def _h3(x):
             return x
 
-        assert engine.expr_helper_injections["needs_ctx"] == frozenset({"ctx"})
-        assert engine.expr_helper_injections["needs_both"] == frozenset({"source", "ctx"})
-        assert engine.expr_helper_injections["plain"] == frozenset()
-    finally:
-        _rules_engine.reset(token)
+        assert loader.declarative_ctx.expr_helper_injections["needs_ctx"] == frozenset({"ctx"})
+        assert loader.declarative_ctx.expr_helper_injections["needs_both"] == frozenset({"source", "ctx"})
+        assert loader.declarative_ctx.expr_helper_injections["plain"] == frozenset()
 
 
-def test_no_active_engine_is_error():
-    # No _rules_engine bound.
-    with pytest.raises(RuleIngestionError, match="No active rules engine"):
+def test_registration_scope_restores_outer_loader():
+    outer = RuleLoader()
+    inner = RuleLoader()
+
+    with _using_rule_loader(outer):
+
+        @expr_helper("outer_before")
+        def _outer_before():
+            return None
+
+        with _using_rule_loader(inner):
+
+            @expr_helper("inner")
+            def _inner():
+                return None
+
+        @expr_helper("outer_after")
+        def _outer_after():
+            return None
+
+    assert set(outer.declarative_ctx.expr_helpers) == {"outer_before", "outer_after"}
+    assert set(inner.declarative_ctx.expr_helpers) == {"inner"}
+
+
+def test_rule_loader_context_manager_is_reentrant():
+    loader = RuleLoader()
+
+    with loader:
+
+        @expr_helper("outer")
+        def _outer():
+            return None
+
+        with loader:
+
+            @expr_helper("inner")
+            def _inner():
+                return None
+
+    assert set(loader.declarative_ctx.expr_helpers) == {"outer", "inner"}
+
+    with pytest.raises(RuleIngestionError, match="No active rule loader"):
+
+        @expr_helper("orphan_after_nested_context")
+        def _orphan_after_nested_context():
+            return None
+
+
+def test_rule_loader_context_manager_rejects_unmatched_exit():
+    with pytest.raises(RuntimeError, match="not active"):
+        RuleLoader().__exit__(None, None, None)
+
+
+def test_registration_scope_releases_loader_after_error():
+    with pytest.raises(RuntimeError, match="registration failed"):
+        with _using_rule_loader(RuleLoader()):
+            raise RuntimeError("registration failed")
+
+    with pytest.raises(RuleIngestionError, match="No active rule loader"):
+
+        @expr_helper("orphan_after_error")
+        def _orphan():
+            return None
+
+
+def test_no_active_loader_is_error():
+    with pytest.raises(RuleIngestionError, match="No active rule loader"):
 
         @expr_helper("orphan")
         def _impl(x):
             return x
 
 
-def test_fresh_engine_starts_empty():
-    assert RuleEngine().expr_helpers == {}
+def test_fresh_loader_starts_empty():
+    assert RuleLoader().declarative_ctx.expr_helpers == {}
 
 
 def test_merge_functions_empty_returns_fixed():
@@ -161,8 +207,7 @@ def test_reserved_matches_fixed_funcs():
 def test_positional_only_injected_param_is_error(pname):
     # A helper declaring source/ctx as positional-only (before /) can't receive
     # the keyword injection the engine performs; reject it at registration time.
-    engine, token = _with_engine()
-    try:
+    with _with_loader():
         with pytest.raises(RuleIngestionError, match=f"{pname!r}.*positional-only"):
             exec(
                 f"from attribution_lib.rules_engine import expr_helper\n"
@@ -170,5 +215,3 @@ def test_positional_only_injected_param_is_error(pname):
                 f"def _h({pname}, /, x): pass",
                 {},
             )
-    finally:
-        _rules_engine.reset(token)

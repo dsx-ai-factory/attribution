@@ -20,7 +20,7 @@ from attribution_lib.exceptions import (
     SymptomValidationError,
     UnknownSymptomError,
 )
-from attribution_lib.rules_engine import RuleEngine
+from attribution_lib.rules_engine import RuleLoader
 from attribution_lib.symptoms.declarations import (
     CascadeScope,
     OutcomePriority,
@@ -41,9 +41,9 @@ from attribution_lib.symptoms.registry_generation import (
 
 
 def _load_committed_symptom_defaults() -> list[SymptomDeclaration]:
-    engine = RuleEngine()
-    engine.load(str(get_bundled_rules_path() / "symptom_defaults.py"))
-    return list(engine.symptom_declarations)
+    loader = RuleLoader()
+    loader.load(str(get_bundled_rules_path() / "symptom_defaults.py"))
+    return list(loader.symptom_declarations)
 
 
 def _load_committed_registry():
@@ -81,6 +81,49 @@ def test_nv_err_busy_retry_maps_to_infrasw():
     assert match is not None
     assert match.matched_prefix == "NV_ERR_BUSY_RETRY"
     assert match.outcome == "Fail InfraSW"
+
+
+def test_slurm_node_failure_maps_to_infrasw():
+    """Treat the scheduler's NODE_FAIL state as infrastructure software evidence."""
+    registry = _load_committed_registry()
+
+    match = registry.outcome_for(["Node failure reported by slurm"])
+
+    assert match is not None
+    assert match.matched_prefix == "Node failure reported by slurm"
+    assert match.outcome == "Fail InfraSW"
+    assert match.hw_cause == "Not Applicable"
+    assert match.tier_index == OUTCOME_PRIORITIES.index(OutcomePriority.MEDIUM)
+
+
+def test_slurm_node_failure_takes_precedence_over_xid31_in_any_order():
+    """Prefer the specific scheduler failure over ambiguous XID-31 evidence."""
+    registry = _load_committed_registry()
+    node_failure = "Node failure reported by slurm"
+    xid31 = "XID-31-MMU_ERR_FLT"
+
+    for symptoms in ([node_failure, xid31], [xid31, node_failure]):
+        match = registry.outcome_for(symptoms)
+
+        assert match is not None
+        assert match.matched_prefix == node_failure
+        assert match.outcome == "Fail InfraSW"
+        assert match.tier_index == OUTCOME_PRIORITIES.index(OutcomePriority.MEDIUM)
+
+
+def test_slurm_node_failure_yields_to_epilog_non_response_in_any_order():
+    """Prefer epilog non-response hardware evidence over the scheduler state."""
+    registry = _load_committed_registry()
+    node_failure = "Node failure reported by slurm"
+    epilog_non_response = "Not responding"
+
+    for symptoms in ([node_failure, epilog_non_response], [epilog_non_response, node_failure]):
+        match = registry.outcome_for(symptoms)
+
+        assert match is not None
+        assert match.matched_prefix == epilog_non_response
+        assert match.outcome == "Fail InfraHW"
+        assert match.tier_index == OUTCOME_PRIORITIES.index(OutcomePriority.HIGH)
 
 
 def test_wandb_error_maps_to_low_priority_fail_user():
@@ -505,26 +548,24 @@ def test_cascade_only_noop_declaration_is_valid_registry_metadata(tmp_path):
         """
 from dataclasses import replace
 
-from attribution_lib.exceptions import RuleIngestionError
-from attribution_lib.rules_engine import _get_caller_location, _rules_engine
+from attribution_lib.declarative.context import _require_rule_loader
+from attribution_lib.rules_engine import _get_caller_location
 from attribution_lib.symptoms.declarations import SymptomDeclaration
 
 
 def _register_prefix(declaration: SymptomDeclaration) -> None:
-    engine = _rules_engine.get(None)
-    if engine is None:
-        raise RuleIngestionError("No active rules engine when declaring prefix symptom")
-    engine.register_symptom_declaration(replace(declaration, location=_get_caller_location()))
+    loader = _require_rule_loader("declaring prefix symptom")
+    loader.register_symptom_declaration(replace(declaration, location=_get_caller_location()))
 
 
 _register_prefix(SymptomDeclaration(prefix="noop-only", cascade_noop=True))
 """,
         encoding="utf-8",
     )
-    engine = RuleEngine()
-    engine.load(str(defaults_file))
+    loader = RuleLoader()
+    loader.load(str(defaults_file))
 
-    registry = registry_from_declarations(engine.symptom_declarations)
+    registry = registry_from_declarations(loader.symptom_declarations)
 
     assert registry.metadata_for("noop-only") is not None
     assert registry.cascade_discards_for("noop-only") == []

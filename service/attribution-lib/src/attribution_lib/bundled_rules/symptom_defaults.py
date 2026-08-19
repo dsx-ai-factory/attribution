@@ -580,10 +580,9 @@ outcome_symptom(
 
 outcome_symptom(
     "Node failure reported by slurm",
-    outcome="Fail InfraHW",
-    priority=OutcomePriority.HIGH_HW,
+    outcome="Fail InfraSW",
+    priority=OutcomePriority.MEDIUM,
     doc="node-failure-reported-by-slurm",
-    hw_cause="Known HW Cause - Node",
     cascade_discards=("Stopping nvidia-imex.service",),
 )
 

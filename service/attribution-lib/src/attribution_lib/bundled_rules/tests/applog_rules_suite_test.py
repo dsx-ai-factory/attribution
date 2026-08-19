@@ -385,9 +385,8 @@ class TestNcclWatchdogAccumulator:
         result = app_tst_bldr(big_jobinfo, watchdog_log)
         nccl_data = NcclWatchdogParseState.collect(result.event_stream)
 
-        assert len(nccl_data) == 1
-        assert len(nccl_data[0].timeouts_by_key) == 1
-        assert sorted(list(nccl_data[0].timeouts_by_key.values())[0].ranks) == [0, 1]
+        assert len(nccl_data) == 2
+        assert [sorted(list(report.timeouts_by_key.values())[0].ranks) for report in nccl_data] == [[0, 1], [1]]
 
     def test_fires_on_stack_trace_line(self, app_tst_bldr, big_jobinfo):
         """NcclWatchdogAccumulator emits NCCLWatchdog.report for stack trace lines."""

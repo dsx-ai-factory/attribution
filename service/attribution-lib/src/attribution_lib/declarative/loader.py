@@ -47,16 +47,12 @@ from attribution_lib.declarative.families import stamp_family
 from attribution_lib.declarative.lifecycle import LIFECYCLE_INJECTIONS, LIFECYCLE_PREDICATES
 from attribution_lib.exceptions import RuleIngestionError
 from attribution_lib.observation.inbound import Source as ObsSource
-from attribution_lib.rules_engine import (
-    ExtractorRule,
-    PreFilterSpec,
-    RuleLocation,
-    normalize_tags,
-    register_pre_filter,
-)
+from attribution_lib.prefilters import PreFilterSpec, register_pre_filter
+from attribution_lib.rule_types.definitions import ExtractorRule, Rule, RuleId, RuleLocation
+from attribution_lib.rule_types.registration import normalize_tags
 
 if TYPE_CHECKING:
-    from attribution_lib.rules_engine import Rule, RuleEngine, RuleId
+    from attribution_lib.rules_engine import RuleLoader
 
 
 # ---------------------------------------------------------------------------
@@ -66,7 +62,7 @@ if TYPE_CHECKING:
 
 @dataclasses.dataclass(frozen=True)
 class _LoadContext:
-    """Immutable build context derived from the file header and engine state.
+    """Immutable build context derived from the file header and loader state.
 
     Produced once by :func:`_build_load_context` and shared across all per-stanza
     finalize calls so each stanza sees the same helper/const/table snapshot.
@@ -568,22 +564,22 @@ def _referenced_calls(emit: dict[str, Any]) -> set[str]:
 
 
 def _build_load_context(
-    engine: "RuleEngine",
+    loader: "RuleLoader",
     doc: dict[str, Any],
     filepath: str,
 ) -> _LoadContext:
-    """Build the shared load context from engine state and file-level declarations.
+    """Build the shared load context from loader state and file-level declarations.
 
     Partitions the @expr_helper registry, merges the inline ``[const]`` table into
-    the engine's flat namespace, parses element catalogs and record tables, and merges
+    the loader's flat namespace, parses element catalogs and record tables, and merges
     ``@rows``-provided record tables.
 
     Raises :class:`RegistrationError` for const-name collisions, table-name
     collisions, or invalid file-level ``tags``, all detectable before any stanza
     is inspected.
     """
-    all_helpers = dict(engine.expr_helpers)
-    helper_injections = dict(engine.expr_helper_injections)
+    all_helpers = dict(loader.declarative_ctx.expr_helpers)
+    helper_injections = dict(loader.declarative_ctx.expr_helper_injections)
     non_injecting = {n: f for n, f in all_helpers.items() if not helper_injections.get(n)}
     functions = merge_functions(non_injecting)
     injecting_registry: dict[str, tuple[Callable[..., Any], frozenset[str]]] = {
@@ -597,21 +593,21 @@ def _build_load_context(
 
     new_consts = doc.get("const", {})
     for cname in new_consts:
-        if cname in engine.const_values:
+        if cname in loader.declarative_ctx.const_values:
             raise RegistrationError(
                 f"const name {cname!r} (inline [const] in {filepath}) is already "
                 f"defined; const names are a single flat namespace"
             )
-    engine.const_values.update(new_consts)
-    const_ns = types.SimpleNamespace(**engine.const_values)
-    allowed_consts = set(engine.const_values)
+    loader.declarative_ctx.const_values.update(new_consts)
+    const_ns = types.SimpleNamespace(**loader.declarative_ctx.const_values)
+    allowed_consts = set(loader.declarative_ctx.const_values)
 
     try:
         tables = parse_tables(doc)
     except LoadError as exc:
         _wrap_load_error(exc)
 
-    for rname, records in engine.record_tables.items():
+    for rname, records in loader.declarative_ctx.record_tables.items():
         if rname in tables.element_catalogs:
             raise RegistrationError(f"record table {rname!r} (@rows provider) collides with [catalog.{rname}]")
         if rname in tables.record_tables:
@@ -646,7 +642,7 @@ def _build_load_context(
 
 def _register_extractor_stanzas(
     doc: dict[str, Any],
-    engine: "RuleEngine",
+    loader: "RuleLoader",
 ) -> "list[_PendingProcessor | _PendingEmit]":
     """Record each ``[[extractor]]`` stanza for later finalization.
 
@@ -671,7 +667,7 @@ def _register_extractor_stanzas(
             raise RegistrationError(f"{name}: a stanza requires either `emit` or `processor`")
         if has_processor:
             ns_name = stanza["processor"]
-            if engine.rule_processors.get(ns_name) is None:
+            if loader.declarative_ctx.rule_processors.get(ns_name) is None:
                 raise RegistrationError(
                     f"{name}: processor {ns_name!r} is not registered "
                     f"(define it with @rule_processor({ns_name!r}) in a loaded .py rule file)"
@@ -694,7 +690,7 @@ def _wrap_load_error(exc: LoadError) -> NoReturn:
 
 def _finalize_processor(
     pending: _PendingProcessor,
-    engine: "RuleEngine",
+    loader: "RuleLoader",
     ctx: _LoadContext,
     filepath: str,
 ) -> "Rule":
@@ -705,7 +701,7 @@ def _finalize_processor(
     stanza = pending.stanza
     name = pending.name
     try:
-        func = engine.rule_processors[stanza["processor"]]
+        func = loader.declarative_ctx.rule_processors[stanza["processor"]]
         proc = compile_processor(func, rule_name=name)
         sources = _resolve_sources(stanza.get("sources", ctx.file_sources), where=name)
         tags = _resolve_tags(stanza.get("tags"), ctx=ctx, where=name, filepath=filepath)
@@ -720,10 +716,10 @@ def _finalize_processor(
             source_filters=sources,
             tags=tags,
         )
-        engine.register_rule(rule)
-        engine.declared_rule_names.update(stanza.get("derived_rules", []))
-        engine.declared_event_types.update(stanza.get("derived_event_types", []))
-        engine.declarative_emit[name] = json.dumps(
+        loader.register_rule(rule)
+        loader.declared_rule_names.update(stanza.get("derived_rules", []))
+        loader.declared_event_types.update(stanza.get("derived_event_types", []))
+        loader.declarative_emit[name] = json.dumps(
             {
                 "processor": stanza["processor"],
                 "derived_rules": sorted(stanza.get("derived_rules", [])),
@@ -740,7 +736,7 @@ def _finalize_processor(
 
 def _finalize_emit_stanza(
     pending: _PendingEmit,
-    engine: "RuleEngine",
+    loader: "RuleLoader",
     ctx: _LoadContext,
     filepath: str,
 ) -> "Rule":
@@ -851,7 +847,7 @@ def _finalize_emit_stanza(
             source_filters=sources,
             tags=tags,
         )
-        engine.register_rule(rule)
+        loader.register_rule(rule)
 
         declared_rules: set[str] = set()
         declared_event_types: set[str] = set()
@@ -859,9 +855,9 @@ def _finalize_emit_stanza(
             _collect_catalog_declarations(emit, table, is_element, declared_rules, declared_event_types)
         else:
             _collect_declarations(emit, declared_rules, declared_event_types)
-        engine.declared_rule_names.update(declared_rules)
-        engine.declared_event_types.update(declared_event_types)
-        engine.declarative_emit[name] = json.dumps(emit, sort_keys=True)
+        loader.declared_rule_names.update(declared_rules)
+        loader.declared_event_types.update(declared_event_types)
+        loader.declarative_emit[name] = json.dumps(emit, sort_keys=True)
         return rule
     except LoadError as exc:
         if type(exc) is LoadError:
@@ -872,7 +868,7 @@ def _finalize_emit_stanza(
 def _finalize_family(
     family: dict[str, Any],
     fi: int,
-    engine: "RuleEngine",
+    loader: "RuleLoader",
     ctx: _LoadContext,
     filepath: str,
 ) -> "dict[RuleId, Rule]":
@@ -922,12 +918,12 @@ def _finalize_family(
                 source_filters=fam_sources,
                 tags=fam_tags,
             )
-            engine.register_rule(rule)
+            loader.register_rule(rule)
             _collect_declarations(gen.emit, declared_rules, declared_event_types)
-            engine.declarative_emit[gen.name] = json.dumps(gen.emit, sort_keys=True)
+            loader.declarative_emit[gen.name] = json.dumps(gen.emit, sort_keys=True)
             added[gen.name] = rule
-        engine.declared_rule_names.update(declared_rules)
-        engine.declared_event_types.update(declared_event_types)
+        loader.declared_rule_names.update(declared_rules)
+        loader.declared_event_types.update(declared_event_types)
         return added
     except LoadError as exc:
         if type(exc) is LoadError:
@@ -974,12 +970,12 @@ def _load_prefilter(pf_doc: dict[str, Any], ctx: _LoadContext, filepath: str) ->
 
 
 def load_toml_rules(
-    engine: "RuleEngine",
+    loader: "RuleLoader",
     filepath: str | os.PathLike[str],
 ) -> "dict[RuleId, Rule]":
     """Parse a declarative .toml rule file and register its extractors.
 
-    Returns the rules added by this file (mirrors ``RuleEngine.load``'s return).
+    Returns the rules added by this file (mirrors ``RuleLoader.load``'s return).
 
     The load process has two phases:
 
@@ -996,18 +992,18 @@ def load_toml_rules(
 
     _check_declared_keys(doc, filepath)
 
-    ctx = _build_load_context(engine, doc, filepath)
-    pending = _register_extractor_stanzas(doc, engine)
+    ctx = _build_load_context(loader, doc, filepath)
+    pending = _register_extractor_stanzas(doc, loader)
 
     added: "dict[RuleId, Rule]" = {}
     for p in pending:
         if isinstance(p, _PendingProcessor):
-            added[p.name] = _finalize_processor(p, engine, ctx, filepath)
+            added[p.name] = _finalize_processor(p, loader, ctx, filepath)
         else:
-            added[p.name] = _finalize_emit_stanza(p, engine, ctx, filepath)
+            added[p.name] = _finalize_emit_stanza(p, loader, ctx, filepath)
 
     for fi, family in enumerate(doc.get("family", [])):
-        added.update(_finalize_family(family, fi, engine, ctx, filepath))
+        added.update(_finalize_family(family, fi, loader, ctx, filepath))
 
     if "prefilter" in doc:
         _load_prefilter(doc["prefilter"], ctx, filepath)

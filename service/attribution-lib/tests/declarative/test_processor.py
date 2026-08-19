@@ -1,42 +1,40 @@
-"""Tests for the @rule_processor seam (Plan 5e, Task 1)."""
+"""Tests for ``@rule_processor`` registration."""
 
 import textwrap
+from contextlib import contextmanager
 
 import pytest
 
 from attribution_lib.declarative import load_toml_rules
+from attribution_lib.declarative.context import _using_rule_loader
 from attribution_lib.declarative.emit import compile_processor
 from attribution_lib.declarative.errors import LoadError
 from attribution_lib.rules_engine import (
-    RuleEngine,
     RuleIngestionError,
-    _rules_engine,
+    RuleLoader,
     rule_processor,
 )
 
 
-def _with_engine():
-    engine = RuleEngine()
-    token = _rules_engine.set(engine)
-    return engine, token
+@contextmanager
+def _with_loader():
+    loader = RuleLoader()
+    with _using_rule_loader(loader):
+        yield loader
 
 
 def test_register_and_retrieve():
-    engine, token = _with_engine()
-    try:
+    with _with_loader() as loader:
 
         @rule_processor("applog:pushrecv")
         def _p(groups, node, source, ctx):
             return []
 
-        assert engine.rule_processors["applog:pushrecv"] is _p
-    finally:
-        _rules_engine.reset(token)
+        assert loader.declarative_ctx.rule_processors["applog:pushrecv"] is _p
 
 
 def test_duplicate_ns_name_is_error():
-    engine, token = _with_engine()
-    try:
+    with _with_loader():
 
         @rule_processor("applog:dup")
         def _a(groups):
@@ -47,12 +45,10 @@ def test_duplicate_ns_name_is_error():
             @rule_processor("applog:dup")
             def _b(groups):
                 return []
-    finally:
-        _rules_engine.reset(token)
 
 
 def test_no_active_engine_is_error():
-    with pytest.raises(RuleIngestionError, match="No active rules engine"):
+    with pytest.raises(RuleIngestionError, match="No active rule loader"):
 
         @rule_processor("applog:orphan")
         def _p(groups):
@@ -60,7 +56,7 @@ def test_no_active_engine_is_error():
 
 
 def test_fresh_engine_starts_empty():
-    assert RuleEngine().rule_processors == {}
+    assert RuleLoader().declarative_ctx.rule_processors == {}
 
 
 def test_processor_injects_only_declared_params():
@@ -99,16 +95,13 @@ def test_processor_groups_only():
 
 
 def _load(tmp_path, toml_text, register=None):
-    engine = RuleEngine()
-    token = _rules_engine.set(engine)
-    try:
+    loader = RuleLoader()
+    with _using_rule_loader(loader):
         if register:
             register()
         f = tmp_path / "rules.toml"
         f.write_text(textwrap.dedent(toml_text))
-        return engine, load_toml_rules(engine, str(f))
-    finally:
-        _rules_engine.reset(token)
+        return loader, load_toml_rules(loader, str(f))
 
 
 def test_processor_stanza_registers_and_declares(tmp_path):
@@ -126,10 +119,10 @@ def test_processor_stanza_registers_and_declares(tmp_path):
     derived_rules = ["pushrecv"]
     derived_event_types = ["Attribution.node.bad", "Attribution.node.bad_peers"]
     """
-    engine, added = _load(tmp_path, toml, register)
+    loader, added = _load(tmp_path, toml, register)
     assert "pr" in added
-    assert "pushrecv" in engine.declared_rule_names
-    assert "Attribution.node.bad_peers" in engine.declared_event_types
+    assert "pushrecv" in loader.declared_rule_names
+    assert "Attribution.node.bad_peers" in loader.declared_event_types
 
 
 def test_processor_stanza_merges_file_and_rule_tags(tmp_path):

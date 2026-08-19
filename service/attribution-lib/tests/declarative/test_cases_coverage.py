@@ -10,7 +10,7 @@ from attribution_lib.declarative.coverage import (
     leaf_obligations,
 )
 from attribution_lib.declarative.emit import LoadError
-from attribution_lib.rules_engine import RuleEngine
+from attribution_lib.rules_engine import RuleLoader
 
 # --- leaf_obligations -----------------------------------------------------------
 
@@ -184,7 +184,7 @@ line = "value 60"
 expect = "interesting"
 """
     with pytest.raises(LoadError):
-        load_toml_rules(RuleEngine(), _write(tmp_path, toml))
+        load_toml_rules(RuleLoader(), _write(tmp_path, toml))
 
 
 def test_loader_accepts_branch_complete_leaf(tmp_path):
@@ -201,7 +201,7 @@ expect = "interesting"
 line = "value 10"
 expect = "none"
 """
-    added = load_toml_rules(RuleEngine(), _write(tmp_path, toml))
+    added = load_toml_rules(RuleLoader(), _write(tmp_path, toml))
     assert "HighValue" in added
 
 
@@ -214,7 +214,7 @@ match_re = "boom"
 emit = { type = "bad_node", symptom = "boom" }
 untested = "covered by integration tests"
 """
-    added = load_toml_rules(RuleEngine(), _write(tmp_path, toml))
+    added = load_toml_rules(RuleLoader(), _write(tmp_path, toml))
     assert "R" in added
 
 
@@ -227,4 +227,4 @@ match_re = "boom"
 emit = { type = "bad_node", symptom = "boom" }
 """
     with pytest.raises(LoadError):
-        load_toml_rules(RuleEngine(), _write(tmp_path, toml))
+        load_toml_rules(RuleLoader(), _write(tmp_path, toml))

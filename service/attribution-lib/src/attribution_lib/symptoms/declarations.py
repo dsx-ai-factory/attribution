@@ -15,7 +15,7 @@ from enum import Enum, IntEnum
 from typing import TYPE_CHECKING, Optional
 
 if TYPE_CHECKING:
-    from attribution_lib.rules_engine import RuleLocation
+    from attribution_lib.rule_types.definitions import RuleLocation
 
 
 class OutcomePriority(IntEnum):
