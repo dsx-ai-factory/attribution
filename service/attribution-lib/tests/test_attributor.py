@@ -365,6 +365,23 @@ def test_maintenance_fault_rejects_incompatible_formats_during_batch_cache_hit(r
         cached.ingest_batch([make_maintenance_observation([make_maintenance_fault(0)], fmt=fmt)], backend)
 
 
+def test_maintenance_fault_rejects_duplicate_snapshot_in_batch(request, event_manager, job_info):
+    """A maintenance-fault batch contains exactly one complete snapshot."""
+    backend = MemoryCheckpointBackend()
+    attributor = Attributor.new(event_manager.create_stream(request.node.name), job_info)
+
+    with pytest.raises(DuplicateObservationError):
+        attributor.ingest_batch(
+            [
+                make_maintenance_observation([make_maintenance_fault(0)]),
+                make_maintenance_observation([make_maintenance_fault(1)]),
+            ],
+            backend,
+        )
+
+    assert attributor._source_fingerprints == {}
+
+
 def test_maintenance_fault_unchanged_snapshot_reuses_cached_extraction(request, event_manager, job_info):
     """An identical complete maintenance snapshot restores the existing extraction cache."""
     backend = MemoryCheckpointBackend()

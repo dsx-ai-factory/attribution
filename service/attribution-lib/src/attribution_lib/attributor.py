@@ -279,9 +279,14 @@ class Attributor:
         rules_engine = _attribution_lib.get_rules_engine()
 
         extraction_observations = []
+        saw_maintenance_fault = False
         for observation in observations:
             if observation.context.source is ObservationSource.MAINTENANCE_FAULT:
                 _validate_source_format(observation.context)
+                if saw_maintenance_fault:
+                    duplicate = Observation.from_inbound_observation(observation)
+                    raise DuplicateObservationError(duplicate.context.id)
+                saw_maintenance_fault = True
             if observation.context.source == ObservationSource.JOB_KEYWORDS:
                 self._raw_keywords_observation = Observation.from_inbound_observation(observation)
             else:
