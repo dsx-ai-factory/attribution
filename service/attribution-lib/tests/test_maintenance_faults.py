@@ -29,7 +29,7 @@ from attribution_lib.observation.processing import (
 from attribution_lib.resources import AllJobResources
 from attribution_lib.resources.node import Node as NodeResource
 from attribution_lib.resources.resource_set import ResourceSetClass
-from attribution_lib.rules_engine import SOURCE_CONFIGS, EventTriple, ExtractorRule, RuleEngine, RuleLocation
+from attribution_lib.rules_engine import SOURCE_CONFIGS, EventTriple, ExtractorRule, RuleLoader, RuleLocation
 from attribution_lib.symptoms.declarations import OutcomePriority, SymptomCategory
 from attribution_lib.symptoms.registry_generation import OUTCOME_PRIORITIES
 
@@ -128,8 +128,8 @@ def _emit_maintenance_test_event(groups, hostname, source, context):
 @pytest.fixture
 def maintenance_test_engine():
     """Install a temporary extractor so source filtering has observable output."""
-    engine = RuleEngine()
-    engine.register_rule(
+    loader = RuleLoader()
+    loader.register_rule(
         ExtractorRule(
             name="maintenance_test_extractor",
             author="test",
@@ -139,7 +139,8 @@ def maintenance_test_engine():
             source_filters=frozenset({Source.MAINTENANCE_FAULT}),
         )
     )
-    engine.declared_event_types.add("maintenance_test_event")
+    loader.declared_event_types.add("maintenance_test_event")
+    engine = loader.build()
     saved_engine = attribution_lib._rules_engine
     attribution_lib._rules_engine = engine
     manager = EventManager(rules_engine=engine)
