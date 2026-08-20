@@ -795,11 +795,18 @@ outcome_symptom(
 )
 
 outcome_symptom(
-    "NV_ERR_NO_MEMORY",
+    "NV_ERR_NO_MEMORY mem_multicast_fabric.c",
     outcome="Fail InfraSW",
     priority=OutcomePriority.MEDIUM_SW,
     doc="nv-err-no-memory",
     hw_cause="Driver bug",
+)
+
+outcome_symptom(
+    "NV_ERR_NO_MEMORY",
+    outcome="Fail MultiCategory",
+    priority=OutcomePriority.MEDIUM_SW,
+    doc="nv-err-no-memory",
 )
 
 outcome_symptom(
