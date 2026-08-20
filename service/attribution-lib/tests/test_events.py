@@ -31,7 +31,9 @@ from attribution_lib.sources import Source
 @pytest.fixture(autouse=True)
 def _preload_test_rules(event_manager):
     """Preload rule names specific to this test file."""
-    event_manager.preload_rule_names({"thermal_monitor_rule", "attribution_analyzer", "mfu_monitor"})
+    event_manager.preload_rule_names(
+        {"thermal_monitor_rule", "thermal_log_matcher", "attribution_analyzer", "mfu_monitor"}
+    )
 
 
 @pytest.fixture
@@ -123,7 +125,12 @@ class TestEventRule:
         """Test creating events with proper Source objects"""
         stream = event_stream("myjob")
         stream.register_observation_context(sample_source.source_context)
-        stream.add_event("Attribution.node.bad", {"node": "gpu-node-01", "symptom": "High temperature"}, sample_source)
+        stream.add_event(
+            "Attribution.node.bad",
+            {"node": "gpu-node-01", "symptom": "High temperature"},
+            sample_source,
+            producer_rule_id="thermal_log_matcher",
+        )
 
         # Verify via query_events_with_source (bulk pattern)
 
@@ -139,6 +146,9 @@ class TestEventRule:
         assert retrieved_source.rule == "thermal_monitor_rule"
         assert retrieved_source.line_num == 42
         assert retrieved_source.datum == "High GPU temperature detected"
+        producer_index = stream.producer_rules_by_source()
+        assert len(producer_index) == 1
+        assert next(iter(producer_index.values())) == ("thermal_log_matcher",)
 
     def test_flush_serializes_pydantic_payload_with_datetime(self, event_stream, sample_source):
         """Regression: Pydantic model with a raw datetime in payload must not crash _flush."""

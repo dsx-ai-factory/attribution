@@ -10,6 +10,8 @@
 
 """Rule values, execution contexts, processor protocols, and matchers."""
 
+import hashlib
+import json
 from abc import ABC, abstractmethod
 from collections.abc import Callable, Hashable, Mapping
 from dataclasses import dataclass, field
@@ -132,6 +134,24 @@ RuleId: TypeAlias = str
 
 
 @dataclass(frozen=True, slots=True)
+class RuleMatcherProvenance:
+    """Typed matching definition for a rule that evaluates source text."""
+
+    regex: str
+    sources: tuple[str, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class RuleProvenance:
+    """Stable identity and optional definition metadata for an executable rule."""
+
+    rule_id: RuleId
+    rule_type: str
+    definition_hash: Optional[str] = None
+    matcher: Optional[RuleMatcherProvenance] = None
+
+
+@dataclass(frozen=True, slots=True)
 class RuleParameters:
     """Generic envelope for rule parameters."""
 
@@ -207,6 +227,14 @@ class Rule(ABC):
         """Process the rule. Signature varies by subtype."""
         ...
 
+    def provenance(self) -> RuleProvenance:
+        """Return stable identity metadata for this rule.
+
+        Returns:
+            Generic rule provenance.
+        """
+        return RuleProvenance(rule_id=self.name, rule_type=type(self).__name__)
+
 
 @dataclass(frozen=True, slots=True)
 class ExtractorRule(Rule):
@@ -215,6 +243,14 @@ class ExtractorRule(Rule):
     match_re: str
     processor: ExtractorProcessor
     source_filters: frozenset[ObservationSource] = field(default_factory=frozenset)
+
+    def provenance(self) -> RuleProvenance:
+        """Return matcher metadata and a deterministic criteria hash.
+
+        Returns:
+            Extractor rule provenance.
+        """
+        return _extractor_rule_provenance(self)
 
     def process(self, match: Match, source: Source, context: RuleContext) -> list[EventTriple]:
         """Try to match and extract from source"""
@@ -297,9 +333,41 @@ class ExtractorAccumulatorRule(Rule):
     factory: Callable[[], ExtractorAccumulator]
     source_filters: frozenset[ObservationSource] = field(default_factory=frozenset)
 
+    def provenance(self) -> RuleProvenance:
+        """Return matcher metadata and a deterministic criteria hash.
+
+        Returns:
+            Extractor rule provenance.
+        """
+        return _extractor_rule_provenance(self)
+
     def process(self) -> ExtractorAccumulator:
         """Create a new extractor-accumulator instance."""
         return self.factory()
+
+
+def _extractor_rule_provenance(rule: ExtractorRule | ExtractorAccumulatorRule) -> RuleProvenance:
+    """Build provenance from the criteria that determine whether an extractor matches.
+
+    Args:
+        rule: Extractor definition to describe.
+
+    Returns:
+        Stable identity, matcher metadata, and deterministic criteria hash.
+    """
+    sources = tuple(sorted(source.value for source in rule.source_filters))
+    canonical = json.dumps(
+        {"regex": rule.match_re, "sources": sources},
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=True,
+    )
+    return RuleProvenance(
+        rule_id=rule.name,
+        rule_type=type(rule).__name__,
+        definition_hash=hashlib.sha256(canonical.encode()).hexdigest(),
+        matcher=RuleMatcherProvenance(regex=rule.match_re, sources=sources),
+    )
 
 
 @dataclass(frozen=True, slots=True)

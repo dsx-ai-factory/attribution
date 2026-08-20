@@ -10,6 +10,7 @@
 
 from datetime import datetime
 
+import duckdb
 import pytest
 
 import attribution_lib
@@ -46,6 +47,14 @@ def _add_events(mgr: EventManager, stream_id: str, dummy_ctx, count: int = 3) ->
 
 
 class TestSnapshotRoundTrip:
+    def test_rejects_incompatible_schema_version(self, tmp_path):
+        snapshot_dir = tmp_path / "snapshot"
+        snapshot_dir.mkdir()
+        (snapshot_dir / EventManager._SCHEMA_VERSION_FILE).write_text("0")
+
+        with pytest.raises(ValueError, match="stored=0, current=2"):
+            EventManager.from_snapshot(snapshot_dir, attribution_lib.get_rules_engine())
+
     def test_export_import_preserves_events(self, tmp_path, dummy_ctx):
         mgr = EventManager(rules_engine=attribution_lib.get_rules_engine())
         _add_events(mgr, "job_1", dummy_ctx, count=5)
@@ -59,10 +68,33 @@ class TestSnapshotRoundTrip:
         assert rows[0] == 5
         restored.close()
 
+    def test_imports_schema_v1_without_reextraction(self, tmp_path, dummy_ctx):
+        mgr = EventManager(rules_engine=attribution_lib.get_rules_engine())
+        _add_events(mgr, "job_1", dummy_ctx, count=1)
+        snapshot_dir = tmp_path / "snap"
+        mgr.export_snapshot(snapshot_dir)
+        mgr.close()
+
+        events_path = snapshot_dir / "events.parquet"
+        legacy_path = snapshot_dir / "events-v1.parquet"
+        legacy_columns = (
+            "id, context_id, event_type, timestamp, status, line_num, "
+            "source_datum, source_rule, resources, obs_context_id, payload"
+        )
+        duckdb.read_parquet(str(events_path)).project(legacy_columns).write_parquet(str(legacy_path))
+        events_path.unlink()
+        legacy_path.rename(events_path)
+        (snapshot_dir / EventManager._SCHEMA_VERSION_FILE).write_text("1")
+
+        restored = EventManager.from_snapshot(snapshot_dir, attribution_lib.get_rules_engine())
+        rows = restored._conn.execute("SELECT source_datum, producer_rule FROM events").fetchall()
+        assert rows == [("datum_0", None)]
+        restored.close()
+
     def test_export_import_preserves_event_content(self, tmp_path, dummy_ctx):
         mgr = EventManager(rules_engine=attribution_lib.get_rules_engine())
         mgr.preload_event_types({"Test.specific"})
-        mgr.preload_rule_names({"specific_rule"})
+        mgr.preload_rule_names({"specific_rule", "specific_extractor"})
         stream = mgr.create_stream("job_1")
         stream.register_observation_context(dummy_ctx)
         stream.add_event(
@@ -76,6 +108,7 @@ class TestSnapshotRoundTrip:
                 resources=AllJobResources,
                 rule="specific_rule",
             ),
+            producer_rule_id="specific_extractor",
         )
         stream.flush()
         mgr.export_snapshot(tmp_path / "snap")
@@ -85,11 +118,14 @@ class TestSnapshotRoundTrip:
         stream2 = restored.create_stream("job_1")
 
         rows = stream2.query_raw(
-            "SELECT source_datum FROM events WHERE context_id=?",
+            """SELECT e.source_datum, r.name
+               FROM events e LEFT JOIN rules r ON e.producer_rule = r.id
+               WHERE e.context_id=?""",
             [stream2.ctx_id],
         )
         assert len(rows) == 1
         assert rows[0][0] == "specific_datum"
+        assert rows[0][1] == "specific_extractor"
         restored.close()
 
     def test_lookup_helpers_work_after_import(self, tmp_path, dummy_ctx):

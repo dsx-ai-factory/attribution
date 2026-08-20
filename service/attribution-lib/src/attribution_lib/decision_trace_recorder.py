@@ -62,6 +62,7 @@ class SourceEvidence:
     timestamp: Optional[str]
     obs_source: Optional[str]
     hostname: Optional[str] = None
+    obs_context_id: Optional[int] = None
 
     @classmethod
     def from_source(cls, source: Source, hostname: Optional[str] = None) -> "SourceEvidence":
@@ -74,6 +75,7 @@ class SourceEvidence:
             timestamp=timestamp.isoformat() if timestamp is not None else None,
             obs_source=observation_source.value if observation_source is not None else None,
             hostname=hostname,
+            obs_context_id=int(source.source_context.id) if source.source_context is not None else None,
         )
 
     @classmethod
@@ -100,6 +102,7 @@ class SourceEvidence:
             "timestamp": str,
             "obs_source": str,
             "hostname": str,
+            "obs_context_id": int,
         }
         for field_name, expected_type in field_types.items():
             value = payload.get(field_name)
@@ -116,6 +119,7 @@ class SourceEvidence:
             timestamp=payload.get("timestamp"),
             obs_source=payload.get("obs_source"),
             hostname=payload_hostname,
+            obs_context_id=payload.get("obs_context_id"),
         )
 
     def to_payload(self) -> EvidencePayload:
@@ -126,6 +130,7 @@ class SourceEvidence:
             "timestamp": self.timestamp,
             "obs_source": self.obs_source,
             "hostname": self.hostname,
+            "obs_context_id": self.obs_context_id,
         }
 
 

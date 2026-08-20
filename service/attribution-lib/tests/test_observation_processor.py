@@ -13,6 +13,7 @@ from attribution_lib.rule_types.definitions import (
     EventTriple,
     ExtractorAccumulator,
     ExtractorAccumulatorRule,
+    ExtractorRule,
     RuleContext,
     RuleLocation,
 )
@@ -78,7 +79,9 @@ def test_active_accumulator_is_not_retriggered():
         engine=engine,
         source_type=ObservationSource.APPLOG,
         context=RuleContext(),
-        event_adder=lambda event_type, payload, source: emitted.append((event_type, payload, source)),
+        event_adder=lambda event_type, payload, source, *, producer_rule_id=None: emitted.append(
+            (event_type, payload, source, producer_rule_id)
+        ),
     )
 
     processor.process_line(_source("start one"))
@@ -90,7 +93,41 @@ def test_active_accumulator_is_not_retriggered():
     processor.process_line(_source("stop"))
 
     assert processor._active == {}
-    assert [payload["lines"] for _, payload, _ in emitted] == [["start one", "start two", "stop"]]
+    assert [payload["lines"] for _, payload, _, _ in emitted] == [["start one", "start two", "stop"]]
+    assert {producer_rule_id for _, _, _, producer_rule_id in emitted} == {"single"}
+
+
+def test_plain_extractor_tags_emitted_source_with_stable_id():
+    """A matched extractor ID follows its emitted event into provenance."""
+
+    def emit_event(_groups, _hostname, source, _context):
+        return [EventTriple("test.extractor", {}, source.derived(rule="credited_rule"))]
+
+    rule = ExtractorRule(
+        name="stable_extractor",
+        author="test",
+        location=RuleLocation(__file__, 0),
+        match_re="matched",
+        processor=emit_event,
+        source_filters=frozenset({ObservationSource.APPLOG}),
+    )
+    engine = ExtractorEngine(rules={rule.name: rule})
+    engine.build_matcher()
+    emitted = []
+    processor = ObservationProcessor(
+        engine=engine,
+        source_type=ObservationSource.APPLOG,
+        context=RuleContext(),
+        event_adder=lambda event_type, payload, source, *, producer_rule_id=None: emitted.append(
+            (event_type, payload, source, producer_rule_id)
+        ),
+    )
+
+    processor.process_line(_source("matched line"))
+
+    assert len(emitted) == 1
+    assert emitted[0][2].rule == "credited_rule"
+    assert emitted[0][3] == "stable_extractor"
 
 
 def test_processing_requires_an_initialized_matcher():

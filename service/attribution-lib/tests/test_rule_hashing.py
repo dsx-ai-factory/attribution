@@ -106,6 +106,52 @@ class TestExtractorHash:
         assert loader1.build().extractor_hash() != loader2.build().extractor_hash()
 
 
+class TestRuleProvenance:
+    def test_exposes_stable_id_regex_and_deterministic_hash(self):
+        loader = RuleLoader()
+        loader.register_rule(_make_extractor("stable_id", r"error\s+\d+", frozenset({ObservationSource.APPLOG})))
+        engine = loader.build()
+        rule = engine.get_rule("stable_id")
+
+        assert rule is not None
+        first = rule.provenance()
+        second = rule.provenance()
+
+        assert first == second
+        assert first.rule_id == "stable_id"
+        assert first.rule_type == "ExtractorRule"
+        assert first.matcher is not None
+        assert first.matcher.regex == r"error\s+\d+"
+        assert first.matcher.sources == ("applog",)
+        assert first.definition_hash is not None
+        assert len(first.definition_hash) == 64
+
+    def test_hash_changes_with_effective_matching_criteria(self):
+        loader1 = RuleLoader()
+        loader1.register_rule(_make_extractor("stable_id", r"pattern_a"))
+        loader2 = RuleLoader()
+        loader2.register_rule(_make_extractor("stable_id", r"pattern_b"))
+
+        first_rule = loader1.build().get_rule("stable_id")
+        second_rule = loader2.build().get_rule("stable_id")
+
+        assert first_rule is not None
+        assert second_rule is not None
+        assert first_rule.provenance().definition_hash != second_rule.provenance().definition_hash
+
+    def test_non_extractor_has_basic_provenance(self):
+        loader = RuleLoader()
+        loader.register_rule(_make_filter("filter_rule"))
+
+        rule = loader.build().get_rule("filter_rule")
+        assert rule is not None
+        provenance = rule.provenance()
+        assert provenance.rule_id == "filter_rule"
+        assert provenance.rule_type == "FilterRule"
+        assert provenance.definition_hash is None
+        assert provenance.matcher is None
+
+
 class TestAttributionHash:
     def test_stable_across_calls(self):
         loader = RuleLoader()

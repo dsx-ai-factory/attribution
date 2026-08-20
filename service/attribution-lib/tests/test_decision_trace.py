@@ -26,6 +26,7 @@ from attribution_lib.decision_trace import (
     build_symptom_details,
 )
 from attribution_lib.decision_trace_recorder import Action, DecisionRecorder, NodeType, snapshot_bad_nodes
+from attribution_lib.events import EventManager
 from attribution_lib.exceptions import DecisionGraphError
 from attribution_lib.observation import Context as ObservationContext
 from attribution_lib.observation.inbound import (
@@ -35,6 +36,8 @@ from attribution_lib.observation.inbound import (
     TimeInterval,
 )
 from attribution_lib.resources.resource_set import AllJobResources
+from attribution_lib.rule_types.definitions import ExtractorRule, RuleLocation
+from attribution_lib.rules_engine import RuleLoader
 from attribution_lib.sources import Source, SourceSet, SymptomSet
 from attribution_lib.symptoms.base import BaseSymptom
 
@@ -133,6 +136,30 @@ def _make_attribution_result(
                 ss.add_interesting(src)
             result.symptoms.add(ss)
     return result
+
+
+def _attach_producer_events(
+    att_res: AttributionResult,
+    engine,
+    source: Source,
+    producer_rule_ids: tuple[str, ...],
+) -> EventManager:
+    """Attach extractor events without adding provenance to Source identity."""
+    manager = EventManager(rules_engine=engine)
+    manager.preload_event_types({"Test.extraction"})
+    manager.preload_rule_names({source.rule, *producer_rule_ids})
+    stream = manager.create_stream("decision-trace-test")
+    stream.register_observation_context(source.source_context)
+    for producer_rule_id in producer_rule_ids:
+        stream.add_event(
+            "Test.extraction",
+            {},
+            source,
+            producer_rule_id=producer_rule_id,
+        )
+    stream.flush()
+    att_res.event_stream = stream
+    return manager
 
 
 class TestBuildSymptomDetails:
@@ -353,6 +380,22 @@ class TestDecisionRecorder:
 
 
 class TestBuildDecisionDAG:
+    @staticmethod
+    def _extractor_engine(*rules: tuple[str, str]):
+        loader = RuleLoader()
+        for extractor_id, regex in rules:
+            loader.register_rule(
+                ExtractorRule(
+                    name=extractor_id,
+                    author="test",
+                    location=RuleLocation(__file__, 0),
+                    match_re=regex,
+                    processor=lambda *_args: [],
+                    source_filters=frozenset({ObservationSource.SYSLOG}),
+                )
+            )
+        return loader.build()
+
     @pytest.mark.parametrize(
         ("evidence", "message"),
         [
@@ -401,6 +444,54 @@ class TestBuildDecisionDAG:
         matches_edges = [e for e in graph.edges if e.edge_type == "MATCHES"]
         assert len(matches_edges) >= 1
         assert isinstance(matches_edges[0], DecisionEdge)
+
+    def test_extraction_node_exposes_rule_provenance(self):
+        """Producer identity resolves to typed matcher provenance on the DAG."""
+        engine = self._extractor_engine(("xid_48_extractor", r"Xid.*48"))
+        src = _make_source(
+            rule="xid_48_ecc",
+            datum="Xid 48",
+        )
+        att_res = _make_attribution_result({"node-042": {"XID-48": [src]}})
+        att_res.outcome_attr = SourceSet(Mock(outcome="Fail InfraHW", root_cause_symptom="XID-48"))
+        manager = _attach_producer_events(att_res, engine, src, ("xid_48_extractor",))
+
+        try:
+            graph = build_decision_graph(DecisionRecorder("job-123"), att_res, rules_engine=engine)
+        finally:
+            manager.close()
+
+        extraction = next(node for node in graph.nodes if node.node_type == NodeType.EXTRACTION)
+        assert extraction.rule_name == "xid_48_ecc"
+        assert extraction.rule_provenance is not None
+        assert extraction.rule_provenance.rule_id == "xid_48_extractor"
+        assert extraction.rule_provenance.matcher is not None
+        assert extraction.rule_provenance.matcher.regex == r"Xid.*48"
+        extractor_rule = engine.get_rule("xid_48_extractor")
+        assert extractor_rule is not None
+        assert extraction.rule_provenance.definition_hash == extractor_rule.provenance().definition_hash
+        assert graph.ruleset_hashes == {"extraction": engine.extractor_hash()}
+
+    def test_same_source_matched_by_different_extractors_is_not_deduplicated(self):
+        """Each matching extractor keeps a distinct extraction evidence node."""
+        engine = self._extractor_engine(("extractor_a", "Xid"), ("extractor_b", "48"))
+        source = _make_source(rule="xid_48_ecc", datum="Xid 48")
+        att_res = _make_attribution_result({"node-042": {"XID-48": [source]}})
+        att_res.outcome_attr = SourceSet(Mock(outcome="Fail InfraHW", root_cause_symptom="XID-48"))
+        manager = _attach_producer_events(att_res, engine, source, ("extractor_a", "extractor_b"))
+
+        try:
+            graph = build_decision_graph(DecisionRecorder("job-123"), att_res, rules_engine=engine)
+        finally:
+            manager.close()
+
+        extraction_ids = {
+            node.rule_provenance.rule_id
+            for node in graph.nodes
+            if node.node_type == NodeType.EXTRACTION and node.rule_provenance is not None
+        }
+        assert extraction_ids == {"extractor_a", "extractor_b"}
+        assert len(att_res.bad_nodes_attr.my_bad_nodes.attributions["node-042"].attributions["XID-48"]) == 1
 
     def test_graph_with_cascade_prune_events(self):
         """Recorder cascade events produce CASCADE_PRUNE nodes with PRUNES edges."""

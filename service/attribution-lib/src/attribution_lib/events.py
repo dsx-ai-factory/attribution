@@ -8,14 +8,18 @@
 # without an express license agreement from NVIDIA CORPORATION or
 # its affiliates is strictly prohibited.
 import json
-from collections.abc import Callable
+from collections import defaultdict
 from enum import Enum, auto
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Optional, TypeAlias
+from typing import TYPE_CHECKING, Any, Optional, Protocol, TypeAlias
 
 import duckdb
 
-from attribution_lib.exceptions import UndeclaredEventTypeError, UndeclaredRuleError, UnexpectedEmptyQueryResultError
+from attribution_lib.exceptions import (
+    UndeclaredEventTypeError,
+    UndeclaredRuleError,
+    UnexpectedEmptyQueryResultError,
+)
 
 if TYPE_CHECKING:
     from attribution_lib.rules_engine import RuleEngine
@@ -31,6 +35,23 @@ from attribution_lib.sources import Source
 
 if TYPE_CHECKING:
     from attribution_lib.rules_engine import RuleEngine
+
+
+SourceProvenanceKey: TypeAlias = tuple[Optional[int], Optional[int], str, Optional[float]]
+
+
+def source_provenance_key(source: Source) -> SourceProvenanceKey:
+    """Return the observation identity used only for Decision DAG provenance.
+
+    Args:
+        source: Attribution evidence source.
+
+    Returns:
+        Stable key independent of the credited attribution rule.
+    """
+    observation_id = int(source.source_context.id) if source.source_context is not None else None
+    timestamp = source.time.timestamp() if source.time is not None else None
+    return observation_id, source.line_num, source.datum, timestamp
 
 
 class DemotionTypes(str, Enum):
@@ -120,6 +141,7 @@ CREATE TABLE events (
     line_num INTEGER,
     source_datum VARCHAR,
     source_rule INTEGER REFERENCES rules(id),
+    producer_rule INTEGER REFERENCES rules(id),
     resources VARCHAR,
     obs_context_id BIGINT REFERENCES observation_contexts(id),
     payload JSON,
@@ -130,7 +152,7 @@ CREATE TABLE events (
 CREATE INDEX idx_events_ctx_timestamp ON events(context_id, timestamp);
 """
 
-_COLS = "context_id,event_type,timestamp,status,line_num,source_datum,source_rule,resources,obs_context_id,payload"
+_COLS = "context_id,event_type,timestamp,status,line_num,source_datum,source_rule,producer_rule,resources,obs_context_id,payload"
 
 
 class EventStream:
@@ -145,6 +167,7 @@ class EventStream:
         line_num INTEGER    - source line number
         source_datum VARCHAR - source datum string
         source_rule INTEGER - rule ID (foreign key to rules)
+        producer_rule INTEGER - producing rule ID (foreign key to rules)
         resources VARCHAR   - resource identifier ("ANY" or hostname)
         obs_context_id BIGINT - observation context ID
         payload JSON        - event payload as JSON
@@ -152,14 +175,22 @@ class EventStream:
     Use query_raw() for SELECT queries, execute() for mutations.
     """
 
-    Adder: TypeAlias = Callable[[str, dict[str, Any], Source], None]
+    class Adder(Protocol):
+        def __call__(
+            self,
+            event_type: str,
+            payload: dict[str, Any],
+            source: Source,
+            *,
+            producer_rule_id: Optional[str] = None,
+        ) -> None: ...
 
     def __init__(self, ctx_id: int, ctx_str: str, conn: duckdb.DuckDBPyConnection, mgr: "EventManager"):
         self._ctx_id = ctx_id
         self._ctx_str = ctx_str
         self._conn = conn
         self._mgr = mgr
-        self._batch: list[tuple[str, dict[str, Any], Source]] = []
+        self._batch: list[tuple[str, dict[str, Any], Source, Optional[str]]] = []
         self._batch_size_threshold = 500  # Auto-flush after this many events
 
     @property
@@ -190,10 +221,12 @@ class EventStream:
         # Step 1: Collect all unique event types and rules
         event_types = set()
         rules = set()
-        for event_type, _, source in self._batch:
+        for event_type, _, source, producer_rule_name in self._batch:
             event_types.add(event_type)
             if source.rule:
                 rules.add(source.rule)
+            if producer_rule_name is not None:
+                rules.add(producer_rule_name)
 
         # Step 2: Resolve event type and rule name strings to integer IDs.
         # Both are read-only — get_id raises on unknown names.
@@ -205,9 +238,10 @@ class EventStream:
 
         # Step 3: Prepare all event rows for bulk insert
         event_rows = []
-        for event_type, payload, source in self._batch:
+        for event_type, payload, source, producer_rule_name in self._batch:
             typ_id = type_ids.get(event_type)
             rule_id = rule_ids.get(source.rule) if source.rule else None
+            producer_rule_id = rule_ids.get(producer_rule_name) if producer_rule_name is not None else None
             # Serialize resources using Pydantic (returns "AllJobResources" or list of Resource models)
             serialized = serialize_resource_set(source.resources)
             if isinstance(serialized, str):
@@ -228,6 +262,7 @@ class EventStream:
                     source.line_num,
                     source.datum,
                     rule_id,
+                    producer_rule_id,
                     resources_str,
                     source.source_context.id,
                     payload_json,
@@ -236,7 +271,7 @@ class EventStream:
 
         # Step 4: Bulk insert all events using flat tuple insert
         if event_rows:
-            values_clause = ",".join(["(?, ?, ?, 1, ?, ?, ?, ?, ?, ?)"] * len(event_rows))
+            values_clause = ",".join(["(?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?)"] * len(event_rows))
             # Flatten all rows into a single parameter list
             flat_params = [param for row in event_rows for param in row]
             self._conn.execute(
@@ -276,7 +311,14 @@ class EventStream:
             ],
         )
 
-    def add_event(self, event_type: str, payload: dict[str, Any], source: Source) -> None:
+    def add_event(
+        self,
+        event_type: str,
+        payload: dict[str, Any],
+        source: Source,
+        *,
+        producer_rule_id: Optional[str] = None,
+    ) -> None:
         """Add an event to the stream. Events are batched and flushed periodically.
 
         IMPORTANT: Observation contexts MUST be registered via register_observation_context()
@@ -286,7 +328,7 @@ class EventStream:
         Returns:
             None (batched mode) - call flush() to persist events.
         """
-        self._batch.append((event_type, payload, source))
+        self._batch.append((event_type, payload, source, producer_rule_id))
 
         if len(self._batch) >= self._batch_size_threshold:
             self._flush()
@@ -296,6 +338,29 @@ class EventStream:
     def event_adder(self) -> "EventStream.Adder":
         """Return a callable for adding events."""
         return self.add_event
+
+    def producer_rules_by_source(self) -> dict[SourceProvenanceKey, tuple[str, ...]]:
+        """Load producing-rule identities for Decision DAG construction only.
+
+        Returns:
+            Mapping from attribution-neutral source identity to producing rules.
+        """
+        self._flush()
+        rows = self._conn.execute(
+            """SELECT obs_context_id, line_num, source_datum, timestamp, producer_rule
+               FROM events
+               WHERE context_id=? AND producer_rule IS NOT NULL""",
+            [self._ctx_id],
+        ).fetchall()
+        producers: dict[SourceProvenanceKey, set[str]] = defaultdict(set)
+        for observation_id, line_num, datum, timestamp, producer_rule in rows:
+            rule_name = self._mgr.rules.get_str(producer_rule)
+            if rule_name is None:
+                continue
+            timestamp_value = timestamp.timestamp() if timestamp is not None else None
+            key = observation_id, line_num, datum or "", timestamp_value
+            producers[key].add(rule_name)
+        return {key: tuple(sorted(rule_ids)) for key, rule_ids in producers.items()}
 
     def query_raw(self, sql: str, params: list = []) -> list[tuple]:
         """Execute SQL query and return raw rows."""
@@ -464,9 +529,10 @@ class EventManager:
                 pass
 
     # Bump when DuckDB table schemas change (columns, types, new tables).
-    # Snapshots written with a different version are rejected on load.
-    _SNAPSHOT_SCHEMA_VERSION = 1
+    # Supported older versions are migrated while loading; others are rejected.
+    _SNAPSHOT_SCHEMA_VERSION = 2
     _SCHEMA_VERSION_FILE = "schema_version"
+    _MIGRATABLE_SNAPSHOT_VERSIONS = frozenset({1})
 
     # All DuckDB tables in dependency-safe import order.
     # NOTE: TableName.OBSERVATION_CONTEXTS has value "obs_contexts" but the
@@ -518,19 +584,23 @@ class EventManager:
         if not snapshot_dir.is_dir():
             raise FileNotFoundError(f"Snapshot directory does not exist: {snapshot_dir}")
 
-        try:
-            version_file = snapshot_dir / cls._SCHEMA_VERSION_FILE
-            if version_file.exists():
-                stored_version = int(version_file.read_text().strip())
-                if stored_version != cls._SNAPSHOT_SCHEMA_VERSION:
-                    raise ValueError(
-                        f"Snapshot schema version mismatch: stored={stored_version}, "
-                        f"current={cls._SNAPSHOT_SCHEMA_VERSION}"
-                    )
-        except ValueError:
-            raise
-        except (PermissionError, OSError) as e:
-            raise RuntimeError(f"Cannot read schema version from {snapshot_dir}: {e}") from e
+        version_file = snapshot_dir / cls._SCHEMA_VERSION_FILE
+        # Missing version files were historically accepted and have the v1 event shape.
+        stored_version = 1
+        if version_file.exists():
+            try:
+                raw_version = version_file.read_text().strip()
+            except (PermissionError, OSError) as e:
+                raise RuntimeError(f"Cannot read schema version from {snapshot_dir}: {e}") from e
+            try:
+                stored_version = int(raw_version)
+            except ValueError as e:
+                raise ValueError(f"Invalid snapshot schema version: {raw_version!r}") from e
+        supported_versions = cls._MIGRATABLE_SNAPSHOT_VERSIONS | {cls._SNAPSHOT_SCHEMA_VERSION}
+        if stored_version not in supported_versions:
+            raise ValueError(
+                f"Snapshot schema version mismatch: stored={stored_version}, current={cls._SNAPSHOT_SCHEMA_VERSION}"
+            )
 
         mgr = cls(rules_engine)
 
@@ -540,7 +610,19 @@ class EventManager:
                 raise FileNotFoundError(f"Snapshot file missing: {src}")
             try:
                 mgr._conn.execute(f"DELETE FROM {table}")
-                mgr._conn.execute(f"INSERT INTO {table} SELECT * FROM read_parquet('{src}')")
+                if table == "events" and stored_version == 1:
+                    # Schema v2 added producer_rule. Preserve a v1 cache hit by
+                    # importing every legacy column and leaving the new nullable
+                    # provenance column empty until extraction naturally refreshes.
+                    legacy_columns = (
+                        "id, context_id, event_type, timestamp, status, line_num, "
+                        "source_datum, source_rule, resources, obs_context_id, payload"
+                    )
+                    mgr._conn.execute(
+                        f"INSERT INTO events ({legacy_columns}) SELECT {legacy_columns} FROM read_parquet('{src}')"
+                    )
+                else:
+                    mgr._conn.execute(f"INSERT INTO {table} SELECT * FROM read_parquet('{src}')")
             except (PermissionError, OSError) as e:
                 raise PermissionError(f"Cannot read snapshot file {src}: {e}") from e
             except duckdb.IOException as e:

@@ -10,14 +10,20 @@
 
 """Per-node, per-symptom decision trace extracted from AttributionResult."""
 
-from dataclasses import asdict, dataclass
-from typing import Any, Mapping, Optional
+from dataclasses import asdict, dataclass, field
+from datetime import datetime
+from typing import TYPE_CHECKING, Any, Mapping, Optional
 
 from attribution_lib.core import AttributionResult
 from attribution_lib.decision_trace_recorder import Action, DecisionRecorder, NodeType, SourceEvidence
+from attribution_lib.events import EventStream, SourceProvenanceKey, source_provenance_key
 from attribution_lib.exceptions import DecisionGraphError
+from attribution_lib.rule_types.definitions import RuleProvenance
 from attribution_lib.sources import Source, SourceSet
 from attribution_lib.symptoms.base import BaseSymptom
+
+if TYPE_CHECKING:
+    from attribution_lib.rules_engine import RuleEngine
 
 
 @dataclass(frozen=True)
@@ -212,6 +218,7 @@ class DecisionNode:
     line_num: Optional[int] = None
     timestamp: Optional[str] = None
     obs_source: Optional[str] = None
+    rule_provenance: Optional[RuleProvenance] = None
 
 
 @dataclass(frozen=True)
@@ -235,6 +242,7 @@ class DecisionDAG:
 
     nodes: list[DecisionNode]
     edges: list[DecisionEdge]
+    ruleset_hashes: dict[str, str] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -248,14 +256,26 @@ class ExtractionKey:
     timestamp: Optional[str]
     line_num: Optional[int]
     datum: Optional[str]
+    producer_rule_id: Optional[str]
 
     @classmethod
-    def from_source(cls, symptom: str, source: Source, hostname: Optional[str]) -> "ExtractionKey":
+    def from_source(
+        cls,
+        symptom: str,
+        source: Source,
+        hostname: Optional[str],
+        producer_rule_id: Optional[str],
+    ) -> "ExtractionKey":
         evidence = SourceEvidence.from_source(source, hostname=hostname)
-        return cls.from_evidence(symptom, evidence)
+        return cls.from_evidence(symptom, evidence, producer_rule_id)
 
     @classmethod
-    def from_evidence(cls, symptom: str, evidence: SourceEvidence) -> "ExtractionKey":
+    def from_evidence(
+        cls,
+        symptom: str,
+        evidence: SourceEvidence,
+        producer_rule_id: Optional[str],
+    ) -> "ExtractionKey":
         return cls(
             symptom=symptom,
             hostname=evidence.hostname,
@@ -264,6 +284,7 @@ class ExtractionKey:
             timestamp=evidence.timestamp,
             line_num=evidence.line_num,
             datum=evidence.datum,
+            producer_rule_id=producer_rule_id,
         )
 
 
@@ -271,6 +292,7 @@ def build_decision_graph(
     recorder: DecisionRecorder,
     att_res: AttributionResult,
     canonical_from_normalized: Optional[Mapping[str, str]] = None,
+    rules_engine: Optional["RuleEngine"] = None,
 ) -> DecisionDAG:
     """Assemble flat DecisionEvents into a directed acyclic graph (DAG).
 
@@ -288,8 +310,20 @@ def build_decision_graph(
     Phase 3 — Synthesize the authoritative final outcome from att_res.
       This keeps the graph consistent with post-outcome refiners.
 
-    Returns domain dataclasses — callers handle presentation.
+    Args:
+        recorder: Runtime decision events collected during attribution.
+        att_res: Final attribution result containing authoritative symptom evidence.
+        canonical_from_normalized: Optional normalized-to-canonical hostname mapping.
+        rules_engine: Immutable rule engine used to resolve rule provenance.
+
+    Returns:
+        Domain DecisionDAG; callers handle presentation.
     """
+    if rules_engine is None:
+        import attribution_lib
+
+        rules_engine = attribution_lib.get_rules_engine()
+
     cmap = canonical_from_normalized if canonical_from_normalized is not None else {}
     nodes: list[DecisionNode] = []
     edges: list[DecisionEdge] = []
@@ -297,11 +331,45 @@ def build_decision_graph(
     extraction_ids: dict[str, list[str]] = {}
     extraction_hosts: dict[str, Optional[str]] = {}
     _seen_extraction_sources: set[ExtractionKey] = set()
+    rule_provenance_by_id: dict[str, Optional[RuleProvenance]] = {}
+    producer_rules_by_source = (
+        att_res.event_stream.producer_rules_by_source() if isinstance(att_res.event_stream, EventStream) else {}
+    )
+
+    def _evidence_provenance_key(evidence: SourceEvidence) -> SourceProvenanceKey:
+        timestamp_value: Optional[float] = None
+        if evidence.timestamp is not None:
+            try:
+                timestamp_value = datetime.fromisoformat(evidence.timestamp).timestamp()
+            except ValueError:
+                pass
+        return evidence.obs_context_id, evidence.line_num, evidence.datum or "", timestamp_value
+
+    def _producer_rule_ids(key: SourceProvenanceKey) -> tuple[Optional[str], ...]:
+        rule_ids = producer_rules_by_source.get(key, ())
+        return tuple(rule_ids) if len(rule_ids) > 0 else (None,)
+
+    def _rule_provenance(rule_id: Optional[str]) -> Optional[RuleProvenance]:
+        """Resolve and cache one executable rule's immutable metadata.
+
+        Args:
+            rule_id: Stable executable rule identifier, if available.
+
+        Returns:
+            Rule provenance, or None when the rule is unavailable.
+        """
+        if rule_id is None:
+            return None
+        if rule_id not in rule_provenance_by_id:
+            rule = rules_engine.get_rule(rule_id)
+            rule_provenance_by_id[rule_id] = rule.provenance() if rule is not None else None
+        return rule_provenance_by_id[rule_id]
 
     def _add_extraction_node_from_evidence(
         *,
         symptom: str,
         evidence: SourceEvidence,
+        producer_rule_id: Optional[str],
     ) -> None:
         nonlocal node_counter
         nid = f"ext_{node_counter}"
@@ -318,6 +386,7 @@ def build_decision_graph(
                 line_num=evidence.line_num,
                 timestamp=evidence.timestamp,
                 obs_source=evidence.obs_source,
+                rule_provenance=_rule_provenance(producer_rule_id),
             )
         )
         extraction_ids.setdefault(symptom, []).append(nid)
@@ -325,19 +394,29 @@ def build_decision_graph(
 
     def _add_extraction_node(symptom: str, source: Source, hostname: Optional[str]) -> None:
         evidence = SourceEvidence.from_source(source, hostname=hostname)
-        source_key = ExtractionKey.from_source(symptom, source, hostname)
-        if source_key in _seen_extraction_sources:
-            return
-        _seen_extraction_sources.add(source_key)
-        _add_extraction_node_from_evidence(symptom=symptom, evidence=evidence)
+        for producer_rule_id in _producer_rule_ids(source_provenance_key(source)):
+            source_key = ExtractionKey.from_source(symptom, source, hostname, producer_rule_id)
+            if source_key in _seen_extraction_sources:
+                continue
+            _seen_extraction_sources.add(source_key)
+            _add_extraction_node_from_evidence(
+                symptom=symptom,
+                evidence=evidence,
+                producer_rule_id=producer_rule_id,
+            )
 
     def _add_extraction_from_evidence(symptom: str, evidence: dict[str, Any], hostname: Optional[str]) -> None:
         source_evidence = SourceEvidence.from_payload(evidence, hostname=hostname)
-        source_key = ExtractionKey.from_evidence(symptom, source_evidence)
-        if source_key in _seen_extraction_sources:
-            return
-        _seen_extraction_sources.add(source_key)
-        _add_extraction_node_from_evidence(symptom=symptom, evidence=source_evidence)
+        for producer_rule_id in _producer_rule_ids(_evidence_provenance_key(source_evidence)):
+            source_key = ExtractionKey.from_evidence(symptom, source_evidence, producer_rule_id)
+            if source_key in _seen_extraction_sources:
+                continue
+            _seen_extraction_sources.add(source_key)
+            _add_extraction_node_from_evidence(
+                symptom=symptom,
+                evidence=source_evidence,
+                producer_rule_id=producer_rule_id,
+            )
 
     def _matching_extraction_ids(symptom: str, hostname: Optional[str]) -> list[str]:
         ids = extraction_ids.get(symptom, [])
@@ -451,4 +530,8 @@ def build_decision_graph(
         for ext_id in _matching_extraction_ids(winning_symptom, None):
             edges.append(DecisionEdge(parent_id=ext_id, child_id=nid, edge_type="MATCHES"))
 
-    return DecisionDAG(nodes=nodes, edges=edges)
+    return DecisionDAG(
+        nodes=nodes,
+        edges=edges,
+        ruleset_hashes={"extraction": rules_engine.extractor_hash()},
+    )
