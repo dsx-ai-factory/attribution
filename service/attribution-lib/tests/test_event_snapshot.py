@@ -58,7 +58,7 @@ class TestSnapshotRoundTrip:
     def test_export_import_preserves_events(self, tmp_path, dummy_ctx):
         mgr = EventManager(rules_engine=attribution_lib.get_rules_engine())
         _add_events(mgr, "job_1", dummy_ctx, count=5)
-        snapshot_dir = tmp_path / "snap"
+        snapshot_dir = tmp_path / "snap's"
 
         mgr.export_snapshot(snapshot_dir)
         mgr.close()
@@ -68,10 +68,11 @@ class TestSnapshotRoundTrip:
         assert rows[0] == 5
         restored.close()
 
-    def test_imports_schema_v1_without_reextraction(self, tmp_path, dummy_ctx):
+    @pytest.mark.parametrize("with_version_marker", [True, False])
+    def test_imports_schema_v1_without_reextraction(self, tmp_path, dummy_ctx, with_version_marker):
         mgr = EventManager(rules_engine=attribution_lib.get_rules_engine())
         _add_events(mgr, "job_1", dummy_ctx, count=1)
-        snapshot_dir = tmp_path / "snap"
+        snapshot_dir = tmp_path / "snap's"
         mgr.export_snapshot(snapshot_dir)
         mgr.close()
 
@@ -84,7 +85,11 @@ class TestSnapshotRoundTrip:
         duckdb.read_parquet(str(events_path)).project(legacy_columns).write_parquet(str(legacy_path))
         events_path.unlink()
         legacy_path.rename(events_path)
-        (snapshot_dir / EventManager._SCHEMA_VERSION_FILE).write_text("1")
+        version_path = snapshot_dir / EventManager._SCHEMA_VERSION_FILE
+        if with_version_marker:
+            version_path.write_text("1")
+        else:
+            version_path.unlink()
 
         restored = EventManager.from_snapshot(snapshot_dir, attribution_lib.get_rules_engine())
         rows = restored._conn.execute("SELECT source_datum, producer_rule FROM events").fetchall()

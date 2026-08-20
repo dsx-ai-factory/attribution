@@ -106,7 +106,8 @@ class SourceEvidence:
         }
         for field_name, expected_type in field_types.items():
             value = payload.get(field_name)
-            if value is not None and not isinstance(value, expected_type):
+            invalid_integer = expected_type is int and isinstance(value, bool)
+            if value is not None and (invalid_integer or not isinstance(value, expected_type)):
                 raise DecisionGraphError(
                     f"Decision source evidence field {field_name!r} must be {expected_type.__name__} or None"
                 )

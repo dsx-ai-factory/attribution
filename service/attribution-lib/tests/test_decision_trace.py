@@ -402,6 +402,11 @@ class TestBuildDecisionDAG:
             ({"sources": None}, "sources for 'XID-48' must be a list"),
             ({"sources": ["not-a-mapping"]}, "source evidence must be a mapping"),
             ({"sources": [{"datum": {"nested": "value"}}]}, "field 'datum' must be str or None"),
+            ({"sources": [{"obs_context_id": False}]}, "field 'obs_context_id' must be int or None"),
+            (
+                {"sources": [{"timestamp": "not-a-timestamp"}]},
+                "source evidence timestamp must be ISO 8601",
+            ),
         ],
     )
     def test_build_rejects_malformed_event_evidence(self, evidence, message):
@@ -485,10 +490,15 @@ class TestBuildDecisionDAG:
         finally:
             manager.close()
 
-        extraction_ids = {
-            node.rule_provenance.rule_id
+        extraction_nodes = [
+            node
             for node in graph.nodes
             if node.node_type == NodeType.EXTRACTION and node.rule_provenance is not None
+        ]
+        assert len(extraction_nodes) == 2
+        extraction_ids = {
+            node.rule_provenance.rule_id
+            for node in extraction_nodes
         }
         assert extraction_ids == {"extractor_a", "extractor_b"}
         assert len(att_res.bad_nodes_attr.my_bad_nodes.attributions["node-042"].attributions["XID-48"]) == 1

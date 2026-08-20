@@ -567,8 +567,9 @@ class EventManager:
 
         for table in self._SNAPSHOT_TABLES:
             dest = snapshot_dir / f"{table}.parquet"
+            dest_sql = str(dest).replace("'", "''")
             try:
-                self._conn.execute(f"COPY {table} TO '{dest}' (FORMAT PARQUET)")
+                self._conn.execute(f"COPY {table} TO '{dest_sql}' (FORMAT PARQUET)")
             except (PermissionError, OSError) as e:
                 raise PermissionError(f"Cannot write snapshot file {dest}: {e}") from e
             except duckdb.IOException as e:
@@ -614,6 +615,7 @@ class EventManager:
             src = snapshot_dir / f"{table}.parquet"
             if not src.exists():
                 raise FileNotFoundError(f"Snapshot file missing: {src}")
+            src_sql = str(src).replace("'", "''")
             try:
                 mgr._conn.execute(f"DELETE FROM {table}")
                 if table == "events" and stored_version == 1:
@@ -625,10 +627,11 @@ class EventManager:
                         "source_datum, source_rule, resources, obs_context_id, payload"
                     )
                     mgr._conn.execute(
-                        f"INSERT INTO events ({legacy_columns}) SELECT {legacy_columns} FROM read_parquet('{src}')"
+                        f"INSERT INTO events ({legacy_columns}) "
+                        f"SELECT {legacy_columns} FROM read_parquet('{src_sql}')"
                     )
                 else:
-                    mgr._conn.execute(f"INSERT INTO {table} SELECT * FROM read_parquet('{src}')")
+                    mgr._conn.execute(f"INSERT INTO {table} SELECT * FROM read_parquet('{src_sql}')")
             except (PermissionError, OSError) as e:
                 raise PermissionError(f"Cannot read snapshot file {src}: {e}") from e
             except duckdb.IOException as e:

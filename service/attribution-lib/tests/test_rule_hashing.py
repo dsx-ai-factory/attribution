@@ -139,6 +139,23 @@ class TestRuleProvenance:
         assert second_rule is not None
         assert first_rule.provenance().definition_hash != second_rule.provenance().definition_hash
 
+    def test_hash_changes_with_source_filters(self):
+        loader1 = RuleLoader()
+        loader1.register_rule(
+            _make_extractor("stable_id", r"pattern", frozenset({ObservationSource.APPLOG}))
+        )
+        loader2 = RuleLoader()
+        loader2.register_rule(
+            _make_extractor("stable_id", r"pattern", frozenset({ObservationSource.SYSLOG}))
+        )
+
+        first_rule = loader1.build().get_rule("stable_id")
+        second_rule = loader2.build().get_rule("stable_id")
+
+        assert first_rule is not None
+        assert second_rule is not None
+        assert first_rule.provenance().definition_hash != second_rule.provenance().definition_hash
+
     def test_non_extractor_has_basic_provenance(self):
         loader = RuleLoader()
         loader.register_rule(_make_filter("filter_rule"))

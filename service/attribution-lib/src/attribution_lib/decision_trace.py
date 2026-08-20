@@ -339,8 +339,10 @@ def build_decision_graph(
         if evidence.timestamp is not None:
             try:
                 timestamp_value = datetime.fromisoformat(evidence.timestamp).timestamp()
-            except ValueError:
-                pass
+            except ValueError as e:
+                raise DecisionGraphError(
+                    f"Decision source evidence timestamp must be ISO 8601: {evidence.timestamp!r}"
+                ) from e
         return evidence.obs_context_id, evidence.line_num, evidence.datum or "", timestamp_value
 
     def _producer_rule_ids(key: SourceProvenanceKey) -> tuple[Optional[str], ...]:
