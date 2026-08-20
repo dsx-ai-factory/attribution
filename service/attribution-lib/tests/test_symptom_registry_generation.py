@@ -231,6 +231,33 @@ def test_multicast_nv_err_no_memory_maps_to_infrasw():
     assert match.hw_cause == "Driver bug"
 
 
+def test_mixed_nv_err_no_memory_maps_to_multicategory_in_any_order():
+    """Keep mixed multicast and non-multicast memory failures ambiguous."""
+    registry = _load_committed_registry()
+    non_multicast = "NV_ERR_NO_MEMORY mem_desc.c"
+    multicast = "NV_ERR_NO_MEMORY mem_multicast_fabric.c"
+
+    for symptoms in ([non_multicast, multicast], [multicast, non_multicast]):
+        match = registry.outcome_for(symptoms)
+
+        assert match is not None
+        assert match.matched_prefix == "NV_ERR_NO_MEMORY"
+        assert match.outcome == "Fail MultiCategory"
+        assert match.hw_cause == "Not Applicable"
+
+
+def test_bare_nv_err_no_memory_maps_to_multicategory():
+    """Classify the bare memory status through the generic fallback."""
+    registry = _load_committed_registry()
+
+    match = registry.outcome_for(["NV_ERR_NO_MEMORY"])
+
+    assert match is not None
+    assert match.matched_prefix == "NV_ERR_NO_MEMORY"
+    assert match.outcome == "Fail MultiCategory"
+    assert match.hw_cause == "Not Applicable"
+
+
 def test_nvrx_detected_failure_maps_to_fail_undetermined():
     registry = _load_committed_registry()
 
