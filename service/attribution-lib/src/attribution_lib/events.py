@@ -455,6 +455,7 @@ class EventManager:
         self._conn = duckdb.connect(":memory:")
         self._conn.execute(SCHEMA)
         self._streams: dict[str, EventStream] = {}
+        self._rules_engine = rules_engine
         self._closed = False  # Track if already closed to prevent double-logging
 
         # Provide convenient lookup helpers
@@ -500,6 +501,11 @@ class EventManager:
     def rules(self) -> _ReadOnlyLookup:
         """Helper for rule lookups (read-only, raises on unknown names)."""
         return self._rules
+
+    @property
+    def rules_engine(self) -> "RuleEngine":
+        """Return the rule engine that produced this manager's events."""
+        return self._rules_engine
 
     def create_stream(self, context_id: str) -> EventStream:
         if context_id is None:

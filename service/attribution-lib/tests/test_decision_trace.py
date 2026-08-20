@@ -457,7 +457,7 @@ class TestBuildDecisionDAG:
         manager = _attach_producer_events(att_res, engine, src, ("xid_48_extractor",))
 
         try:
-            graph = build_decision_graph(DecisionRecorder("job-123"), att_res, rules_engine=engine)
+            graph = build_decision_graph(DecisionRecorder("job-123"), att_res)
         finally:
             manager.close()
 
@@ -481,7 +481,7 @@ class TestBuildDecisionDAG:
         manager = _attach_producer_events(att_res, engine, source, ("extractor_a", "extractor_b"))
 
         try:
-            graph = build_decision_graph(DecisionRecorder("job-123"), att_res, rules_engine=engine)
+            graph = build_decision_graph(DecisionRecorder("job-123"), att_res)
         finally:
             manager.close()
 

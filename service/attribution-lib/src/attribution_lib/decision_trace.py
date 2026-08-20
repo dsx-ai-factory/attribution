@@ -320,9 +320,7 @@ def build_decision_graph(
         Domain DecisionDAG; callers handle presentation.
     """
     if rules_engine is None:
-        import attribution_lib
-
-        rules_engine = attribution_lib.get_rules_engine()
+        rules_engine = att_res.event_stream.mgr.rules_engine
 
     cmap = canonical_from_normalized if canonical_from_normalized is not None else {}
     nodes: list[DecisionNode] = []
