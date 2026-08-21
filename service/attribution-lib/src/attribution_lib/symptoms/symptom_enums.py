@@ -83,7 +83,9 @@ class RegisteredSymptoms(Enum):
     # System Symptoms
     RUNNING_WITHOUT_ERROR = "running without error"
     THE_PROCESS_COMPLETES = "the process completes"
-    NOT_RESPONDING = "Not responding"
+    NODE_NOT_RESPONDING = "Node not responding"
+    # Compatibility alias for callers that still use the former enum member.
+    NOT_RESPONDING = NODE_NOT_RESPONDING
     STOPPING_NVIDIA_IMEX_SERVICE = "Stopping nvidia-imex.service"
     SYSTEM_POWERING_DOWN = "System is powering down"
     SYSTEM_SERVICE_OOM_KILL = "OOM kill of system service"

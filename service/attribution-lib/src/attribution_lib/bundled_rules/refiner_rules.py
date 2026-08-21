@@ -24,9 +24,11 @@ from common.refiner_helpers import (
 from loguru import logger
 
 from attribution_lib.events import BAD_PAIR_EVENT_TYPES, EventStream, sql_placeholders
+from attribution_lib.failed_node_provenance import FailedNodeResolution
 from common.megatron import get_pytorch_timeout_minutes
 from attribution_lib.hooks import multihooks, singlehooks
 from attribution_lib.job_info import NVRX_TAG, JobInfo
+from attribution_lib.node_not_responding_provenance import NodeNotRespondingProvenance
 from attribution_lib.bundled_rules.common.outcome_helpers import apply_user_cancellation_reclassification
 from attribution_lib.outcome import OutcomeAttribution
 from attribution_lib.rules import (
@@ -55,13 +57,15 @@ declare_event_types(
     *BAD_PAIR_EVENT_TYPES,
     "Application.megatron-lm.runtime_args",
     "Node failure reported by slurm",
-    "scheduler check -> node not responding",
 )
 
 # Shared derived rule names used in core.py/bundled_rules/ (library code outside rule files).
 declare_rule_names(
     "raw keywords",
     "remap SingleGPU_XID->XID",
+    NodeNotRespondingProvenance.SLURM_NODE_REASON.value,
+    FailedNodeResolution.SLURM_FAILED_NODE_FIELD.value,
+    FailedNodeResolution.SINGLE_ALLOCATED_NODE_INFERENCE.value,
 )
 
 _REFINER_BASE = FilterPriority.FINAL
@@ -71,7 +75,7 @@ _STEP = 10
 # Customers can add their own scrubbers here; aggregation happens once after all finish.
 _SCRUB_ORDER = [
     # Scheduler-state attributions run first: they contribute the slurm node-failure
-    # and "Not responding" symptoms that ScrubBadNodes reads (see _NODE_FAILURE_SYMPTOMS)
+    # and "Node not responding" symptoms that ScrubBadNodes reads (see _NODE_FAILURE_SYMPTOMS)
     # to scrub peer DataLoader attributions. They must land before ScrubBadNodes.
     "SchedulerNodeFailure",
     "SchedulerNotResponding",
@@ -278,7 +282,7 @@ _PYXIS_NVIDIA_SPECIFIC_CLI_SYMPTOMS = frozenset(
 _NODE_FAILURE_SYMPTOMS = frozenset(
     {
         "Node failure reported by slurm",
-        "Not responding",
+        "Node not responding",
         "Node unexpectedly rebooted",
     }
 )
@@ -335,7 +339,7 @@ _NON_IB_ROOT_CAUSE_PATTERNS = [
     "%XID-%",
     "%ECC%",
     "%Row Remap%",
-    "%Not responding%",
+    "%Node not responding%",
     "%NaN reported by Megatron%",
     "%megatron.core.dist_checkpointing.core.CheckpointingException%",
     "%Page Retirement%",
@@ -522,28 +526,30 @@ def scheduler_node_failure_refiner(context: RefinerContext):
     if job_info.state != "NODE_FAIL":
         return
 
-    failed_node_by_slurm = job_info.failed_node
-    if (failed_node_by_slurm is None or failed_node_by_slurm == "") and len(job_info.nodes) == 1:
+    failed_node = job_info.failed_node
+    resolution = FailedNodeResolution.SLURM_FAILED_NODE_FIELD
+    if (failed_node is None or failed_node == "") and len(job_info.nodes) == 1:
         # slurmdb did not record which node failed; on a single-node job the
         # sole allocated node is necessarily the one that failed.
-        failed_node_by_slurm = job_info.nodes[0]
+        failed_node = job_info.nodes[0]
+        resolution = FailedNodeResolution.SINGLE_ALLOCATED_NODE_INFERENCE
     # explicit checks so an empty string can't attribute to a node-less key
-    if failed_node_by_slurm is not None and failed_node_by_slurm != "":
-        source = job_info.source(job_info.state + failed_node_by_slurm, "Node failure reported by slurm")
+    if failed_node is not None and failed_node != "":
+        source = job_info.source(job_info.state + failed_node, resolution.value)
         attr = SourceSet.new_one("Node failure reported by slurm", source)
-        my_bad_nodes.add([failed_node_by_slurm], attr)
+        my_bad_nodes.add([failed_node], attr)
 
 
 @refiner_def(
     name="SchedulerNotResponding", author="NVIDIA Attribution team", priority=_priority("SchedulerNotResponding")
 )
 def scheduler_not_responding_refiner(context: RefinerContext):
-    """Back an "IB Error" with a scheduler "Not responding" reason.
+    """Back an "IB Error" with a raw scheduler "Not responding" reason.
 
     "IB Error" can be caused by a node going unresponsive, but that message may be
-    missing from telemetry; slurmdb's node reason fills the gap. Emits "Not
-    responding", a member of _NODE_FAILURE_SYMPTOMS read by ScrubBadNodes, so this
-    runs earlier in the SCRUB phase.
+    missing from telemetry; slurmdb's node reason fills the gap. Emits the canonical
+    "Node not responding" symptom, a member of _NODE_FAILURE_SYMPTOMS read
+    by ScrubBadNodes, so this runs earlier in the SCRUB phase.
     """
     job_info = context.job_info
     my_bad_nodes = context.my_bad_nodes
@@ -553,19 +559,22 @@ def scheduler_not_responding_refiner(context: RefinerContext):
     for node in list(my_bad_nodes.attributions.keys()):
         errors = my_bad_nodes.attributions[node]
 
-        # A heuristic to check if "IB Error" is caused by "Not responding",
-        # using pyslurm to fetch this data from slurmdb because the message
-        # might be missing in the telemetry.
+        # A heuristic to check if "IB Error" is caused by a raw "Not responding"
+        # reason, using pyslurm to fetch this data from slurmdb because the
+        # message might be missing in the telemetry.
         node_has_ib_error = any("IB Error" in error for error in errors.symptoms())
         if node_has_ib_error is False:
             continue
 
         if (node_info := job_info.slurm_node_infos.get(node)) is not None:
             node_reason = node_info.get("reason")
-            # TODO: support other epilog checks
+            # TODO: support other scheduler node-reason checks
             if node_reason is not None and "Not responding" in node_reason:
                 my_bad_nodes[node].add(
-                    SourceSet.new_one("Not responding", job_info.source(None, "scheduler check -> node not responding"))
+                    SourceSet.new_one(
+                        "Node not responding",
+                        job_info.source(None, NodeNotRespondingProvenance.SLURM_NODE_REASON.value),
+                    )
                 )
 
 
@@ -587,11 +596,11 @@ def scrub_bad_nodes_refiner(context: RefinerContext):
     node_failure_present = any(s in my_bad_nodes[n] for n in my_bad_nodes for s in _NODE_FAILURE_SYMPTOMS)
 
     for k in list(my_bad_nodes):
-        if "Not responding" in my_bad_nodes[k]:
+        if "Node not responding" in my_bad_nodes[k]:
             my_bad_nodes[k].discard("Node unexpectedly rebooted")
 
         if "System is powering down" in my_bad_nodes[k]:
-            my_bad_nodes[k].discard("Not responding")
+            my_bad_nodes[k].discard("Node not responding")
             my_bad_nodes[k].discard("Node unexpectedly rebooted")
             my_bad_nodes[k].discard("Stopping nvidia-imex.service")
 
@@ -602,20 +611,20 @@ def scrub_bad_nodes_refiner(context: RefinerContext):
             or "kernel invalid memory access" in my_bad_nodes[k]
             or "Failed to collect nvlink status info" in my_bad_nodes[k]
         ):
-            my_bad_nodes[k].discard("Not responding")
+            my_bad_nodes[k].discard("Node not responding")
             my_bad_nodes[k].discard("Node unexpectedly rebooted")
 
         if any("bad kernel stack frame pointer" in error for error in my_bad_nodes[k].symptoms()):
             my_bad_nodes[k].discard("NMI watchdog hard LOCKUP")
             my_bad_nodes[k].discard("general protection fault")
-            my_bad_nodes[k].discard("Not responding")
+            my_bad_nodes[k].discard("Node not responding")
             my_bad_nodes[k].discard("Node unexpectedly rebooted")
 
         # An OOM kill of a system service (slurmd, slurmstepd, munged, etc.) is
         # the root cause; the node going silent or SLURM declaring NODE_FAIL
         # are downstream consequences.
         if "OOM kill of system service" in my_bad_nodes[k]:
-            my_bad_nodes[k].discard("Not responding")
+            my_bad_nodes[k].discard("Node not responding")
             my_bad_nodes[k].discard("Node failure reported by slurm")
 
         # See cross-node precompute above — discard from every node, not just
@@ -849,7 +858,7 @@ def process_completes_cleanup(context: RefinerContext):
 
     # TODO: revisit later
     if "the process completes" in symptoms:
-        symptoms.discard("Not responding")  # hmmma
+        symptoms.discard("Node not responding")
         symptoms.discard("BrokenPipeError")
         symptoms.discard("No such file or directory")
         symptoms.discard(_CSP_TENANT_REPORTED)
@@ -1607,7 +1616,7 @@ def node_failure_nfs_cleanup(context: RefinerContext):
         symptom in symptoms
         for symptom in [
             "Node failure reported by slurm",
-            "Not responding",
+            "Node not responding",
             "Node unexpectedly rebooted",
             "System is powering down",
         ]

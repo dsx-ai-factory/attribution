@@ -111,17 +111,31 @@ def test_slurm_node_failure_takes_precedence_over_xid31_in_any_order():
         assert match.tier_index == OUTCOME_PRIORITIES.index(OutcomePriority.MEDIUM)
 
 
-def test_slurm_node_failure_yields_to_epilog_non_response_in_any_order():
-    """Prefer epilog non-response hardware evidence over the scheduler state."""
+def test_node_not_responding_preserves_hardware_policy():
+    """Rename the symptom without changing its hardware classification."""
+    registry = _load_committed_registry()
+
+    match = registry.outcome_for(["Node not responding"])
+
+    assert match is not None
+    assert match.matched_prefix == "Node not responding"
+    assert match.outcome == "Fail InfraHW"
+    assert match.hw_cause == "Known HW Cause - Node"
+    assert match.tier_index == OUTCOME_PRIORITIES.index(OutcomePriority.HIGH)
+    assert not registry.contains("Not responding")
+
+
+def test_slurm_node_failure_yields_to_node_not_responding_in_any_order():
+    """Prefer node non-response hardware evidence over the scheduler state."""
     registry = _load_committed_registry()
     node_failure = "Node failure reported by slurm"
-    epilog_non_response = "Not responding"
+    node_not_responding = "Node not responding"
 
-    for symptoms in ([node_failure, epilog_non_response], [epilog_non_response, node_failure]):
+    for symptoms in ([node_failure, node_not_responding], [node_not_responding, node_failure]):
         match = registry.outcome_for(symptoms)
 
         assert match is not None
-        assert match.matched_prefix == epilog_non_response
+        assert match.matched_prefix == node_not_responding
         assert match.outcome == "Fail InfraHW"
         assert match.tier_index == OUTCOME_PRIORITIES.index(OutcomePriority.HIGH)
 

@@ -11,8 +11,10 @@ from collections import defaultdict
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
-import attribution_lib
 import pytest
+from common.refiner_helpers import _get_earliest_watchdog_source
+
+import attribution_lib
 from attribution_lib.attr_types import JobNodeAttributions
 from attribution_lib.bundled_rules.common.outcome_helpers import apply_outcome_reclassification_rules
 from attribution_lib.bundled_rules.common.scrub_helpers import get_clean_bad_nodes
@@ -35,7 +37,6 @@ from attribution_lib.symptoms import (
     translate_and_prune_node_attributions,
 )
 from attribution_lib.symptoms.registry_generation import GeneratedSymptomRegistry
-from common.refiner_helpers import _get_earliest_watchdog_source
 from test_support.helpers import create_source_set, make_node_to_ranks
 
 
@@ -1768,6 +1769,21 @@ class TestSingleNodeNodeFail:
         assert "example-batch-node-00985" in my_bad_nodes.attributions
         assert self._NODE_FAILURE_SYMPTOM in my_bad_nodes["example-batch-node-00985"].symptoms()
         assert "" not in my_bad_nodes.attributions
+
+        source = next(iter(my_bad_nodes["example-batch-node-00985"].attributions[self._NODE_FAILURE_SYMPTOM]))
+        assert source.rule == "single_allocated_node_inference"
+
+    def test_nodefail_with_failed_node_records_scheduler_field_provenance(self, event_stream, simple_job_factory):
+        job_info = simple_job_factory(
+            state="NODE_FAIL",
+            nodes=["node-a", "node-b"],
+            failed_node="node-b",
+        )
+
+        my_bad_nodes = self._attributed_bad_nodes(event_stream, job_info)
+
+        source = next(iter(my_bad_nodes["node-b"].attributions[self._NODE_FAILURE_SYMPTOM]))
+        assert source.rule == "slurm_failed_node_field"
 
     def test_multi_node_nodefail_no_failed_node_does_not_infer(self, event_stream, simple_job_factory):
         job_info = simple_job_factory(state="NODE_FAIL", nodes=["node-a", "node-b"])

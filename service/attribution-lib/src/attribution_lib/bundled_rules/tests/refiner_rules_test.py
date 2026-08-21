@@ -29,6 +29,7 @@ from attribution_lib.filter import run_post_outcome_refiners, run_pre_outcome_re
 from attribution_lib.hooks import singlehooks
 from attribution_lib.bundled_rules.tests._shared import default_job_info
 from attribution_lib.job_info import JobInfo, JobInfoBuilder
+from attribution_lib.node_not_responding_provenance import NodeNotRespondingProvenance
 from attribution_lib.observation import Context as ObservationContext
 from attribution_lib.observation.inbound import Format as ObsFormat, Id, Source as ObsSource, TimeInterval
 from attribution_lib.outcome import OutcomeAttribution, calculate_outcome
@@ -165,31 +166,42 @@ def _run_scrub(stream, job_info, bad_nodes):
 class TestScrubBadNodes:
     """Tests for the ScrubBadNodes refiner (SCRUB phase, pre-aggregation)."""
 
-    def test_not_responding_discards_node_rebooted(self, stream, obs_ctx, job_info):
-        bad_nodes = _make_bad_nodes(obs_ctx, {"node01": ["Not responding", "Node unexpectedly rebooted"]})
+    def test_scheduler_raw_not_responding_reason_emits_renamed_symptom(self, stream, obs_ctx, job_info):
+        job_info = job_info._replace(slurm_node_infos={"node01": {"reason": "Health check: Not responding"}})
+        bad_nodes = _make_bad_nodes(obs_ctx, {"node01": ["IB Error-12 (IBV_WC_RETRY_EXC_ERR)"]})
+
         _run_scrub(stream, job_info, bad_nodes)
-        assert "Not responding" in bad_nodes["node01"]
+
+        assert "Node not responding" in bad_nodes["node01"]
+        assert "Not responding" not in bad_nodes["node01"]
+        source = bad_nodes["node01"].attributions["Node not responding"].one_source()
+        assert source.rule == NodeNotRespondingProvenance.SLURM_NODE_REASON.value
+
+    def test_node_not_responding_discards_node_rebooted(self, stream, obs_ctx, job_info):
+        bad_nodes = _make_bad_nodes(obs_ctx, {"node01": ["Node not responding", "Node unexpectedly rebooted"]})
+        _run_scrub(stream, job_info, bad_nodes)
+        assert "Node not responding" in bad_nodes["node01"]
         assert "Node unexpectedly rebooted" not in bad_nodes["node01"]
 
     def test_powering_down_discards_cascaded(self, stream, obs_ctx, job_info):
         bad_nodes = _make_bad_nodes(
             obs_ctx,
-            {"node01": ["System is powering down", "Not responding", "Node unexpectedly rebooted"]},
+            {"node01": ["System is powering down", "Node not responding", "Node unexpectedly rebooted"]},
         )
         _run_scrub(stream, job_info, bad_nodes)
         assert "System is powering down" in bad_nodes["node01"]
-        assert "Not responding" not in bad_nodes["node01"]
+        assert "Node not responding" not in bad_nodes["node01"]
         assert "Node unexpectedly rebooted" not in bad_nodes["node01"]
 
-    def test_xid_discards_not_responding_preserves_node_failure(self, stream, obs_ctx, job_info):
-        """XID discards 'Not responding' but preserves 'Node failure reported by slurm' for DAG."""
+    def test_xid_discards_node_not_responding_preserves_node_failure(self, stream, obs_ctx, job_info):
+        """XID discards 'Node not responding' but preserves 'Node failure reported by slurm' for DAG."""
         bad_nodes = _make_bad_nodes(
             obs_ctx,
-            {"node01": ["XID-94-CONTAINED_ERROR", "Not responding", "Node failure reported by slurm"]},
+            {"node01": ["XID-94-CONTAINED_ERROR", "Node not responding", "Node failure reported by slurm"]},
         )
         _run_scrub(stream, job_info, bad_nodes)
         assert "XID-94-CONTAINED_ERROR" in bad_nodes["node01"]
-        assert "Not responding" not in bad_nodes["node01"]
+        assert "Node not responding" not in bad_nodes["node01"]
         assert "Node failure reported by slurm" in bad_nodes["node01"]
 
     def test_bad_stack_frame_python_preserves_node_failure(self, stream, obs_ctx, job_info):
@@ -223,11 +235,11 @@ class TestScrubBadNodes:
         """OOM kill of a system service is the root cause for downstream node-silent symptoms."""
         bad_nodes = _make_bad_nodes(
             obs_ctx,
-            {"node01": ["OOM kill of system service", "Not responding", "Node failure reported by slurm"]},
+            {"node01": ["OOM kill of system service", "Node not responding", "Node failure reported by slurm"]},
         )
         _run_scrub(stream, job_info, bad_nodes)
         assert "OOM kill of system service" in bad_nodes["node01"]
-        assert "Not responding" not in bad_nodes["node01"]
+        assert "Node not responding" not in bad_nodes["node01"]
         assert "Node failure reported by slurm" not in bad_nodes["node01"]
 
     def test_system_service_oom_kill_preserves_node_rebooted(self, stream, obs_ctx, job_info):
@@ -819,10 +831,10 @@ class TestSlurmStateSymptoms:
 
 class TestProcessCompletesCleanup:
     def test_discards_cascaded_symptoms(self, stream, obs_ctx, job_info):
-        symptoms = _make_symptoms(obs_ctx, "the process completes", "Not responding", "BrokenPipeError")
+        symptoms = _make_symptoms(obs_ctx, "the process completes", "Node not responding", "BrokenPipeError")
         _run(stream, job_info, symptoms)
         assert "the process completes" in symptoms
-        assert "Not responding" not in symptoms
+        assert "Node not responding" not in symptoms
         assert "BrokenPipeError" not in symptoms
 
     def test_discards_only_tenant_reported_csp_event(self, stream, obs_ctx, job_info):
@@ -859,9 +871,9 @@ class TestProcessCompletesCleanup:
         assert "CSP Event Tenant Reported As Faulty" in symptoms
 
     def test_no_process_completes_keeps_symptoms(self, stream, obs_ctx, job_info):
-        symptoms = _make_symptoms(obs_ctx, "Not responding")
+        symptoms = _make_symptoms(obs_ctx, "Node not responding")
         _run(stream, job_info, symptoms)
-        assert "Not responding" in symptoms
+        assert "Node not responding" in symptoms
 
 
 class TestCspEventPrecedenceAndCascades:
@@ -3158,9 +3170,9 @@ class TestDagCascadePruning:
         _run(stream, job_info, symptoms, bad_nodes)
         assert "XID-48-GPU_ECC_DBE" in symptoms
 
-    def test_system_powering_down_prunes_not_responding(self, stream, obs_ctx, job_info):
+    def test_system_powering_down_prunes_node_not_responding(self, stream, obs_ctx, job_info):
         """System powering down prunes generic node-loss symptoms via DAG."""
-        aftermath = ["Not responding", "node offline"]
+        aftermath = ["Node not responding", "node offline"]
         bad_nodes = _make_bad_nodes(
             obs_ctx,
             {"node01": ["System is powering down", *aftermath]},
@@ -3214,7 +3226,7 @@ class TestDagCascadePruning:
         aftermath = [
             "Node unexpectedly rebooted",
             "Node failure reported by slurm",
-            "Not responding",
+            "Node not responding",
             "node offline",
             "System is powering down",
             "Fabric manager lost connection to all GPUs",

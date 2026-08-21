@@ -382,15 +382,15 @@ def test_route_unhealthy_discards_xid_145_routing_variants(dummy_ctx):
     assert RegisteredSymptoms.XID_145_RLW_SRC_TRACK_8.value not in remaining
 
 
-def test_csp_event_discards_slurm_node_failure_and_not_responding(dummy_ctx):
-    """CSP blame symptoms prune the redundant slurm node-failure / not-responding.
+def test_csp_event_discards_slurm_node_failure_and_node_not_responding(dummy_ctx):
+    """CSP blame symptoms prune redundant node-failure / responsiveness signals.
 
     CSP symptoms are read from the generated registry by category, so new ones
     need no edit here; interesting-only HEALTH_EVENT signals have no outcome
     and are excluded.
     """
     node_failure = "Node failure reported by slurm"
-    not_responding = "Not responding"
+    node_not_responding = "Node not responding"
     registry = attribution_lib.get_symptom_registry()
 
     csp_blame_symptoms = sorted(
@@ -404,7 +404,7 @@ def test_csp_event_discards_slurm_node_failure_and_not_responding(dummy_ctx):
         symptoms = SymptomSet[str]()
         symptoms.add(_one_source_set(dummy_ctx, symptom_id))
         symptoms.add(_one_source_set(dummy_ctx, node_failure))
-        symptoms.add(_one_source_set(dummy_ctx, not_responding))
+        symptoms.add(_one_source_set(dummy_ctx, node_not_responding))
         symptoms.add(_one_source_set(dummy_ctx, "UNRELATED-SYMPTOM"))
 
         op.cascade_prune(symptoms, symptom_id)
@@ -413,7 +413,7 @@ def test_csp_event_discards_slurm_node_failure_and_not_responding(dummy_ctx):
         assert symptom_id in remaining, f"{symptom_id}: variant pruned itself"
         assert "UNRELATED-SYMPTOM" in remaining, f"{symptom_id}: unrelated symptom pruned"
         assert node_failure not in remaining, f"{symptom_id}: failed to prune {node_failure!r}"
-        assert not_responding not in remaining, f"{symptom_id}: failed to prune {not_responding!r}"
+        assert node_not_responding not in remaining, f"{symptom_id}: failed to prune {node_not_responding!r}"
 
 
 def test_factory_creates_route_unhealthy():
@@ -422,6 +422,12 @@ def test_factory_creates_route_unhealthy():
     assert symptom.symptom_id == "Route Unhealthy"
     assert RegisteredSymptoms.XID_145_RLW_SRC_TRACK_4.value in symptom.cascade_discards
     assert RegisteredSymptoms.XID_145_RLW_SRC_TRACK_8.value in symptom.cascade_discards
+
+
+def test_not_responding_enum_member_aliases_renamed_symptom():
+    """Keep the former enum member available while exposing the new symptom name."""
+    assert RegisteredSymptoms.NOT_RESPONDING is RegisteredSymptoms.NODE_NOT_RESPONDING
+    assert RegisteredSymptoms.NOT_RESPONDING.value == "Node not responding"
 
 
 class TestResolveRegisteredSymptomPrefixFallback:

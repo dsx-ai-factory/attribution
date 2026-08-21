@@ -489,22 +489,24 @@ class TestBuildDecisionDAG:
         src = _make_source(rule="node_down", datum="node down")
         att_res = _make_attribution_result(
             {
-                "node-001": {"Not responding": [src]},
-                "node-002": {"Not responding": [src]},
+                "node-001": {"Node not responding": [src]},
+                "node-002": {"Node not responding": [src]},
             }
         )
-        att_res.outcome_attr = SourceSet(Mock(outcome="Fail InfraHW", root_cause_symptom="Not responding"))
+        att_res.outcome_attr = SourceSet(Mock(outcome="Fail InfraHW", root_cause_symptom="Node not responding"))
 
         recorder = DecisionRecorder("job-123")
         graph = build_decision_graph(recorder, att_res)
 
-        ext_nodes = [n for n in graph.nodes if n.node_type == NodeType.EXTRACTION and n.symptom == "Not responding"]
+        ext_nodes = [
+            n for n in graph.nodes if n.node_type == NodeType.EXTRACTION and n.symptom == "Node not responding"
+        ]
         assert sorted(n.hostname for n in ext_nodes) == ["node-001", "node-002"]
 
     def test_graph_does_not_fallback_to_unrelated_host_extraction(self):
         """Host-specific events synthesize evidence instead of linking to another host."""
         src = _make_source(rule="node_down", datum="node down")
-        att_res = _make_attribution_result({"node-001": {"Not responding": [src]}})
+        att_res = _make_attribution_result({"node-001": {"Node not responding": [src]}})
         att_res.outcome_attr = SourceSet(Mock(outcome="Incomplete Info", root_cause_symptom=""))
 
         recorder = DecisionRecorder("job-123")
@@ -512,7 +514,7 @@ class TestBuildDecisionDAG:
             NodeType.REFINER,
             "NodeSpecificRefiner",
             Action.REMOVED,
-            "Not responding",
+            "Node not responding",
             hostname="node-002",
         )
 

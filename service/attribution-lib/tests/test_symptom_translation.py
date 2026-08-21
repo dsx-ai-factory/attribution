@@ -285,7 +285,7 @@ def test_translate_and_prune_system_oom_discards_slurm_noise(root_cause):
 
     job_attributions = JobNodeAttributions()
     cascades = (
-        RegisteredSymptoms.NOT_RESPONDING.value,
+        RegisteredSymptoms.NODE_NOT_RESPONDING.value,
         RegisteredSymptoms.NODE_FAILURE_REPORTED_BY_SLURM.value,
         RegisteredSymptoms.NODE_UNEXPECTEDLY_REBOOTED.value,
         RegisteredSymptoms.NODE_OFFLINE.value,
