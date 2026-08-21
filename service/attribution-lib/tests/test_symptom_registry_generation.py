@@ -231,10 +231,21 @@ def test_multicast_nv_err_no_memory_maps_to_infrasw():
     assert match.hw_cause == "Driver bug"
 
 
-def test_mixed_nv_err_no_memory_maps_to_multicategory_in_any_order():
-    """Keep mixed multicast and non-multicast memory failures ambiguous."""
+@pytest.mark.parametrize(
+    "non_multicast",
+    [
+        "NV_ERR_NO_MEMORY mem_desc.c",
+        "NV_ERR_NO_MEMORY nv_gpu_ops.c",
+        "NV_ERR_NO_MEMORY system_mem.c",
+    ],
+)
+def test_mixed_nv_err_no_memory_maps_to_multicategory_in_any_order(non_multicast: str):
+    """Keep mixed multicast and non-multicast memory failures ambiguous.
+
+    Args:
+        non_multicast: Non-multicast memory symptom paired with multicast evidence.
+    """
     registry = _load_committed_registry()
-    non_multicast = "NV_ERR_NO_MEMORY mem_desc.c"
     multicast = "NV_ERR_NO_MEMORY mem_multicast_fabric.c"
 
     for symptoms in ([non_multicast, multicast], [multicast, non_multicast]):
@@ -244,6 +255,23 @@ def test_mixed_nv_err_no_memory_maps_to_multicategory_in_any_order():
         assert match.matched_prefix == "NV_ERR_NO_MEMORY"
         assert match.outcome == "Fail MultiCategory"
         assert match.hw_cause == "Not Applicable"
+
+
+def test_mixed_nv_err_no_memory_does_not_override_earlier_same_tier_match():
+    """Preserve an unrelated same-tier match that sorts before no-memory evidence."""
+    registry = _load_committed_registry()
+
+    match = registry.outcome_for(
+        [
+            "Call to ibv_modify_qp failed: eno 110 timeout",
+            "NV_ERR_NO_MEMORY mem_multicast_fabric.c",
+            "NV_ERR_NO_MEMORY nv_gpu_ops.c",
+        ]
+    )
+
+    assert match is not None
+    assert match.matched_prefix == "Call to ibv_modify_qp failed: eno 110 timeout"
+    assert match.outcome == "Fail InfraHW"
 
 
 def test_bare_nv_err_no_memory_maps_to_multicategory():

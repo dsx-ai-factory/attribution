@@ -260,8 +260,10 @@ class GeneratedSymptomRegistry:
     ) -> Optional[GeneratedOutcomeMatch]:
         """Return the highest-priority outcome match for symptoms.
 
-        Iterates outcome tiers in priority order, and within each tier examines
-        symptoms in sorted order and mapping prefixes in insertion order.
+        Iterates outcome tiers in priority order, and within each tier finds the
+        first mapping prefix for every symptom. If the sorted winner's prefix is
+        nested under a broader prefix selected by another symptom, the broader
+        match wins. Otherwise, sorted symptom order wins.
 
         Args:
             symptoms: Symptom ids to classify.
@@ -272,6 +274,7 @@ class GeneratedSymptomRegistry:
         """
         normalized_symptoms = sorted(symptoms)
         for tier_index, mapping_list in enumerate(self.outcome_rules):
+            tier_matches: list[GeneratedOutcomeMatch] = []
             for symptom in normalized_symptoms:
                 if any(symptom.startswith(prefix) for prefix in ignored_prefixes):
                     continue
@@ -279,14 +282,28 @@ class GeneratedSymptomRegistry:
                     if symptom.startswith(mapping):
                         outcome, hw_cause = outcome_data
                         doc = self.symptom_docs.get(mapping)
-                        return GeneratedOutcomeMatch(
-                            symptom=symptom,
-                            matched_prefix=mapping,
-                            outcome=outcome,
-                            hw_cause=hw_cause,
-                            tier_index=tier_index,
-                            doc=doc,
+                        tier_matches.append(
+                            GeneratedOutcomeMatch(
+                                symptom=symptom,
+                                matched_prefix=mapping,
+                                outcome=outcome,
+                                hw_cause=hw_cause,
+                                tier_index=tier_index,
+                                doc=doc,
+                            )
                         )
+                        break
+            if len(tier_matches) == 0:
+                continue
+            first_match = tier_matches[0]
+            for match in tier_matches[1:]:
+                is_broader_match = (
+                    match.matched_prefix != first_match.matched_prefix
+                    and first_match.matched_prefix.startswith(match.matched_prefix)
+                )
+                if is_broader_match:
+                    return match
+            return first_match
         return None
 
 
