@@ -343,7 +343,7 @@ def build_decision_graph(
                 raise DecisionGraphError(
                     f"Decision source evidence timestamp must be ISO 8601: {evidence.timestamp!r}"
                 ) from e
-        return evidence.obs_context_id, evidence.line_num, evidence.datum or "", timestamp_value
+        return evidence.obs_context_id, evidence.line_num, evidence.datum, timestamp_value
 
     def _producer_rule_ids(source_key: SourceProvenanceKey, symptom: str) -> tuple[Optional[str], ...]:
         key: ExtractionProvenanceKey = source_key, symptom

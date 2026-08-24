@@ -37,7 +37,7 @@ if TYPE_CHECKING:
     from attribution_lib.rules_engine import RuleEngine
 
 
-SourceProvenanceKey: TypeAlias = tuple[Optional[int], Optional[int], str, Optional[float]]
+SourceProvenanceKey: TypeAlias = tuple[Optional[int], Optional[int], Optional[str], Optional[float]]
 ExtractionProvenanceKey: TypeAlias = tuple[SourceProvenanceKey, str]
 
 
@@ -365,7 +365,7 @@ class EventStream:
             if not isinstance(symptom, str):
                 continue
             timestamp_value = timestamp.timestamp() if timestamp is not None else None
-            source_key: SourceProvenanceKey = observation_id, line_num, datum or "", timestamp_value
+            source_key: SourceProvenanceKey = observation_id, line_num, datum, timestamp_value
             key = source_key, symptom
             producers[key].add(rule_name)
         return {key: tuple(sorted(rule_ids)) for key, rule_ids in producers.items()}

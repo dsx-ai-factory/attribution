@@ -9,7 +9,7 @@
 # its affiliates is strictly prohibited.
 
 from datetime import datetime
-from typing import Optional
+from typing import Optional, cast
 from unittest.mock import Mock, patch
 from zoneinfo import ZoneInfo
 
@@ -557,6 +557,49 @@ class TestBuildDecisionDAG:
         assert extraction_rules == {
             "Row Remap": "row_remap",
             "ECC Error": "ecc_error",
+        }
+
+    def test_null_and_empty_datum_keep_exact_producer_rule(self):
+        """Nullable legacy evidence does not collide with an empty datum."""
+        engine = self._extractor_engine(("null_datum", "null"), ("empty_datum", "empty"))
+        empty_source = _make_source(rule="health_check", datum="")
+        null_source = empty_source._replace(datum=cast(str, None))
+        att_res = _make_attribution_result({"node-042": {"Health Error": [null_source, empty_source]}})
+        att_res.outcome_attr = SourceSet(Mock(outcome="Fail InfraHW", root_cause_symptom="Health Error"))
+
+        manager = EventManager(rules_engine=engine)
+        manager.preload_event_types({"Test.extraction"})
+        manager.preload_rule_names({"health_check", "null_datum", "empty_datum"})
+        stream = manager.create_stream("decision-trace-test")
+        stream.register_observation_context(empty_source.source_context)
+        stream.add_event(
+            "Test.extraction",
+            {"symptom": "Health Error"},
+            null_source,
+            producer_rule_id="null_datum",
+        )
+        stream.add_event(
+            "Test.extraction",
+            {"symptom": "Health Error"},
+            empty_source,
+            producer_rule_id="empty_datum",
+        )
+        stream.flush()
+        att_res.event_stream = stream
+
+        try:
+            graph = build_decision_graph(DecisionRecorder("job-123"), att_res)
+        finally:
+            manager.close()
+
+        extraction_rules = {
+            node.datum: node.rule_provenance.rule_id
+            for node in graph.nodes
+            if node.node_type == NodeType.EXTRACTION and node.rule_provenance is not None
+        }
+        assert extraction_rules == {
+            None: "null_datum",
+            "": "empty_datum",
         }
 
     def test_graph_with_cascade_prune_events(self):
