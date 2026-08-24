@@ -16,7 +16,7 @@ from typing import TYPE_CHECKING, Any, Mapping, Optional
 
 from attribution_lib.core import AttributionResult
 from attribution_lib.decision_trace_recorder import Action, DecisionRecorder, NodeType, SourceEvidence
-from attribution_lib.events import EventStream, SourceProvenanceKey, source_provenance_key
+from attribution_lib.events import EventStream, ExtractionProvenanceKey, SourceProvenanceKey, source_provenance_key
 from attribution_lib.exceptions import DecisionGraphError
 from attribution_lib.rule_types.definitions import RuleProvenance
 from attribution_lib.sources import Source, SourceSet
@@ -330,8 +330,8 @@ def build_decision_graph(
     extraction_hosts: dict[str, Optional[str]] = {}
     _seen_extraction_sources: set[ExtractionKey] = set()
     rule_provenance_by_id: dict[str, Optional[RuleProvenance]] = {}
-    producer_rules_by_source = (
-        att_res.event_stream.producer_rules_by_source() if isinstance(att_res.event_stream, EventStream) else {}
+    producer_rules_by_extraction = (
+        att_res.event_stream.producer_rules_by_extraction() if isinstance(att_res.event_stream, EventStream) else {}
     )
 
     def _evidence_provenance_key(evidence: SourceEvidence) -> SourceProvenanceKey:
@@ -345,8 +345,9 @@ def build_decision_graph(
                 ) from e
         return evidence.obs_context_id, evidence.line_num, evidence.datum or "", timestamp_value
 
-    def _producer_rule_ids(key: SourceProvenanceKey) -> tuple[Optional[str], ...]:
-        rule_ids = producer_rules_by_source.get(key, ())
+    def _producer_rule_ids(source_key: SourceProvenanceKey, symptom: str) -> tuple[Optional[str], ...]:
+        key: ExtractionProvenanceKey = source_key, symptom
+        rule_ids = producer_rules_by_extraction.get(key, ())
         return tuple(rule_ids) if len(rule_ids) > 0 else (None,)
 
     def _rule_provenance(rule_id: Optional[str]) -> Optional[RuleProvenance]:
@@ -394,7 +395,7 @@ def build_decision_graph(
 
     def _add_extraction_node(symptom: str, source: Source, hostname: Optional[str]) -> None:
         evidence = SourceEvidence.from_source(source, hostname=hostname)
-        for producer_rule_id in _producer_rule_ids(source_provenance_key(source)):
+        for producer_rule_id in _producer_rule_ids(source_provenance_key(source), symptom):
             source_key = ExtractionKey.from_source(symptom, source, hostname, producer_rule_id)
             if source_key in _seen_extraction_sources:
                 continue
@@ -407,7 +408,7 @@ def build_decision_graph(
 
     def _add_extraction_from_evidence(symptom: str, evidence: dict[str, Any], hostname: Optional[str]) -> None:
         source_evidence = SourceEvidence.from_payload(evidence, hostname=hostname)
-        for producer_rule_id in _producer_rule_ids(_evidence_provenance_key(source_evidence)):
+        for producer_rule_id in _producer_rule_ids(_evidence_provenance_key(source_evidence), symptom):
             source_key = ExtractionKey.from_evidence(symptom, source_evidence, producer_rule_id)
             if source_key in _seen_extraction_sources:
                 continue

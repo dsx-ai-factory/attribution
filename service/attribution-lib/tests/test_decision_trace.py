@@ -143,8 +143,20 @@ def _attach_producer_events(
     engine,
     source: Source,
     producer_rule_ids: tuple[str, ...],
+    symptom: str,
 ) -> EventManager:
-    """Attach extractor events without adding provenance to Source identity."""
+    """Attach extractor events without adding provenance to Source identity.
+
+    Args:
+        att_res: Attribution result that will receive the event stream.
+        engine: Rule engine containing the producer rules.
+        source: Shared attribution evidence source.
+        producer_rule_ids: Rules that emitted the symptom.
+        symptom: Symptom emitted by each producer rule.
+
+    Returns:
+        Event manager that owns the attached stream.
+    """
     manager = EventManager(rules_engine=engine)
     manager.preload_event_types({"Test.extraction"})
     manager.preload_rule_names({source.rule, *producer_rule_ids})
@@ -153,7 +165,7 @@ def _attach_producer_events(
     for producer_rule_id in producer_rule_ids:
         stream.add_event(
             "Test.extraction",
-            {},
+            {"symptom": symptom},
             source,
             producer_rule_id=producer_rule_id,
         )
@@ -459,7 +471,7 @@ class TestBuildDecisionDAG:
         )
         att_res = _make_attribution_result({"node-042": {"XID-48": [src]}})
         att_res.outcome_attr = SourceSet(Mock(outcome="Fail InfraHW", root_cause_symptom="XID-48"))
-        manager = _attach_producer_events(att_res, engine, src, ("xid_48_extractor",))
+        manager = _attach_producer_events(att_res, engine, src, ("xid_48_extractor",), "XID-48")
 
         try:
             graph = build_decision_graph(DecisionRecorder("job-123"), att_res)
@@ -483,7 +495,7 @@ class TestBuildDecisionDAG:
         source = _make_source(rule="xid_48_ecc", datum="Xid 48")
         att_res = _make_attribution_result({"node-042": {"XID-48": [source]}})
         att_res.outcome_attr = SourceSet(Mock(outcome="Fail InfraHW", root_cause_symptom="XID-48"))
-        manager = _attach_producer_events(att_res, engine, source, ("extractor_a", "extractor_b"))
+        manager = _attach_producer_events(att_res, engine, source, ("extractor_a", "extractor_b"), "XID-48")
 
         try:
             graph = build_decision_graph(DecisionRecorder("job-123"), att_res)
@@ -491,17 +503,61 @@ class TestBuildDecisionDAG:
             manager.close()
 
         extraction_nodes = [
-            node
-            for node in graph.nodes
-            if node.node_type == NodeType.EXTRACTION and node.rule_provenance is not None
+            node for node in graph.nodes if node.node_type == NodeType.EXTRACTION and node.rule_provenance is not None
         ]
         assert len(extraction_nodes) == 2
-        extraction_ids = {
-            node.rule_provenance.rule_id
-            for node in extraction_nodes
-        }
+        extraction_ids = {node.rule_provenance.rule_id for node in extraction_nodes}
         assert extraction_ids == {"extractor_a", "extractor_b"}
         assert len(att_res.bad_nodes_attr.my_bad_nodes.attributions["node-042"].attributions["XID-48"]) == 1
+
+    def test_same_source_with_distinct_symptoms_keeps_exact_producer_rule(self):
+        """Rules sharing one source do not become associated with each other's symptoms."""
+        engine = self._extractor_engine(("row_remap", "remapped"), ("ecc_error", "ecc"))
+        source = _make_source(rule="health_check", datum="remapped rows; ecc error")
+        att_res = _make_attribution_result(
+            {
+                "node-042": {
+                    "Row Remap": [source],
+                    "ECC Error": [source],
+                }
+            }
+        )
+        att_res.outcome_attr = SourceSet(Mock(outcome="Fail InfraHW", root_cause_symptom="ECC Error"))
+
+        manager = EventManager(rules_engine=engine)
+        manager.preload_event_types({"Test.extraction"})
+        manager.preload_rule_names({source.rule, "row_remap", "ecc_error"})
+        stream = manager.create_stream("decision-trace-test")
+        stream.register_observation_context(source.source_context)
+        stream.add_event(
+            "Test.extraction",
+            {"symptom": "Row Remap"},
+            source,
+            producer_rule_id="row_remap",
+        )
+        stream.add_event(
+            "Test.extraction",
+            {"symptom": "ECC Error"},
+            source,
+            producer_rule_id="ecc_error",
+        )
+        stream.flush()
+        att_res.event_stream = stream
+
+        try:
+            graph = build_decision_graph(DecisionRecorder("job-123"), att_res)
+        finally:
+            manager.close()
+
+        extraction_rules = {
+            node.symptom: node.rule_provenance.rule_id
+            for node in graph.nodes
+            if node.node_type == NodeType.EXTRACTION and node.rule_provenance is not None
+        }
+        assert extraction_rules == {
+            "Row Remap": "row_remap",
+            "ECC Error": "ecc_error",
+        }
 
     def test_graph_with_cascade_prune_events(self):
         """Recorder cascade events produce CASCADE_PRUNE nodes with PRUNES edges."""

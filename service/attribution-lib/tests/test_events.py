@@ -146,8 +146,9 @@ class TestEventRule:
         assert retrieved_source.rule == "thermal_monitor_rule"
         assert retrieved_source.line_num == 42
         assert retrieved_source.datum == "High GPU temperature detected"
-        producer_index = stream.producer_rules_by_source()
+        producer_index = stream.producer_rules_by_extraction()
         assert len(producer_index) == 1
+        assert next(iter(producer_index))[1] == "High temperature"
         assert next(iter(producer_index.values())) == ("thermal_log_matcher",)
 
     def test_flush_serializes_pydantic_payload_with_datetime(self, event_stream, sample_source):

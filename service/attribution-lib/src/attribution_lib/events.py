@@ -38,6 +38,7 @@ if TYPE_CHECKING:
 
 
 SourceProvenanceKey: TypeAlias = tuple[Optional[int], Optional[int], str, Optional[float]]
+ExtractionProvenanceKey: TypeAlias = tuple[SourceProvenanceKey, str]
 
 
 def source_provenance_key(source: Source) -> SourceProvenanceKey:
@@ -339,26 +340,33 @@ class EventStream:
         """Return a callable for adding events."""
         return self.add_event
 
-    def producer_rules_by_source(self) -> dict[SourceProvenanceKey, tuple[str, ...]]:
-        """Load producing-rule identities for Decision DAG construction only.
+    def producer_rules_by_extraction(self) -> dict[ExtractionProvenanceKey, tuple[str, ...]]:
+        """Load producing-rule identities for Decision DAG extraction nodes.
 
         Returns:
-            Mapping from attribution-neutral source identity to producing rules.
+            Mapping from source-and-symptom identity to producing rules.
         """
         self._flush()
         rows = self._conn.execute(
-            """SELECT obs_context_id, line_num, source_datum, timestamp, producer_rule
+            """SELECT obs_context_id, line_num, source_datum, timestamp, payload, producer_rule
                FROM events
                WHERE context_id=? AND producer_rule IS NOT NULL""",
             [self._ctx_id],
         ).fetchall()
-        producers: dict[SourceProvenanceKey, set[str]] = defaultdict(set)
-        for observation_id, line_num, datum, timestamp, producer_rule in rows:
+        producers: dict[ExtractionProvenanceKey, set[str]] = defaultdict(set)
+        for observation_id, line_num, datum, timestamp, payload, producer_rule in rows:
             rule_name = self._mgr.rules.get_str(producer_rule)
             if rule_name is None:
                 continue
+            payload_value = json.loads(payload) if isinstance(payload, str) else payload
+            if not isinstance(payload_value, dict):
+                continue
+            symptom = payload_value.get("symptom")
+            if not isinstance(symptom, str):
+                continue
             timestamp_value = timestamp.timestamp() if timestamp is not None else None
-            key = observation_id, line_num, datum or "", timestamp_value
+            source_key: SourceProvenanceKey = observation_id, line_num, datum or "", timestamp_value
+            key = source_key, symptom
             producers[key].add(rule_name)
         return {key: tuple(sorted(rule_ids)) for key, rule_ids in producers.items()}
 
@@ -627,8 +635,7 @@ class EventManager:
                         "source_datum, source_rule, resources, obs_context_id, payload"
                     )
                     mgr._conn.execute(
-                        f"INSERT INTO events ({legacy_columns}) "
-                        f"SELECT {legacy_columns} FROM read_parquet('{src_sql}')"
+                        f"INSERT INTO events ({legacy_columns}) SELECT {legacy_columns} FROM read_parquet('{src_sql}')"
                     )
                 else:
                     mgr._conn.execute(f"INSERT INTO {table} SELECT * FROM read_parquet('{src_sql}')")
