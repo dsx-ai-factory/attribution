@@ -155,7 +155,7 @@ def create_app() -> FastAPI:
             logger.debug(f"RESPONSE: {request.method} {request.url.path} Status: {response.status_code}")
             return response
         except Exception as e:
-            logger.exception(f"Error handling request: {e}")
+            logger.exception(f"Error handling {request.method} {request.url.path}: {e}")
             return JSONResponse(status_code=500, content={"detail": "Internal Server Error"})
 
     VERSION_INFO.labels(version=__version__).set(1)

@@ -13,6 +13,9 @@ import subprocess
 import sys
 from unittest.mock import MagicMock
 
+from fastapi import Request, Response
+from loguru import logger
+
 import app.factory as factory
 
 
@@ -70,3 +73,39 @@ def test_lifespan_cancels_and_awaits_cleanup_task(monkeypatch):
     asyncio.run(exercise_lifespan())
     provider.force_flush.assert_called_once_with(timeout_millis=5000)
     provider.shutdown.assert_called_once_with()
+
+
+def test_http_logging_omits_bodies_and_preserves_request_handling(app, client):
+    """Verify HTTP logs omit payloads without changing request handling."""
+
+    @app.post("/_test/logging")
+    async def echo_body(request: Request):
+        """Return the request body to exercise the successful response path."""
+        return Response(content=await request.body())
+
+    @app.post("/_test/logging-error")
+    async def fail_after_reading_body(request: Request):
+        """Raise after reading the body to exercise exception logging."""
+        await request.body()
+        raise RuntimeError("expected test failure")
+
+    messages = []
+    sink_id = logger.add(messages.append, level="DEBUG", format="{message}")
+    payload = b"private-request-body\r\nforged-log-entry"
+    try:
+        response = client.post("/_test/logging", content=payload)
+        error_response = client.post("/_test/logging-error", content=payload)
+    finally:
+        logger.remove(sink_id)
+
+    assert response.content == payload
+    assert error_response.status_code == 500
+    assert error_response.json() == {"detail": "Internal Server Error"}
+
+    logged = "".join(map(str, messages))
+    assert "private-request-body" not in logged
+    assert "forged-log-entry" not in logged
+    assert "REQUEST: POST /_test/logging" in logged
+    assert "RESPONSE: POST /_test/logging Status: 200" in logged
+    assert "Error handling POST /_test/logging-error" in logged
+    assert "expected test failure" in logged
