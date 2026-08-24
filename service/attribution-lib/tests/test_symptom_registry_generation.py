@@ -180,7 +180,6 @@ def test_wandb_error_yields_to_stronger_infrastructure_symptom_in_any_order():
 @pytest.mark.parametrize(
     ("code", "symptom"),
     [
-        ("NV_ERR_INSUFFICIENT_PERMISSIONS", "NV_ERR_INSUFFICIENT_PERMISSIONS kern_profiler_v2_ctrl.c"),
         ("NV_ERR_FABRIC_STATE_OUT_OF_SYNC", "NV_ERR_FABRIC_STATE_OUT_OF_SYNC mem_multicast_fabric.c"),
         ("NV_ERR_RESET_REQUIRED", "NV_ERR_RESET_REQUIRED gpu_fabric_probe.c"),
         ("NV_ERR_BUFFER_TOO_SMALL", "NV_ERR_BUFFER_TOO_SMALL journal.c"),
@@ -207,6 +206,17 @@ def test_observed_nv_err_symptoms_map_to_infrasw(code: str, symptom: str):
     assert match is not None
     assert match.matched_prefix == code
     assert match.outcome == "Fail InfraSW"
+
+
+def test_nv_err_insufficient_permissions_has_no_specific_outcome_mapping():
+    """Fall back to generic NV_ERR handling when filters are bypassed."""
+    registry = _load_committed_registry()
+
+    match = registry.outcome_for(["NV_ERR_INSUFFICIENT_PERMISSIONS kern_profiler_v2_ctrl.c"])
+
+    assert match is not None
+    assert match.matched_prefix == "NV_ERR_"
+    assert match.outcome == "Fail Undetermined"
 
 
 @pytest.mark.parametrize(
