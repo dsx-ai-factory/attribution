@@ -815,14 +815,6 @@ outcome_symptom(
 )
 
 outcome_symptom(
-    "NV_ERR_INSUFFICIENT_PERMISSIONS",
-    outcome="Fail InfraSW",
-    priority=OutcomePriority.MEDIUM_SW,
-    doc="nv-err-insufficient-permissions",
-    hw_cause="Driver bug",
-)
-
-outcome_symptom(
     "NV_ERR_FABRIC_STATE_OUT_OF_SYNC",
     outcome="Fail InfraSW",
     priority=OutcomePriority.MEDIUM_SW,

@@ -263,20 +263,26 @@ def _demote_bad_by_symptom(event_stream: EventStream, symptoms: frozenset[str], 
         )
 
 
-def _demote_bad_by_symptom_like(event_stream: EventStream, patterns: list[str], rule_name: str):
-    """Demote bad events whose symptom matches any LIKE pattern to interesting."""
+def _demote_bad_by_symptom_prefix(event_stream: EventStream, prefixes: list[str], rule_name: str):
+    """Demote bad events whose symptom starts with any prefix to interesting.
+
+    Args:
+        event_stream: Event stream containing candidate bad events.
+        prefixes: Literal symptom prefixes to demote.
+        rule_name: Derived rule name attached to interesting events.
+    """
     bad_type_ids = event_stream.mgr.types.get_ids(_BAD_TYPES)
     if not bad_type_ids:
         return
 
-    like_clauses = " OR ".join(["json_extract_string(payload, '$.symptom') LIKE ?"] * len(patterns))
-    additional_where = f"AND ({like_clauses})"
+    prefix_clauses = " OR ".join(["starts_with(json_extract_string(payload, '$.symptom'), ?)"] * len(prefixes))
+    additional_where = f"AND ({prefix_clauses})"
 
     event_adder = event_stream.event_adder()
     event_ids = []
 
     for eid, _evt_type, payload, source in query_events_with_source(
-        event_stream, bad_type_ids, additional_where, patterns
+        event_stream, bad_type_ids, additional_where, prefixes
     ):
         event_ids.append(eid)
         new_payload = {k: v for k, v in payload.items() if k not in _DEMOTION_KEYS}
@@ -670,6 +676,22 @@ def handle_xid_burst_events(context: FilterContext):
 def clean_informational_xids(context: FilterContext):
     """Demote informational-only XIDs from bad to interesting."""
     _demote_bad_by_symptom(context.event_stream, INFORMATIONAL_XIDS, "CleanInformationalXids")
+
+
+@filter_def(name="DemoteInsufficientPermissions", author="NVIDIA Attribution team", priority=FilterPriority.LATE)
+def demote_insufficient_permissions(context: FilterContext):
+    """Demote insufficient-permissions telemetry from bad to interesting.
+
+    Args:
+        context: Filter context containing the event stream.
+    """
+    symptom = "NV_ERR_INSUFFICIENT_PERMISSIONS"
+    _demote_bad_by_symptom(context.event_stream, frozenset((symptom,)), "DemoteInsufficientPermissions")
+    _demote_bad_by_symptom_prefix(
+        context.event_stream,
+        [f"{symptom} "],
+        "DemoteInsufficientPermissions",
+    )
 
 
 @filter_def(name="FmNodeFailure", author="NVIDIA Attribution team", derived_rules=["fm-lost-connection-to-all-gpus"])
