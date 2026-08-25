@@ -200,16 +200,44 @@ expect  = "bad"
 line    = "bus error"
 symptom = "bus error"
 
-# NcclWarnMessageTruncated: dedicated slug nccl-invalid-nic-selection, NO demotion
-# (main calls _bad without a demotion arg).
+# NcclWarnMessageTruncated: only the original 512/256 signature identifies an
+# invalid NIC selection. Other truncation sizes remain diagnostic observations.
 [[extractor]]
 name     = "NcclWarnMessageTruncated"
 match_re = "NCCL WARN Message truncated"
-emit     = { type = "bad_node", symptom = "NCCL invalid NIC selection", derived_rule = "nccl-invalid-nic-selection" }
+
+[extractor.emit]
+type = "pick_one"
+
+[[extractor.emit.branches]]
+type         = "bad_node"
+symptom      = "NCCL invalid NIC selection"
+derived_rule = "nccl-invalid-nic-selection"
+when         = 'search(r"\breceived\s+512\s+bytes\s+instead\s+of\s+256\b", datum)'
+
+[extractor.emit.default]
+type    = "interesting_node"
+symptom = "NCCL WARN Message truncated"
+
 [[extractor.cases]]
 expect  = "bad"
-line    = "misc/socket.cc:47 NCCL WARN Message truncated : received 1024 bytes instead of 256"
+line    = "misc/socket.cc:47 NCCL WARN Message truncated : received   512 bytes instead of  256"
 symptom = "NCCL invalid NIC selection"
+[[extractor.cases]]
+expect  = "interesting"
+line    = "misc/socket.cc:47 NCCL WARN Message truncated : received 128,120 bytes instead of 120,120"
+symptom = "NCCL WARN Message truncated"
+[[extractor.cases]]
+expect  = "interesting"
+line    = "misc/socket.cc:47 NCCL WARN Message truncated : received 512 bytes instead of 2560"
+symptom = "NCCL WARN Message truncated"
+[[extractor.cases]]
+expect  = "interesting"
+line    = "misc/socket.cc:47 NCCL WARN Message truncated : unreceived 512 bytes instead of 256"
+symptom = "NCCL WARN Message truncated"
+[[extractor.cases]]
+expect = "no_match"
+line   = "misc/socket.cc:47 NCCL WARN Call to bind failed: Address already in use"
 
 
 # --- guarded bad_node leaves (a `when` reproducing main's early-return guard) -----
