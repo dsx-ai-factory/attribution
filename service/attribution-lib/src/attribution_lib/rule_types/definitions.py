@@ -146,7 +146,9 @@ class RuleProvenance:
     """Stable identity and optional definition metadata for an executable rule.
 
     ``rule_type`` is intentionally a string because rule implementations are
-    extensible through the dynamic ``@rule_type`` registry.
+    extensible through the dynamic ``@rule_type`` registry. RuleLoader validates
+    each rule's exact concrete type against that registry before it can enter a
+    RuleEngine, so this value is derived from an already validated Rule object.
     """
 
     rule_id: RuleId
