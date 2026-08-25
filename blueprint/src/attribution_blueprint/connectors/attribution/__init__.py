@@ -8,16 +8,18 @@
 # without an express license agreement from NVIDIA CORPORATION or
 # its affiliates is strictly prohibited.
 
-from attribution_blueprint.connectors.attribution.client import (
-    AttributionConnector,
-    AttributorInfoDict,
-    AttributorMetadataDict,
-    AttributorWorkloadDict,
+# Service's `Observation` is re-exported under a distinct name as to not conflict
+# with the one in `attribution_blueprint.types`. The former is the shape the service
+# accepts, the latter is the shape connectors emit.
+from nvidia_attribution_client import (
+    AttributorInfoV2,
+    Observation as ServiceObservation,
 )
+
+from attribution_blueprint.connectors.attribution.client import AttributionConnector
 
 __all__ = [
     "AttributionConnector",
-    "AttributorInfoDict",
-    "AttributorMetadataDict",
-    "AttributorWorkloadDict",
+    "AttributorInfoV2",
+    "ServiceObservation",
 ]

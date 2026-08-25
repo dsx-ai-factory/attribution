@@ -9,64 +9,25 @@
 # its affiliates is strictly prohibited.
 
 import json
-from datetime import datetime
-from typing import NotRequired, TypedDict
+from http import HTTPStatus
 
-import requests
+from nvidia_attribution_client import (
+    ApiClient,
+    ApiException,
+    AttributorInfoV2,
+    Configuration,
+    DefaultApi,
+    DuplicateAttributorError,
+    Observation as ServiceObservation,
+)
 
-
-def _json_default(value):
-    if isinstance(value, datetime):
-        return value.isoformat()
-    raise TypeError(f"object of type {type(value).__name__} is not JSON serializable")
-
-
-def _serialize(payload: dict) -> str:
-    return json.dumps(payload, default=_json_default)
-
-
-_JSON_HEADERS = {"Content-Type": "application/json"}
-
-
-# Mirrors the NVIDIA Attribution Service app/v2/models.py AttributorWorkloadInfoV2 /
-# AttributorMetadata / AttributorInfoV2. Datetimes are `str` because BP emits ISO
-# strings and the service parses them to AwareDatetime.
-class AttributorWorkloadDict(TypedDict):
-    id: str
-    type: str
-    job_start_time: str
-    timezone: str
-    status: str
-    nodes: dict[str, list[int]]
-    name: str
-    username: str
-    framework: str
-    job_end_time: NotRequired[str]
-    interest_start_time: NotRequired[str]
-    interest_end_time: NotRequired[str]
-    failed_node: NotRequired[str]
-    cancelled_by: NotRequired[str]
-    time_limit: NotRequired[int]
-    srun_cmd: NotRequired[str]
-    exit_code_signal: NotRequired[int]
-    last_tflops_time: NotRequired[str]
-
-
-class AttributorMetadataDict(TypedDict):
-    cluster: str
-    agent: str
-    tenant: str
-    ruleset: str
-
-
-class AttributorInfoDict(TypedDict):
-    workload: AttributorWorkloadDict
-    metadata: AttributorMetadataDict
-    parameters: NotRequired[dict]
+# Set to "slightly larger than a multiple of 3" as per
+# https://requests.readthedocs.io/en/latest/user/advanced/#timeouts
+_CONNECT_TIMEOUT_SECONDS = 3.05
 
 
 class AttributionConnector:
-    """Thin HTTP client for the NVIDIA Attribution Service v2 API."""
+    """Blueprint-facing wrapper around the v2 API of the Attribution Service client."""
 
     def __init__(
         self,
@@ -74,17 +35,17 @@ class AttributionConnector:
         timeout_seconds: float = 60.0,
     ):
         self.service_url = service_url.rstrip("/")
-        self.timeout_seconds = timeout_seconds
-        self._session = requests.Session()
+        self._request_timeout = (_CONNECT_TIMEOUT_SECONDS, timeout_seconds)
+        # Retries on idempotent methods only (GET/DELETE)
+        configuration = Configuration(host=self.service_url, retries=3)
+        self._api = DefaultApi(ApiClient(configuration))
 
-    def create_attributor(self, info: AttributorInfoDict) -> str:
-        """POST /v2/attributor with JSON body. Returns attributor_id."""
-        url = f"{self.service_url}/v2/attributor"
-        response = self._session.post(url, data=_serialize(info), headers=_JSON_HEADERS, timeout=self.timeout_seconds)
-        response.raise_for_status()
-        return response.json()["attributor_id"]
+    def create_attributor(self, info: AttributorInfoV2) -> str:
+        """POST /v2/attributor. Returns attributor_id."""
+        response = self._api.new_attribution_v2_attributor_post(info, _request_timeout=self._request_timeout)
+        return response.attributor_id
 
-    def create_or_replace_attributor(self, info: AttributorInfoDict) -> str:
+    def create_or_replace_attributor(self, info: AttributorInfoV2) -> str:
         """Create an attributor, replacing the stale service record on 409.
 
         The service returns the existing attributor id as `att_id` on conflict.
@@ -93,41 +54,34 @@ class AttributionConnector:
         """
         try:
             return self.create_attributor(info)
-        except requests.HTTPError as e:
-            resp = e.response
-            if resp is None or resp.status_code != 409:
+        except ApiException as e:
+            if e.status != HTTPStatus.CONFLICT or not isinstance(e.data, DuplicateAttributorError):
                 raise
-            try:
-                existing = (resp.json() or {}).get("att_id")
-            except ValueError:
-                existing = None
-            if not existing:
-                raise
-            self.delete_attributor(existing)
+            self.delete_attributor(e.data.att_id)
             return self.create_attributor(info)
 
-    def ingest_observation(self, attributor_id: str, observation: dict) -> int:
+    def ingest_observation(self, attributor_id: str, observation: ServiceObservation) -> int:
         """POST /v2/attributor/{attributor_id}/observation. Returns observation_id."""
-        url = f"{self.service_url}/v2/attributor/{attributor_id}/observation"
-        response = self._session.post(
-            url, data=_serialize(observation), headers=_JSON_HEADERS, timeout=self.timeout_seconds
+        response = self._api.ingest_v2_attributor_att_id_observation_post(
+            attributor_id, observation, _request_timeout=self._request_timeout
         )
-        response.raise_for_status()
-        return response.json()["observation_id"]
+        return response.observation_id
 
     def get_attribution(self, attributor_id: str) -> dict:
         """GET /v2/attributor/{attributor_id}/attribution. Returns response JSON."""
-        url = f"{self.service_url}/v2/attributor/{attributor_id}/attribution"
-        response = self._session.get(url, timeout=self.timeout_seconds)
-        response.raise_for_status()
-        return response.json()
+        response = self._api.attribute_v2_attributor_att_id_attribution_get(
+            attributor_id, _request_timeout=self._request_timeout
+        )
+        # to_dict() would leave datetimes, which aren't JSON-serializable.
+        return json.loads(response.to_json())
 
     def delete_attributor(self, attributor_id: str) -> None:
-        """DELETE /v2/attributor/{attributor_id}. 404 is silently tolerated:
-        the server's 24h TTL can expire an attributor between create and
-        delete, and cleanup should be idempotent for the caller."""
-        url = f"{self.service_url}/v2/attributor/{attributor_id}"
-        response = self._session.delete(url, timeout=self.timeout_seconds)
-        if response.status_code == 404:
-            return
-        response.raise_for_status()
+        """DELETE /v2/attributor/{attributor_id}. 404 is silently tolerated: the
+        server's 24h TTL can expire an attributor before cleanup runs."""
+        try:
+            self._api.delete_attribution_v2_attributor_att_id_delete(
+                attributor_id, _request_timeout=self._request_timeout
+            )
+        except ApiException as e:
+            if e.status != HTTPStatus.NOT_FOUND:
+                raise

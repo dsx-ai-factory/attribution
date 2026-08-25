@@ -1317,7 +1317,7 @@ expected_rule = "alias else"
 
 [[cases]]
 description = "nccl invalid nic selection is bad during job"
-line = "0: NCCL WARN Message truncated"
+line = "0: misc/socket.cc:47 NCCL WARN Message truncated : received 512 bytes instead of 256"
 tflops_start = true
 expect = "bad"
 expected_symptom = "NCCL invalid NIC selection"
@@ -1325,7 +1325,7 @@ expected_rule = "nccl-invalid-nic-selection"
 
 [[cases]]
 description = "nccl invalid nic selection stays bad even before MFU"
-line = "0: NCCL WARN Message truncated"
+line = "0: misc/socket.cc:47 NCCL WARN Message truncated : received 512 bytes instead of 256"
 tflops_start = false
 expect = "bad"
 expected_symptom = "NCCL invalid NIC selection"
@@ -1728,14 +1728,31 @@ expect = "bad"
 expected_symptom = "Address already in use"
 expected_rule = "address-in-use"
 
-# NcclWarnMessageTruncated: dedicated slug, no demotion -> bad even without MFU.
+# NcclWarnMessageTruncated: only the original 512/256 signature identifies an
+# invalid NIC selection. Other truncation sizes remain diagnostic observations.
 [[cases]]
-description = "nccl warn message truncated is bad during job"
-line = "0: misc/socket.cc:47 NCCL WARN Message truncated : received 1024 bytes instead of 256"
+description = "nccl warn message truncated is interesting for hybrid ep timeout"
+line = "0: misc/socket.cc:47 NCCL WARN Message truncated : received 128,120 bytes instead of 120,120"
 tflops_start = true
-expect = "bad"
-expected_symptom = "NCCL invalid NIC selection"
-expected_rule = "nccl-invalid-nic-selection"
+expect = "interesting"
+expected_symptom = "NCCL WARN Message truncated"
+expected_rule = "NcclWarnMessageTruncated"
+
+[[cases]]
+description = "nccl warn message truncated size near miss is interesting"
+line = "0: misc/socket.cc:47 NCCL WARN Message truncated : received 512 bytes instead of 2560"
+tflops_start = true
+expect = "interesting"
+expected_symptom = "NCCL WARN Message truncated"
+expected_rule = "NcclWarnMessageTruncated"
+
+[[cases]]
+description = "nccl warn message truncated received word near miss is interesting"
+line = "0: misc/socket.cc:47 NCCL WARN Message truncated : unreceived 512 bytes instead of 256"
+tflops_start = true
+expect = "interesting"
+expected_symptom = "NCCL WARN Message truncated"
+expected_rule = "NcclWarnMessageTruncated"
 
 # No such file or directory: line WITHOUT "error: pyxis:" passes the guard ->
 # bad "No such file or directory" / "alias else".

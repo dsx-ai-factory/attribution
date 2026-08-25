@@ -1149,6 +1149,8 @@ outcome_symptom(
     hw_cause="Known NCCL Cause - Invalid NIC selection",
 )
 
+known_symptom("NCCL WARN Message truncated")
+
 outcome_symptom(
     "EAP authentication failed",
     outcome="Fail InfraHW",

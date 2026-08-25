@@ -150,3 +150,4 @@ from nvidia_attribution_client.models.validation_error_response import Validatio
 from nvidia_attribution_client.models.verdict import Verdict as Verdict
 from nvidia_attribution_client.models.workload_record import WorkloadRecord as WorkloadRecord
 from nvidia_attribution_client.models.workload_type_enum import WorkloadTypeEnum as WorkloadTypeEnum
+

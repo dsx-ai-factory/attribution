@@ -1,9 +1,11 @@
 {
   "create_response": {
-    "attributor_id": "12345678901234567890"
+    "attributor_id": "12345678901234567890",
+    "model_type": "NewResponseV2"
   },
   "ingest_response": {
-    "observation_id": 2681252656797335323
+    "observation_id": 2681252656797335323,
+    "model_type": "ObservationResponseV2"
   },
   "attribution_response": {
     "verdict": {
@@ -11,11 +13,11 @@
         "symptom": "GpuFell",
         "source": {
           "observation_id": 2681252656797335323,
-          "source": "SYSLOG",
+          "source": "syslog",
           "pos": 42,
           "line": "NVRM: Xid (PCI:0000:01:00): 79, GPU has fallen off the bus.",
           "rule": "gpu_fell_off_bus",
-          "time": "2026-05-01T00:30:00+00:00"
+          "time": "2026-05-01T00:30:00Z"
         }
       },
       "attribution_outcome": "Fail InfraHW",
@@ -28,15 +30,20 @@
           "node": "node-001",
           "source": {
             "observation_id": 2681252656797335323,
-            "source": "SYSLOG",
+            "source": "syslog",
             "pos": 42,
             "line": "NVRM: Xid (PCI:0000:01:00): 79, GPU has fallen off the bus.",
             "rule": "gpu_fell_off_bus",
-            "time": "2026-05-01T00:30:00+00:00"
+            "time": "2026-05-01T00:30:00Z"
           }
         }
       ]
     },
-    "observation_context": [2681252656797335323]
+    "observation_context": [2681252656797335323],
+    "model_type": "AttributionResponseV2"
+  },
+  "conflict_response": {
+    "att_id": "stale-attr-id",
+    "model_type": "DuplicateAttributorError"
   }
 }

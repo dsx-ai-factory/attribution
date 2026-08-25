@@ -8,14 +8,25 @@
 # without an express license agreement from NVIDIA CORPORATION or
 # its affiliates is strictly prohibited.
 
+import json
 from datetime import datetime, timedelta, timezone
 from unittest.mock import MagicMock
 from zoneinfo import ZoneInfo
 
 import pytest
+from nvidia_attribution_client import ApiException, AttributorInfoV2
 
 from attribution_blueprint.orchestrator import AttributionOrchestrator
 from attribution_blueprint.types import Format, Source
+
+
+def _wire(info: AttributorInfoV2) -> dict:
+    """Return the JSON body the client puts on the wire for `info`.
+
+    Done so that payload assertions below go through the same serializer
+    the real request uses rather than reading a hand-built dict.
+    """
+    return json.loads(info.to_json())
 
 
 def _make_ctx(ctx_id: str) -> dict:
@@ -32,21 +43,21 @@ def _make_ctx(ctx_id: str) -> dict:
     }
 
 
-def _make_obs(source: str = "SYSLOG") -> dict:
+def _make_obs(source: Source = Source.SYSLOG) -> dict:
     return {
         "context": {
             "source": source,
-            "format": "RAW_LOG_LINES",
+            "format": Format.RAW_LOG,
             "resources": "",
             "time_interval": {"start": "2026-05-01T00:00:00Z", "end": "2026-05-01T01:00:00Z"},
         },
-        "body": ["line"],
+        "body": "line",
     }
 
 
 def _make_attribution_mock():
     attr = MagicMock()
-    attr.create_attributor.side_effect = lambda info: f"attr-{info['workload']['id']}"
+    attr.create_attributor.side_effect = lambda info: f"attr-{info.workload.id}"
     attr.create_or_replace_attributor.side_effect = lambda info: attr.create_attributor(info)
     attr.ingest_observation.return_value = 1
     attr.get_attribution.return_value = {"verdict": {"attribution_outcome": "Fail User"}}
@@ -83,9 +94,9 @@ def test_analyze_full_flow_calls_per_context_and_per_collector():
     eca.discover_by_ids.return_value = contexts
 
     coll_a = MagicMock(source="APPLOG")
-    coll_a.collect.return_value = [_make_obs("APPLOG")]
+    coll_a.collect.return_value = [_make_obs(Source.APPLOG)]
     coll_b = MagicMock(source="SYSLOG")
-    coll_b.collect.return_value = [_make_obs("SYSLOG")]
+    coll_b.collect.return_value = [_make_obs(Source.SYSLOG)]
 
     attr = _make_attribution_mock()
     output = _ListOutput()
@@ -137,10 +148,8 @@ def test_analyze_records_run_summaries():
     ]
 
 
-# Required keys per Attribution Service/app/v2/models.py:
-#   AttributorWorkloadInfoV2 (workload) and AttributorMetadata (metadata).
-# Keep these in lockstep with the service Pydantic models. A regression
-# here means a 422 in production.
+# Required keys per the generated client's AttributorWorkloadInfoV2 (workload)
+# and AttributorMetadata (metadata).
 _REQUIRED_WORKLOAD_KEYS = {
     "id",
     "type",
@@ -160,7 +169,7 @@ def test_build_attributor_info_payload_has_all_required_workload_keys():
     service. Lock the contract here so it fails in CI, not production."""
     ctx = _make_ctx("contract-1")
     pipeline = _make_pipeline(eca=MagicMock(), log_collectors=[])
-    info = pipeline._build_attributor_info(ctx)
+    info = _wire(pipeline._build_attributor_info(ctx))
     missing = _REQUIRED_WORKLOAD_KEYS - set(info["workload"])
     assert not missing, f"workload missing required keys: {missing}"
 
@@ -168,7 +177,7 @@ def test_build_attributor_info_payload_has_all_required_workload_keys():
 def test_build_attributor_info_payload_has_all_required_metadata_keys():
     ctx = _make_ctx("contract-2")
     pipeline = _make_pipeline(eca=MagicMock(), log_collectors=[])
-    info = pipeline._build_attributor_info(ctx)
+    info = _wire(pipeline._build_attributor_info(ctx))
     missing = _REQUIRED_METADATA_KEYS - set(info["metadata"])
     assert not missing, f"metadata missing required keys: {missing}"
 
@@ -177,7 +186,7 @@ def test_build_attributor_info_payload_required_fields_have_concrete_types():
     """Required fields must match the v2 service wire schema."""
     ctx = _make_ctx("contract-3")
     pipeline = _make_pipeline(eca=MagicMock(), log_collectors=[])
-    info = pipeline._build_attributor_info(ctx)
+    info = _wire(pipeline._build_attributor_info(ctx))
     w = info["workload"]
     assert isinstance(w["id"], str) and w["id"]
     assert isinstance(w["nodes"], dict)
@@ -196,7 +205,7 @@ def test_build_attributor_info_omits_legacy_straggler_parameters():
     omit `parameters` entirely; the service defaults it."""
     ctx = _make_ctx("contract-4")
     pipeline = _make_pipeline(eca=MagicMock(), log_collectors=[])
-    info = pipeline._build_attributor_info(ctx)
+    info = _wire(pipeline._build_attributor_info(ctx))
     assert "parameters" not in info
 
 
@@ -239,7 +248,7 @@ def test_build_attributor_info_sends_service_timezone(tz, expected):
 
     pipeline = _make_pipeline(eca=MagicMock(), log_collectors=[])
 
-    assert pipeline._build_attributor_info(ctx)["workload"]["timezone"] == expected
+    assert _wire(pipeline._build_attributor_info(ctx))["workload"]["timezone"] == expected
 
 
 def test_build_attributor_info_uses_explicit_timezone_for_non_hour_offset():
@@ -251,7 +260,7 @@ def test_build_attributor_info_uses_explicit_timezone_for_non_hour_offset():
 
     pipeline = _make_pipeline(eca=MagicMock(), log_collectors=[])
 
-    assert pipeline._build_attributor_info(ctx)["workload"]["timezone"] == "Asia/Kolkata"
+    assert _wire(pipeline._build_attributor_info(ctx))["workload"]["timezone"] == "Asia/Kolkata"
 
 
 def test_build_attributor_info_rejects_non_hour_offset_without_timezone():
@@ -285,7 +294,7 @@ def test_build_attributor_info_preserves_zoneinfo_across_dst_change():
 
     pipeline = _make_pipeline(eca=MagicMock(), log_collectors=[])
 
-    assert pipeline._build_attributor_info(ctx)["workload"]["timezone"] == "America/Los_Angeles"
+    assert _wire(pipeline._build_attributor_info(ctx))["workload"]["timezone"] == "America/Los_Angeles"
 
 
 def test_build_attributor_info_rejects_invalid_explicit_timezone():
@@ -313,8 +322,6 @@ def test_analyze_continues_when_get_attribution_raises_for_one_ctx():
     """One ExecutionContext's 500 must not abort the rest of the batch - see
     `attribution_lib` events.py datetime serialization bug for a real-world
     trigger. The bad context's attributor is still cleaned up."""
-    import requests
-
     contexts = [_make_ctx("1"), _make_ctx("2"), _make_ctx("3")]
     eca = MagicMock()
     eca.discover_by_ids.return_value = contexts
@@ -326,7 +333,7 @@ def test_analyze_continues_when_get_attribution_raises_for_one_ctx():
     attr = _make_attribution_mock()
     attr.get_attribution.side_effect = [
         {"verdict": {"attribution_outcome": "Fail User"}},
-        requests.HTTPError("500"),
+        ApiException(status=500, reason="Internal Server Error"),
         {"verdict": {"attribution_outcome": "Fail User"}},
     ]
 
@@ -437,7 +444,7 @@ def test_build_attributor_info_shape():
     ctx = _make_ctx("ctx-7")
     pipeline = _make_pipeline(MagicMock(), [])
 
-    info = pipeline._build_attributor_info(ctx)
+    info = _wire(pipeline._build_attributor_info(ctx))
 
     assert info["workload"]["id"] == "ctx-7"
     assert info["workload"]["type"] == "slurm"
@@ -446,9 +453,9 @@ def test_build_attributor_info_shape():
         "node-ctx-7-1": [0, 1, 2, 3],
         "node-ctx-7-2": [4, 5, 6, 7],
     }
-    assert info["workload"]["job_start_time"] == ctx["start_time"].isoformat()
+    assert datetime.fromisoformat(info["workload"]["job_start_time"]) == ctx["start_time"]
     assert info["workload"]["timezone"] == "UTC"
-    assert info["workload"]["job_end_time"] == ctx["end_time"].isoformat()
+    assert datetime.fromisoformat(info["workload"]["job_end_time"]) == ctx["end_time"]
     assert info["metadata"]["agent"] == "attribution-blueprint"
     # Wire format requires `cluster`; we emit empty string. The blueprint
     # itself does not carry cluster as a data-model concept.
@@ -460,7 +467,7 @@ def test_build_attributor_info_uses_context_workload_type():
     ctx["workload_type"] = "runai"
     pipeline = _make_pipeline(MagicMock(), [])
 
-    info = pipeline._build_attributor_info(ctx)
+    info = _wire(pipeline._build_attributor_info(ctx))
 
     assert info["workload"]["type"] == "runai"
 
@@ -470,7 +477,7 @@ def test_build_attributor_info_missing_workload_type_is_undefined():
     ctx.pop("workload_type")
     pipeline = _make_pipeline(MagicMock(), [])
 
-    info = pipeline._build_attributor_info(ctx)
+    info = _wire(pipeline._build_attributor_info(ctx))
 
     assert info["workload"]["type"] == ""
 
@@ -485,7 +492,7 @@ def test_wire_workload_type_unaffected_by_scheduler_field():
     ctx["scheduler"] = "kueue"
     pipeline = _make_pipeline(MagicMock(), [])
 
-    info = pipeline._build_attributor_info(ctx)
+    info = _wire(pipeline._build_attributor_info(ctx))
 
     assert info["workload"]["type"] == ""
     # And the scheduler field doesn't appear under any other key in the payload.
@@ -503,7 +510,7 @@ def test_build_attributor_info_honors_gpus_per_node():
         gpus_per_node=8,
     )
 
-    info = pipeline._build_attributor_info(ctx)
+    info = _wire(pipeline._build_attributor_info(ctx))
 
     assert info["workload"]["nodes"] == {
         "node-ctx-7-1": [0, 1, 2, 3, 4, 5, 6, 7],
@@ -615,7 +622,7 @@ def test_raw_syslog_is_adapted_before_service_ingest():
 
     ingested = attr.ingest_observation.call_args.args[1]
     assert obs["context"]["format"] == Format.RAW_LOG
-    assert ingested["context"]["format"] == Format.LOKI_DICT_LIST
+    assert ingested.context.format == Format.LOKI_DICT_LIST
 
 
 @pytest.mark.parametrize("ids", [["1"], ["1", "2"]])
@@ -641,7 +648,7 @@ def test_build_attributor_info_username_reads_user_name_field():
     ctx["user_name"] = "alice"
     pipeline = _make_pipeline(MagicMock(), [])
 
-    info = pipeline._build_attributor_info(ctx)
+    info = _wire(pipeline._build_attributor_info(ctx))
 
     assert info["workload"]["username"] == "alice"
 
@@ -655,7 +662,7 @@ def test_build_attributor_info_framework_threads_through():
     ctx["workload_framework"] = "megatron"
     pipeline = _make_pipeline(MagicMock(), [])
 
-    info = pipeline._build_attributor_info(ctx)
+    info = _wire(pipeline._build_attributor_info(ctx))
 
     assert info["workload"]["framework"] == "megatron"
 

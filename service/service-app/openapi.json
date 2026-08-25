@@ -1,0 +1,2575 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "NVIDIA Attribution Service",
+    "summary": "Service for producing failure attribution/workload information from metrics & logs",
+    "description": "\nNVIDIA Attribution Service helps interpret workload information (primarily failures).\n\nIt produces 'attributions', typically node-based, based on 'observations'.\n\nThe model is that POSTing to the '/attributor' endpoint with some workload information plus agent metadata creates a handle that is returned to the user.\n\nThe handle can then be used as follows:\n\n* POSTing 'observations' to '/attributor/{handle}/observation' feeds logs/metrics/etc to the service and associates them with the handle. Each such POST will produce an 'observation_id' that can be used to track the ingestion of the observation.\n\n* GETing '/attributor/{handle}/attribution' will produce an attribution that tries to explain how the workload failed (if it did) and explains how the service reached that conclusion.\n\n* DELETEing '/attributor/{handle}' will clean up that handle.\n\nIt is possible to interleave observation-posting and attribution-getting; the more observations that have been ingested, the better the quality of the attribution, generally speaking.\n",
+    "contact": {
+      "name": "NVIDIA Corporation"
+    },
+    "version": "0.1.0"
+  },
+  "paths": {
+    "/v1/healthz": {
+      "get": {
+        "summary": "Health",
+        "operationId": "health_v1_healthz_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/attributor": {
+      "post": {
+        "summary": "New Attribution",
+        "description": "Create a new attribution attributor based on provided metadata and return an id with which to identify it. Providing identical metadata to an existing attributor is an error.",
+        "operationId": "new_attribution_v1_attributor_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AttributorInfoV1"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NewResponseV1"
+                }
+              }
+            }
+          },
+          "201": {
+            "description": "Created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NewResponseV1"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Duplicate attribution {att_id} rejected.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DuplicateAttributorError"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/attributor/{att_id}/observation": {
+      "post": {
+        "summary": "Ingest",
+        "description": "Pass observation to specified attributor and return an id that identifies it. It is an error to provide a duplicate observation. When the id is returned, the observation has been successfully ingested.",
+        "operationId": "ingest_v1_attributor__att_id__observation_post",
+        "parameters": [
+          {
+            "name": "att_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Att Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Observation"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ObservationResponseV1"
+                }
+              }
+            }
+          },
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ObservationResponseV1"
+                }
+              }
+            },
+            "description": "Created"
+          },
+          "404": {
+            "description": "Attribution id {att_id} unknown.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnknownAttributorIdError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Duplicate observation {obs_id} rejected.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DuplicateObservationError"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/attributor/{att_id}/attribution": {
+      "get": {
+        "summary": "Attribute",
+        "description": "Perform attribution on specified attributor based on all previous observation ingested on this attributor.",
+        "operationId": "attribute_v1_attributor__att_id__attribution_get",
+        "parameters": [
+          {
+            "name": "att_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Att Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AttributionResponseV1"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Attribution id {att_id} unknown.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnknownAttributorIdError"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/attributor/{att_id}": {
+      "delete": {
+        "summary": "Delete Attribution",
+        "description": "Destroy attribution attributor indicated by id. It is an error if the id is not present in the service.",
+        "operationId": "delete_attribution_v1_attributor__att_id__delete",
+        "parameters": [
+          {
+            "name": "att_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Att Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "204": {
+            "description": "No Content"
+          },
+          "404": {
+            "description": "Attribution id {att_id} unknown.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnknownAttributorIdError"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v2/healthz": {
+      "get": {
+        "summary": "Health",
+        "operationId": "health_v2_healthz_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v2/attributor": {
+      "post": {
+        "summary": "New Attribution",
+        "description": "Create a new attribution attributor based on provided metadata and return an id with which to identify it. Providing identical metadata to an existing attributor is an error.",
+        "operationId": "new_attribution_v2_attributor_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AttributorInfoV2"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NewResponseV2"
+                }
+              }
+            }
+          },
+          "201": {
+            "description": "Created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NewResponseV2"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Duplicate attribution {att_id} rejected.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DuplicateAttributorError"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation failed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ValidationErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v2/attributor/{att_id}/observation": {
+      "post": {
+        "summary": "Ingest",
+        "description": "Pass observation to specified attributor and return an id that identifies it. It is an error to provide a duplicate observation. When the id is returned, the observation has been successfully ingested.",
+        "operationId": "ingest_v2_attributor__att_id__observation_post",
+        "parameters": [
+          {
+            "name": "att_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Att Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Observation"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ObservationResponseV2"
+                }
+              }
+            }
+          },
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ObservationResponseV2"
+                }
+              }
+            },
+            "description": "Created"
+          },
+          "404": {
+            "description": "Attribution id {att_id} unknown.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnknownAttributorIdError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Duplicate observation {obs_id} rejected.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DuplicateObservationError"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Observation ingestion failed.",
+            "content": {
+              "application/json": {
+                "examples": {
+                  "UnknownObservationFormatError": {
+                    "summary": "Unsupported recognized observation format",
+                    "value": {
+                      "model_type": "UnknownObservationFormatError",
+                      "format": "future_format"
+                    }
+                  },
+                  "InvalidObservationBodyError": {
+                    "summary": "Malformed structured observation body",
+                    "value": {
+                      "model_type": "InvalidObservationBodyError",
+                      "format": "raw_loki_streams"
+                    }
+                  },
+                  "IncompatibleObservationSourceFormatError": {
+                    "summary": "Incompatible observation source and format",
+                    "value": {
+                      "model_type": "IncompatibleObservationSourceFormatError",
+                      "source": "applog",
+                      "format": "string_list"
+                    }
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ObservationIngestionErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation failed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ValidationErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v2/attributor/{att_id}/attribution": {
+      "get": {
+        "summary": "Attribute",
+        "description": "Perform attribution on specified attributor based on all previous observation ingested on this attributor.",
+        "operationId": "attribute_v2_attributor__att_id__attribution_get",
+        "parameters": [
+          {
+            "name": "att_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Att Id"
+            }
+          },
+          {
+            "name": "include_decision_graph",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "description": "Include the runtime Decision DAG in the verdict.",
+              "default": false,
+              "title": "Include Decision Graph"
+            },
+            "description": "Include the runtime Decision DAG in the verdict."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AttributionResponseV2"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Attribution id {att_id} unknown.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnknownAttributorIdError"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation failed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ValidationErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v2/attributor/{att_id}": {
+      "delete": {
+        "summary": "Delete Attribution",
+        "description": "Destroy attribution attributor indicated by id. It is an error if the id is not present in the service.",
+        "operationId": "delete_attribution_v2_attributor__att_id__delete",
+        "parameters": [
+          {
+            "name": "att_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Att Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "204": {
+            "description": "No Content"
+          },
+          "404": {
+            "description": "Attribution id {att_id} unknown.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnknownAttributorIdError"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation failed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ValidationErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/latest/healthz": {
+      "get": {
+        "summary": "Health",
+        "operationId": "health_latest_healthz_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/latest/attributor": {
+      "post": {
+        "summary": "New Attribution",
+        "description": "Create a new attribution attributor based on provided metadata and return an id with which to identify it. Providing identical metadata to an existing attributor is an error.",
+        "operationId": "new_attribution_latest_attributor_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AttributorInfoV2"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NewResponseV2"
+                }
+              }
+            }
+          },
+          "201": {
+            "description": "Created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NewResponseV2"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Duplicate attribution {att_id} rejected.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DuplicateAttributorError"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation failed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ValidationErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/latest/attributor/{att_id}/observation": {
+      "post": {
+        "summary": "Ingest",
+        "description": "Pass observation to specified attributor and return an id that identifies it. It is an error to provide a duplicate observation. When the id is returned, the observation has been successfully ingested.",
+        "operationId": "ingest_latest_attributor__att_id__observation_post",
+        "parameters": [
+          {
+            "name": "att_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Att Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Observation"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ObservationResponseV2"
+                }
+              }
+            }
+          },
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ObservationResponseV2"
+                }
+              }
+            },
+            "description": "Created"
+          },
+          "404": {
+            "description": "Attribution id {att_id} unknown.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnknownAttributorIdError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Duplicate observation {obs_id} rejected.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DuplicateObservationError"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Observation ingestion failed.",
+            "content": {
+              "application/json": {
+                "examples": {
+                  "UnknownObservationFormatError": {
+                    "summary": "Unsupported recognized observation format",
+                    "value": {
+                      "model_type": "UnknownObservationFormatError",
+                      "format": "future_format"
+                    }
+                  },
+                  "InvalidObservationBodyError": {
+                    "summary": "Malformed structured observation body",
+                    "value": {
+                      "model_type": "InvalidObservationBodyError",
+                      "format": "raw_loki_streams"
+                    }
+                  },
+                  "IncompatibleObservationSourceFormatError": {
+                    "summary": "Incompatible observation source and format",
+                    "value": {
+                      "model_type": "IncompatibleObservationSourceFormatError",
+                      "source": "applog",
+                      "format": "string_list"
+                    }
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ObservationIngestionErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation failed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ValidationErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/latest/attributor/{att_id}/attribution": {
+      "get": {
+        "summary": "Attribute",
+        "description": "Perform attribution on specified attributor based on all previous observation ingested on this attributor.",
+        "operationId": "attribute_latest_attributor__att_id__attribution_get",
+        "parameters": [
+          {
+            "name": "att_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Att Id"
+            }
+          },
+          {
+            "name": "include_decision_graph",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "description": "Include the runtime Decision DAG in the verdict.",
+              "default": false,
+              "title": "Include Decision Graph"
+            },
+            "description": "Include the runtime Decision DAG in the verdict."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AttributionResponseV2"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Attribution id {att_id} unknown.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnknownAttributorIdError"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation failed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ValidationErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/latest/attributor/{att_id}": {
+      "delete": {
+        "summary": "Delete Attribution",
+        "description": "Destroy attribution attributor indicated by id. It is an error if the id is not present in the service.",
+        "operationId": "delete_attribution_latest_attributor__att_id__delete",
+        "parameters": [
+          {
+            "name": "att_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Att Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "204": {
+            "description": "No Content"
+          },
+          "404": {
+            "description": "Attribution id {att_id} unknown.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnknownAttributorIdError"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation failed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ValidationErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/metrics": {
+      "get": {
+        "summary": "Metrics",
+        "description": "Endpoint that serves Prometheus metrics.",
+        "operationId": "metrics_metrics_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "AttributionClassEnum": {
+        "type": "string",
+        "enum": [
+          "",
+          "no_error",
+          "hardware",
+          "software",
+          "user",
+          "artificial",
+          "undetermined"
+        ],
+        "title": "AttributionClassEnum",
+        "description": "The types of attributions/errors we can find. V1-only."
+      },
+      "AttributionParameters": {
+        "properties": {
+          "rule_params": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/RuleParameters"
+            },
+            "type": "object",
+            "title": "Rule Params"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "AttributionParameters",
+        "description": "Parameters to guide attribution."
+      },
+      "AttributionResponseV1": {
+        "properties": {
+          "observation_context": {
+            "items": {
+              "type": "integer"
+            },
+            "type": "array",
+            "title": "Observation Context"
+          },
+          "attributions": {
+            "items": {
+              "oneOf": [
+                {
+                  "$ref": "#/components/schemas/WorkloadRecord"
+                },
+                {
+                  "$ref": "#/components/schemas/NodeAttribution"
+                },
+                {
+                  "$ref": "#/components/schemas/StorageAttribution"
+                },
+                {
+                  "$ref": "#/components/schemas/SwitchAttribution"
+                },
+                {
+                  "$ref": "#/components/schemas/GlobalAttribution"
+                }
+              ],
+              "discriminator": {
+                "propertyName": "type",
+                "mapping": {
+                  "GlobalAttribution": "#/components/schemas/GlobalAttribution",
+                  "NodeAttribution": "#/components/schemas/NodeAttribution",
+                  "StorageAttribution": "#/components/schemas/StorageAttribution",
+                  "SwitchAttribution": "#/components/schemas/SwitchAttribution",
+                  "WorkloadRecord": "#/components/schemas/WorkloadRecord"
+                }
+              }
+            },
+            "type": "array",
+            "title": "Attributions"
+          },
+          "model_type": {
+            "type": "string",
+            "const": "AttributionResponseV1",
+            "title": "Model Type"
+          }
+        },
+        "type": "object",
+        "required": [
+          "observation_context",
+          "attributions",
+          "model_type"
+        ],
+        "title": "AttributionResponseV1",
+        "description": "Response to attribution requests"
+      },
+      "AttributionResponseV2": {
+        "properties": {
+          "verdict": {
+            "$ref": "#/components/schemas/Verdict"
+          },
+          "symptoms": {
+            "additionalProperties": {
+              "items": {
+                "oneOf": [
+                  {
+                    "$ref": "#/components/schemas/ResourcelessSource"
+                  },
+                  {
+                    "$ref": "#/components/schemas/NodeSource"
+                  }
+                ],
+                "discriminator": {
+                  "propertyName": "type",
+                  "mapping": {
+                    "NodeSource": "#/components/schemas/NodeSource",
+                    "ResourcelessSource": "#/components/schemas/ResourcelessSource"
+                  }
+                }
+              },
+              "type": "array"
+            },
+            "type": "object",
+            "title": "Symptoms"
+          },
+          "observation_context": {
+            "items": {
+              "type": "integer"
+            },
+            "type": "array",
+            "title": "Observation Context"
+          },
+          "collectors": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Collectors"
+          },
+          "model_type": {
+            "type": "string",
+            "const": "AttributionResponseV2",
+            "title": "Model Type"
+          }
+        },
+        "type": "object",
+        "required": [
+          "verdict",
+          "symptoms",
+          "observation_context",
+          "model_type"
+        ],
+        "title": "AttributionResponseV2",
+        "description": "V2 response to GET /v2/attributor/{att_id}/attribution."
+      },
+      "AttributionSource": {
+        "properties": {
+          "observation_id": {
+            "type": "integer",
+            "title": "Observation Id"
+          },
+          "source": {
+            "$ref": "#/components/schemas/Source"
+          },
+          "pos": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pos"
+          },
+          "line": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Line"
+          },
+          "rule": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rule"
+          },
+          "time": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Time"
+          }
+        },
+        "type": "object",
+        "required": [
+          "observation_id",
+          "source",
+          "pos",
+          "line",
+          "rule",
+          "time"
+        ],
+        "title": "AttributionSource",
+        "description": "Description of provenance of attribution."
+      },
+      "AttributorInfoV1": {
+        "properties": {
+          "workload": {
+            "$ref": "#/components/schemas/AttributorWorkloadInfoV1"
+          },
+          "metadata": {
+            "$ref": "#/components/schemas/AttributorMetadata"
+          },
+          "parameters": {
+            "$ref": "#/components/schemas/AttributionParameters"
+          }
+        },
+        "type": "object",
+        "required": [
+          "workload",
+          "metadata"
+        ],
+        "title": "AttributorInfoV1",
+        "description": "V1 wire shape for the /attributor POST body."
+      },
+      "AttributorInfoV2": {
+        "properties": {
+          "workload": {
+            "$ref": "#/components/schemas/AttributorWorkloadInfoV2"
+          },
+          "metadata": {
+            "$ref": "#/components/schemas/AttributorMetadata"
+          },
+          "parameters": {
+            "$ref": "#/components/schemas/AttributionParameters"
+          }
+        },
+        "type": "object",
+        "required": [
+          "workload",
+          "metadata"
+        ],
+        "title": "AttributorInfoV2",
+        "description": "V2 wire shape for the /attributor POST body."
+      },
+      "AttributorMetadata": {
+        "properties": {
+          "cluster": {
+            "type": "string",
+            "title": "Cluster"
+          },
+          "agent": {
+            "type": "string",
+            "title": "Agent"
+          },
+          "tenant": {
+            "type": "string",
+            "title": "Tenant"
+          },
+          "ruleset": {
+            "type": "string",
+            "title": "Ruleset"
+          }
+        },
+        "type": "object",
+        "required": [
+          "cluster",
+          "agent",
+          "tenant",
+          "ruleset"
+        ],
+        "title": "AttributorMetadata",
+        "description": "Additional metadata to help with tracing, etc"
+      },
+      "AttributorWorkloadInfoV1": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "type": {
+            "$ref": "#/components/schemas/WorkloadTypeEnum"
+          },
+          "srun_cmd": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Srun Cmd",
+            "default": "dummy"
+          },
+          "job_start_time": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Job Start Time"
+          },
+          "job_end_time": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Job End Time"
+          },
+          "interest_start_time": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Interest Start Time"
+          },
+          "interest_end_time": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Interest End Time"
+          },
+          "exit_code_signal": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Exit Code Signal"
+          },
+          "cancelled_by": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cancelled By"
+          },
+          "time_limit": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Time Limit"
+          },
+          "failed_node": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Failed Node"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status"
+          },
+          "nranks": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Nranks"
+          },
+          "ranks_per_node": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ranks Per Node"
+          },
+          "nodes": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Nodes"
+          },
+          "node_to_ranks": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "items": {
+                    "type": "integer"
+                  },
+                  "type": "array"
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Node To Ranks"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "username": {
+            "type": "string",
+            "title": "Username"
+          },
+          "last_tflops_time": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Tflops Time"
+          },
+          "framework": {
+            "type": "string",
+            "title": "Framework"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "type",
+          "job_start_time",
+          "status",
+          "name",
+          "username",
+          "framework"
+        ],
+        "title": "AttributorWorkloadInfoV1",
+        "description": "V1 wire shape: legacy positional node list + ranks-per-node fan-out, or an explicit\nnode-to-ranks mapping. If both are sent, the explicit mapping wins (see to_lib_jobinfo)."
+      },
+      "AttributorWorkloadInfoV2": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "type": {
+            "type": "string",
+            "title": "Type"
+          },
+          "srun_cmd": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Srun Cmd",
+            "default": "dummy"
+          },
+          "job_start_time": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Job Start Time"
+          },
+          "timezone": {
+            "type": "string",
+            "format": "zoneinfo",
+            "title": "Timezone"
+          },
+          "job_end_time": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Job End Time"
+          },
+          "interest_start_time": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Interest Start Time"
+          },
+          "interest_end_time": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Interest End Time"
+          },
+          "exit_code_signal": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Exit Code Signal"
+          },
+          "cancelled_by": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cancelled By"
+          },
+          "time_limit": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Time Limit"
+          },
+          "failed_node": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Failed Node"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status"
+          },
+          "nodes": {
+            "additionalProperties": {
+              "items": {
+                "type": "integer"
+              },
+              "type": "array"
+            },
+            "type": "object",
+            "title": "Nodes"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "username": {
+            "type": "string",
+            "title": "Username"
+          },
+          "last_tflops_time": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Tflops Time"
+          },
+          "framework": {
+            "type": "string",
+            "title": "Framework"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "type",
+          "job_start_time",
+          "timezone",
+          "status",
+          "nodes",
+          "name",
+          "username",
+          "framework"
+        ],
+        "title": "AttributorWorkloadInfoV2",
+        "description": "V2 wire shape: ``nodes`` is the explicit node->ranks mapping."
+      },
+      "DecisionAction": {
+        "type": "string",
+        "enum": [
+          "UNKNOWN",
+          "CREATED",
+          "MATCHED",
+          "REMOVED",
+          "PRUNED"
+        ],
+        "title": "DecisionAction",
+        "description": "Effect a decision node had on the symptom it references."
+      },
+      "DecisionEdge": {
+        "properties": {
+          "parent_id": {
+            "type": "string",
+            "title": "Parent Id"
+          },
+          "child_id": {
+            "type": "string",
+            "title": "Child Id"
+          },
+          "edge_type": {
+            "type": "string",
+            "title": "Edge Type"
+          }
+        },
+        "type": "object",
+        "required": [
+          "parent_id",
+          "child_id",
+          "edge_type"
+        ],
+        "title": "DecisionEdge",
+        "description": "One directed relationship in a runtime Decision DAG."
+      },
+      "DecisionGraph": {
+        "properties": {
+          "nodes": {
+            "items": {
+              "$ref": "#/components/schemas/DecisionNode"
+            },
+            "type": "array",
+            "title": "Nodes"
+          },
+          "edges": {
+            "items": {
+              "$ref": "#/components/schemas/DecisionEdge"
+            },
+            "type": "array",
+            "title": "Edges"
+          }
+        },
+        "type": "object",
+        "required": [
+          "nodes",
+          "edges"
+        ],
+        "title": "DecisionGraph",
+        "description": "Per-attribution runtime Decision DAG."
+      },
+      "DecisionNode": {
+        "properties": {
+          "node_id": {
+            "type": "string",
+            "title": "Node Id"
+          },
+          "node_type": {
+            "$ref": "#/components/schemas/DecisionNodeType"
+          },
+          "hostname": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Hostname"
+          },
+          "symptom": {
+            "type": "string",
+            "title": "Symptom"
+          },
+          "rule_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rule Name"
+          },
+          "action": {
+            "$ref": "#/components/schemas/DecisionAction"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          },
+          "datum": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Datum"
+          },
+          "line_num": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Line Num"
+          },
+          "timestamp": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Timestamp"
+          },
+          "obs_source": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Obs Source"
+          }
+        },
+        "type": "object",
+        "required": [
+          "node_id",
+          "node_type",
+          "hostname",
+          "symptom",
+          "rule_name",
+          "action"
+        ],
+        "title": "DecisionNode",
+        "description": "One evidence, rule-action, or outcome node in a runtime Decision DAG."
+      },
+      "DecisionNodeType": {
+        "type": "string",
+        "enum": [
+          "UNKNOWN",
+          "EXTRACTION",
+          "FILTER",
+          "SCRUB",
+          "REFINER",
+          "CASCADE_PRUNE",
+          "OUTCOME"
+        ],
+        "title": "DecisionNodeType",
+        "description": "Attribution pipeline stage a decision node was produced by."
+      },
+      "DuplicateAttributorError": {
+        "properties": {
+          "model_type": {
+            "type": "string",
+            "const": "DuplicateAttributorError",
+            "title": "Model Type"
+          },
+          "att_id": {
+            "type": "string",
+            "title": "Att Id"
+          }
+        },
+        "type": "object",
+        "required": [
+          "model_type",
+          "att_id"
+        ],
+        "title": "DuplicateAttributorError",
+        "description": "Error for when a new attributor appears to be identical to an extant one."
+      },
+      "DuplicateObservationError": {
+        "properties": {
+          "model_type": {
+            "type": "string",
+            "const": "DuplicateObservationError",
+            "title": "Model Type"
+          },
+          "obs_id": {
+            "type": "integer",
+            "title": "Obs Id"
+          }
+        },
+        "type": "object",
+        "required": [
+          "model_type",
+          "obs_id"
+        ],
+        "title": "DuplicateObservationError",
+        "description": "Error for the case where repeated Observations are fed to an attributor."
+      },
+      "Format": {
+        "type": "string",
+        "enum": [
+          "",
+          "string_list",
+          "raw_log",
+          "raw_loki_streams",
+          "loki_dict_list",
+          "csv_metric_response",
+          "ufmlog",
+          "prometheus_metrics",
+          "csp_event_list"
+        ],
+        "title": "Format",
+        "description": "Specifies the types of formats the 'lines' in an observation can be in.\n\nNot all sources can be specified in each format; see above for clarification.\n\nFurthermore, some sources expect slightly different fields in formats.\n\nIn particular, the `applog` source expects the entry found in the given format to have a rank-like prefix; for them, the host-specifier field, if present in a format, is optional.\n\nFor `syslog` and `health_check`, the rank-like prefix is not expected, and `host-specifier` fields are mandatory.\n\nRank-like prefixes are match the following regex: \"^\\[rank\\s*:?\\s*(?P<rank>\\d+)\\]\" or have an integer followed by a colon at the start of the line.\n\nExamples:\n\n    [rank3] Message\n     3: another message\n    [rank :10] a third message\n\n\n- `string_list`:\n\n    Raw text\n\n    Lines of text separated by newlines. No hosts associations.\n\n- `raw_log`:\n\n    Raw text\n\n    entries separated by newlines. Rank-like prefix expected for applog.\n\n- `raw_loki_streams`:\n\n    JSON-based\n\n    Top-Level Structure:\n    - An array of objects, each with:\n      - `stream`: If host-spcifier needed, *Required*. If present, must contain the `node_name` field (string); which is the host-specifier. All other fields in stream are permitted but ignored.\n      - `values`: *Required*. An array of entries.\n\n    Details:\n    - `stream` Object. *Required* if host-specifier:\n      - Required Field:\n        - `node_name` (string): Identifies the node that generated the logs. Host specifier.\n        - Other fields: Any other fields within stream are permitted but ignored.\n    - `values` Array:\n      - Each entry is a 2-element array:\n        - Timestamp (string): Unix timestamp; unit scale dictated by Source (see above).\n        - Entry (string): the main content. Should have rank-line prefix for applog.\n    - Other fields:\n      - Any other fields at any level are permitted but ignored.\n\n    Example (`syslog` source):\n    ```json\n    [\n      {\n        \"stream\": {\n          \"node_name\": \"host-a1b2c3d4\"\n        },\n        \"values\": [\n          [\n            \"1744734437830498000\",\n            \"Apr 24 12:04:06 host-a1b2c3d4 kernel: message repeated 8 times: [ NVRM: subdeviceCtrlCmdBusGetNvlinkStatus_IMPL: Failed to collect nvlink status info!]\"\n          ]\n        ]\n      }\n    ]\n    ```\n\n- `loki_dict_list`:\n\n    JSON-based.\n\n    Top-Level Structure:\n    -  An array of objects, each with:\n        - `values`: Required. An array of entries.\n\n    Details:\n    - `values` Array:\n      Each entry is a 2-element array:\n      - Timestamp (string): Unix timestamp; unit scale dictated by Source (see above).\n      - Content (string): A JSON-encoded object with at least the following fields:\n        - `body` (string): entry (required; rank-like prefix expected for APPLOG.)\n        - `hostname` (string): The source hostname (required if host-specified needed.)\n    - Other fields:\n      - The `stream` object is optional and, if present, is ignored.\n      - Any other fields in the log message JSON are permitted but ignored.\n\n    Example (`syslog` source)\n    ```json\n    [\n      {\n        \"values\": [\n          [\n            \"1744734421212766000\",\n            \"{\\\"body\\\":\\\"Some log message\\\",\\\"hostname\\\":\\\"server-01\\\"}\"\n          ]\n        ]\n      }\n    ]\n    ```\n\n- `csv_metric_response`:\n\n  Not implemented presently.\n\n- `prometheus_metrics`:\n\n  JSON-based.\n\n  Top-Level Structure:\n  - An array of objects, each representing a metric data point.\n\n  Details:\n  - Each object must contain:\n    - `timestamp` (int): Unix timestamp in seconds\n    - `value` (Union[int, float, string]): Metric value (initially as string, converted later)\n    - `metric` (string): Metric name (e.g., \"node_infiniband_link_downed_total\")\n    - `labels` (dict): Prometheus labels including node and device information\n    - `node` (string): Node identifier (required, extracted from net_host_name label)\n    - `component` (string, optional): Component/device identifier (e.g., \"mlx5_0\", \"mlx5_1\")\n    - `cluster` (string, optional): Cluster identifier (e.g., \"cluster-e5f6g7h8\", extracted from s_cluster label)\n\n  Example:\n  ```json\n  [\n    {\n      \"timestamp\": 1753898040,\n      \"value\": \"1\",\n      \"metric\": \"node_infiniband_link_downed_total\",\n      \"labels\": {\n        \"net_host_name\": \"host-i9j0k1l2\",\n        \"s_cluster\": \"cluster-e5f6g7h8\",\n        \"device\": \"mlx5_0\",\n        \"instance\": \"host-i9j0k1l2:9100\"\n      },\n      \"node\": \"host-i9j0k1l2\",\n      \"component\": \"mlx5_0\",\n      \"cluster\": \"cluster-e5f6g7h8\"\n    }\n  ]\n  ```"
+      },
+      "GlobalAttribution": {
+        "properties": {
+          "type": {
+            "type": "string",
+            "const": "GlobalAttribution",
+            "title": "Type",
+            "default": "GlobalAttribution"
+          },
+          "attributions": {
+            "items": {
+              "oneOf": [
+                {
+                  "$ref": "#/components/schemas/SingleAttribution"
+                },
+                {
+                  "$ref": "#/components/schemas/StragglerAttribution"
+                }
+              ],
+              "discriminator": {
+                "propertyName": "type",
+                "mapping": {
+                  "SingleAttribution": "#/components/schemas/SingleAttribution",
+                  "StragglerAttribution": "#/components/schemas/StragglerAttribution"
+                }
+              }
+            },
+            "type": "array",
+            "title": "Attributions"
+          }
+        },
+        "type": "object",
+        "required": [
+          "attributions"
+        ],
+        "title": "GlobalAttribution",
+        "description": "Non-specific attribution (i.e. job-level)"
+      },
+      "HTTPValidationError": {
+        "properties": {
+          "detail": {
+            "items": {
+              "$ref": "#/components/schemas/ValidationError"
+            },
+            "type": "array",
+            "title": "Detail"
+          }
+        },
+        "type": "object",
+        "title": "HTTPValidationError"
+      },
+      "IncompatibleObservationSourceFormatError": {
+        "properties": {
+          "model_type": {
+            "type": "string",
+            "const": "IncompatibleObservationSourceFormatError",
+            "title": "Model Type"
+          },
+          "source": {
+            "type": "string",
+            "title": "Source"
+          },
+          "format": {
+            "type": "string",
+            "title": "Format"
+          }
+        },
+        "type": "object",
+        "required": [
+          "model_type",
+          "source",
+          "format"
+        ],
+        "title": "IncompatibleObservationSourceFormatError"
+      },
+      "InvalidObservationBodyError": {
+        "properties": {
+          "model_type": {
+            "type": "string",
+            "const": "InvalidObservationBodyError",
+            "title": "Model Type"
+          },
+          "format": {
+            "type": "string",
+            "title": "Format"
+          }
+        },
+        "type": "object",
+        "required": [
+          "model_type",
+          "format"
+        ],
+        "title": "InvalidObservationBodyError",
+        "description": "Error for a structured observation body that cannot be decoded."
+      },
+      "NewResponseV1": {
+        "properties": {
+          "attributor_id": {
+            "type": "string",
+            "title": "Attributor Id"
+          },
+          "model_type": {
+            "type": "string",
+            "const": "NewResponseV1",
+            "title": "Model Type"
+          }
+        },
+        "type": "object",
+        "required": [
+          "attributor_id",
+          "model_type"
+        ],
+        "title": "NewResponseV1",
+        "description": "Response to creating a new attribution attributor."
+      },
+      "NewResponseV2": {
+        "properties": {
+          "attributor_id": {
+            "type": "string",
+            "title": "Attributor Id"
+          },
+          "model_type": {
+            "type": "string",
+            "const": "NewResponseV2",
+            "title": "Model Type"
+          }
+        },
+        "type": "object",
+        "required": [
+          "attributor_id",
+          "model_type"
+        ],
+        "title": "NewResponseV2",
+        "description": "Response to creating a new attribution attributor."
+      },
+      "NodeAttribution": {
+        "properties": {
+          "type": {
+            "type": "string",
+            "const": "NodeAttribution",
+            "title": "Type",
+            "default": "NodeAttribution"
+          },
+          "attributions": {
+            "items": {
+              "oneOf": [
+                {
+                  "$ref": "#/components/schemas/SingleAttribution"
+                },
+                {
+                  "$ref": "#/components/schemas/StragglerAttribution"
+                }
+              ],
+              "discriminator": {
+                "propertyName": "type",
+                "mapping": {
+                  "SingleAttribution": "#/components/schemas/SingleAttribution",
+                  "StragglerAttribution": "#/components/schemas/StragglerAttribution"
+                }
+              }
+            },
+            "type": "array",
+            "title": "Attributions"
+          },
+          "node": {
+            "type": "string",
+            "title": "Node"
+          }
+        },
+        "type": "object",
+        "required": [
+          "attributions",
+          "node"
+        ],
+        "title": "NodeAttribution",
+        "description": "A node-specific attribution"
+      },
+      "NodeSource": {
+        "properties": {
+          "type": {
+            "type": "string",
+            "const": "NodeSource",
+            "title": "Type",
+            "default": "NodeSource"
+          },
+          "node": {
+            "type": "string",
+            "title": "Node"
+          },
+          "source": {
+            "$ref": "#/components/schemas/AttributionSource"
+          }
+        },
+        "type": "object",
+        "required": [
+          "node",
+          "source"
+        ],
+        "title": "NodeSource",
+        "description": "A source bound to a specific node (e.g. a per-node GPU or NIC symptom)."
+      },
+      "Observation": {
+        "properties": {
+          "context": {
+            "$ref": "#/components/schemas/ObservationContext"
+          },
+          "body": {
+            "type": "string",
+            "title": "Body"
+          }
+        },
+        "type": "object",
+        "required": [
+          "context",
+          "body"
+        ],
+        "title": "Observation",
+        "description": "Describes association of some observation data with a context."
+      },
+      "ObservationContext": {
+        "properties": {
+          "time_interval": {
+            "$ref": "#/components/schemas/TimeInterval"
+          },
+          "resources": {
+            "type": "string",
+            "title": "Resources",
+            "default": "AllJobResources"
+          },
+          "source": {
+            "$ref": "#/components/schemas/Source"
+          },
+          "format": {
+            "$ref": "#/components/schemas/Format"
+          },
+          "is_prefiltered": {
+            "type": "boolean",
+            "title": "Is Prefiltered",
+            "default": false
+          }
+        },
+        "type": "object",
+        "required": [
+          "time_interval",
+          "source",
+          "format"
+        ],
+        "title": "ObservationContext",
+        "description": "Describes the scope of an observation."
+      },
+      "ObservationIngestionErrorResponse": {
+        "oneOf": [
+          {
+            "$ref": "#/components/schemas/UnknownObservationFormatError"
+          },
+          {
+            "$ref": "#/components/schemas/InvalidObservationBodyError"
+          },
+          {
+            "$ref": "#/components/schemas/IncompatibleObservationSourceFormatError"
+          }
+        ],
+        "title": "ObservationIngestionErrorResponse",
+        "description": "Published union of client-fixable observation ingestion errors.",
+        "discriminator": {
+          "propertyName": "model_type",
+          "mapping": {
+            "IncompatibleObservationSourceFormatError": "#/components/schemas/IncompatibleObservationSourceFormatError",
+            "InvalidObservationBodyError": "#/components/schemas/InvalidObservationBodyError",
+            "UnknownObservationFormatError": "#/components/schemas/UnknownObservationFormatError"
+          }
+        }
+      },
+      "ObservationResponseV1": {
+        "properties": {
+          "observation_id": {
+            "type": "integer",
+            "title": "Observation Id"
+          },
+          "model_type": {
+            "type": "string",
+            "const": "ObservationResponseV1",
+            "title": "Model Type"
+          }
+        },
+        "type": "object",
+        "required": [
+          "observation_id",
+          "model_type"
+        ],
+        "title": "ObservationResponseV1",
+        "description": "Response to performing an ingestion."
+      },
+      "ObservationResponseV2": {
+        "properties": {
+          "observation_id": {
+            "type": "integer",
+            "title": "Observation Id"
+          },
+          "model_type": {
+            "type": "string",
+            "const": "ObservationResponseV2",
+            "title": "Model Type"
+          }
+        },
+        "type": "object",
+        "required": [
+          "observation_id",
+          "model_type"
+        ],
+        "title": "ObservationResponseV2",
+        "description": "Response to performing an ingestion."
+      },
+      "RankScore": {
+        "prefixItems": [
+          {
+            "type": "integer",
+            "title": "Rank"
+          },
+          {
+            "type": "number",
+            "title": "Score"
+          }
+        ],
+        "type": "array",
+        "maxItems": 2,
+        "minItems": 2
+      },
+      "RecommendationEnum": {
+        "type": "string",
+        "enum": [
+          "",
+          "drain",
+          "no_error",
+          "ambiguous",
+          "unknown"
+        ],
+        "title": "RecommendationEnum",
+        "description": "The types of attributions/errors we can find."
+      },
+      "ResourcelessSource": {
+        "properties": {
+          "type": {
+            "type": "string",
+            "const": "ResourcelessSource",
+            "title": "Type",
+            "default": "ResourcelessSource"
+          },
+          "source": {
+            "$ref": "#/components/schemas/AttributionSource"
+          }
+        },
+        "type": "object",
+        "required": [
+          "source"
+        ],
+        "title": "ResourcelessSource",
+        "description": "A source not bound to any specific node (e.g. a job-level signal)."
+      },
+      "RuleParameters": {
+        "properties": {
+          "params": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Params"
+          }
+        },
+        "type": "object",
+        "title": "RuleParameters",
+        "description": "Generic envelope for rule parameters."
+      },
+      "SingleAttribution": {
+        "properties": {
+          "symptom": {
+            "type": "string",
+            "title": "Symptom"
+          },
+          "description": {
+            "type": "string",
+            "title": "Description"
+          },
+          "attribution_class": {
+            "$ref": "#/components/schemas/AttributionClassEnum"
+          },
+          "recommendation": {
+            "$ref": "#/components/schemas/RecommendationEnum"
+          },
+          "sources": {
+            "items": {
+              "$ref": "#/components/schemas/AttributionSource"
+            },
+            "type": "array",
+            "title": "Sources",
+            "default": []
+          },
+          "type": {
+            "type": "string",
+            "const": "SingleAttribution",
+            "title": "Type",
+            "default": "SingleAttribution"
+          }
+        },
+        "type": "object",
+        "required": [
+          "symptom",
+          "description",
+          "attribution_class",
+          "recommendation"
+        ],
+        "title": "SingleAttribution"
+      },
+      "Source": {
+        "type": "string",
+        "enum": [
+          "",
+          "slurm_info",
+          "job_keywords",
+          "applog",
+          "syslog",
+          "health_check",
+          "node_metrics",
+          "nvlink_metrics",
+          "ib_metrics",
+          "eth_metrics",
+          "network_syslog",
+          "ufmlog",
+          "csp_event"
+        ],
+        "title": "Source",
+        "description": "The classes of observations that can be ingested.\n\n- `slurm_info`\n\n    Automatically attached to JobInfo objects; not supported for other Observations. No relevant Format.\n\n- `job_keywords`\n\n    Formats: `[string_list]`\n\n    Keywords extracted from preprocessing some logs.\n\n- `applog`\n\n    Formats: `[raw_log, loki_dict_list, raw_loki_streams]`. Timestamps should in in nanoseconds, entries must have rank-like prefixes.\n\n    Application's stdout/stderr.\n\n- `syslog`\n\n    Formats: `[loki_dict_list, raw_loki_streams]`. Timestamps should be in nanoseconds. Host-specifiers required.\n\n    Data from dmesg/syslog\n\n- `health_check`\n\n    Formats: `[loki_dict_list, raw_loki_streams]`. Timestamps should be in milliseconds. Host-specifiers required.\n\n    Data from health checks.\n\n- `node_metrics`\n\n   Formats: `[prometheus_metrics]`. Timestamps should be in seconds, entries must have node information.\n\n   Prometheus metrics data for node attribution.\n\n- `nvlink_metrics`\n\n   Formats: `[prometheus_metrics]`. Timestamps should be in seconds, entries must have node information.\n\n   Prometheus metrics data for nvlink attribution.\n\n- `ib_metrics`\n\n   Not implemented.\n\n- `eth_metrics`\n\n   Not implemented.\n\n- `network_syslog`\n\n   Not implemented.\n\n- `csp_event`\n\n   Formats: `[csp_event_list]`. Timestamps should be in seconds.\n\n   CSP event events indicating infrastructure-level host failures,\n   repairs, or maintenance actions reported by the cloud service provider."
+      },
+      "SourcedSymptom": {
+        "properties": {
+          "symptom": {
+            "type": "string",
+            "title": "Symptom"
+          },
+          "source": {
+            "$ref": "#/components/schemas/AttributionSource"
+          },
+          "catalog_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Catalog Id",
+            "description": "Documentation slug identifying the failure-catalog entry this symptom maps to. A reference into that catalog, not a guaranteed-unique key per symptom."
+          }
+        },
+        "type": "object",
+        "required": [
+          "symptom",
+          "source"
+        ],
+        "title": "SourcedSymptom",
+        "description": "A symptom paired with the specific source that surfaced it."
+      },
+      "StorageAttribution": {
+        "properties": {
+          "type": {
+            "type": "string",
+            "const": "StorageAttribution",
+            "title": "Type",
+            "default": "StorageAttribution"
+          },
+          "attributions": {
+            "items": {
+              "oneOf": [
+                {
+                  "$ref": "#/components/schemas/SingleAttribution"
+                },
+                {
+                  "$ref": "#/components/schemas/StragglerAttribution"
+                }
+              ],
+              "discriminator": {
+                "propertyName": "type",
+                "mapping": {
+                  "SingleAttribution": "#/components/schemas/SingleAttribution",
+                  "StragglerAttribution": "#/components/schemas/StragglerAttribution"
+                }
+              }
+            },
+            "type": "array",
+            "title": "Attributions"
+          }
+        },
+        "type": "object",
+        "required": [
+          "attributions"
+        ],
+        "title": "StorageAttribution",
+        "description": "Storage-specific attribution; details TBD"
+      },
+      "StragglerAttribution": {
+        "properties": {
+          "symptom": {
+            "type": "string",
+            "const": "Straggler",
+            "title": "Symptom",
+            "default": "Straggler"
+          },
+          "description": {
+            "type": "string",
+            "title": "Description",
+            "default": "Straggler Pattern"
+          },
+          "attribution_class": {
+            "$ref": "#/components/schemas/AttributionClassEnum",
+            "default": "undetermined"
+          },
+          "recommendation": {
+            "$ref": "#/components/schemas/RecommendationEnum",
+            "default": "ambiguous"
+          },
+          "sources": {
+            "items": {
+              "$ref": "#/components/schemas/AttributionSource"
+            },
+            "type": "array",
+            "title": "Sources",
+            "default": []
+          },
+          "type": {
+            "type": "string",
+            "const": "StragglerAttribution",
+            "title": "Type",
+            "default": "StragglerAttribution"
+          },
+          "rank_scores": {
+            "items": {
+              "$ref": "#/components/schemas/RankScore"
+            },
+            "type": "array",
+            "title": "Rank Scores",
+            "default": []
+          }
+        },
+        "type": "object",
+        "title": "StragglerAttribution",
+        "description": "A node-specific attribution"
+      },
+      "SwitchAttribution": {
+        "properties": {
+          "type": {
+            "type": "string",
+            "const": "SwitchAttribution",
+            "title": "Type",
+            "default": "SwitchAttribution"
+          },
+          "attributions": {
+            "items": {
+              "oneOf": [
+                {
+                  "$ref": "#/components/schemas/SingleAttribution"
+                },
+                {
+                  "$ref": "#/components/schemas/StragglerAttribution"
+                }
+              ],
+              "discriminator": {
+                "propertyName": "type",
+                "mapping": {
+                  "SingleAttribution": "#/components/schemas/SingleAttribution",
+                  "StragglerAttribution": "#/components/schemas/StragglerAttribution"
+                }
+              }
+            },
+            "type": "array",
+            "title": "Attributions"
+          }
+        },
+        "type": "object",
+        "required": [
+          "attributions"
+        ],
+        "title": "SwitchAttribution",
+        "description": "Switch-specific attribution; details TBD"
+      },
+      "TimeInterval": {
+        "properties": {
+          "start": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Start"
+          },
+          "end": {
+            "type": "string",
+            "format": "date-time",
+            "title": "End"
+          }
+        },
+        "type": "object",
+        "required": [
+          "start",
+          "end"
+        ],
+        "title": "TimeInterval"
+      },
+      "UnknownAttributorIdError": {
+        "properties": {
+          "model_type": {
+            "type": "string",
+            "const": "UnknownAttributorIdError",
+            "title": "Model Type"
+          },
+          "att_id": {
+            "type": "string",
+            "title": "Att Id"
+          }
+        },
+        "type": "object",
+        "required": [
+          "model_type",
+          "att_id"
+        ],
+        "title": "UnknownAttributorIdError",
+        "description": "Error for when an attributor id is not known to the attribution service."
+      },
+      "UnknownObservationFormatError": {
+        "properties": {
+          "model_type": {
+            "type": "string",
+            "const": "UnknownObservationFormatError",
+            "title": "Model Type"
+          },
+          "format": {
+            "type": "string",
+            "title": "Format"
+          }
+        },
+        "type": "object",
+        "required": [
+          "model_type",
+          "format"
+        ],
+        "title": "UnknownObservationFormatError",
+        "description": "Error for when we receive an unknown observation format"
+      },
+      "ValidationError": {
+        "properties": {
+          "loc": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                }
+              ]
+            },
+            "type": "array",
+            "title": "Location"
+          },
+          "msg": {
+            "type": "string",
+            "title": "Message"
+          },
+          "type": {
+            "type": "string",
+            "title": "Error Type"
+          },
+          "input": {
+            "title": "Input"
+          },
+          "ctx": {
+            "type": "object",
+            "title": "Context"
+          }
+        },
+        "type": "object",
+        "required": [
+          "loc",
+          "msg",
+          "type"
+        ],
+        "title": "ValidationError"
+      },
+      "ValidationErrorResponse": {
+        "properties": {
+          "errors": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "items": {},
+                "type": "array"
+              }
+            ],
+            "title": "Errors"
+          },
+          "body": {
+            "title": "Body"
+          },
+          "message": {
+            "type": "string",
+            "title": "Message"
+          }
+        },
+        "type": "object",
+        "required": [
+          "errors",
+          "body",
+          "message"
+        ],
+        "title": "ValidationErrorResponse",
+        "description": "Published schema for the validation envelope returned by the application handlers."
+      },
+      "Verdict": {
+        "properties": {
+          "root_symptom": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SourcedSymptom"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "attribution_outcome": {
+            "type": "string",
+            "title": "Attribution Outcome"
+          },
+          "detail": {
+            "type": "string",
+            "title": "Detail"
+          },
+          "decision_graph": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/DecisionGraph"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Runtime Decision DAG: the graph when requested and available, null when requested but unavailable, absent when not requested."
+          }
+        },
+        "type": "object",
+        "required": [
+          "root_symptom",
+          "attribution_outcome",
+          "detail"
+        ],
+        "title": "Verdict",
+        "description": "Top-level attribution outcome: raw lib outcome, free-form detail, and the driving root-cause symptom if any."
+      },
+      "WorkloadRecord": {
+        "properties": {
+          "type": {
+            "type": "string",
+            "const": "WorkloadRecord",
+            "title": "Type",
+            "default": "WorkloadRecord"
+          },
+          "key": {
+            "type": "string",
+            "title": "Key"
+          },
+          "val": {
+            "type": "string",
+            "title": "Val"
+          },
+          "sources": {
+            "items": {
+              "$ref": "#/components/schemas/AttributionSource"
+            },
+            "type": "array",
+            "title": "Sources"
+          }
+        },
+        "type": "object",
+        "required": [
+          "key",
+          "val",
+          "sources"
+        ],
+        "title": "WorkloadRecord",
+        "description": "A class for non-failure related observations"
+      },
+      "WorkloadTypeEnum": {
+        "type": "string",
+        "enum": [
+          "",
+          "slurm",
+          "runai"
+        ],
+        "title": "WorkloadTypeEnum",
+        "description": "The types of workload identifiers we can find."
+      }
+    }
+  }
+}

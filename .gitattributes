@@ -1,0 +1,12 @@
+# Generated artifacts produced by service/service-app/openapi/generate-client.sh.
+#
+# `linguist-generated=true` collapses these in GitHub pull request diffs
+# so a review shows only hand-written changes rather than regenerated lines.
+# It is a display hint only; it does not prevent edits.
+#
+# Everything under the client directory is script output, including the files
+# that look hand-written. For example, LICENSE, README.md and pyproject.toml
+# are copied verbatim from openapi/extras/ on every run, and edits in
+# openapi/extras/ will still be picked up for review.
+service/service-app/openapi.json linguist-generated=true
+service/service-app/nvidia_attribution_client/** linguist-generated=true

@@ -9,185 +9,186 @@
 # its affiliates is strictly prohibited.
 
 import json
+from copy import deepcopy
+from datetime import datetime, timezone
+from http import HTTPStatus
 from pathlib import Path
 
 import pytest
-import requests
+from nvidia_attribution_client import ApiException, AttributorInfoV2, Observation
 
 from attribution_blueprint.connectors.attribution import AttributionConnector
 
 FIXTURES = json.loads((Path(__file__).parents[2] / "fixtures" / "service_responses.json").read_text())
 
-
-def _mock_response(mocker, body: dict | None, status_ok: bool = True):
-    fake = mocker.Mock()
-    fake.json.return_value = body
-    if status_ok:
-        fake.raise_for_status = mocker.Mock()
-    else:
-        fake.raise_for_status.side_effect = requests.HTTPError("boom")
-    return fake
+_TRANSPORT = "nvidia_attribution_client.rest.RESTClientObject.request"
 
 
-def _http_error(mocker, status_code: int, body: dict | None = None) -> requests.HTTPError:
-    response = mocker.Mock(spec=requests.Response)
-    response.status_code = status_code
-    response.json.return_value = body or {}
-    return requests.HTTPError(response=response)
+class _FakeResponse:
+    """Stand-in for the client's RESTResponse: `read()` first, then `.data`."""
+
+    def __init__(self, status: int, body: dict | None):
+        self.status = status
+        self.reason = ""
+        self.data = b"" if body is None else json.dumps(body).encode()
+        self.headers = {"content-type": "application/json"}
+
+    def read(self):
+        return self.data
+
+
+def _transport(mocker, *responses: _FakeResponse):
+    if len(responses) == 1:
+        return mocker.patch(_TRANSPORT, return_value=responses[0])
+    return mocker.patch(_TRANSPORT, side_effect=list(responses))
+
+
+def _info(workload_id: str = "ctx-1") -> AttributorInfoV2:
+    return AttributorInfoV2.model_validate(
+        {
+            "workload": {
+                "id": workload_id,
+                "type": "slurm",
+                "status": "FAILED",
+                "framework": "",
+                "name": "job",
+                "username": "alice",
+                "job_start_time": "2026-05-01T12:00:00+00:00",
+                "job_end_time": "2026-05-01T12:30:00+00:00",
+                "timezone": "UTC",
+                "nodes": {"node-001": [0, 1, 2, 3]},
+            },
+            "metadata": {"cluster": "", "agent": "attribution-blueprint", "tenant": "", "ruleset": ""},
+        }
+    )
+
+
+def _observation(**context_overrides) -> Observation:
+    context = {
+        "source": "syslog",
+        "format": "loki_dict_list",
+        "resources": "AllJobResources",
+        "time_interval": {"start": "2026-05-01T12:00:00+00:00", "end": "2026-05-01T12:30:00+00:00"},
+    }
+    context.update(context_overrides)
+    return Observation.model_validate({"context": context, "body": "[]"})
 
 
 def test_create_attributor_posts_and_returns_id(mocker):
-    fake = _mock_response(mocker, FIXTURES["create_response"])
-    post = mocker.patch("requests.Session.post", return_value=fake)
+    request = _transport(mocker, _FakeResponse(HTTPStatus.CREATED, FIXTURES["create_response"]))
 
     conn = AttributionConnector("http://svc:8000")
-    info = {"workload": {"id": "ctx-1"}, "metadata": {"agent": "blueprint"}}
-    result = conn.create_attributor(info)
+    result = conn.create_attributor(_info())
 
     assert result == FIXTURES["create_response"]["attributor_id"]
-    args, kwargs = post.call_args
-    assert args == ("http://svc:8000/v2/attributor",)
-    assert json.loads(kwargs["data"]) == info
-    assert kwargs["headers"] == {"Content-Type": "application/json"}
-    assert kwargs["timeout"] == 60.0
-    assert "Authorization" not in conn._session.headers
+    args, kwargs = request.call_args
+    assert args == ("POST", "http://svc:8000/v2/attributor")
+    assert kwargs["body"]["workload"]["id"] == "ctx-1"
+    assert kwargs["headers"]["Content-Type"] == "application/json"
 
 
 def test_ingest_observation_posts_and_returns_id(mocker):
-    fake = _mock_response(mocker, FIXTURES["ingest_response"])
-    post = mocker.patch("requests.Session.post", return_value=fake)
+    request = _transport(mocker, _FakeResponse(HTTPStatus.OK, FIXTURES["ingest_response"]))
 
     conn = AttributionConnector("http://svc:8000")
-    obs = {"context": {"source": "SYSLOG"}, "body": "line1\nline2"}
-    result = conn.ingest_observation("attr-7", obs)
+    result = conn.ingest_observation("attr-7", _observation())
 
     assert result == FIXTURES["ingest_response"]["observation_id"]
     assert isinstance(result, int)
-    args, kwargs = post.call_args
-    assert args == ("http://svc:8000/v2/attributor/attr-7/observation",)
-    assert json.loads(kwargs["data"]) == obs
-    assert kwargs["timeout"] == 60.0
+    args, kwargs = request.call_args
+    assert args == ("POST", "http://svc:8000/v2/attributor/attr-7/observation")
+    assert kwargs["body"]["context"]["source"] == "syslog"
 
 
 def test_get_attribution_returns_full_dict(mocker):
-    fake = _mock_response(mocker, FIXTURES["attribution_response"])
-    get = mocker.patch("requests.Session.get", return_value=fake)
+    request = _transport(mocker, _FakeResponse(HTTPStatus.OK, FIXTURES["attribution_response"]))
 
     conn = AttributionConnector("http://svc:8000")
     result = conn.get_attribution("attr-7")
 
-    assert result == FIXTURES["attribution_response"]
-    get.assert_called_once_with("http://svc:8000/v2/attributor/attr-7/attribution", timeout=60.0)
+    expected = deepcopy(FIXTURES["attribution_response"])
+    expected["verdict"]["decision_graph"] = None
+    expected["verdict"]["root_symptom"]["catalog_id"] = None
+    assert result == expected
+    args, _ = request.call_args
+    assert args == ("GET", "http://svc:8000/v2/attributor/attr-7/attribution")
 
 
 def test_delete_attributor_returns_none(mocker):
-    fake = _mock_response(mocker, None)
-    delete = mocker.patch("requests.Session.delete", return_value=fake)
+    request = _transport(mocker, _FakeResponse(HTTPStatus.NO_CONTENT, None))
 
     conn = AttributionConnector("http://svc:8000")
-    result = conn.delete_attributor("attr-7")
 
-    assert result is None
-    delete.assert_called_once_with("http://svc:8000/v2/attributor/attr-7", timeout=60.0)
+    assert conn.delete_attributor("attr-7") is None
+    args, _ = request.call_args
+    assert args == ("DELETE", "http://svc:8000/v2/attributor/attr-7")
 
 
 def test_create_or_replace_attributor_handles_409_by_deleting_and_retrying(mocker):
-    conn = AttributionConnector("http://svc:8000")
-    mocker.patch.object(
-        conn,
-        "create_attributor",
-        side_effect=[_http_error(mocker, 409, {"att_id": "stale-attr-id"}), "fresh-attr-id"],
+    _transport(
+        mocker,
+        _FakeResponse(HTTPStatus.CONFLICT, FIXTURES["conflict_response"]),
+        _FakeResponse(HTTPStatus.NO_CONTENT, None),
+        _FakeResponse(HTTPStatus.CREATED, FIXTURES["create_response"]),
     )
-    delete = mocker.patch.object(conn, "delete_attributor")
+    conn = AttributionConnector("http://svc:8000")
+    delete = mocker.spy(conn, "delete_attributor")
 
-    assert conn.create_or_replace_attributor({"workload": {"id": "1"}}) == "fresh-attr-id"
+    assert conn.create_or_replace_attributor(_info()) == FIXTURES["create_response"]["attributor_id"]
     delete.assert_called_once_with("stale-attr-id")
-    assert conn.create_attributor.call_count == 2
 
 
 def test_create_or_replace_attributor_propagates_non_409_http_error(mocker):
+    _transport(mocker, _FakeResponse(HTTPStatus.INTERNAL_SERVER_ERROR, {"detail": "boom"}))
     conn = AttributionConnector("http://svc:8000")
-    mocker.patch.object(conn, "create_attributor", side_effect=_http_error(mocker, 500, {"error": "boom"}))
-    delete = mocker.patch.object(conn, "delete_attributor")
+    delete = mocker.spy(conn, "delete_attributor")
 
-    with pytest.raises(requests.HTTPError):
-        conn.create_or_replace_attributor({"workload": {"id": "1"}})
+    with pytest.raises(ApiException) as excinfo:
+        conn.create_or_replace_attributor(_info())
+
+    assert excinfo.value.status == HTTPStatus.INTERNAL_SERVER_ERROR
     delete.assert_not_called()
 
 
 def test_create_or_replace_attributor_propagates_409_without_att_id(mocker):
+    _transport(mocker, _FakeResponse(HTTPStatus.CONFLICT, {"unexpected": "shape"}))
     conn = AttributionConnector("http://svc:8000")
-    mocker.patch.object(conn, "create_attributor", side_effect=_http_error(mocker, 409, {}))
-    delete = mocker.patch.object(conn, "delete_attributor")
+    delete = mocker.spy(conn, "delete_attributor")
 
-    with pytest.raises(requests.HTTPError):
-        conn.create_or_replace_attributor({"workload": {"id": "1"}})
+    with pytest.raises(ApiException) as excinfo:
+        conn.create_or_replace_attributor(_info())
+
+    assert excinfo.value.status == HTTPStatus.CONFLICT
     delete.assert_not_called()
 
 
-def test_raise_for_status_propagates(mocker):
-    fake = _mock_response(mocker, None, status_ok=False)
-    mocker.patch("requests.Session.post", return_value=fake)
+def test_create_attributor_propagates_http_error(mocker):
+    _transport(mocker, _FakeResponse(HTTPStatus.UNPROCESSABLE_ENTITY, {"detail": []}))
 
     conn = AttributionConnector("http://svc:8000")
-    with pytest.raises(requests.HTTPError):
-        conn.create_attributor({})
-
-
-def test_trailing_slash_normalized(mocker):
-    fake = _mock_response(mocker, FIXTURES["create_response"])
-    post = mocker.patch("requests.Session.post", return_value=fake)
-
-    conn = AttributionConnector("http://svc:8000/")
-    conn.create_attributor({})
-
-    assert post.call_args.args == ("http://svc:8000/v2/attributor",)
+    with pytest.raises(ApiException):
+        conn.create_attributor(_info())
 
 
 def test_delete_attributor_tolerates_404(mocker):
     """The server's 24h TTL can expire an attributor before the orchestrator's
     cleanup runs; treating that 404 as success keeps cleanup idempotent."""
-    fake = mocker.Mock()
-    fake.status_code = 404
-    fake.raise_for_status = mocker.Mock()
-    mocker.patch("requests.Session.delete", return_value=fake)
+    _transport(
+        mocker, _FakeResponse(HTTPStatus.NOT_FOUND, {"model_type": "UnknownAttributorIdError", "att_id": "attr-7"})
+    )
 
     conn = AttributionConnector("http://svc:8000")
+
     # Must not raise.
     assert conn.delete_attributor("attr-7") is None
-    # We short-circuited before raise_for_status, so it must NOT have been called.
-    fake.raise_for_status.assert_not_called()
 
 
 def test_delete_attributor_propagates_other_errors(mocker):
     """Only 404 is silently tolerated; 500 must still raise."""
-    fake = mocker.Mock()
-    fake.status_code = 500
-    fake.raise_for_status.side_effect = requests.HTTPError("boom")
-    mocker.patch("requests.Session.delete", return_value=fake)
+    _transport(mocker, _FakeResponse(HTTPStatus.INTERNAL_SERVER_ERROR, {"detail": "boom"}))
 
     conn = AttributionConnector("http://svc:8000")
-    with pytest.raises(requests.HTTPError):
+    with pytest.raises(ApiException) as excinfo:
         conn.delete_attributor("attr-7")
 
-
-def test_datetime_in_observation_serializes(mocker):
-    from datetime import datetime, timezone
-
-    fake = _mock_response(mocker, FIXTURES["ingest_response"])
-    post = mocker.patch("requests.Session.post", return_value=fake)
-
-    conn = AttributionConnector("http://svc:8000")
-    obs = {
-        "context": {
-            "time_interval": {
-                "start": datetime(2026, 5, 1, 12, 0, 0, tzinfo=timezone.utc),
-                "end": datetime(2026, 5, 1, 12, 30, 0, tzinfo=timezone.utc),
-            },
-            "source": "SYSLOG",
-        },
-        "body": "[]",
-    }
-    conn.ingest_observation("attr-7", obs)
-    sent = json.loads(post.call_args.kwargs["data"])
-    assert sent["context"]["time_interval"]["start"] == "2026-05-01T12:00:00+00:00"
+    assert excinfo.value.status == HTTPStatus.INTERNAL_SERVER_ERROR

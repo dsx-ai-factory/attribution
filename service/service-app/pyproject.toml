@@ -37,7 +37,8 @@ dev = [
     "mypy>=1.15.0",
     "pytest-cov>=6.0.0",
     "ruff>=0.8.6",
-    "openapi-generator-cli[jdk4py]>=7.11.0.post0",
+    # Pinned exactly: openapi/templates/ vendors four templates from this version.
+    "openapi-generator-cli[jdk4py]==7.21.0",
     "pyzstd>=0.16.2",
     "hatchling>=1.27.0",
     "schemathesis>=4.0.0",

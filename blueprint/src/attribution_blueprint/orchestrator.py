@@ -17,7 +17,8 @@ from loguru import logger
 
 from attribution_blueprint.connectors.attribution import (
     AttributionConnector,
-    AttributorInfoDict,
+    AttributorInfoV2,
+    ServiceObservation,
 )
 from attribution_blueprint.connectors.execution_contexts import ExecutionContextAdapter
 from attribution_blueprint.connectors.logs import LogConnector
@@ -176,7 +177,8 @@ class AttributionOrchestrator:
 
         for obs in observations:
             try:
-                self.attribution.ingest_observation(attributor_id, adapt_log_observation_for_service(obs))
+                service_obs = ServiceObservation.model_validate(adapt_log_observation_for_service(obs))
+                self.attribution.ingest_observation(attributor_id, service_obs)
             except Exception as e:
                 obs_source = obs.get("context", {}).get("source", "?")
                 obs_source_value = obs_source.value if hasattr(obs_source, "value") else obs_source
@@ -260,7 +262,7 @@ class AttributionOrchestrator:
             }
             path.write_text(json.dumps(payload, indent=2))
 
-    def _build_attributor_info(self, ctx: dict) -> AttributorInfoDict:
+    def _build_attributor_info(self, ctx: dict) -> AttributorInfoV2:
         # Service-side AttributorWorkloadInfo.job_start_time is AwareDatetime;
         # a naive datetime here would 422 the request, so fail fast at the BP
         # boundary rather than turning a programming error into an HTTP error.
@@ -309,22 +311,24 @@ class AttributionOrchestrator:
         if "time_limit" in ctx:
             workload["time_limit"] = ctx["time_limit"]
 
-        return {
-            "workload": workload,
-            "metadata": {
-                # The wire format requires `cluster`; the blueprint doesn't
-                # track it as a concept (per the data-model design), so we
-                # send an empty string just to satisfy the schema. Any
-                # cluster-aware analytics live downstream of attribution.
-                "cluster": "",
-                "agent": "attribution-blueprint",
-                "tenant": "",
-                "ruleset": "",
-            },
-            # `parameters` is intentionally omitted. The service defaults it,
-            # and its AttributionParameters model forbids unknown fields, so
-            # the legacy straggler-parameter keys would 422 every request.
-        }
+        return AttributorInfoV2.model_validate(
+            {
+                "workload": workload,
+                "metadata": {
+                    # The wire format requires `cluster`; the blueprint doesn't
+                    # track it as a concept (per the data-model design), so we
+                    # send an empty string just to satisfy the schema. Any
+                    # cluster-aware analytics live downstream of attribution.
+                    "cluster": "",
+                    "agent": "attribution-blueprint",
+                    "tenant": "",
+                    "ruleset": "",
+                },
+                # `parameters` is intentionally omitted. The service defaults it,
+                # and its AttributionParameters model forbids unknown fields, so
+                # the legacy straggler-parameter keys would 422 every request.
+            }
+        )
 
 
 def _context_with_workload_gpu_defaults(ctx: dict, gpus_per_node: int | None) -> dict:

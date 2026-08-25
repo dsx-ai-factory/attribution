@@ -36,6 +36,13 @@ run_service_app() {
     )
 }
 
+run_service_app_client_drift() {
+    (
+        cd "${repository_root}"
+        bash .ci/check-client-drift.sh
+    )
+}
+
 run_blueprint() {
     (
         cd "${repository_root}/blueprint"
@@ -78,6 +85,9 @@ case "${suite}" in
     service-app)
         run_service_app
         ;;
+    service-app-client-drift)
+        run_service_app_client_drift
+        ;;
     blueprint)
         run_blueprint
         ;;
@@ -91,11 +101,12 @@ case "${suite}" in
         run_quickstart
         run_attribution_lib
         run_service_app
+        run_service_app_client_drift
         run_blueprint
         run_frontend
         ;;
     *)
-        echo "usage: $0 {all|attribution-lib|service-app|blueprint|frontend|quickstart}" >&2
+        echo "usage: $0 {all|attribution-lib|service-app|blueprint|service-app-client-drift|frontend|quickstart}" >&2
         exit 2
         ;;
 esac

@@ -74,7 +74,7 @@ The blueprint uses this section to call the attribution service.
 | Field | Required | Default | Meaning |
 |---|---:|---|---|
 | `service_url` | Yes in practice | `http://localhost:8080` | Base URL for the attribution service. Set this explicitly because the service examples normally run on port `8000`. |
-| `timeout_seconds` | No | `60.0` | HTTP timeout for service calls. |
+| `timeout_seconds` | No | `60.0` | HTTP read timeout for service calls. |
 
 For the service v2 request lifecycle and wire schemas, see
 [Attribution Service REST API](./rest-api.md).
