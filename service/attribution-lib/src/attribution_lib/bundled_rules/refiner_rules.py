@@ -107,6 +107,9 @@ _REFINER_ORDER = [
     "WatchdogTerminateResolution",
     "NodeOfflineComposite",
     "IBSymptomCleanup",
+    # Runs after IBSymptomCleanup so it sees the normalized IB set (Vendor-129 >
+    # Error-12 > Error-5 hierarchy already applied).
+    "KernelCrashIbCascade",
     "WatchdogGpuCascadeCleanup",
     "CudaXidCascades",
     "ConnectionClosedCascade",
@@ -408,6 +411,25 @@ _XID145_RXPIPE_COMPANIONS = frozenset(
 _XID145_RXPIPE_COMPANION_WINDOW = timedelta(seconds=1)
 _XID_PCI_ID_RE = re.compile(r"NVRM:\s+Xid \(PCI:(?P<pci_id>[0-9a-fA-F.:]+)\):")
 _IB_CLEANUP_SKIP_SYMPTOMS = frozenset({_XID145_RXPIPE_SYMPTOM, "XID-137-NVLINK_PRIV_ERR"})
+
+
+# Constants for KernelCrashIbCascade
+
+# A node that panics or oopses stops servicing its InfiniBand queue pairs, so its
+# peers report retry-exceeded (IB Error-12) against a fabric that is healthy.
+# "kernel soft lockup" is deliberately excluded: it is a hang, not a crash, and
+# the node can keep answering IB traffic through it.
+_KERNEL_CRASH_SYMPTOMS = frozenset(
+    {
+        "kernel panic",
+        "kernel oops",
+        "kernel invalid memory access",
+    }
+)
+
+# Covers every Error-12 spelling emitted by format_ib_error: the bare code, the
+# " Vendor-N" variant, and either of those with the " (IBV_WC_...)" status name.
+_IB_ERROR_12_PREFIX = "IB Error-12"
 
 
 # IBSymptomCleanup helpers
@@ -1423,6 +1445,42 @@ def ib_symptom_cleanup(context: RefinerContext):
 
     if "cudaErrorInvalidValue" in symptoms:
         symptoms.discard("EFA Error-5")
+
+
+@refiner_def(
+    name="KernelCrashIbCascade",
+    author="NVIDIA Attribution team",
+    priority=_priority("KernelCrashIbCascade"),
+)
+def kernel_crash_ib_cascade(context: RefinerContext):
+    """Discard IB Error-12 reported by peers of a node that crashed its kernel.
+
+    The crashed node is the root cause; the retry-exceeded completions its peers
+    logged are cascade, not a fabric fault. IB Error-12 raised on the crashed
+    node itself is left alone, since there is no *other* node to blame it on.
+    """
+    symptoms = context.symptoms
+    my_bad_nodes = context.my_bad_nodes
+
+    if symptoms is None or my_bad_nodes is None:
+        return
+
+    crashed_nodes = {
+        node for node, node_group in my_bad_nodes.items() if any(s in node_group for s in _KERNEL_CRASH_SYMPTOMS)
+    }
+    if not crashed_nodes:
+        return
+
+    peer_ib_error = False
+    for node, node_group in my_bad_nodes.items():
+        if node in crashed_nodes:
+            continue
+        if any(symptom.startswith(_IB_ERROR_12_PREFIX) for symptom in node_group.symptoms()):
+            _discard_ib_cascade(node_group)
+            peer_ib_error = True
+
+    if peer_ib_error:
+        _discard_ib_cascade(symptoms)
 
 
 @refiner_def(

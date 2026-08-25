@@ -787,6 +787,120 @@ class TestIBSymptomCleanup:
         )
 
 
+class TestKernelCrashIbCascade:
+    """Tests for the KernelCrashIbCascade refiner rule."""
+
+    @pytest.fixture
+    def two_node_job(self):
+        return _job_info_with(nodes=["node01", "node02"])
+
+    @pytest.mark.parametrize("crash_symptom", ["kernel panic", "kernel oops", "kernel invalid memory access"])
+    def test_peer_kernel_crash_discards_ib_error_12(self, stream, obs_ctx, two_node_job, crash_symptom):
+        """A kernel crash on another node makes the peer's IB Error-12 a cascade."""
+        symptoms = _make_symptoms(obs_ctx, crash_symptom, "IB Error-12 (IBV_WC_RETRY_EXC_ERR)")
+        bad_nodes = _make_bad_nodes(
+            obs_ctx,
+            {
+                "node01": [crash_symptom],
+                "node02": ["IB Error-12 (IBV_WC_RETRY_EXC_ERR)"],
+            },
+        )
+
+        _run(stream, two_node_job, symptoms, bad_nodes)
+
+        assert crash_symptom in symptoms
+        assert "IB Error-12 (IBV_WC_RETRY_EXC_ERR)" not in symptoms
+        assert "IB Error-12 (IBV_WC_RETRY_EXC_ERR)" not in bad_nodes["node02"]
+
+    @pytest.mark.parametrize(
+        "ib_symptom",
+        [
+            "IB Error-12",
+            "IB Error-12 (IBV_WC_RETRY_EXC_ERR)",
+            "IB Error-12 Vendor-129",
+            "IB Error-12 Vendor-129 (IBV_WC_RETRY_EXC_ERR)",
+        ],
+    )
+    def test_all_ib_error_12_spellings_trigger(self, stream, obs_ctx, two_node_job, ib_symptom):
+        """Every format_ib_error spelling of error code 12 is recognized."""
+        symptoms = _make_symptoms(obs_ctx, "kernel panic", ib_symptom)
+        bad_nodes = _make_bad_nodes(obs_ctx, {"node01": ["kernel panic"], "node02": [ib_symptom]})
+
+        _run(stream, two_node_job, symptoms, bad_nodes)
+
+        assert ib_symptom not in symptoms
+
+    def test_full_ib_cascade_is_discarded(self, stream, obs_ctx, two_node_job):
+        """The whole IB/EFA cascade goes, not just the Error-12 that triggered it."""
+        symptoms = _make_symptoms(
+            obs_ctx,
+            "kernel panic",
+            "IB Error-12 (IBV_WC_RETRY_EXC_ERR)",
+            "IB Error-5 (IBV_WC_WR_FLUSH_ERR)",
+            "EFA Error-107",
+            "ncclTimeout",
+        )
+        bad_nodes = _make_bad_nodes(
+            obs_ctx,
+            {
+                "node01": ["kernel panic"],
+                "node02": [
+                    "IB Error-12 (IBV_WC_RETRY_EXC_ERR)",
+                    "IB Error-5 (IBV_WC_WR_FLUSH_ERR)",
+                    "EFA Error-107",
+                    "ncclTimeout",
+                ],
+            },
+        )
+
+        _run(stream, two_node_job, symptoms, bad_nodes)
+
+        assert "kernel panic" in symptoms
+        assert not any("IB Error-" in s for s in symptoms.symptoms())
+        assert not any("EFA Error-" in s for s in symptoms.symptoms())
+        assert "ncclTimeout" not in symptoms
+        assert not any("IB Error-" in s for s in bad_nodes["node02"].symptoms())
+
+    def test_ib_error_12_on_the_crashed_node_is_kept(self, stream, obs_ctx, job_info):
+        """No *other* node crashed, so the IB error stays the root cause."""
+        symptoms = _make_symptoms(obs_ctx, "kernel panic", "IB Error-12 (IBV_WC_RETRY_EXC_ERR)")
+        bad_nodes = _make_bad_nodes(obs_ctx, {"node01": ["kernel panic", "IB Error-12 (IBV_WC_RETRY_EXC_ERR)"]})
+
+        _run(stream, job_info, symptoms, bad_nodes)
+
+        assert "IB Error-12 (IBV_WC_RETRY_EXC_ERR)" in symptoms
+
+    def test_no_kernel_crash_keeps_ib_error_12(self, stream, obs_ctx, two_node_job):
+        """Soft lockup is a hang, not a crash: it does not suppress the IB error."""
+        symptoms = _make_symptoms(obs_ctx, "kernel soft lockup", "IB Error-12 (IBV_WC_RETRY_EXC_ERR)")
+        bad_nodes = _make_bad_nodes(
+            obs_ctx,
+            {
+                "node01": ["kernel soft lockup"],
+                "node02": ["IB Error-12 (IBV_WC_RETRY_EXC_ERR)"],
+            },
+        )
+
+        _run(stream, two_node_job, symptoms, bad_nodes)
+
+        assert "IB Error-12 (IBV_WC_RETRY_EXC_ERR)" in symptoms
+
+    def test_peer_without_error_12_is_untouched(self, stream, obs_ctx, two_node_job):
+        """Error-12 is the trigger; a peer carrying only Error-5 keeps it."""
+        symptoms = _make_symptoms(obs_ctx, "kernel panic", "IB Error-5 (IBV_WC_WR_FLUSH_ERR)")
+        bad_nodes = _make_bad_nodes(
+            obs_ctx,
+            {
+                "node01": ["kernel panic"],
+                "node02": ["IB Error-5 (IBV_WC_WR_FLUSH_ERR)"],
+            },
+        )
+
+        _run(stream, two_node_job, symptoms, bad_nodes)
+
+        assert "IB Error-5 (IBV_WC_WR_FLUSH_ERR)" in symptoms
+
+
 class TestSlurmStateSymptoms:
     def test_cancelled_state_adds_symptom(self, stream, obs_ctx):
         ji = _job_info_with(state="CANCELLED", exit_code_signal=None)
