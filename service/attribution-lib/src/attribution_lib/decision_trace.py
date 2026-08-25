@@ -256,7 +256,7 @@ class ExtractionKey:
     timestamp: Optional[str]
     line_num: Optional[int]
     datum: Optional[str]
-    producer_rule_id: Optional[str]
+    emitter_rule_id: Optional[str]
 
     @classmethod
     def from_source(
@@ -264,17 +264,17 @@ class ExtractionKey:
         symptom: str,
         source: Source,
         hostname: Optional[str],
-        producer_rule_id: Optional[str],
+        emitter_rule_id: Optional[str],
     ) -> "ExtractionKey":
         evidence = SourceEvidence.from_source(source, hostname=hostname)
-        return cls.from_evidence(symptom, evidence, producer_rule_id)
+        return cls.from_evidence(symptom, evidence, emitter_rule_id)
 
     @classmethod
     def from_evidence(
         cls,
         symptom: str,
         evidence: SourceEvidence,
-        producer_rule_id: Optional[str],
+        emitter_rule_id: Optional[str],
     ) -> "ExtractionKey":
         return cls(
             symptom=symptom,
@@ -284,7 +284,7 @@ class ExtractionKey:
             timestamp=evidence.timestamp,
             line_num=evidence.line_num,
             datum=evidence.datum,
-            producer_rule_id=producer_rule_id,
+            emitter_rule_id=emitter_rule_id,
         )
 
 
@@ -329,9 +329,9 @@ def build_decision_graph(
     extraction_ids: dict[str, list[str]] = {}
     extraction_hosts: dict[str, Optional[str]] = {}
     _seen_extraction_sources: set[ExtractionKey] = set()
-    rule_provenance_by_id: dict[str, Optional[RuleProvenance]] = {}
-    producer_rules_by_extraction = (
-        att_res.event_stream.producer_rules_by_extraction() if isinstance(att_res.event_stream, EventStream) else {}
+    rule_provenance_by_id: dict[str, RuleProvenance] = {}
+    emitter_rules_by_extraction = (
+        att_res.event_stream.emitter_rules_by_extraction() if isinstance(att_res.event_stream, EventStream) else {}
     )
 
     def _evidence_provenance_key(evidence: SourceEvidence) -> SourceProvenanceKey:
@@ -345,9 +345,9 @@ def build_decision_graph(
                 ) from e
         return evidence.obs_context_id, evidence.line_num, evidence.datum, timestamp_value
 
-    def _producer_rule_ids(source_key: SourceProvenanceKey, symptom: str) -> tuple[Optional[str], ...]:
+    def _emitter_rule_ids(source_key: SourceProvenanceKey, symptom: str) -> tuple[Optional[str], ...]:
         key: ExtractionProvenanceKey = source_key, symptom
-        rule_ids = producer_rules_by_extraction.get(key, ())
+        rule_ids = emitter_rules_by_extraction.get(key, ())
         return tuple(rule_ids) if len(rule_ids) > 0 else (None,)
 
     def _rule_provenance(rule_id: Optional[str]) -> Optional[RuleProvenance]:
@@ -357,20 +357,24 @@ def build_decision_graph(
             rule_id: Stable executable rule identifier, if available.
 
         Returns:
-            Rule provenance, or None when the rule is unavailable.
+            Rule metadata, or None when the event has no emitting rule.
         """
         if rule_id is None:
             return None
         if rule_id not in rule_provenance_by_id:
             rule = rules_engine.get_rule(rule_id)
-            rule_provenance_by_id[rule_id] = rule.provenance() if rule is not None else None
+            if rule is None:
+                raise DecisionGraphError(
+                    f"Decision event emitter rule {rule_id!r} is not present in its EventManager RuleEngine"
+                )
+            rule_provenance_by_id[rule_id] = rule.provenance()
         return rule_provenance_by_id[rule_id]
 
     def _add_extraction_node_from_evidence(
         *,
         symptom: str,
         evidence: SourceEvidence,
-        producer_rule_id: Optional[str],
+        emitter_rule_id: Optional[str],
     ) -> None:
         nonlocal node_counter
         nid = f"ext_{node_counter}"
@@ -387,7 +391,7 @@ def build_decision_graph(
                 line_num=evidence.line_num,
                 timestamp=evidence.timestamp,
                 obs_source=evidence.obs_source,
-                rule_provenance=_rule_provenance(producer_rule_id),
+                rule_provenance=_rule_provenance(emitter_rule_id),
             )
         )
         extraction_ids.setdefault(symptom, []).append(nid)
@@ -395,28 +399,28 @@ def build_decision_graph(
 
     def _add_extraction_node(symptom: str, source: Source, hostname: Optional[str]) -> None:
         evidence = SourceEvidence.from_source(source, hostname=hostname)
-        for producer_rule_id in _producer_rule_ids(source_provenance_key(source), symptom):
-            source_key = ExtractionKey.from_source(symptom, source, hostname, producer_rule_id)
+        for emitter_rule_id in _emitter_rule_ids(source_provenance_key(source), symptom):
+            source_key = ExtractionKey.from_source(symptom, source, hostname, emitter_rule_id)
             if source_key in _seen_extraction_sources:
                 continue
             _seen_extraction_sources.add(source_key)
             _add_extraction_node_from_evidence(
                 symptom=symptom,
                 evidence=evidence,
-                producer_rule_id=producer_rule_id,
+                emitter_rule_id=emitter_rule_id,
             )
 
     def _add_extraction_from_evidence(symptom: str, evidence: dict[str, Any], hostname: Optional[str]) -> None:
         source_evidence = SourceEvidence.from_payload(evidence, hostname=hostname)
-        for producer_rule_id in _producer_rule_ids(_evidence_provenance_key(source_evidence), symptom):
-            source_key = ExtractionKey.from_evidence(symptom, source_evidence, producer_rule_id)
+        for emitter_rule_id in _emitter_rule_ids(_evidence_provenance_key(source_evidence), symptom):
+            source_key = ExtractionKey.from_evidence(symptom, source_evidence, emitter_rule_id)
             if source_key in _seen_extraction_sources:
                 continue
             _seen_extraction_sources.add(source_key)
             _add_extraction_node_from_evidence(
                 symptom=symptom,
                 evidence=source_evidence,
-                producer_rule_id=producer_rule_id,
+                emitter_rule_id=emitter_rule_id,
             )
 
     def _matching_extraction_ids(symptom: str, hostname: Optional[str]) -> list[str]:

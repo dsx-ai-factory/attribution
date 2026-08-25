@@ -138,36 +138,36 @@ def _make_attribution_result(
     return result
 
 
-def _attach_producer_events(
+def _attach_emitter_events(
     att_res: AttributionResult,
     engine,
     source: Source,
-    producer_rule_ids: tuple[str, ...],
+    emitter_rule_ids: tuple[str, ...],
     symptom: str,
 ) -> EventManager:
     """Attach extractor events without adding provenance to Source identity.
 
     Args:
         att_res: Attribution result that will receive the event stream.
-        engine: Rule engine containing the producer rules.
+        engine: Rule engine containing the emitter rules.
         source: Shared attribution evidence source.
-        producer_rule_ids: Rules that emitted the symptom.
-        symptom: Symptom emitted by each producer rule.
+        emitter_rule_ids: Rules that emitted the symptom.
+        symptom: Symptom emitted by each emitter rule.
 
     Returns:
         Event manager that owns the attached stream.
     """
     manager = EventManager(rules_engine=engine)
     manager.preload_event_types({"Test.extraction"})
-    manager.preload_rule_names({source.rule, *producer_rule_ids})
+    manager.preload_rule_names({source.rule, *emitter_rule_ids})
     stream = manager.create_stream("decision-trace-test")
     stream.register_observation_context(source.source_context)
-    for producer_rule_id in producer_rule_ids:
+    for emitter_rule_id in emitter_rule_ids:
         stream.add_event(
             "Test.extraction",
             {"symptom": symptom},
             source,
-            producer_rule_id=producer_rule_id,
+            emitter_rule_id=emitter_rule_id,
         )
     stream.flush()
     att_res.event_stream = stream
@@ -471,7 +471,7 @@ class TestBuildDecisionDAG:
         )
         att_res = _make_attribution_result({"node-042": {"XID-48": [src]}})
         att_res.outcome_attr = SourceSet(Mock(outcome="Fail InfraHW", root_cause_symptom="XID-48"))
-        manager = _attach_producer_events(att_res, engine, src, ("xid_48_extractor",), "XID-48")
+        manager = _attach_emitter_events(att_res, engine, src, ("xid_48_extractor",), "XID-48")
 
         try:
             graph = build_decision_graph(DecisionRecorder("job-123"), att_res)
@@ -486,8 +486,25 @@ class TestBuildDecisionDAG:
         assert extraction.rule_provenance.matcher.regex == r"Xid.*48"
         extractor_rule = engine.get_rule("xid_48_extractor")
         assert extractor_rule is not None
-        assert extraction.rule_provenance.definition_hash == extractor_rule.provenance().definition_hash
+        assert extraction.rule_provenance.matcher_hash == extractor_rule.provenance().matcher_hash
         assert graph.ruleset_hashes == {"extraction": engine.extractor_hash()}
+
+    def test_emitter_rule_must_belong_to_event_manager_engine(self):
+        """An emitter ID outside the retained rule engine violates the event invariant."""
+        engine = self._extractor_engine()
+        source = _make_source(rule="health_check", datum="legacy evidence")
+        att_res = _make_attribution_result({"node-042": {"Health Error": [source]}})
+        att_res.outcome_attr = SourceSet(Mock(outcome="Fail InfraHW", root_cause_symptom="Health Error"))
+        manager = _attach_emitter_events(att_res, engine, source, ("legacy_extractor",), "Health Error")
+
+        try:
+            with pytest.raises(
+                DecisionGraphError,
+                match="emitter rule 'legacy_extractor' is not present",
+            ):
+                build_decision_graph(DecisionRecorder("job-123"), att_res)
+        finally:
+            manager.close()
 
     def test_same_source_matched_by_different_extractors_is_not_deduplicated(self):
         """Each matching extractor keeps a distinct extraction evidence node."""
@@ -495,7 +512,7 @@ class TestBuildDecisionDAG:
         source = _make_source(rule="xid_48_ecc", datum="Xid 48")
         att_res = _make_attribution_result({"node-042": {"XID-48": [source]}})
         att_res.outcome_attr = SourceSet(Mock(outcome="Fail InfraHW", root_cause_symptom="XID-48"))
-        manager = _attach_producer_events(att_res, engine, source, ("extractor_a", "extractor_b"), "XID-48")
+        manager = _attach_emitter_events(att_res, engine, source, ("extractor_a", "extractor_b"), "XID-48")
 
         try:
             graph = build_decision_graph(DecisionRecorder("job-123"), att_res)
@@ -510,7 +527,7 @@ class TestBuildDecisionDAG:
         assert extraction_ids == {"extractor_a", "extractor_b"}
         assert len(att_res.bad_nodes_attr.my_bad_nodes.attributions["node-042"].attributions["XID-48"]) == 1
 
-    def test_same_source_with_distinct_symptoms_keeps_exact_producer_rule(self):
+    def test_same_source_with_distinct_symptoms_keeps_exact_emitter_rule(self):
         """Rules sharing one source do not become associated with each other's symptoms."""
         engine = self._extractor_engine(("row_remap", "remapped"), ("ecc_error", "ecc"))
         source = _make_source(rule="health_check", datum="remapped rows; ecc error")
@@ -533,13 +550,13 @@ class TestBuildDecisionDAG:
             "Test.extraction",
             {"symptom": "Row Remap"},
             source,
-            producer_rule_id="row_remap",
+            emitter_rule_id="row_remap",
         )
         stream.add_event(
             "Test.extraction",
             {"symptom": "ECC Error"},
             source,
-            producer_rule_id="ecc_error",
+            emitter_rule_id="ecc_error",
         )
         stream.flush()
         att_res.event_stream = stream
@@ -559,7 +576,7 @@ class TestBuildDecisionDAG:
             "ECC Error": "ecc_error",
         }
 
-    def test_null_and_empty_datum_keep_exact_producer_rule(self):
+    def test_null_and_empty_datum_keep_exact_emitter_rule(self):
         """Nullable legacy evidence does not collide with an empty datum."""
         engine = self._extractor_engine(("null_datum", "null"), ("empty_datum", "empty"))
         empty_source = _make_source(rule="health_check", datum="")
@@ -576,13 +593,13 @@ class TestBuildDecisionDAG:
             "Test.extraction",
             {"symptom": "Health Error"},
             null_source,
-            producer_rule_id="null_datum",
+            emitter_rule_id="null_datum",
         )
         stream.add_event(
             "Test.extraction",
             {"symptom": "Health Error"},
             empty_source,
-            producer_rule_id="empty_datum",
+            emitter_rule_id="empty_datum",
         )
         stream.flush()
         att_res.event_stream = stream

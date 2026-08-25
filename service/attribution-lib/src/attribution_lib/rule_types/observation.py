@@ -88,15 +88,15 @@ class ObservationProcessor:
 
     # -- Extractor-accumulator lifecycle helpers --
 
-    def _emit_events(self, producer_rule_id: RuleId, acc: ExtractorAccumulator) -> None:
+    def _emit_events(self, emitter_rule_id: RuleId, acc: ExtractorAccumulator) -> None:
         """Finalize an extractor-accumulator and emit its attributed events.
 
         Args:
-            producer_rule_id: Stable ID of the accumulator rule that matched.
+            emitter_rule_id: Stable ID of the accumulator rule that emitted the event.
             acc: Accumulator instance to finalize.
         """
         for evt in acc.finalize():
-            self.event_adder(evt.type, evt.payload, evt.source, producer_rule_id=producer_rule_id)
+            self.event_adder(evt.type, evt.payload, evt.source, emitter_rule_id=emitter_rule_id)
 
     def _deactivate(self, rid: RuleId) -> None:
         """Remove an active extractor-accumulator, clean up tracking state, and emit its events."""
@@ -164,7 +164,7 @@ class ObservationProcessor:
                 continue
             if (ext_rule := self.engine.extractor_rules.get(rule_id)) is not None:
                 for evt in ext_rule.process(match, source, self.context):
-                    self.event_adder(evt.type, evt.payload, evt.source, producer_rule_id=rule_id)
+                    self.event_adder(evt.type, evt.payload, evt.source, emitter_rule_id=rule_id)
             elif rule_id in self._acc_rules:
                 self._try_spawn(rule_id, source)
 

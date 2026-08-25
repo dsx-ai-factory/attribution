@@ -123,8 +123,8 @@ class TestRuleProvenance:
         assert first.matcher is not None
         assert first.matcher.regex == r"error\s+\d+"
         assert first.matcher.sources == ("applog",)
-        assert first.definition_hash is not None
-        assert len(first.definition_hash) == 64
+        assert first.matcher_hash is not None
+        assert len(first.matcher_hash) == 64
 
     def test_hash_changes_with_effective_matching_criteria(self):
         loader1 = RuleLoader()
@@ -137,24 +137,34 @@ class TestRuleProvenance:
 
         assert first_rule is not None
         assert second_rule is not None
-        assert first_rule.provenance().definition_hash != second_rule.provenance().definition_hash
+        assert first_rule.provenance().matcher_hash != second_rule.provenance().matcher_hash
 
     def test_hash_changes_with_source_filters(self):
         loader1 = RuleLoader()
-        loader1.register_rule(
-            _make_extractor("stable_id", r"pattern", frozenset({ObservationSource.APPLOG}))
-        )
+        loader1.register_rule(_make_extractor("stable_id", r"pattern", frozenset({ObservationSource.APPLOG})))
         loader2 = RuleLoader()
-        loader2.register_rule(
-            _make_extractor("stable_id", r"pattern", frozenset({ObservationSource.SYSLOG}))
-        )
+        loader2.register_rule(_make_extractor("stable_id", r"pattern", frozenset({ObservationSource.SYSLOG})))
 
         first_rule = loader1.build().get_rule("stable_id")
         second_rule = loader2.build().get_rule("stable_id")
 
         assert first_rule is not None
         assert second_rule is not None
-        assert first_rule.provenance().definition_hash != second_rule.provenance().definition_hash
+        assert first_rule.provenance().matcher_hash != second_rule.provenance().matcher_hash
+
+    def test_matcher_hash_is_explicitly_not_a_full_rule_hash(self):
+        loader1 = RuleLoader()
+        loader1.register_rule(_make_extractor("first_id", r"pattern"))
+        loader2 = RuleLoader()
+        loader2.register_rule(_make_extractor("second_id", r"pattern"))
+
+        first_rule = loader1.build().get_rule("first_id")
+        second_rule = loader2.build().get_rule("second_id")
+
+        assert first_rule is not None
+        assert second_rule is not None
+        assert first_rule.provenance().matcher_hash == second_rule.provenance().matcher_hash
+        assert first_rule.provenance().rule_id != second_rule.provenance().rule_id
 
     def test_non_extractor_has_basic_provenance(self):
         loader = RuleLoader()
@@ -165,7 +175,7 @@ class TestRuleProvenance:
         provenance = rule.provenance()
         assert provenance.rule_id == "filter_rule"
         assert provenance.rule_type == "FilterRule"
-        assert provenance.definition_hash is None
+        assert provenance.matcher_hash is None
         assert provenance.matcher is None
 
 

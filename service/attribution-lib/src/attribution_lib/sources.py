@@ -57,7 +57,13 @@ def set_if_none(lval: Optional[Ts], rval: Optional[Ts]) -> Optional[Ts]:
 
 
 class Source(NamedTuple):
-    """Stores information about where an attribution came from for eventual consumption by caller/debugger."""
+    """Stores evidence and its attribution credit for caller/debugger consumption.
+
+    ``rule`` is a credit slug describing why the evidence supports an
+    attribution. It is not necessarily the executable rule that emitted the
+    event. For example, the ``SyslogXid`` extractor can emit evidence credited
+    to ``known-xid-event``.
+    """
 
     source_context: ObservationContext
     line_num: Optional[int]

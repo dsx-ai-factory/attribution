@@ -129,7 +129,7 @@ class TestEventRule:
             "Attribution.node.bad",
             {"node": "gpu-node-01", "symptom": "High temperature"},
             sample_source,
-            producer_rule_id="thermal_log_matcher",
+            emitter_rule_id="thermal_log_matcher",
         )
 
         # Verify via query_events_with_source (bulk pattern)
@@ -146,10 +146,10 @@ class TestEventRule:
         assert retrieved_source.rule == "thermal_monitor_rule"
         assert retrieved_source.line_num == 42
         assert retrieved_source.datum == "High GPU temperature detected"
-        producer_index = stream.producer_rules_by_extraction()
-        assert len(producer_index) == 1
-        assert next(iter(producer_index))[1] == "High temperature"
-        assert next(iter(producer_index.values())) == ("thermal_log_matcher",)
+        emitter_index = stream.emitter_rules_by_extraction()
+        assert len(emitter_index) == 1
+        assert next(iter(emitter_index))[1] == "High temperature"
+        assert next(iter(emitter_index.values())) == ("thermal_log_matcher",)
 
     def test_flush_serializes_pydantic_payload_with_datetime(self, event_stream, sample_source):
         """Regression: Pydantic model with a raw datetime in payload must not crash _flush."""

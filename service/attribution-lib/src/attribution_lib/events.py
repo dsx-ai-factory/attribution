@@ -20,10 +20,6 @@ from attribution_lib.exceptions import (
     UndeclaredRuleError,
     UnexpectedEmptyQueryResultError,
 )
-
-if TYPE_CHECKING:
-    from attribution_lib.rules_engine import RuleEngine
-
 from attribution_lib.observation import Context as ObservationContext
 from attribution_lib.observation.inbound import (
     Format as ObsFormat,
@@ -142,7 +138,7 @@ CREATE TABLE events (
     line_num INTEGER,
     source_datum VARCHAR,
     source_rule INTEGER REFERENCES rules(id),
-    producer_rule INTEGER REFERENCES rules(id),
+    emitter_rule INTEGER REFERENCES rules(id),
     resources VARCHAR,
     obs_context_id BIGINT REFERENCES observation_contexts(id),
     payload JSON,
@@ -153,7 +149,7 @@ CREATE TABLE events (
 CREATE INDEX idx_events_ctx_timestamp ON events(context_id, timestamp);
 """
 
-_COLS = "context_id,event_type,timestamp,status,line_num,source_datum,source_rule,producer_rule,resources,obs_context_id,payload"
+_COLS = "context_id,event_type,timestamp,status,line_num,source_datum,source_rule,emitter_rule,resources,obs_context_id,payload"
 
 
 class EventStream:
@@ -167,8 +163,10 @@ class EventStream:
         status INTEGER      - 1=active, 0=inactive
         line_num INTEGER    - source line number
         source_datum VARCHAR - source datum string
-        source_rule INTEGER - rule ID (foreign key to rules)
-        producer_rule INTEGER - producing rule ID (foreign key to rules)
+        source_rule INTEGER - attribution credit carried by Source.rule; not
+            necessarily an executable RuleEngine rule
+        emitter_rule INTEGER - executable RuleEngine rule that emitted the
+            event; for example SyslogXid when source_rule is known-xid-event
         resources VARCHAR   - resource identifier ("ANY" or hostname)
         obs_context_id BIGINT - observation context ID
         payload JSON        - event payload as JSON
@@ -183,7 +181,7 @@ class EventStream:
             payload: dict[str, Any],
             source: Source,
             *,
-            producer_rule_id: Optional[str] = None,
+            emitter_rule_id: Optional[str] = None,
         ) -> None: ...
 
     def __init__(self, ctx_id: int, ctx_str: str, conn: duckdb.DuckDBPyConnection, mgr: "EventManager"):
@@ -219,30 +217,23 @@ class EventStream:
         if not self._batch:
             return
 
-        # Step 1: Collect all unique event types and rules
+        # Step 1: Resolve the event types used by this batch. Rule and credit
+        # names were preloaded from the rule engine and declarations.
         event_types = set()
-        rules = set()
-        for event_type, _, source, producer_rule_name in self._batch:
+        for event_type, _, _, _ in self._batch:
             event_types.add(event_type)
-            if source.rule:
-                rules.add(source.rule)
-            if producer_rule_name is not None:
-                rules.add(producer_rule_name)
 
-        # Step 2: Resolve event type and rule name strings to integer IDs.
-        # Both are read-only — get_id raises on unknown names.
+        # Step 2: Resolve event type strings to integer IDs.
         types_lookup = self._mgr._types
         type_ids: dict[str, int] = {t: types_lookup.get_id(t) for t in event_types}
-
         rules_lookup = self._mgr._rules
-        rule_ids: dict[str, int] = {r: rules_lookup.get_id(r) for r in rules}
 
         # Step 3: Prepare all event rows for bulk insert
         event_rows = []
-        for event_type, payload, source, producer_rule_name in self._batch:
-            typ_id = type_ids.get(event_type)
-            rule_id = rule_ids.get(source.rule) if source.rule else None
-            producer_rule_id = rule_ids.get(producer_rule_name) if producer_rule_name is not None else None
+        for event_type, payload, source, emitter_rule_name in self._batch:
+            typ_id = type_ids[event_type]
+            rule_id = rules_lookup.get_id(source.rule) if source.rule is not None else None
+            emitter_rule_id = rules_lookup.get_id(emitter_rule_name) if emitter_rule_name is not None else None
             # Serialize resources using Pydantic (returns "AllJobResources" or list of Resource models)
             serialized = serialize_resource_set(source.resources)
             if isinstance(serialized, str):
@@ -263,7 +254,7 @@ class EventStream:
                     source.line_num,
                     source.datum,
                     rule_id,
-                    producer_rule_id,
+                    emitter_rule_id,
                     resources_str,
                     source.source_context.id,
                     payload_json,
@@ -318,7 +309,7 @@ class EventStream:
         payload: dict[str, Any],
         source: Source,
         *,
-        producer_rule_id: Optional[str] = None,
+        emitter_rule_id: Optional[str] = None,
     ) -> None:
         """Add an event to the stream. Events are batched and flushed periodically.
 
@@ -326,10 +317,16 @@ class EventStream:
         before adding events that reference them, otherwise flush() will fail with a
         foreign key constraint violation.
 
+        Args:
+            event_type: Event type identifier.
+            payload: Event data.
+            source: Evidence and its attribution credit label.
+            emitter_rule_id: Executable rule that emitted the event, when available.
+
         Returns:
             None (batched mode) - call flush() to persist events.
         """
-        self._batch.append((event_type, payload, source, producer_rule_id))
+        self._batch.append((event_type, payload, source, emitter_rule_id))
 
         if len(self._batch) >= self._batch_size_threshold:
             self._flush()
@@ -340,24 +337,22 @@ class EventStream:
         """Return a callable for adding events."""
         return self.add_event
 
-    def producer_rules_by_extraction(self) -> dict[ExtractionProvenanceKey, tuple[str, ...]]:
-        """Load producing-rule identities for Decision DAG extraction nodes.
+    def emitter_rules_by_extraction(self) -> dict[ExtractionProvenanceKey, tuple[str, ...]]:
+        """Load emitting-rule identities for Decision DAG extraction nodes.
 
         Returns:
-            Mapping from source-and-symptom identity to producing rules.
+            Mapping from source-and-symptom identity to emitting rules.
         """
         self._flush()
         rows = self._conn.execute(
-            """SELECT obs_context_id, line_num, source_datum, timestamp, payload, producer_rule
+            """SELECT obs_context_id, line_num, source_datum, timestamp, payload, emitter_rule
                FROM events
-               WHERE context_id=? AND producer_rule IS NOT NULL""",
+               WHERE context_id=? AND emitter_rule IS NOT NULL""",
             [self._ctx_id],
         ).fetchall()
-        producers: dict[ExtractionProvenanceKey, set[str]] = defaultdict(set)
-        for observation_id, line_num, datum, timestamp, payload, producer_rule in rows:
-            rule_name = self._mgr.rules.get_str(producer_rule)
-            if rule_name is None:
-                continue
+        emitters: dict[ExtractionProvenanceKey, set[str]] = defaultdict(set)
+        for observation_id, line_num, datum, timestamp, payload, emitter_rule in rows:
+            rule_name = self._mgr.rules.get_str_required(emitter_rule)
             payload_value = json.loads(payload) if isinstance(payload, str) else payload
             if not isinstance(payload_value, dict):
                 continue
@@ -367,8 +362,8 @@ class EventStream:
             timestamp_value = timestamp.timestamp() if timestamp is not None else None
             source_key: SourceProvenanceKey = observation_id, line_num, datum, timestamp_value
             key = source_key, symptom
-            producers[key].add(rule_name)
-        return {key: tuple(sorted(rule_ids)) for key, rule_ids in producers.items()}
+            emitters[key].add(rule_name)
+        return {key: tuple(sorted(rule_ids)) for key, rule_ids in emitters.items()}
 
     def query_raw(self, sql: str, params: list = []) -> list[tuple]:
         """Execute SQL query and return raw rows."""
@@ -447,6 +442,13 @@ class _ReadOnlyLookup:
     def get_str(self, id: int) -> Optional[str]:
         """Get string for an ID, or None if not found."""
         return self._str_cache.get(id)
+
+    def get_str_required(self, id: int) -> str:
+        """Get a preloaded string by ID, raising if the lookup is inconsistent."""
+        try:
+            return self._str_cache[id]
+        except KeyError:
+            raise self._error_type(f"Unknown {self._table.value} id: {id!r}")
 
     def rebuild_cache(self) -> None:
         """Repopulate caches from the underlying DuckDB table."""
@@ -575,9 +577,8 @@ class EventManager:
 
         for table in self._SNAPSHOT_TABLES:
             dest = snapshot_dir / f"{table}.parquet"
-            dest_sql = str(dest).replace("'", "''")
             try:
-                self._conn.execute(f"COPY {table} TO '{dest_sql}' (FORMAT PARQUET)")
+                self._conn.execute(f"COPY {table} TO ? (FORMAT PARQUET)", [str(dest)])
             except (PermissionError, OSError) as e:
                 raise PermissionError(f"Cannot write snapshot file {dest}: {e}") from e
             except duckdb.IOException as e:
@@ -623,11 +624,10 @@ class EventManager:
             src = snapshot_dir / f"{table}.parquet"
             if not src.exists():
                 raise FileNotFoundError(f"Snapshot file missing: {src}")
-            src_sql = str(src).replace("'", "''")
             try:
                 mgr._conn.execute(f"DELETE FROM {table}")
                 if table == "events" and stored_version == 1:
-                    # Schema v2 added producer_rule. Preserve a v1 cache hit by
+                    # Schema v2 added emitter_rule. Preserve a v1 cache hit by
                     # importing every legacy column and leaving the new nullable
                     # provenance column empty until extraction naturally refreshes.
                     legacy_columns = (
@@ -635,10 +635,11 @@ class EventManager:
                         "source_datum, source_rule, resources, obs_context_id, payload"
                     )
                     mgr._conn.execute(
-                        f"INSERT INTO events ({legacy_columns}) SELECT {legacy_columns} FROM read_parquet('{src_sql}')"
+                        f"INSERT INTO events ({legacy_columns}) SELECT {legacy_columns} FROM read_parquet(?)",
+                        [str(src)],
                     )
                 else:
-                    mgr._conn.execute(f"INSERT INTO {table} SELECT * FROM read_parquet('{src_sql}')")
+                    mgr._conn.execute(f"INSERT INTO {table} SELECT * FROM read_parquet(?)", [str(src)])
             except (PermissionError, OSError) as e:
                 raise PermissionError(f"Cannot read snapshot file {src}: {e}") from e
             except duckdb.IOException as e:

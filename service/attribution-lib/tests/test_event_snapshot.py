@@ -92,7 +92,7 @@ class TestSnapshotRoundTrip:
             version_path.unlink()
 
         restored = EventManager.from_snapshot(snapshot_dir, attribution_lib.get_rules_engine())
-        rows = restored._conn.execute("SELECT source_datum, producer_rule FROM events").fetchall()
+        rows = restored._conn.execute("SELECT source_datum, emitter_rule FROM events").fetchall()
         assert rows == [("datum_0", None)]
         restored.close()
 
@@ -113,7 +113,7 @@ class TestSnapshotRoundTrip:
                 resources=AllJobResources,
                 rule="specific_rule",
             ),
-            producer_rule_id="specific_extractor",
+            emitter_rule_id="specific_extractor",
         )
         stream.flush()
         mgr.export_snapshot(tmp_path / "snap")
@@ -124,7 +124,7 @@ class TestSnapshotRoundTrip:
 
         rows = stream2.query_raw(
             """SELECT e.source_datum, r.name
-               FROM events e LEFT JOIN rules r ON e.producer_rule = r.id
+               FROM events e LEFT JOIN rules r ON e.emitter_rule = r.id
                WHERE e.context_id=?""",
             [stream2.ctx_id],
         )

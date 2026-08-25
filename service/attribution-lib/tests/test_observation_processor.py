@@ -79,8 +79,8 @@ def test_active_accumulator_is_not_retriggered():
         engine=engine,
         source_type=ObservationSource.APPLOG,
         context=RuleContext(),
-        event_adder=lambda event_type, payload, source, *, producer_rule_id=None: emitted.append(
-            (event_type, payload, source, producer_rule_id)
+        event_adder=lambda event_type, payload, source, *, emitter_rule_id=None: emitted.append(
+            (event_type, payload, source, emitter_rule_id)
         ),
     )
 
@@ -94,7 +94,7 @@ def test_active_accumulator_is_not_retriggered():
 
     assert processor._active == {}
     assert [payload["lines"] for _, payload, _, _ in emitted] == [["start one", "start two", "stop"]]
-    assert {producer_rule_id for _, _, _, producer_rule_id in emitted} == {"single"}
+    assert {emitter_rule_id for _, _, _, emitter_rule_id in emitted} == {"single"}
 
 
 def test_plain_extractor_tags_emitted_source_with_stable_id():
@@ -118,8 +118,8 @@ def test_plain_extractor_tags_emitted_source_with_stable_id():
         engine=engine,
         source_type=ObservationSource.APPLOG,
         context=RuleContext(),
-        event_adder=lambda event_type, payload, source, *, producer_rule_id=None: emitted.append(
-            (event_type, payload, source, producer_rule_id)
+        event_adder=lambda event_type, payload, source, *, emitter_rule_id=None: emitted.append(
+            (event_type, payload, source, emitter_rule_id)
         ),
     )
 

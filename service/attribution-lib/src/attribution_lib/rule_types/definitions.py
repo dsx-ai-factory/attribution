@@ -14,7 +14,7 @@ import hashlib
 import json
 from abc import ABC, abstractmethod
 from collections.abc import Callable, Hashable, Mapping
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from enum import IntEnum
 from re import Match
 from typing import Any, NamedTuple, Optional, TypeAlias, cast
@@ -135,7 +135,7 @@ RuleId: TypeAlias = str
 
 @dataclass(frozen=True, slots=True)
 class RuleMatcherProvenance:
-    """Typed matching definition for a rule that evaluates source text."""
+    """Explicit projection of the fields that determine whether a text rule matches."""
 
     regex: str
     sources: tuple[str, ...]
@@ -143,11 +143,15 @@ class RuleMatcherProvenance:
 
 @dataclass(frozen=True, slots=True)
 class RuleProvenance:
-    """Stable identity and optional definition metadata for an executable rule."""
+    """Stable identity and optional definition metadata for an executable rule.
+
+    ``rule_type`` is intentionally a string because rule implementations are
+    extensible through the dynamic ``@rule_type`` registry.
+    """
 
     rule_id: RuleId
     rule_type: str
-    definition_hash: Optional[str] = None
+    matcher_hash: Optional[str] = None
     matcher: Optional[RuleMatcherProvenance] = None
 
 
@@ -245,7 +249,7 @@ class ExtractorRule(Rule):
     source_filters: frozenset[ObservationSource] = field(default_factory=frozenset)
 
     def provenance(self) -> RuleProvenance:
-        """Return matcher metadata and a deterministic criteria hash.
+        """Return matcher metadata and a deterministic matcher-projection hash.
 
         Returns:
             Extractor rule provenance.
@@ -334,7 +338,7 @@ class ExtractorAccumulatorRule(Rule):
     source_filters: frozenset[ObservationSource] = field(default_factory=frozenset)
 
     def provenance(self) -> RuleProvenance:
-        """Return matcher metadata and a deterministic criteria hash.
+        """Return matcher metadata and a deterministic matcher-projection hash.
 
         Returns:
             Extractor rule provenance.
@@ -346,27 +350,54 @@ class ExtractorAccumulatorRule(Rule):
         return self.factory()
 
 
+def _extractor_matcher_projection(
+    rule: ExtractorRule | ExtractorAccumulatorRule,
+) -> RuleMatcherProvenance:
+    """Project an extractor onto only the fields that control text matching.
+
+    Args:
+        rule: Extractor definition to project.
+
+    Returns:
+        Explicit matcher projection. It is not a full rule serialization.
+    """
+    sources = tuple(sorted(source.value for source in rule.source_filters))
+    return RuleMatcherProvenance(regex=rule.match_re, sources=sources)
+
+
+def _matcher_projection_hash(matcher: RuleMatcherProvenance) -> str:
+    """Hash an explicit matcher projection deterministically.
+
+    Args:
+        matcher: Matching fields to hash.
+
+    Returns:
+        SHA-256 digest of the canonical matcher projection.
+    """
+    canonical = json.dumps(
+        asdict(matcher),
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=True,
+    )
+    return hashlib.sha256(canonical.encode()).hexdigest()
+
+
 def _extractor_rule_provenance(rule: ExtractorRule | ExtractorAccumulatorRule) -> RuleProvenance:
-    """Build provenance from the criteria that determine whether an extractor matches.
+    """Build stable identity and explicit matcher metadata for an extractor.
 
     Args:
         rule: Extractor definition to describe.
 
     Returns:
-        Stable identity, matcher metadata, and deterministic criteria hash.
+        Stable identity plus a hash of the matcher projection.
     """
-    sources = tuple(sorted(source.value for source in rule.source_filters))
-    canonical = json.dumps(
-        {"regex": rule.match_re, "sources": sources},
-        sort_keys=True,
-        separators=(",", ":"),
-        ensure_ascii=True,
-    )
+    matcher = _extractor_matcher_projection(rule)
     return RuleProvenance(
         rule_id=rule.name,
         rule_type=type(rule).__name__,
-        definition_hash=hashlib.sha256(canonical.encode()).hexdigest(),
-        matcher=RuleMatcherProvenance(regex=rule.match_re, sources=sources),
+        matcher_hash=_matcher_projection_hash(matcher),
+        matcher=matcher,
     )
 
 
