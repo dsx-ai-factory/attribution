@@ -376,6 +376,40 @@ class EventStream:
             emitters[key].add(emission.emitter_rule_id)
         return {key: tuple(sorted(rule_ids)) for key, rule_ids in emitters.items()}
 
+    def recredit_rule_ids(
+        self,
+        rewrites: set[tuple[Optional[int], str]],
+    ) -> dict[tuple[Optional[int], str], int]:
+        """Resolve new credit IDs while retaining existing extractor identity.
+
+        Args:
+            rewrites: Existing source-rule ID and replacement credit pairs.
+
+        Returns:
+            Rules-table IDs for each requested rewrite.
+        """
+        from attribution_lib.rule_types.definitions import RuleEmission
+
+        credits = {credit for _, credit in rewrites}
+        self._mgr.preload_rule_names(credits)
+        emissions: dict[tuple[Optional[int], str], RuleEmission] = {
+            (source_rule_id, credit): RuleEmission(
+                credited_rule_id=credit,
+                emitter_rule_id=current.emitter_rule_id,
+            )
+            for source_rule_id, credit in rewrites
+            if source_rule_id is not None and (current := self._mgr._rules.get_emission(source_rule_id)) is not None
+        }
+        self._mgr._rules.preload_emissions(tuple(emissions.values()))
+        return {
+            key: (
+                self._mgr._rules.get_emission_id(emission.credited_rule_id, emission.emitter_rule_id)
+                if (emission := emissions.get(key)) is not None
+                else self._mgr._rules.get_id(key[1])
+            )
+            for key in rewrites
+        }
+
     def deactivate_with_rule(
         self,
         credited_rule: str,
@@ -397,37 +431,26 @@ class EventStream:
         Returns:
             None.
         """
-        from attribution_lib.rule_types.definitions import RuleEmission
-
         self._flush()
-        ordinary_rule_id = self._mgr.rules.get_id(credited_rule)
         matching_params = [self._ctx_id, *params]
         source_rule_rows = self._conn.execute(
-            f"""SELECT DISTINCT e.source_rule, current_rule.name
+            f"""SELECT DISTINCT e.source_rule
                 FROM events e
-                LEFT JOIN rules current_rule ON e.source_rule = current_rule.id
                 WHERE e.context_id=? AND e.status=1
                   AND ({predicate_sql})""",
             matching_params,
         ).fetchall()
-        emissions_by_source_rule = {
-            source_rule_id: emission
-            for source_rule_id, storage_name in source_rule_rows
-            if storage_name is not None and (emission := RuleEmission.from_storage_key(storage_name)) is not None
-        }
-        self._mgr._rules.preload_emissions(
-            tuple(
-                RuleEmission(
-                    credited_rule_id=credited_rule,
-                    emitter_rule_id=emission.emitter_rule_id,
-                )
-                for emission in emissions_by_source_rule.values()
-            )
-        )
+        rewrites = {(source_rule_id, credited_rule) for (source_rule_id,) in source_rule_rows}
+        rewritten_rule_ids = self.recredit_rule_ids(rewrites)
         rewritten_ids = {
-            source_rule_id: self._mgr._rules.get_emission_id(credited_rule, emission.emitter_rule_id)
-            for source_rule_id, emission in emissions_by_source_rule.items()
+            source_rule_id: rewritten_rule_ids[(source_rule_id, credited_rule)]
+            for source_rule_id, _ in rewrites
+            if source_rule_id is not None
         }
+        ordinary_rule_id = rewritten_rule_ids.get(
+            (None, credited_rule),
+            self._mgr.rules.get_id(credited_rule),
+        )
         if len(rewritten_ids) > 0:
             cases = " ".join("WHEN ? THEN ?" for _ in rewritten_ids)
             source_rule_sql = f"CASE e.source_rule {cases} ELSE ? END"
@@ -551,6 +574,7 @@ class _RuleLookup(_ReadOnlyLookup):
         """
         super().__init__(conn, TableName.RULES, error_type=UndeclaredRuleError)
         self._emission_id_cache: dict[tuple[str, str], int] = {}
+        self._emission_by_id_cache: dict[int, "RuleEmission"] = {}
 
     def preload_emissions(self, emissions: tuple["RuleEmission", ...]) -> None:
         """Insert immutable emission metadata into the existing rules table.
@@ -588,6 +612,17 @@ class _RuleLookup(_ReadOnlyLookup):
         except KeyError:
             raise UndeclaredRuleError(f"Extractor {emitter_rule!r} did not declare credited rule {credited_rule!r}")
 
+    def get_emission(self, rule_id: int) -> Optional["RuleEmission"]:
+        """Return emission metadata for a rules-table ID, if present.
+
+        Args:
+            rule_id: Rules-table identifier.
+
+        Returns:
+            Decoded emission metadata, or ``None`` for an ordinary rule row.
+        """
+        return self._emission_by_id_cache.get(rule_id)
+
     def rebuild_cache(self) -> None:
         """Repopulate ordinary and emission-rule caches.
 
@@ -600,12 +635,14 @@ class _RuleLookup(_ReadOnlyLookup):
         self._id_cache.clear()
         self._str_cache.clear()
         self._emission_id_cache.clear()
+        self._emission_by_id_cache.clear()
         for storage_name, id_val in rows:
             emission = RuleEmission.from_storage_key(storage_name)
             self._id_cache[storage_name] = id_val
             self._str_cache[id_val] = emission.credited_rule_id if emission is not None else storage_name
             if emission is not None:
                 self._emission_id_cache[(emission.credited_rule_id, emission.emitter_rule_id)] = id_val
+                self._emission_by_id_cache[id_val] = emission
 
 
 class EventManager:

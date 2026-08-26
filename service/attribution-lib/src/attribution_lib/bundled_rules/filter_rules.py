@@ -125,6 +125,7 @@ def _sql_demote_events(
             e.resources,
             e.obs_context_id,
             e.payload,
+            e.source_rule,
             json_extract_string(e.payload, '$.{demote_key}') as demote_rule,
             CASE WHEN {in_clause} THEN 1 ELSE 0 END as needs_transform
         FROM events e
@@ -137,12 +138,8 @@ def _sql_demote_events(
         return
 
     # Step 1: Collect all unique rule values and batch insert/fetch them
-    unique_rules = {row[9] for row in rows if row[9]}  # demote_rule_value is at index 9
-    rule_id_map = {}
-
-    if unique_rules:
-        event_stream.mgr.preload_rule_names(unique_rules)
-        rule_id_map = {name: event_stream.mgr.rules.get_id(name) for name in unique_rules}
+    rewrites = {(row[9], row[10]) for row in rows if row[10] is not None}
+    rule_id_map = event_stream.recredit_rule_ids(rewrites)
 
     # Step 2: Process rows using the pre-fetched rule IDs
     insert_data = []
@@ -159,6 +156,7 @@ def _sql_demote_events(
             resources,
             obs_context_id,
             payload_json,
+            original_source_rule,
             demote_rule_value,
             needs_transform,
         ) = row
@@ -170,7 +168,7 @@ def _sql_demote_events(
         event_ids_to_deactivate.append(orig_id)
 
         # Look up pre-fetched rule ID (no query here!)
-        source_rule = rule_id_map.get(demote_rule_value)
+        source_rule = rule_id_map[(original_source_rule, demote_rule_value)]
 
         # Only create a new event if this event type needs transformation
         if needs_transform:

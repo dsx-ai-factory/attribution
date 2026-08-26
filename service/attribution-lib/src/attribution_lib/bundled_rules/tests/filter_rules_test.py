@@ -29,6 +29,7 @@ from attribution_lib.observation.inbound import (
     TimeInterval,
 )
 from attribution_lib.resources import AllJobResources, Node, ResourceSet
+from attribution_lib.rule_types.definitions import ExtractorRule, RuleEmission, RuleLocation
 from attribution_lib.rules_engine import RuleLoader
 from attribution_lib.sources import Source
 
@@ -41,6 +42,17 @@ def rules_engine():
     # Load filter rules from the bundled rules directory
     rules_dir = get_bundled_rules_path()
     loader.load(str(rules_dir / "filter_rules.py"))
+    loader.declared_rule_names.add("some_rule")
+    loader.register_rule(
+        ExtractorRule(
+            name="test-demotion-extractor",
+            author="test",
+            location=RuleLocation(__file__, 0),
+            match_re="some error",
+            processor=lambda *_args: [],
+            credited_rule_ids=frozenset({"some_rule"}),
+        )
+    )
     attribution_lib._rules_engine = loader.build()
 
     yield attribution_lib.get_rules_engine()
@@ -99,11 +111,21 @@ def _register_ctx(stream, obs_ctx):
     stream.register_observation_context(obs_ctx)
 
 
-def create_event(stream, obs_ctx, event_type, payload, time, line_num, rule="some_rule", datum="dummy line"):
+def create_event(
+    stream,
+    obs_ctx,
+    event_type,
+    payload,
+    time,
+    line_num,
+    rule="some_rule",
+    datum="dummy line",
+    emitter_rule_id=None,
+):
     source = Source(
         source_context=obs_ctx, line_num=line_num, datum=datum, time=time, resources=AllJobResources, rule=rule
     )
-    stream.add_event(event_type, payload, source)
+    stream.add_event(event_type, payload, source, emitter_rule_id=emitter_rule_id)
     stream.flush()
 
 
@@ -111,7 +133,15 @@ def test_demote_tflops_symptoms(stream, obs_ctx, job_info):
     # 1. Add bad event with AFTER_MFU_DEMOTION at 10:05
     t1 = datetime(2024, 1, 1, 10, 5, 0, tzinfo=ZoneInfo("UTC"))
     payload = {"node": "node01", "symptom": "some error", DemotionTypes.AFTER_MFU_DEMOTION: "test_demote"}
-    create_event(stream, obs_ctx, "Attribution.node.bad", payload, t1, 100)
+    create_event(
+        stream,
+        obs_ctx,
+        "Attribution.node.bad",
+        payload,
+        t1,
+        100,
+        emitter_rule_id="test-demotion-extractor",
+    )
 
     # 2. Add MFU event at 10:10
     t_mfu = datetime(2024, 1, 1, 10, 10, 0, tzinfo=ZoneInfo("UTC"))
@@ -135,6 +165,22 @@ def test_demote_tflops_symptoms(stream, obs_ctx, job_info):
     # New interesting event should be created for 100
     rows_int = stream.query_raw("SELECT status FROM events WHERE event_type=? AND line_num=100", [int_id])
     assert rows_int[0][0] == 1
+    [(storage_name,)] = stream.query_raw(
+        """SELECT r.name
+           FROM events e
+           JOIN rules r ON e.source_rule=r.id
+           WHERE e.event_type=? AND e.line_num=100""",
+        [int_id],
+    )
+    assert RuleEmission.from_storage_key(storage_name) == RuleEmission(
+        credited_rule_id="test_demote",
+        emitter_rule_id="test-demotion-extractor",
+    )
+    emitter_index = stream.emitter_rules_by_extraction()
+    assert any(
+        symptom == "(non-fatal) some error" and emitters == ("test-demotion-extractor",)
+        for (_, symptom), emitters in emitter_index.items()
+    )
 
     # Event at 200 is after MFU. Should remain bad.
     rows_200 = stream.query_raw("SELECT status FROM events WHERE event_type=? AND line_num=200", [bad_id])

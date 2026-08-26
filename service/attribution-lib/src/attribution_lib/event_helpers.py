@@ -222,7 +222,7 @@ class EventQueryHelper:
         return Source(
             source_context=source_context,
             line_num=line_num,
-            datum=datum or "",
+            datum=datum,
             time=timestamp,
             resources=resources,
             rule=rule,

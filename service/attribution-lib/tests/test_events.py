@@ -147,6 +147,21 @@ class TestEventRule:
         assert retrieved_source.line_num == 42
         assert retrieved_source.datum == "High GPU temperature detected"
 
+    def test_event_reconstruction_preserves_null_datum(self, event_stream, sample_source):
+        stream = event_stream("null-datum")
+        source = sample_source._replace(datum=None)
+        stream.register_observation_context(source.source_context)
+        stream.add_event(
+            "Attribution.node.bad",
+            {"node": "gpu-node-01", "symptom": "High temperature"},
+            source,
+        )
+
+        typ_id = stream.mgr.types.get_id("Attribution.node.bad")
+        [(_, _, _, reconstructed)] = query_events_with_source(stream, typ_id)
+
+        assert reconstructed.datum is None
+
     def test_emitter_provenance_survives_credit_rewrite(self, dummy_ctx):
         loader = RuleLoader()
         loader.declared_rule_names.update({"extractor-credit", "filter-credit"})
@@ -208,6 +223,55 @@ class TestEventRule:
                 ),
                 "High temperature",
             ): ("thermal-log-matcher",)
+        }
+        manager.close()
+
+    def test_shared_filter_credit_preserves_each_original_emitter(self, dummy_ctx):
+        loader = RuleLoader()
+        loader.declared_rule_names.update({"extractor-credit-a", "extractor-credit-b", "filter-credit"})
+        for suffix in ("a", "b"):
+            loader.register_rule(
+                ExtractorRule(
+                    name=f"extractor-{suffix}",
+                    author="test",
+                    location=RuleLocation(__file__, 0),
+                    match_re=suffix,
+                    processor=lambda *_args: [],
+                    credited_rule_ids=frozenset({f"extractor-credit-{suffix}"}),
+                )
+            )
+        manager = EventManager(loader.build())
+        manager.preload_event_types({"Attribution.node.bad"})
+        stream = manager.create_stream("shared-rewrite-test")
+        stream.register_observation_context(dummy_ctx)
+        for line_num, suffix in enumerate(("a", "b"), start=1):
+            stream.add_event(
+                "Attribution.node.bad",
+                {"node": "gpu-node-01", "symptom": f"Error {suffix}"},
+                Source(
+                    source_context=dummy_ctx,
+                    line_num=line_num,
+                    datum=f"error {suffix}",
+                    time=datetime.now(),
+                    resources=AllJobResources,
+                    rule=f"extractor-credit-{suffix}",
+                ),
+                emitter_rule_id=f"extractor-{suffix}",
+            )
+        stream.flush()
+
+        stream.deactivate_with_rule("filter-credit", "TRUE", [])
+
+        storage_names = stream.query_raw(
+            """SELECT r.name
+               FROM events e
+               JOIN rules r ON e.source_rule=r.id
+               WHERE e.context_id=?""",
+            [stream.ctx_id],
+        )
+        assert {RuleEmission.from_storage_key(name) for (name,) in storage_names} == {
+            RuleEmission(credited_rule_id="filter-credit", emitter_rule_id="extractor-a"),
+            RuleEmission(credited_rule_id="filter-credit", emitter_rule_id="extractor-b"),
         }
         manager.close()
 

@@ -141,6 +141,7 @@ class TestSnapshotRoundTrip:
             snapshot_dir,
             attribution_lib.get_rules_engine(),
         )
+        restored_stream = restored.create_stream("job_1")
         rows = restored._conn.execute(
             """SELECT json_extract_string(e.payload, '$.symptom'), r.name
                FROM events e
@@ -152,6 +153,7 @@ class TestSnapshotRoundTrip:
             credited_rule_id="specific_rule",
             emitter_rule_id="specific_extractor",
         )
+        assert tuple(restored_stream.emitter_rules_by_extraction().values()) == (("specific_extractor",),)
         restored.close()
 
     def test_export_import_preserves_event_content(self, tmp_path, dummy_ctx):
@@ -167,7 +169,7 @@ class TestSnapshotRoundTrip:
         stream.register_observation_context(dummy_ctx)
         stream.add_event(
             "Test.specific",
-            {"key": "value"},
+            {"key": "value", "symptom": "Specific Error"},
             Source(
                 source_context=dummy_ctx,
                 line_num=99,
@@ -179,10 +181,12 @@ class TestSnapshotRoundTrip:
             emitter_rule_id=emission.emitter_rule_id,
         )
         stream.flush()
-        mgr.export_snapshot(tmp_path / "snap")
+        snapshot_dir = tmp_path / "snap"
+        mgr.export_snapshot(snapshot_dir)
         mgr.close()
 
-        restored = EventManager.from_snapshot(tmp_path / "snap", attribution_lib.get_rules_engine())
+        assert (snapshot_dir / EventManager._SCHEMA_VERSION_FILE).read_text() == "3"
+        restored = EventManager.from_snapshot(snapshot_dir, attribution_lib.get_rules_engine())
         stream2 = restored.create_stream("job_1")
 
         rows = stream2.query_raw(
@@ -195,6 +199,7 @@ class TestSnapshotRoundTrip:
         assert len(rows) == 1
         assert rows[0][0] == "specific_datum"
         assert RuleEmission.from_storage_key(rows[0][1]) == emission
+        assert tuple(stream2.emitter_rules_by_extraction().values()) == ((emission.emitter_rule_id,),)
         restored.close()
 
     def test_lookup_helpers_work_after_import(self, tmp_path, dummy_ctx):

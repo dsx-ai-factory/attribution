@@ -67,7 +67,7 @@ class Source(NamedTuple):
 
     source_context: ObservationContext
     line_num: Optional[int]
-    datum: str
+    datum: Optional[str]
     time: Optional[datetime]
     resources: ResourceSet
     rule: Optional[str]
