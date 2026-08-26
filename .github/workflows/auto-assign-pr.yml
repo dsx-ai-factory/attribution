@@ -10,13 +10,12 @@ permissions:
 
 jobs:
   assign:
-    name: Assign Author and Reviewers
+    name: Assign Author
     runs-on: ubuntu-latest
     steps:
-      - name: Assign author and request attribution team review
+      - name: Assign pull request author
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
         with:
-          github-token: ${{ secrets.PR_ASSIGNER_TOKEN }}
           script: |
             const pullRequest = context.payload.pull_request;
             const { owner, repo } = context.repo;
@@ -26,11 +25,4 @@ jobs:
               repo,
               issue_number: pullRequest.number,
               assignees: [pullRequest.user.login],
-            });
-
-            await github.rest.pulls.requestReviewers({
-              owner,
-              repo,
-              pull_number: pullRequest.number,
-              team_reviewers: ["attribution"],
             });
