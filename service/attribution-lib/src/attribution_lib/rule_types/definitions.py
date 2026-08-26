@@ -17,7 +17,7 @@ from collections.abc import Callable, Hashable, Mapping
 from dataclasses import asdict, dataclass, field
 from enum import IntEnum
 from re import Match
-from typing import Any, NamedTuple, Optional, TypeAlias, cast
+from typing import Any, ClassVar, NamedTuple, Optional, TypeAlias, cast
 
 from loguru import logger
 from pydantic import BaseModel, ConfigDict, ValidationError
@@ -134,6 +134,87 @@ RuleId: TypeAlias = str
 
 
 @dataclass(frozen=True, slots=True)
+class RuleEmission:
+    """Static relationship between an extractor and one credited rule.
+
+    Attributes:
+        credited_rule_id: Attribution credit exposed through ``Source.rule``.
+        emitter_rule_id: Executable extractor that may emit the credit.
+    """
+
+    credited_rule_id: RuleId
+    emitter_rule_id: RuleId
+
+    _STORAGE_PREFIX: ClassVar[str] = "__rule_emission__:"
+
+    @property
+    def storage_key(self) -> str:
+        """Return the deterministic internal key stored in the rules table.
+
+        Returns:
+            Collision-free encoding of the credit and extractor IDs.
+        """
+        pair = json.dumps(
+            [self.credited_rule_id, self.emitter_rule_id],
+            ensure_ascii=True,
+            separators=(",", ":"),
+        )
+        return f"{self._STORAGE_PREFIX}{pair}"
+
+    @classmethod
+    def is_storage_key(cls, value: str) -> bool:
+        """Return whether a rules-table name is reserved for emission metadata.
+
+        Args:
+            value: Rules-table name to inspect.
+
+        Returns:
+            ``True`` when ``value`` uses the internal emission prefix.
+        """
+        return value.startswith(cls._STORAGE_PREFIX)
+
+    @classmethod
+    def from_storage_key(cls, value: str) -> Optional["RuleEmission"]:
+        """Decode emission metadata stored in a rules-table name.
+
+        Args:
+            value: Ordinary rule name or internal emission storage key.
+
+        Returns:
+            Decoded relationship, or ``None`` for an ordinary rule name.
+
+        Raises:
+            ValueError: If an internal storage key is malformed.
+        """
+        if not cls.is_storage_key(value):
+            return None
+        try:
+            pair = json.loads(value.removeprefix(cls._STORAGE_PREFIX))
+        except json.JSONDecodeError as exc:
+            raise ValueError(f"Malformed rule emission storage key: {value!r}") from exc
+        if not isinstance(pair, list) or len(pair) != 2 or not isinstance(pair[0], str) or not isinstance(pair[1], str):
+            raise ValueError(f"Malformed rule emission storage key: {value!r}")
+        return cls(credited_rule_id=pair[0], emitter_rule_id=pair[1])
+
+
+def _extractor_rule_emissions(
+    emitter_rule_id: RuleId,
+    credited_rule_ids: frozenset[RuleId],
+) -> tuple[RuleEmission, ...]:
+    """Build deterministic identity and derived-credit emission metadata.
+
+    Args:
+        emitter_rule_id: Executable extractor rule ID.
+        credited_rule_ids: Additional credits the extractor may emit.
+
+    Returns:
+        One relationship for the identity credit and each derived credit.
+    """
+    credits = {emitter_rule_id, *credited_rule_ids}
+    return tuple(RuleEmission(credited_rule_id=credit, emitter_rule_id=emitter_rule_id) for credit in sorted(credits))
+
+
+@dataclass(frozen=True, slots=True)
 class RuleMatcherProvenance:
     """Explicit projection of the fields that determine whether a text rule matches."""
 
@@ -241,6 +322,14 @@ class Rule(ABC):
         """
         return RuleProvenance(rule_id=self.name, rule_type=type(self).__name__)
 
+    def rule_emissions(self) -> tuple[RuleEmission, ...]:
+        """Return extraction emissions statically declared by this rule.
+
+        Returns:
+            Empty tuple for rule types that do not extract observations.
+        """
+        return ()
+
 
 @dataclass(frozen=True, slots=True)
 class ExtractorRule(Rule):
@@ -249,6 +338,7 @@ class ExtractorRule(Rule):
     match_re: str
     processor: ExtractorProcessor
     source_filters: frozenset[ObservationSource] = field(default_factory=frozenset)
+    credited_rule_ids: frozenset[RuleId] = field(default_factory=frozenset, kw_only=True)
 
     def provenance(self) -> RuleProvenance:
         """Return matcher metadata and a deterministic matcher-projection hash.
@@ -269,6 +359,14 @@ class ExtractorRule(Rule):
             )
             for evt in events
         ]
+
+    def rule_emissions(self) -> tuple[RuleEmission, ...]:
+        """Return every credit this extractor declares it may emit.
+
+        Returns:
+            Stable identity emission plus all explicitly declared credits.
+        """
+        return _extractor_rule_emissions(self.name, self.credited_rule_ids)
 
 
 @dataclass(frozen=True, slots=True)
@@ -338,6 +436,7 @@ class ExtractorAccumulatorRule(Rule):
     match_re: str
     factory: Callable[[], ExtractorAccumulator]
     source_filters: frozenset[ObservationSource] = field(default_factory=frozenset)
+    credited_rule_ids: frozenset[RuleId] = field(default_factory=frozenset, kw_only=True)
 
     def provenance(self) -> RuleProvenance:
         """Return matcher metadata and a deterministic matcher-projection hash.
@@ -350,6 +449,14 @@ class ExtractorAccumulatorRule(Rule):
     def process(self) -> ExtractorAccumulator:
         """Create a new extractor-accumulator instance."""
         return self.factory()
+
+    def rule_emissions(self) -> tuple[RuleEmission, ...]:
+        """Return every credit this accumulator declares it may emit.
+
+        Returns:
+            Stable identity emission plus all explicitly declared credits.
+        """
+        return _extractor_rule_emissions(self.name, self.credited_rule_ids)
 
 
 def _extractor_matcher_projection(

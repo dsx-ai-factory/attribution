@@ -46,6 +46,7 @@ from attribution_lib.rule_types.definitions import (
     ExecutionContext,
     ExtractionContext,
     Rule,
+    RuleEmission,
     RuleId,
     RuleLocation,
 )
@@ -96,6 +97,19 @@ class RuleEngine:
             names.update(engine.extra_rule_names())
         self._rules = combined
         self._all_rule_names = names | set(declarations.rule_names)
+        emissions = {emission for rule in combined.values() for emission in rule.rule_emissions()}
+        undeclared_credits = {emission.credited_rule_id for emission in emissions} - self._all_rule_names
+        if len(undeclared_credits) > 0:
+            raise RuleIngestionError(f"Extractor credits must be declared: {sorted(undeclared_credits)}")
+        reserved_names = {name for name in self._all_rule_names if RuleEmission.is_storage_key(name)}
+        if len(reserved_names) > 0:
+            raise RuleIngestionError(f"Rule names use the reserved emission prefix: {sorted(reserved_names)}")
+        self._rule_emissions = tuple(
+            sorted(emissions, key=lambda emission: (emission.credited_rule_id, emission.emitter_rule_id))
+        )
+        self._rule_emissions_by_pair = {
+            (emission.credited_rule_id, emission.emitter_rule_id): emission for emission in self._rule_emissions
+        }
 
     # -- Declarations ------------------------------------------------------
 
@@ -137,6 +151,27 @@ class RuleEngine:
     def get_rule(self, rule_id: RuleId) -> Optional[Rule]:
         """Return a rule by ID, independent of its concrete rule type."""
         return self._rules.get(rule_id)
+
+    @property
+    def rule_emissions(self) -> tuple[RuleEmission, ...]:
+        """Return immutable extractor-to-credit relationships.
+
+        Returns:
+            Statically declared emission metadata in deterministic order.
+        """
+        return self._rule_emissions
+
+    def get_rule_emission(self, credited_rule_id: RuleId, emitter_rule_id: RuleId) -> Optional[RuleEmission]:
+        """Return metadata for an exact credited-rule and emitter pair.
+
+        Args:
+            credited_rule_id: Attribution credit carried by ``Source.rule``.
+            emitter_rule_id: Executable extractor rule ID.
+
+        Returns:
+            Matching rule emission, or ``None`` if the pair was not declared.
+        """
+        return self._rule_emissions_by_pair.get((credited_rule_id, emitter_rule_id))
 
     @property
     def all_rule_names(self) -> set[str]:

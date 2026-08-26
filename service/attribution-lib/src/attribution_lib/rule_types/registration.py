@@ -249,6 +249,7 @@ def extractor_accumulator_def(
             author=registration.resolve_author(mod_globals),
             location=registration.location,
             tags=registration.tags,
+            credited_rule_ids=frozenset(registration.derived_rules),
         )
         registration.register(rule)
         return cls

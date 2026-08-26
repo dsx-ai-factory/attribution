@@ -107,6 +107,9 @@ def _load_cuda_errors():
 
 # Load errors at module import time
 _load_cuda_errors()
+_CUDA_CREDIT_RULES = frozenset(
+    {"alias else", *(info["nice_name"] for info in _CUDA_ERRORS.values() if info["nice_name"].startswith("cuda"))}
+)
 
 GRACEFUL_MULTICAST_SKIP_MESSAGE = "Gracefully skipping multicast initialization"
 
@@ -515,7 +518,7 @@ def connection_closed_by_remote_peer_event(
 # =============================================================================
 
 
-@rule_processor("applog:NCCLWarnCudaFailure")
+@rule_processor("applog:NCCLWarnCudaFailure", derived_rules=sorted(_CUDA_CREDIT_RULES))
 def nccl_warn_cuda_failure_event(
     groups: Dict[str, str], node: str, source: Source, ctx: RuleContext
 ) -> List[EventTriple]:
@@ -547,7 +550,7 @@ WATCHDOG_REGEX = re.compile(
 )
 
 
-@rule_processor("applog:pytorch_watchdog")
+@rule_processor("applog:pytorch_watchdog", derived_rules=sorted(_CUDA_CREDIT_RULES))
 def _pytorch_watchdog_event(groups: Dict[str, str], node: str, source: Source, ctx: RuleContext) -> List[EventTriple]:
     """Handle PyTorch NCCL watchdog events with CUDA error lookup.
 

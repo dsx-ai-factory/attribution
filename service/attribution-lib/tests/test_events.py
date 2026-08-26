@@ -24,6 +24,7 @@ from attribution_lib.observation.inbound import (
     TimeInterval,
 )
 from attribution_lib.resources import AllJobResources, Node, ResourceSet
+from attribution_lib.rule_types.definitions import ExtractorRule, RuleEmission, RuleLocation
 from attribution_lib.rules_engine import RuleLoader
 from attribution_lib.sources import Source
 
@@ -129,7 +130,6 @@ class TestEventRule:
             "Attribution.node.bad",
             {"node": "gpu-node-01", "symptom": "High temperature"},
             sample_source,
-            emitter_rule_id="thermal_log_matcher",
         )
 
         # Verify via query_events_with_source (bulk pattern)
@@ -146,10 +146,70 @@ class TestEventRule:
         assert retrieved_source.rule == "thermal_monitor_rule"
         assert retrieved_source.line_num == 42
         assert retrieved_source.datum == "High GPU temperature detected"
-        emitter_index = stream.emitter_rules_by_extraction()
-        assert len(emitter_index) == 1
-        assert next(iter(emitter_index))[1] == "High temperature"
-        assert next(iter(emitter_index.values())) == ("thermal_log_matcher",)
+
+    def test_emitter_provenance_survives_credit_rewrite(self, dummy_ctx):
+        loader = RuleLoader()
+        loader.declared_rule_names.update({"extractor-credit", "filter-credit"})
+        loader.register_rule(
+            ExtractorRule(
+                name="thermal-log-matcher",
+                author="test",
+                location=RuleLocation(__file__, 0),
+                match_re="temperature",
+                processor=lambda *_args: [],
+                credited_rule_ids=frozenset({"extractor-credit"}),
+            )
+        )
+        manager = EventManager(loader.build())
+        manager.preload_event_types({"Attribution.node.bad"})
+        stream = manager.create_stream("rewrite-test")
+        source = Source(
+            source_context=dummy_ctx,
+            line_num=42,
+            datum="High GPU temperature detected",
+            time=datetime.now(),
+            resources=AllJobResources,
+            rule="extractor-credit",
+        )
+        stream.register_observation_context(dummy_ctx)
+        stream.add_event(
+            "Attribution.node.bad",
+            {"node": "gpu-node-01", "symptom": "High temperature"},
+            source,
+            emitter_rule_id="thermal-log-matcher",
+        )
+        stream.flush()
+        event_id = stream.query_raw("SELECT id FROM events WHERE context_id=?", [stream.ctx_id])[0][0]
+
+        stream.deactivate_with_rule("filter-credit", "e.id=?", [event_id])
+
+        rows = stream.query_raw(
+            """SELECT e.status, e.source_rule, r.name
+               FROM events e
+               JOIN rules r ON e.source_rule=r.id
+               WHERE e.id=? AND e.context_id=?""",
+            [event_id, stream.ctx_id],
+        )
+        assert len(rows) == 1
+        status, source_rule_id, storage_name = rows[0]
+        assert status == 0
+        assert manager.rules.get_str(source_rule_id) == "filter-credit"
+        assert RuleEmission.from_storage_key(storage_name) == RuleEmission(
+            credited_rule_id="filter-credit",
+            emitter_rule_id="thermal-log-matcher",
+        )
+        assert stream.emitter_rules_by_extraction() == {
+            (
+                (
+                    dummy_ctx.id,
+                    source.line_num,
+                    source.datum,
+                    source.time.timestamp(),
+                ),
+                "High temperature",
+            ): ("thermal-log-matcher",)
+        }
+        manager.close()
 
     def test_flush_serializes_pydantic_payload_with_datetime(self, event_stream, sample_source):
         """Regression: Pydantic model with a raw datetime in payload must not crash _flush."""

@@ -16,6 +16,7 @@ import pytest
 import attribution_lib
 from attribution_lib.events import EventManager
 from attribution_lib.resources import AllJobResources
+from attribution_lib.rule_types.definitions import RuleEmission
 from attribution_lib.sources import Source
 
 
@@ -52,7 +53,7 @@ class TestSnapshotRoundTrip:
         snapshot_dir.mkdir()
         (snapshot_dir / EventManager._SCHEMA_VERSION_FILE).write_text("0")
 
-        with pytest.raises(ValueError, match="stored=0, current=2"):
+        with pytest.raises(ValueError, match="stored=0, current=3"):
             EventManager.from_snapshot(snapshot_dir, attribution_lib.get_rules_engine())
 
     def test_export_import_preserves_events(self, tmp_path, dummy_ctx):
@@ -92,14 +93,76 @@ class TestSnapshotRoundTrip:
             version_path.unlink()
 
         restored = EventManager.from_snapshot(snapshot_dir, attribution_lib.get_rules_engine())
-        rows = restored._conn.execute("SELECT source_datum, emitter_rule FROM events").fetchall()
-        assert rows == [("datum_0", None)]
+        rows = restored._conn.execute("SELECT source_datum, source_rule FROM events").fetchall()
+        assert len(rows) == 1
+        assert rows[0][0] == "datum_0"
+        assert restored.rules.get_str(rows[0][1]) == "rule_0"
         restored.close()
 
-    def test_export_import_preserves_event_content(self, tmp_path, dummy_ctx):
+    def test_imports_schema_v2_emitter_provenance(self, tmp_path, dummy_ctx):
         mgr = EventManager(rules_engine=attribution_lib.get_rules_engine())
         mgr.preload_event_types({"Test.specific"})
         mgr.preload_rule_names({"specific_rule", "specific_extractor"})
+        stream = mgr.create_stream("job_1")
+        stream.register_observation_context(dummy_ctx)
+        stream.add_event(
+            "Test.specific",
+            {"symptom": "Specific Error"},
+            Source(
+                source_context=dummy_ctx,
+                line_num=99,
+                datum="specific_datum",
+                time=datetime.now(),
+                resources=AllJobResources,
+                rule="specific_rule",
+            ),
+        )
+        snapshot_dir = tmp_path / "snap"
+        mgr.export_snapshot(snapshot_dir)
+        mgr.close()
+
+        rules_path = snapshot_dir / "rules.parquet"
+        emitter_id = (
+            duckdb.read_parquet(str(rules_path)).filter("name = 'specific_extractor'").project("id").fetchone()[0]
+        )
+        events_path = snapshot_dir / "events.parquet"
+        legacy_path = snapshot_dir / "events-v2.parquet"
+        v2_columns = (
+            "id, context_id, event_type, timestamp, status, line_num, "
+            f"source_datum, source_rule, {emitter_id}::INTEGER AS emitter_rule, "
+            "resources, obs_context_id, payload"
+        )
+        duckdb.read_parquet(str(events_path)).project(v2_columns).write_parquet(str(legacy_path))
+        events_path.unlink()
+        legacy_path.rename(events_path)
+        (snapshot_dir / EventManager._SCHEMA_VERSION_FILE).write_text("2")
+
+        restored = EventManager.from_snapshot(
+            snapshot_dir,
+            attribution_lib.get_rules_engine(),
+        )
+        rows = restored._conn.execute(
+            """SELECT json_extract_string(e.payload, '$.symptom'), r.name
+               FROM events e
+               JOIN rules r ON e.source_rule = r.id"""
+        ).fetchall()
+        assert len(rows) == 1
+        assert rows[0][0] == "Specific Error"
+        assert RuleEmission.from_storage_key(rows[0][1]) == RuleEmission(
+            credited_rule_id="specific_rule",
+            emitter_rule_id="specific_extractor",
+        )
+        restored.close()
+
+    def test_export_import_preserves_event_content(self, tmp_path, dummy_ctx):
+        rules_engine = attribution_lib.get_rules_engine()
+        emission = next(
+            emission
+            for emission in rules_engine.rule_emissions
+            if emission.credited_rule_id != emission.emitter_rule_id
+        )
+        mgr = EventManager(rules_engine=rules_engine)
+        mgr.preload_event_types({"Test.specific"})
         stream = mgr.create_stream("job_1")
         stream.register_observation_context(dummy_ctx)
         stream.add_event(
@@ -111,9 +174,9 @@ class TestSnapshotRoundTrip:
                 datum="specific_datum",
                 time=datetime.now(),
                 resources=AllJobResources,
-                rule="specific_rule",
+                rule=emission.credited_rule_id,
             ),
-            emitter_rule_id="specific_extractor",
+            emitter_rule_id=emission.emitter_rule_id,
         )
         stream.flush()
         mgr.export_snapshot(tmp_path / "snap")
@@ -124,13 +187,14 @@ class TestSnapshotRoundTrip:
 
         rows = stream2.query_raw(
             """SELECT e.source_datum, r.name
-               FROM events e LEFT JOIN rules r ON e.emitter_rule = r.id
+               FROM events e
+               JOIN rules r ON e.source_rule = r.id
                WHERE e.context_id=?""",
             [stream2.ctx_id],
         )
         assert len(rows) == 1
         assert rows[0][0] == "specific_datum"
-        assert rows[0][1] == "specific_extractor"
+        assert RuleEmission.from_storage_key(rows[0][1]) == emission
         restored.close()
 
     def test_lookup_helpers_work_after_import(self, tmp_path, dummy_ctx):

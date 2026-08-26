@@ -141,20 +141,8 @@ def _sql_demote_events(
     rule_id_map = {}
 
     if unique_rules:
-        rule_list = list(unique_rules)
-        # Batch insert new rules using flat tuple insert
-        values_clause = ",".join(["(?)"] * len(rule_list))
-        event_stream._conn.execute(
-            f"INSERT INTO rules (name) VALUES {values_clause} ON CONFLICT (name) DO NOTHING",
-            rule_list,
-        )
-        # Batch fetch all IDs in single query
-        placeholders = sql_placeholders(len(rule_list))
-        results = event_stream._conn.execute(
-            f"SELECT name, id FROM rules WHERE name IN ({placeholders})",
-            rule_list,
-        ).fetchall()
-        rule_id_map = {name: id for name, id in results}
+        event_stream.mgr.preload_rule_names(unique_rules)
+        rule_id_map = {name: event_stream.mgr.rules.get_id(name) for name in unique_rules}
 
     # Step 2: Process rows using the pre-fetched rule IDs
     insert_data = []
@@ -518,14 +506,12 @@ def process_completes_cascade(context: FilterContext):
     first_completes_id, first_completes_ln = rows[0]
 
     # Deactivate warning events after the first "completes"
-    rule_id = event_stream.mgr.rules.get_id("the process completes cascade")
-
     for warning in warnings_to_discard:
-        event_stream.execute(
-            f"""UPDATE events SET status=0, source_rule=?
-                WHERE context_id=? AND event_type IN ({type_ph}) AND status=1
-                AND CAST(payload AS VARCHAR) LIKE ? AND line_num>?""",
-            [rule_id, event_stream.ctx_id] + type_ids + [f"%{warning}%", first_completes_ln],
+        event_stream.deactivate_with_rule(
+            "the process completes cascade",
+            f"""e.event_type IN ({type_ph})
+                AND CAST(e.payload AS VARCHAR) LIKE ? AND e.line_num>?""",
+            type_ids + [f"%{warning}%", first_completes_ln],
         )
 
 

@@ -707,6 +707,8 @@ def _finalize_processor(
         tags = _resolve_tags(stanza.get("tags"), ctx=ctx, where=name, filepath=filepath)
         if "match_re" not in stanza:
             raise LoadError(f"{name}: missing required 'match_re'")
+        processor_derived_rules = loader.declarative_ctx.rule_processor_derived_rules.get(stanza["processor"], ())
+        credited_rule_ids = frozenset(stanza.get("derived_rules", ())) | frozenset(processor_derived_rules)
         rule = ExtractorRule(
             name=name,
             author=stanza.get("author") or ctx.file_author or "unknown",
@@ -715,14 +717,15 @@ def _finalize_processor(
             processor=proc,
             source_filters=sources,
             tags=tags,
+            credited_rule_ids=credited_rule_ids,
         )
         loader.register_rule(rule)
-        loader.declared_rule_names.update(stanza.get("derived_rules", []))
+        loader.declared_rule_names.update(credited_rule_ids)
         loader.declared_event_types.update(stanza.get("derived_event_types", []))
         loader.declarative_emit[name] = json.dumps(
             {
                 "processor": stanza["processor"],
-                "derived_rules": sorted(stanza.get("derived_rules", [])),
+                "derived_rules": sorted(credited_rule_ids),
                 "derived_event_types": sorted(stanza.get("derived_event_types", [])),
             },
             sort_keys=True,
@@ -838,6 +841,12 @@ def _finalize_emit_stanza(
 
         sources = _resolve_sources(stanza.get("sources", ctx.file_sources), where=name)
         tags = _resolve_tags(stanza.get("tags"), ctx=ctx, where=name, filepath=filepath)
+        declared_rules: set[str] = set()
+        declared_event_types: set[str] = set()
+        if is_catalog:
+            _collect_catalog_declarations(emit, table, is_element, declared_rules, declared_event_types)
+        else:
+            _collect_declarations(emit, declared_rules, declared_event_types)
         rule = ExtractorRule(
             name=name,
             author=stanza.get("author") or ctx.file_author or "unknown",
@@ -846,15 +855,10 @@ def _finalize_emit_stanza(
             processor=proc,
             source_filters=sources,
             tags=tags,
+            credited_rule_ids=frozenset(declared_rules),
         )
         loader.register_rule(rule)
 
-        declared_rules: set[str] = set()
-        declared_event_types: set[str] = set()
-        if is_catalog:
-            _collect_catalog_declarations(emit, table, is_element, declared_rules, declared_event_types)
-        else:
-            _collect_declarations(emit, declared_rules, declared_event_types)
         loader.declared_rule_names.update(declared_rules)
         loader.declared_event_types.update(declared_event_types)
         loader.declarative_emit[name] = json.dumps(emit, sort_keys=True)
@@ -902,6 +906,9 @@ def _finalize_family(
         declared_event_types: set[str] = set()
         for gen in generated:
             _check_emit_names(gen.emit, ctx.static_names, where=gen.name)
+            generated_rule_credits: set[str] = set()
+            generated_event_types: set[str] = set()
+            _collect_declarations(gen.emit, generated_rule_credits, generated_event_types)
             proc = compile_element(
                 gen.emit,
                 rule_name=gen.name,
@@ -917,9 +924,11 @@ def _finalize_family(
                 processor=proc,
                 source_filters=fam_sources,
                 tags=fam_tags,
+                credited_rule_ids=frozenset(generated_rule_credits),
             )
             loader.register_rule(rule)
-            _collect_declarations(gen.emit, declared_rules, declared_event_types)
+            declared_rules.update(generated_rule_credits)
+            declared_event_types.update(generated_event_types)
             loader.declarative_emit[gen.name] = json.dumps(gen.emit, sort_keys=True)
             added[gen.name] = rule
         loader.declared_rule_names.update(declared_rules)

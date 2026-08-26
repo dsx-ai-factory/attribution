@@ -84,12 +84,12 @@ class EventQueryHelper:
         order_clause = f"ORDER BY {order_by}" if order_by else ""
         query = f"""
             SELECT
-                e.id, e.event_type, e.payload, e.timestamp, e.line_num, e.source_datum, r.name,
+                e.id, e.event_type, e.payload, e.timestamp, e.line_num, e.source_datum,
+                e.source_rule,
                 e.resources,
                 oc.id, oc.time_start, oc.time_end, oc.source, oc.format, oc.timezone
             FROM events e
             LEFT JOIN observation_contexts oc ON e.obs_context_id = oc.id
-            LEFT JOIN rules r ON e.source_rule = r.id
             WHERE e.context_id=? AND e.event_type IN ({type_ph}) AND e.status=1
             {additional_where}
             {order_clause}
@@ -99,7 +99,15 @@ class EventQueryHelper:
         if params:
             query_params.extend(params)
 
-        return self.event_stream.query_raw(query, query_params)
+        rows = self.event_stream.query_raw(query, query_params)
+        return [
+            (
+                *row[:6],
+                self.event_stream.mgr.rules.get_str(row[6]) if row[6] is not None else None,
+                *row[7:],
+            )
+            for row in rows
+        ]
 
     def iter_events_with_source(
         self,

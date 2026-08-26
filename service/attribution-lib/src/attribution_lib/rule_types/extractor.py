@@ -112,12 +112,14 @@ class ExtractorEngine(SubEngineBase[ExtractorRule]):
             h.update(name.encode())
             h.update(rule.match_re.encode())
             h.update(str(sorted(sf.value for sf in rule.source_filters)).encode())
+            h.update(str(sorted(rule.credited_rule_ids)).encode())
             h.update(self.declarative_emit.get(name, "").encode())
         for name in sorted(self.extractor_accumulator_rules):
             accumulator_rule = self.extractor_accumulator_rules[name]
             h.update(name.encode())
             h.update(accumulator_rule.match_re.encode())
             h.update(str(sorted(sf.value for sf in accumulator_rule.source_filters)).encode())
+            h.update(str(sorted(accumulator_rule.credited_rule_ids)).encode())
         return h.hexdigest()
 
 

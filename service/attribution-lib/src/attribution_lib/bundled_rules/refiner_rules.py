@@ -418,11 +418,11 @@ def _deactivate_bad_pairs(event_stream: EventStream, rule_name: str) -> None:
     type_ids = event_stream.mgr.types.get_ids(BAD_PAIR_EVENT_TYPES)
     if not type_ids:
         return
-    rule_id = event_stream.mgr.rules.get_id(rule_name)
     type_ph = sql_placeholders(len(type_ids))
-    event_stream.execute(
-        f"UPDATE events SET status=0, source_rule=? WHERE context_id=? AND event_type IN ({type_ph}) AND status=1",
-        [rule_id, event_stream.ctx_id] + type_ids,
+    event_stream.deactivate_with_rule(
+        rule_name,
+        f"e.event_type IN ({type_ph})",
+        type_ids,
     )
 
 

@@ -16,7 +16,7 @@ tables, and whole-rule processors into the active rule loader.
 """
 
 import inspect
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterator, Sequence
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass, field
@@ -105,6 +105,7 @@ class DeclarativeContext:
     const_values: dict[str, object] = field(default_factory=dict)
     record_tables: dict[str, dict] = field(default_factory=dict)
     rule_processors: dict[str, Callable[..., Any]] = field(default_factory=dict)
+    rule_processor_derived_rules: dict[str, frozenset[str]] = field(default_factory=dict)
 
     def snapshot(self) -> dict[str, Any]:
         return {
@@ -113,6 +114,7 @@ class DeclarativeContext:
             "const_values": dict(self.const_values),
             "record_tables": dict(self.record_tables),
             "rule_processors": dict(self.rule_processors),
+            "rule_processor_derived_rules": dict(self.rule_processor_derived_rules),
         }
 
     def restore(self, snap: dict[str, Any]) -> None:
@@ -121,6 +123,7 @@ class DeclarativeContext:
         self.const_values = dict(snap["const_values"])
         self.record_tables = dict(snap["record_tables"])
         self.rule_processors = dict(snap["rule_processors"])
+        self.rule_processor_derived_rules = dict(snap["rule_processor_derived_rules"])
 
 
 def expr_helper(name: str) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
@@ -233,14 +236,30 @@ def rows(name: str) -> _ProviderDecorator:
     return register
 
 
-def rule_processor(ns_name: str) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
+def rule_processor(
+    ns_name: str,
+    *,
+    derived_rules: Sequence[str] = (),
+) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
     """Register a whole-rule Python processor under a NAMESPACED name (``ns:name``,
     e.g. ``applog:pushrecv``), referenced by a declarative stanza's
     ``processor = "ns:name"``. The function is an ordinary extractor body; the
     declarative loader wraps it to inject the ``{node, source, ctx}`` it declares.
 
     Init-scoped like the other providers. A duplicate ``ns:name`` is a
-    :class:`RuleIngestionError`. The function is returned unchanged."""
+    :class:`RuleIngestionError`. The function is returned unchanged.
+
+    Args:
+        ns_name: Namespaced identifier referenced by declarative rule stanzas.
+        derived_rules: Every rule credit the processor can assign with
+            ``source.derived(rule=...)``. These are combined with credits declared
+            by each referencing stanza.
+
+    Returns:
+        A decorator that registers and returns the processor function.
+    """
+
+    declared_derived_rules = frozenset(derived_rules)
 
     def register(func: Callable[..., Any]) -> Callable[..., Any]:
         loader = _require_rule_loader(f"registering @rule_processor {ns_name!r}")
@@ -250,6 +269,7 @@ def rule_processor(ns_name: str) -> Callable[[Callable[..., Any]], Callable[...,
                 f"@rule_processor {ns_name!r} is already registered by {getattr(existing, '__module__', '?')}:{getattr(existing, '__qualname__', repr(existing))}"
             )
         loader.declarative_ctx.rule_processors[ns_name] = func
+        loader.declarative_ctx.rule_processor_derived_rules[ns_name] = declared_derived_rules
         return func
 
     return register

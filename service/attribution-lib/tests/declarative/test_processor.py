@@ -122,6 +122,26 @@ def test_processor_stanza_registers_and_declares(tmp_path):
     assert "Attribution.node.bad_peers" in loader.declared_event_types
 
 
+def test_processor_metadata_and_stanza_derived_rules_are_combined(tmp_path):
+    def register():
+        @rule_processor("applog:pr", derived_rules=("dynamic-a", "dynamic-b"))
+        def _pr(groups, node, source, ctx):
+            return []
+
+    toml = r"""
+    sources = ["APPLOG"]
+    [[extractor]]
+    name = "pr"
+    match_re = 'pushrecv'
+    processor = "applog:pr"
+    derived_rules = ["stanza-credit"]
+    """
+    loader, added = _load(tmp_path, toml, register)
+
+    assert added["pr"].credited_rule_ids == frozenset({"dynamic-a", "dynamic-b", "stanza-credit"})
+    assert {"dynamic-a", "dynamic-b", "stanza-credit"} <= loader.declared_rule_names
+
+
 def test_processor_stanza_merges_file_and_rule_tags(tmp_path):
     def register():
         @rule_processor("applog:pr")

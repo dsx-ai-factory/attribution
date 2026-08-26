@@ -300,14 +300,21 @@ def _run_syslog_single_line_events_case(case_data: RuleDataCase, attribution_tes
         # Filter to this case's source line (unique per case). The bad-node and the
         # tracking event share source_datum but land in different phase contexts, so
         # source_datum -- not context_id -- is the reliable per-case discriminator.
-        rows = result.event_stream.query_raw(
-            "SELECT t.name, r.name, e.payload FROM events e "
+        raw_rows = result.event_stream.query_raw(
+            "SELECT t.name, e.source_rule, e.payload FROM events e "
             "LEFT JOIN event_types t ON e.event_type = t.id "
-            "LEFT JOIN rules r ON e.source_rule = r.id "
             "WHERE e.source_datum = ? "
             "ORDER BY e.id",
             [case_data.case["line"]],
         )
+        rows = [
+            (
+                event_type,
+                result.event_stream.mgr.rules.get_str(rule_id) if rule_id is not None else None,
+                payload,
+            )
+            for event_type, rule_id, payload in raw_rows
+        ]
         actual = [(event_type, rule) for event_type, rule, _ in rows]
         expected = [(ev["event_type"], ev["rule"]) for ev in expected_events]
         assert actual == expected, f"event order mismatch in {case_data.path}: {actual!r} != {expected!r}"
@@ -440,14 +447,21 @@ def _run_applog_single_line_case(case_data: RuleDataCase, attribution_test_build
 
     expected_events = case_data.case.get("expected_events")
     if expected_events is not None:
-        rows = result.event_stream.query_raw(
-            "SELECT t.name, r.name, e.payload FROM events e "
+        raw_rows = result.event_stream.query_raw(
+            "SELECT t.name, e.source_rule, e.payload FROM events e "
             "LEFT JOIN event_types t ON e.event_type = t.id "
-            "LEFT JOIN rules r ON e.source_rule = r.id "
             "WHERE e.source_datum = ? "
             "ORDER BY e.id",
             [case_data.case["line"]],
         )
+        rows = [
+            (
+                event_type,
+                result.event_stream.mgr.rules.get_str(rule_id) if rule_id is not None else None,
+                payload,
+            )
+            for event_type, rule_id, payload in raw_rows
+        ]
         actual = [(event_type, rule) for event_type, rule, _ in rows]
         expected = [(ev["event_type"], ev["rule"]) for ev in expected_events]
         assert actual == expected, f"event order mismatch in {case_data.path}: {actual!r} != {expected!r}"

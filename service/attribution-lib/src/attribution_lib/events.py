@@ -30,6 +30,7 @@ from attribution_lib.serialization import serialize
 from attribution_lib.sources import Source
 
 if TYPE_CHECKING:
+    from attribution_lib.rule_types.definitions import RuleEmission
     from attribution_lib.rules_engine import RuleEngine
 
 
@@ -98,6 +99,7 @@ CREATE TABLE event_types (
 CREATE SEQUENCE rules_seq START 1;
 CREATE TABLE rules (
     id INTEGER PRIMARY KEY DEFAULT nextval('rules_seq'),
+    -- Internal emission rows encode (credited rule, extractor rule) in name.
     name VARCHAR UNIQUE NOT NULL
 );
 
@@ -138,7 +140,6 @@ CREATE TABLE events (
     line_num INTEGER,
     source_datum VARCHAR,
     source_rule INTEGER REFERENCES rules(id),
-    emitter_rule INTEGER REFERENCES rules(id),
     resources VARCHAR,
     obs_context_id BIGINT REFERENCES observation_contexts(id),
     payload JSON,
@@ -149,7 +150,7 @@ CREATE TABLE events (
 CREATE INDEX idx_events_ctx_timestamp ON events(context_id, timestamp);
 """
 
-_COLS = "context_id,event_type,timestamp,status,line_num,source_datum,source_rule,emitter_rule,resources,obs_context_id,payload"
+_COLS = "context_id,event_type,timestamp,status,line_num,source_datum,source_rule,resources,obs_context_id,payload"
 
 
 class EventStream:
@@ -163,10 +164,8 @@ class EventStream:
         status INTEGER      - 1=active, 0=inactive
         line_num INTEGER    - source line number
         source_datum VARCHAR - source datum string
-        source_rule INTEGER - attribution credit carried by Source.rule; not
-            necessarily an executable RuleEngine rule
-        emitter_rule INTEGER - executable RuleEngine rule that emitted the
-            event; for example SyslogXid when source_rule is known-xid-event
+        source_rule INTEGER - reference to either an ordinary credited rule or
+            an exact credited-rule/extractor metadata row in rules
         resources VARCHAR   - resource identifier ("ANY" or hostname)
         obs_context_id BIGINT - observation context ID
         payload JSON        - event payload as JSON
@@ -232,8 +231,15 @@ class EventStream:
         event_rows = []
         for event_type, payload, source, emitter_rule_name in self._batch:
             typ_id = type_ids[event_type]
-            rule_id = rules_lookup.get_id(source.rule) if source.rule is not None else None
-            emitter_rule_id = rules_lookup.get_id(emitter_rule_name) if emitter_rule_name is not None else None
+            rule_id: Optional[int]
+            if emitter_rule_name is not None:
+                if source.rule is None:
+                    raise UndeclaredRuleError(
+                        f"Extractor {emitter_rule_name!r} emitted an event without a credited rule"
+                    )
+                rule_id = rules_lookup.get_emission_id(source.rule, emitter_rule_name)
+            else:
+                rule_id = rules_lookup.get_id(source.rule) if source.rule is not None else None
             # Serialize resources using Pydantic (returns "AllJobResources" or list of Resource models)
             serialized = serialize_resource_set(source.resources)
             if isinstance(serialized, str):
@@ -254,7 +260,6 @@ class EventStream:
                     source.line_num,
                     source.datum,
                     rule_id,
-                    emitter_rule_id,
                     resources_str,
                     source.source_context.id,
                     payload_json,
@@ -263,7 +268,7 @@ class EventStream:
 
         # Step 4: Bulk insert all events using flat tuple insert
         if event_rows:
-            values_clause = ",".join(["(?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?)"] * len(event_rows))
+            values_clause = ",".join(["(?, ?, ?, 1, ?, ?, ?, ?, ?, ?)"] * len(event_rows))
             # Flatten all rows into a single parameter list
             flat_params = [param for row in event_rows for param in row]
             self._conn.execute(
@@ -343,16 +348,22 @@ class EventStream:
         Returns:
             Mapping from source-and-symptom identity to emitting rules.
         """
+        from attribution_lib.rule_types.definitions import RuleEmission
+
         self._flush()
         rows = self._conn.execute(
-            """SELECT obs_context_id, line_num, source_datum, timestamp, payload, emitter_rule
-               FROM events
-               WHERE context_id=? AND emitter_rule IS NOT NULL""",
+            """SELECT e.obs_context_id, e.line_num, e.source_datum,
+                      e.timestamp, e.payload, r.name
+               FROM events e
+               JOIN rules r ON e.source_rule = r.id
+               WHERE e.context_id=?""",
             [self._ctx_id],
         ).fetchall()
         emitters: dict[ExtractionProvenanceKey, set[str]] = defaultdict(set)
-        for observation_id, line_num, datum, timestamp, payload, emitter_rule in rows:
-            rule_name = self._mgr.rules.get_str_required(emitter_rule)
+        for observation_id, line_num, datum, timestamp, payload, storage_name in rows:
+            emission = RuleEmission.from_storage_key(storage_name)
+            if emission is None:
+                continue
             payload_value = json.loads(payload) if isinstance(payload, str) else payload
             if not isinstance(payload_value, dict):
                 continue
@@ -362,8 +373,77 @@ class EventStream:
             timestamp_value = timestamp.timestamp() if timestamp is not None else None
             source_key: SourceProvenanceKey = observation_id, line_num, datum, timestamp_value
             key = source_key, symptom
-            emitters[key].add(rule_name)
+            emitters[key].add(emission.emitter_rule_id)
         return {key: tuple(sorted(rule_ids)) for key, rule_ids in emitters.items()}
+
+    def deactivate_with_rule(
+        self,
+        credited_rule: str,
+        predicate_sql: str,
+        params: list[Any],
+    ) -> None:
+        """Deactivate matching events while preserving extractor provenance.
+
+        Extractor events use ``source_rule`` to reference an exact
+        credit/extractor relationship. A filter or refiner that changes the
+        visible credit must therefore create the corresponding relationship for
+        the original extractor instead of replacing it with an ordinary rule ID.
+
+        Args:
+            credited_rule: New audit credit assigned by the filter or refiner.
+            predicate_sql: SQL predicate scoped to the ``e`` events alias.
+            params: Values for placeholders in ``predicate_sql``.
+
+        Returns:
+            None.
+        """
+        from attribution_lib.rule_types.definitions import RuleEmission
+
+        self._flush()
+        ordinary_rule_id = self._mgr.rules.get_id(credited_rule)
+        matching_params = [self._ctx_id, *params]
+        source_rule_rows = self._conn.execute(
+            f"""SELECT DISTINCT e.source_rule, current_rule.name
+                FROM events e
+                LEFT JOIN rules current_rule ON e.source_rule = current_rule.id
+                WHERE e.context_id=? AND e.status=1
+                  AND ({predicate_sql})""",
+            matching_params,
+        ).fetchall()
+        emissions_by_source_rule = {
+            source_rule_id: emission
+            for source_rule_id, storage_name in source_rule_rows
+            if storage_name is not None and (emission := RuleEmission.from_storage_key(storage_name)) is not None
+        }
+        self._mgr._rules.preload_emissions(
+            tuple(
+                RuleEmission(
+                    credited_rule_id=credited_rule,
+                    emitter_rule_id=emission.emitter_rule_id,
+                )
+                for emission in emissions_by_source_rule.values()
+            )
+        )
+        rewritten_ids = {
+            source_rule_id: self._mgr._rules.get_emission_id(credited_rule, emission.emitter_rule_id)
+            for source_rule_id, emission in emissions_by_source_rule.items()
+        }
+        if len(rewritten_ids) > 0:
+            cases = " ".join("WHEN ? THEN ?" for _ in rewritten_ids)
+            source_rule_sql = f"CASE e.source_rule {cases} ELSE ? END"
+            source_rule_params = [value for item in rewritten_ids.items() for value in item]
+            source_rule_params.append(ordinary_rule_id)
+        else:
+            source_rule_sql = "?"
+            source_rule_params = [ordinary_rule_id]
+        self._conn.execute(
+            f"""UPDATE events AS e
+                SET status=0,
+                    source_rule={source_rule_sql}
+                WHERE e.context_id=? AND e.status=1
+                  AND ({predicate_sql})""",
+            [*source_rule_params, *matching_params],
+        )
 
     def query_raw(self, sql: str, params: list = []) -> list[tuple]:
         """Execute SQL query and return raw rows."""
@@ -460,6 +540,74 @@ class _ReadOnlyLookup:
             self._str_cache[id_val] = name
 
 
+class _RuleLookup(_ReadOnlyLookup):
+    """Rule lookup with exact credited-rule to extractor metadata."""
+
+    def __init__(self, conn: duckdb.DuckDBPyConnection):
+        """Initialize rules-table caches.
+
+        Args:
+            conn: DuckDB connection containing the rules table.
+        """
+        super().__init__(conn, TableName.RULES, error_type=UndeclaredRuleError)
+        self._emission_id_cache: dict[tuple[str, str], int] = {}
+
+    def preload_emissions(self, emissions: tuple["RuleEmission", ...]) -> None:
+        """Insert immutable emission metadata into the existing rules table.
+
+        Args:
+            emissions: Credited-rule and extractor relationships.
+
+        Returns:
+            None.
+        """
+        if len(emissions) == 0:
+            return
+        values_clause = ",".join(["(?)"] * len(emissions))
+        params = [emission.storage_key for emission in emissions]
+        self._conn.execute(
+            f"""INSERT INTO rules (name)
+                VALUES {values_clause}
+                ON CONFLICT (name) DO NOTHING""",
+            params,
+        )
+        self.rebuild_cache()
+
+    def get_emission_id(self, credited_rule: str, emitter_rule: str) -> int:
+        """Return the rules-table ID for one exact emission relationship.
+
+        Args:
+            credited_rule: Attribution credit carried by ``Source.rule``.
+            emitter_rule: Executable extractor rule ID.
+
+        Returns:
+            Preloaded rules-table ID.
+        """
+        try:
+            return self._emission_id_cache[(credited_rule, emitter_rule)]
+        except KeyError:
+            raise UndeclaredRuleError(f"Extractor {emitter_rule!r} did not declare credited rule {credited_rule!r}")
+
+    def rebuild_cache(self) -> None:
+        """Repopulate ordinary and emission-rule caches.
+
+        Returns:
+            None.
+        """
+        from attribution_lib.rule_types.definitions import RuleEmission
+
+        rows = self._conn.execute("SELECT name, id FROM rules").fetchall()
+        self._id_cache.clear()
+        self._str_cache.clear()
+        self._emission_id_cache.clear()
+        for storage_name, id_val in rows:
+            emission = RuleEmission.from_storage_key(storage_name)
+            self._id_cache[storage_name] = id_val
+            self._str_cache[id_val] = emission.credited_rule_id if emission is not None else storage_name
+            if emission is not None:
+                self._emission_id_cache[(emission.credited_rule_id, emission.emitter_rule_id)] = id_val
+
+
 class EventManager:
     def __init__(self, rules_engine: "RuleEngine"):
         self._conn = duckdb.connect(":memory:")
@@ -470,7 +618,7 @@ class EventManager:
 
         # Provide convenient lookup helpers
         self._types = _ReadOnlyLookup(self._conn, TableName.EVENT_TYPES, error_type=UndeclaredEventTypeError)
-        self._rules = _ReadOnlyLookup(self._conn, TableName.RULES, error_type=UndeclaredRuleError)
+        self._rules = _RuleLookup(self._conn)
         self._obs_sources = _ReadOnlyLookup(self._conn, TableName.OBSERVATION_SOURCES)
         self._obs_formats = _ReadOnlyLookup(self._conn, TableName.OBSERVATION_FORMATS)
 
@@ -479,6 +627,7 @@ class EventManager:
 
         # Preload rule names and event types from the rules engine
         self._rules.preload(rules_engine.all_rule_names)
+        self._rules.preload_emissions(rules_engine.rule_emissions)
         self._types.preload(rules_engine.all_event_types)
 
     def _populate_enum_tables(self):
@@ -546,9 +695,13 @@ class EventManager:
 
     # Bump when DuckDB table schemas change (columns, types, new tables).
     # Supported older versions are migrated while loading; others are rejected.
-    _SNAPSHOT_SCHEMA_VERSION = 2
+    # Schema v3 replaces the v2 events.emitter_rule column with metadata rows
+    # in the existing rules table.
+    _RULE_METADATA_SCHEMA_VERSION = 3
+    _LEGACY_EMITTER_SCHEMA_VERSION = 2
+    _SNAPSHOT_SCHEMA_VERSION = _RULE_METADATA_SCHEMA_VERSION
     _SCHEMA_VERSION_FILE = "schema_version"
-    _MIGRATABLE_SNAPSHOT_VERSIONS = frozenset({1})
+    _MIGRATABLE_SNAPSHOT_VERSIONS = frozenset({1, _LEGACY_EMITTER_SCHEMA_VERSION})
 
     # All DuckDB tables in dependency-safe import order.
     # NOTE: TableName.OBSERVATION_CONTEXTS has value "obs_contexts" but the
@@ -589,6 +742,64 @@ class EventManager:
         version_path = snapshot_dir / self._SCHEMA_VERSION_FILE
         version_path.write_text(str(self._SNAPSHOT_SCHEMA_VERSION))
 
+    def _migrate_legacy_emitter_rules(
+        self,
+        events_src: Path,
+    ) -> None:
+        """Convert v2 event emitter IDs into rules-table emission metadata.
+
+        Args:
+            events_src: Path to the v2 events Parquet file.
+
+        Returns:
+            None.
+        """
+        from attribution_lib.rule_types.definitions import RuleEmission
+
+        legacy_pairs = self._conn.execute(
+            """SELECT DISTINCT COALESCE(credit.name, emitter.name), emitter.name
+               FROM read_parquet(?) legacy
+               LEFT JOIN rules credit ON legacy.source_rule = credit.id
+               JOIN rules emitter ON legacy.emitter_rule = emitter.id
+               WHERE legacy.emitter_rule IS NOT NULL""",
+            [str(events_src)],
+        ).fetchall()
+        emissions = tuple(
+            RuleEmission(
+                credited_rule_id=credited_rule,
+                emitter_rule_id=emitter_rule,
+            )
+            for credited_rule, emitter_rule in legacy_pairs
+        )
+        self._rules.preload_emissions(emissions)
+        if len(emissions) == 0:
+            return
+        mapping_values = ",".join(["(?, ?, ?)"] * len(emissions))
+        mapping_params = [
+            value
+            for emission in emissions
+            for value in (
+                emission.credited_rule_id,
+                emission.emitter_rule_id,
+                self._rules.get_emission_id(emission.credited_rule_id, emission.emitter_rule_id),
+            )
+        ]
+        self._conn.execute(
+            f"""UPDATE events current
+               SET source_rule = mapping.emission_id
+               FROM read_parquet(?) legacy
+               LEFT JOIN rules credit ON legacy.source_rule = credit.id
+               JOIN rules emitter ON legacy.emitter_rule = emitter.id
+               JOIN (VALUES {mapping_values})
+                 AS mapping(credited_rule, emitter_rule, emission_id)
+                 ON mapping.credited_rule = COALESCE(credit.name, emitter.name)
+                AND mapping.emitter_rule = emitter.name
+               WHERE current.id = legacy.id
+                 AND current.context_id = legacy.context_id
+                 AND legacy.emitter_rule IS NOT NULL""",
+            [str(events_src), *mapping_params],
+        )
+
     @classmethod
     def from_snapshot(cls, snapshot_dir: Path, rules_engine: "RuleEngine") -> "EventManager":
         """Create an EventManager pre-populated from a previous snapshot.
@@ -620,16 +831,22 @@ class EventManager:
 
         mgr = cls(rules_engine)
 
+        for table in reversed(cls._SNAPSHOT_TABLES):
+            mgr._conn.execute(f"DELETE FROM {table}")
+
         for table in cls._SNAPSHOT_TABLES:
             src = snapshot_dir / f"{table}.parquet"
             if not src.exists():
                 raise FileNotFoundError(f"Snapshot file missing: {src}")
             try:
-                mgr._conn.execute(f"DELETE FROM {table}")
-                if table == "events" and stored_version == 1:
-                    # Schema v2 added emitter_rule. Preserve a v1 cache hit by
-                    # importing every legacy column and leaving the new nullable
-                    # provenance column empty until extraction naturally refreshes.
+                if table == "rules" and stored_version < cls._RULE_METADATA_SCHEMA_VERSION:
+                    mgr._conn.execute(
+                        "INSERT INTO rules (id, name) SELECT id, name FROM read_parquet(?)",
+                        [str(src)],
+                    )
+                elif table == "events" and stored_version < cls._RULE_METADATA_SCHEMA_VERSION:
+                    # Schema v3 moved emitter identity out of events. Import the
+                    # common event shape; v2 provenance is migrated below.
                     legacy_columns = (
                         "id, context_id, event_type, timestamp, status, line_num, "
                         "source_datum, source_rule, resources, obs_context_id, payload"
@@ -646,6 +863,12 @@ class EventManager:
                 raise RuntimeError(f"DuckDB I/O error importing '{table}' from {src}: {e}") from e
             except duckdb.Error as e:
                 raise RuntimeError(f"DuckDB error importing '{table}' from {src}: {e}") from e
+
+        mgr._rules.rebuild_cache()
+        if stored_version < cls._RULE_METADATA_SCHEMA_VERSION:
+            mgr._rules.preload_emissions(rules_engine.rule_emissions)
+        if stored_version == cls._LEGACY_EMITTER_SCHEMA_VERSION:
+            mgr._migrate_legacy_emitter_rules(snapshot_dir / "events.parquet")
 
         # Advance sequences past imported IDs so new inserts don't collide.
         # DuckDB lacks setval(), so we consume nextval() until we're past max(id).
@@ -673,9 +896,7 @@ class EventManager:
         """Snapshot the events table to a shadow table within the same connection.
 
         Uses DuckDB-internal CREATE TABLE AS SELECT for zero Python serialization
-        overhead. Only the events table needs checkpointing — lookup tables
-        (event_types, rules, obs_sources, obs_formats) and observation_contexts
-        don't change during filters/refiners/outcome assignment.
+        overhead. Lookup tables and observation contexts remain immutable.
         """
         for stream in self._streams.values():
             stream.flush()

@@ -9,17 +9,24 @@
 # its affiliates is strictly prohibited.
 
 from attribution_lib.core import get_bundled_rules_path
+from attribution_lib.events import EventManager
 from attribution_lib.observation.inbound import Source as ObservationSource
 from attribution_lib.rule_types.definitions import (
     ExtractorAccumulatorRule,
     ExtractorRule,
     FilterRule,
+    RuleEmission,
     RuleLocation,
 )
 from attribution_lib.rules_engine import RuleLoader
 
 
-def _make_extractor(name: str, regex: str, sources: frozenset = frozenset()) -> ExtractorRule:
+def _make_extractor(
+    name: str,
+    regex: str,
+    sources: frozenset = frozenset(),
+    credited_rules: frozenset[str] = frozenset(),
+) -> ExtractorRule:
     return ExtractorRule(
         name=name,
         author="test",
@@ -27,6 +34,7 @@ def _make_extractor(name: str, regex: str, sources: frozenset = frozenset()) -> 
         match_re=regex,
         processor=lambda ctx, m, emit: None,
         source_filters=sources,
+        credited_rule_ids=credited_rules,
     )
 
 
@@ -104,6 +112,75 @@ class TestExtractorHash:
         loader2.register_rule(_make_accumulator("r1", r"error", frozenset({ObservationSource.APPLOG})))
 
         assert loader1.build().extractor_hash() != loader2.build().extractor_hash()
+
+    def test_credited_rules_affect_hash(self):
+        loader1 = RuleLoader()
+        loader1.declared_rule_names.add("derived-credit-a")
+        loader1.register_rule(_make_extractor("r1", r"error", credited_rules=frozenset({"derived-credit-a"})))
+        loader2 = RuleLoader()
+        loader2.declared_rule_names.add("derived-credit-b")
+        loader2.register_rule(_make_extractor("r1", r"error", credited_rules=frozenset({"derived-credit-b"})))
+
+        assert loader1.build().extractor_hash() != loader2.build().extractor_hash()
+
+
+class TestRuleEmissions:
+    def test_storage_key_round_trips_without_rules_schema_columns(self):
+        emission = RuleEmission(
+            credited_rule_id='credit: "quoted" / ünicode',
+            emitter_rule_id="extractor:[arm]",
+        )
+
+        assert RuleEmission.from_storage_key(emission.storage_key) == emission
+
+        manager = EventManager(RuleLoader().build())
+        try:
+            columns = [row[1] for row in manager._conn.execute("PRAGMA table_info('rules')").fetchall()]
+        finally:
+            manager.close()
+
+        assert columns == ["id", "name"]
+
+    def test_extractor_declares_identity_and_derived_credits(self):
+        loader = RuleLoader()
+        loader.declared_rule_names.add("shared-credit")
+        loader.register_rule(_make_extractor("extractor-a", r"error", credited_rules=frozenset({"shared-credit"})))
+
+        engine = loader.build()
+
+        assert {(emission.credited_rule_id, emission.emitter_rule_id) for emission in engine.rule_emissions} == {
+            ("extractor-a", "extractor-a"),
+            ("shared-credit", "extractor-a"),
+        }
+
+    def test_shared_credit_retains_every_extractor_relationship(self):
+        loader = RuleLoader()
+        loader.declared_rule_names.add("shared-credit")
+        loader.register_rule(_make_extractor("extractor-a", r"first", credited_rules=frozenset({"shared-credit"})))
+        loader.register_rule(_make_extractor("extractor-b", r"second", credited_rules=frozenset({"shared-credit"})))
+
+        engine = loader.build()
+
+        assert engine.get_rule_emission("shared-credit", "extractor-a") is not None
+        assert engine.get_rule_emission("shared-credit", "extractor-b") is not None
+
+    def test_event_manager_persists_rule_credit_metadata(self):
+        loader = RuleLoader()
+        loader.declared_rule_names.add("shared-credit")
+        loader.register_rule(_make_extractor("extractor-a", r"error", credited_rules=frozenset({"shared-credit"})))
+        manager = EventManager(loader.build())
+
+        try:
+            storage_names = [row[0] for row in manager._conn.execute("SELECT name FROM rules").fetchall()]
+        finally:
+            manager.close()
+
+        emissions = {
+            emission
+            for storage_name in storage_names
+            if (emission := RuleEmission.from_storage_key(storage_name)) is not None
+        }
+        assert RuleEmission(credited_rule_id="shared-credit", emitter_rule_id="extractor-a") in emissions
 
 
 class TestRuleProvenance:

@@ -96,7 +96,8 @@ class ObservationProcessor:
             acc: Accumulator instance to finalize.
         """
         for evt in acc.finalize():
-            self.event_adder(evt.type, evt.payload, evt.source, emitter_rule_id=emitter_rule_id)
+            source = evt.source if evt.source.rule is not None else evt.source.derived(rule=emitter_rule_id)
+            self.event_adder(evt.type, evt.payload, source, emitter_rule_id=emitter_rule_id)
 
     def _deactivate(self, rid: RuleId) -> None:
         """Remove an active extractor-accumulator, clean up tracking state, and emit its events."""

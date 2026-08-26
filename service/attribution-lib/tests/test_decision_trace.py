@@ -27,7 +27,7 @@ from attribution_lib.decision_trace import (
 )
 from attribution_lib.decision_trace_recorder import Action, DecisionRecorder, NodeType, snapshot_bad_nodes
 from attribution_lib.events import EventManager
-from attribution_lib.exceptions import DecisionGraphError
+from attribution_lib.exceptions import DecisionGraphError, UndeclaredRuleError
 from attribution_lib.observation import Context as ObservationContext
 from attribution_lib.observation.inbound import (
     Format as ObservationFormat,
@@ -395,6 +395,7 @@ class TestBuildDecisionDAG:
     @staticmethod
     def _extractor_engine(*rules: tuple[str, str]):
         loader = RuleLoader()
+        loader.declared_rule_names.update({"health_check", "xid_48_ecc"})
         for extractor_id, regex in rules:
             loader.register_rule(
                 ExtractorRule(
@@ -404,6 +405,7 @@ class TestBuildDecisionDAG:
                     match_re=regex,
                     processor=lambda *_args: [],
                     source_filters=frozenset({ObservationSource.SYSLOG}),
+                    credited_rule_ids=frozenset({"health_check", "xid_48_ecc"}),
                 )
             )
         return loader.build()
@@ -489,21 +491,45 @@ class TestBuildDecisionDAG:
         assert extraction.rule_provenance.matcher_hash == extractor_rule.provenance().matcher_hash
         assert graph.ruleset_hashes == {"extraction": engine.extractor_hash()}
 
+    def test_credit_rewrite_preserves_extractor_provenance(self):
+        engine = self._extractor_engine(("xid_48_extractor", r"Xid.*48"))
+        source = _make_source(rule="xid_48_ecc", datum="Xid 48")
+        att_res = _make_attribution_result({"node-042": {"XID-48": [source]}})
+        att_res.outcome_attr = SourceSet(Mock(outcome="Fail InfraHW", root_cause_symptom="XID-48"))
+        manager = _attach_emitter_events(att_res, engine, source, ("xid_48_extractor",), "XID-48")
+        stream = att_res.event_stream
+        event_id = stream.query_raw("SELECT id FROM events WHERE context_id=?", [stream.ctx_id])[0][0]
+        stream.deactivate_with_rule("health_check", "e.id=?", [event_id])
+
+        try:
+            graph = build_decision_graph(DecisionRecorder("job-123"), att_res)
+        finally:
+            manager.close()
+
+        extraction = next(node for node in graph.nodes if node.node_type == NodeType.EXTRACTION)
+        assert extraction.rule_provenance is not None
+        assert extraction.rule_provenance.rule_id == "xid_48_extractor"
+
     def test_emitter_rule_must_belong_to_event_manager_engine(self):
         """An emitter ID outside the retained rule engine violates the event invariant."""
         engine = self._extractor_engine()
         source = _make_source(rule="health_check", datum="legacy evidence")
-        att_res = _make_attribution_result({"node-042": {"Health Error": [source]}})
-        att_res.outcome_attr = SourceSet(Mock(outcome="Fail InfraHW", root_cause_symptom="Health Error"))
-        manager = _attach_emitter_events(att_res, engine, source, ("legacy_extractor",), "Health Error")
-
+        manager = EventManager(rules_engine=engine)
+        manager.preload_event_types({"Test.extraction"})
+        manager.preload_rule_names({"health_check", "legacy_extractor"})
+        stream = manager.create_stream("decision-trace-test")
+        stream.register_observation_context(source.source_context)
+        stream.add_event(
+            "Test.extraction",
+            {"symptom": "Health Error"},
+            source,
+            emitter_rule_id="legacy_extractor",
+        )
         try:
-            with pytest.raises(
-                DecisionGraphError,
-                match="emitter rule 'legacy_extractor' is not present",
-            ):
-                build_decision_graph(DecisionRecorder("job-123"), att_res)
+            with pytest.raises(UndeclaredRuleError, match="did not declare credited rule"):
+                stream.flush()
         finally:
+            stream._batch.clear()
             manager.close()
 
     def test_same_source_matched_by_different_extractors_is_not_deduplicated(self):
