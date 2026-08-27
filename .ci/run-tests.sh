@@ -71,10 +71,10 @@ run_frontend() {
     )
 }
 
-run_quickstart() {
+run_end_to_end() {
     (
         cd "${repository_root}"
-        bash .ci/validate-quickstart.sh
+        bash .ci/run-end-to-end-tests.sh
     )
 }
 
@@ -94,11 +94,11 @@ case "${suite}" in
     frontend)
         run_frontend
         ;;
-    quickstart)
-        run_quickstart
+    end-to-end)
+        run_end_to_end
         ;;
     all)
-        run_quickstart
+        run_end_to_end
         run_attribution_lib
         run_service_app
         run_service_app_client_drift
@@ -106,7 +106,7 @@ case "${suite}" in
         run_frontend
         ;;
     *)
-        echo "usage: $0 {all|attribution-lib|service-app|blueprint|service-app-client-drift|frontend|quickstart}" >&2
+        echo "usage: $0 {all|attribution-lib|service-app|blueprint|service-app-client-drift|frontend|end-to-end}" >&2
         exit 2
         ;;
 esac

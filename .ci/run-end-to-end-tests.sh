@@ -5,15 +5,15 @@
 set -euo pipefail
 
 repository_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-expected_runs="${QUICKSTART_EXPECTED_RUNS:-118}"
-wait_seconds="${QUICKSTART_WAIT_SECONDS:-180}"
+expected_runs="${END_TO_END_EXPECTED_RUNS:-118}"
+wait_seconds="${END_TO_END_WAIT_SECONDS:-180}"
 service_port="${ATTRIBUTION_SERVICE_PORT:-18000}"
 web_port="${ATTRIBUTION_WEB_PORT:-18080}"
 run_suffix="${GITHUB_RUN_ID:-$$}"
 service_image="attribution-service-test:${run_suffix}"
 blueprint_image="attribution-blueprint-test:${run_suffix}"
 container_name="attribution-test-${run_suffix}"
-work_dir="$(mktemp -d "${TMPDIR:-/tmp}/attribution-quickstart.XXXXXX")"
+work_dir="$(mktemp -d "${TMPDIR:-/tmp}/attribution-end-to-end.XXXXXX")"
 database_dir="${work_dir}/data"
 database_path="${database_dir}/attributions.db"
 output_path="${work_dir}/attribution.log"
@@ -22,7 +22,7 @@ cleanup() {
     local status=$?
     docker rm --force "${container_name}" >/dev/null 2>&1 || true
     docker image rm --force "${service_image}" "${blueprint_image}" >/dev/null 2>&1 || true
-    if [[ -n "${work_dir}" && "${work_dir}" == "${TMPDIR:-/tmp}"/attribution-quickstart.* ]]; then
+    if [[ -n "${work_dir}" && "${work_dir}" == "${TMPDIR:-/tmp}"/attribution-end-to-end.* ]]; then
         rm -rf -- "${work_dir}"
     fi
     exit "${status}"
@@ -71,13 +71,13 @@ uv run --project blueprint --frozen nvidia-attribution-blueprint \
 
 if ! grep -F "Attribution complete: ${expected_runs}/${expected_runs} execution contexts succeeded." \
     "${output_path}" >/dev/null; then
-    echo "quickstart did not complete ${expected_runs}/${expected_runs} contexts" >&2
+    echo "end-to-end tests did not complete ${expected_runs}/${expected_runs} contexts" >&2
     exit 1
 fi
 
-QUICKSTART_DATABASE_PATH="${database_path}" \
-QUICKSTART_EXPECTED_RUNS="${expected_runs}" \
-QUICKSTART_WEB_PORT="${web_port}" \
+END_TO_END_DATABASE_PATH="${database_path}" \
+END_TO_END_EXPECTED_RUNS="${expected_runs}" \
+END_TO_END_WEB_PORT="${web_port}" \
 uv run --project blueprint --frozen python - <<'PY'
 import json
 import os
@@ -85,8 +85,8 @@ import sqlite3
 import urllib.request
 from pathlib import Path
 
-database_path = os.environ["QUICKSTART_DATABASE_PATH"]
-expected_runs = int(os.environ["QUICKSTART_EXPECTED_RUNS"])
+database_path = os.environ["END_TO_END_DATABASE_PATH"]
+expected_runs = int(os.environ["END_TO_END_EXPECTED_RUNS"])
 manifest_path = Path("blueprint/docs/sample-data/static/sample-jobs.json")
 
 with sqlite3.connect(database_path) as connection:
@@ -122,7 +122,7 @@ if missing != [] or extra != [] or mismatches != []:
 if responsible_node_count == 0:
     raise SystemExit("expected at least one attribution run with responsible nodes")
 
-web_port = os.environ["QUICKSTART_WEB_PORT"]
+web_port = os.environ["END_TO_END_WEB_PORT"]
 with urllib.request.urlopen(f"http://127.0.0.1:{web_port}/api/v1/dashboard", timeout=10) as response:
     web_payload = json.load(response)
 web_run_count = int(web_payload["meta"]["dbTotalRuns"])
@@ -130,15 +130,15 @@ if web_run_count != expected_runs:
     raise SystemExit(f"expected {expected_runs} web UI runs, found {web_run_count}")
 
 print(
-    f"quickstart_results={run_count} outcome_mismatches=0 "
+    f"end_to_end_results={run_count} outcome_mismatches=0 "
     f"responsible_nodes={responsible_node_count} webui_total_runs={web_run_count}"
 )
 PY
 
 if docker logs "${container_name}" 2>&1 \
     | grep -E "500 Internal Server Error|exceptions must derive|IncompatibleObservation|ingest_observation failed"; then
-    echo "quickstart service logs contain ingestion errors" >&2
+    echo "end-to-end service logs contain ingestion errors" >&2
     exit 1
 fi
 
-echo "quickstart validation passed"
+echo "end-to-end tests passed"

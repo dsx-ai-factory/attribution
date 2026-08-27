@@ -103,8 +103,8 @@ jobs:
       - name: Run frontend tests with coverage
         run: bash .ci/run-tests.sh frontend
 
-  quickstart:
-    name: quickstart
+  end-to-end:
+    name: end-to-end
     needs: secret-scan
     if: ${{ always() }}
     runs-on: linux-arm64-cpu16
@@ -119,5 +119,5 @@ jobs:
           enable-cache: true
       - name: Install Python
         run: uv python install "$UV_PYTHON"
-      - name: Run release quickstart
-        run: bash .ci/run-tests.sh quickstart
+      - name: Run end-to-end tests
+        run: bash .ci/run-tests.sh end-to-end

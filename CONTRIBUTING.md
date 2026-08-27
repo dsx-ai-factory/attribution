@@ -12,4 +12,4 @@ Install `uv`, Node.js 22, and pnpm 10.11, then run:
 bash .ci/run-tests.sh all
 ```
 
-The command validates the 118-workload Docker quickstart, runs the Attribution Library, Attribution Service, and Blueprint Python suites, then tests and builds the Blueprint frontend. Pass a suite name shown by `.ci/run-tests.sh` to run one part of the gate.
+The command runs the 118-workload Docker end-to-end tests, the Attribution Library, Attribution Service, and Blueprint Python suites, then tests and builds the Blueprint frontend. Pass a suite name shown by `.ci/run-tests.sh` to run one part of the gate.
