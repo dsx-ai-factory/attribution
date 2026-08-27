@@ -2,7 +2,7 @@
 
 ## Overview
 
-Define the code of conduct followed and enforced for DSX Attribution.
+Define the code of conduct followed and enforced for NVIDIA Attribution.
 
 ### Intended audience
 
