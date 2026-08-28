@@ -80,7 +80,10 @@ def _evidence_timestamp(job: dict[str, object]) -> datetime:
     evidence_marker = str(job["evidence_marker"])
     for line in evidence_path.read_text(encoding="utf-8").splitlines():
         if evidence_marker in line:
-            return datetime.fromisoformat(line.split(maxsplit=1)[0].replace("Z", "+00:00"))
+            timestamp = re.search(r"\d{4}-\d{2}-\d{2}T[^\s]+", line)
+            if timestamp is None:
+                raise AssertionError(f"missing evidence timestamp for {job['id']}")
+            return datetime.fromisoformat(timestamp.group(0).replace("Z", "+00:00"))
     raise AssertionError(f"missing evidence marker for {job['id']}")
 
 
