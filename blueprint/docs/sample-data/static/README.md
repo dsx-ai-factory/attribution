@@ -20,7 +20,7 @@ every XID-31 event so the UI can show repeat-offender detection across jobs.
 Hardware Fault coverage includes XID-48, XID-64, XID-74, XID-79, XID-95,
 XID-110, XID-119, XID-120, XID-121, XID-140, XID-143, XID-149, XID-156,
 XID-171, XID-172, and GSP allocation failure. Non-XID coverage also includes
-SLURM node faults, IB device-open failures, storage-network connection loss,
+SLURM node faults, system power-down node faults, IB device-open failures,
 IB Error-12, network route and link failures, Lustre client eviction, GPU lost through
 SLURM/NVML, CUDA illegal address, CUDA devices unavailable, NUMA memory
 exhaustion, OOM kills, fabric manager absence, NMI watchdog lockups, local
