@@ -15,6 +15,7 @@ XID31_ROOT_JOB_COUNT = 18
 TOTAL_JOB_COUNT = BASELINE_JOB_COUNT + REPEAT_SAMPLE_JOB_COUNT
 REPEAT_OFFENDER_NODE = "node-0101"
 PRIORITIZED_NODE_FAILURE_WORKLOADS = {"workload-0101", "workload-0111"}
+PAIR_ONLY_RESPONSIBLE_NODE_WORKLOADS = {"workload-0069", "workload-0070"}
 XID31_PATTERN = re.compile(r"Xid \(PCI:[^)]*\): 31|XID-31|XID 31", re.IGNORECASE)
 DISALLOWED_SAMPLE_PATTERNS = {
     "Job failed": re.compile(r"\bjob failed\b", re.IGNORECASE),
@@ -237,7 +238,7 @@ def test_static_quickstart_samples_include_xid31_repeat_offender_demo():
 
 
 def test_static_quickstart_samples_identify_specific_responsible_nodes():
-    """Each quickstart sample should identify one concrete responsible node."""
+    """Quickstart samples should identify a node unless the evidence is a pair."""
     manifest_jobs = _sample_manifest_jobs()
 
     for job in manifest_jobs:
@@ -245,6 +246,10 @@ def test_static_quickstart_samples_identify_specific_responsible_nodes():
         nodes = job["nodes"]
         assert isinstance(responsible_nodes, list)
         assert isinstance(nodes, list)
+        if job["id"] in PAIR_ONLY_RESPONSIBLE_NODE_WORKLOADS:
+            assert responsible_nodes == []
+            assert str(job["root_cause_symptom"]).startswith("Call to ibv_modify_qp failed")
+            continue
         assert len(responsible_nodes) == 1
         assert responsible_nodes[0] in nodes
 
@@ -258,6 +263,17 @@ def test_static_quickstart_samples_identify_specific_responsible_nodes():
             assert responsible_node in evidence_text
         else:
             raise AssertionError(job["evidence_source"])
+
+
+def test_static_quickstart_includes_xid149_cascade_example():
+    """At least one XID-149 sample should include XID-145 cascade evidence."""
+    cascade_jobs = [job for job in _sample_manifest_jobs() if "discarded_symptom_prefixes" in job]
+
+    assert cascade_jobs != []
+    for job in cascade_jobs:
+        assert str(job["root_cause_symptom"]).startswith("XID-149")
+        assert job["discarded_symptom_prefixes"] == ["XID-145"]
+        assert re.search(r"Xid \(PCI:[^)]*\): 145,", _workload_sample_text(str(job["id"]))) is not None
 
 
 def test_static_quickstart_samples_exclude_generic_failed_and_timeout_outcomes():

@@ -91,27 +91,52 @@ manifest_path = Path("blueprint/docs/sample-data/static/sample-jobs.json")
 
 with sqlite3.connect(database_path) as connection:
     run_count = connection.execute("select count(*) from attribution_run").fetchone()[0]
-    actual = dict(
-        connection.execute(
-            "select execution_context.job_id, attribution_run.outcome "
-            "from attribution_run join execution_context "
-            "on execution_context.id = attribution_run.execution_context_id"
-        )
-    )
+    rows = connection.execute(
+        "select execution_context.job_id, attribution_run.outcome, "
+        "attribution_run.responsible_nodes_json, attribution_run.raw_result_json "
+        "from attribution_run join execution_context "
+        "on execution_context.id = attribution_run.execution_context_id"
+    ).fetchall()
     responsible_node_count = connection.execute(
         "select count(*) from attribution_run "
         "where responsible_nodes_json is not null and responsible_nodes_json != '[]'"
     ).fetchone()[0]
 
 manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+actual = {
+    job_id: {
+        "outcome": outcome,
+        "responsible_nodes": json.loads(responsible_nodes_json),
+        "raw_result": json.loads(raw_result_json),
+    }
+    for job_id, outcome, responsible_nodes_json, raw_result_json in rows
+}
 expected = {job["id"]: job["expected_outcome"] for job in manifest["jobs"]}
+responsible_node_assertion_workloads = set(manifest["constraints"]["responsible_node_assertion_workloads"])
 missing = sorted(set(expected) - set(actual))
 extra = sorted(set(actual) - set(expected))
 mismatches = sorted(
-    (job_id, expected[job_id], actual[job_id])
+    (job_id, expected[job_id], actual[job_id]["outcome"])
     for job_id in set(expected) & set(actual)
-    if expected[job_id] != actual[job_id]
+    if expected[job_id] != actual[job_id]["outcome"]
 )
+responsible_node_mismatches = sorted(
+    (job["id"], job["responsible_nodes"], actual[job["id"]]["responsible_nodes"])
+    for job in manifest["jobs"]
+    if job["id"] in responsible_node_assertion_workloads
+    and job["id"] in actual
+    and job["responsible_nodes"] != actual[job["id"]]["responsible_nodes"]
+)
+cascade_mismatches = []
+for job in manifest["jobs"]:
+    discarded_prefixes = job.get("discarded_symptom_prefixes", [])
+    if discarded_prefixes == [] or job["id"] not in actual:
+        continue
+    actual_symptoms = actual[job["id"]]["raw_result"].get("symptoms", {})
+    for prefix in discarded_prefixes:
+        retained = sorted(symptom for symptom in actual_symptoms if symptom.startswith(prefix))
+        if retained != []:
+            cascade_mismatches.append((job["id"], prefix, retained))
 
 if run_count != expected_runs:
     raise SystemExit(f"expected {expected_runs} attribution runs, found {run_count}")
@@ -119,6 +144,10 @@ if missing != [] or extra != [] or mismatches != []:
     raise SystemExit(
         f"sample outcome mismatch: missing={missing}, extra={extra}, mismatches={mismatches}"
     )
+if responsible_node_mismatches != []:
+    raise SystemExit(f"sample responsible-node mismatch: {responsible_node_mismatches}")
+if cascade_mismatches != []:
+    raise SystemExit(f"sample cascade mismatch: {cascade_mismatches}")
 if responsible_node_count == 0:
     raise SystemExit("expected at least one attribution run with responsible nodes")
 
@@ -131,6 +160,7 @@ if web_run_count != expected_runs:
 
 print(
     f"end_to_end_results={run_count} outcome_mismatches=0 "
+    f"responsible_node_mismatches=0 cascade_mismatches=0 "
     f"responsible_nodes={responsible_node_count} webui_total_runs={web_run_count}"
 )
 PY

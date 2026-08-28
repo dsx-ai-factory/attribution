@@ -10,8 +10,9 @@ The baseline 98-workload corpus uses single-symptom multi-node jobs with 32,
 64, and 1024 node allocations, committed syslog evidence, and benign
 application logs. Generic failed, timeout-cancelled, and prior MMU-fault samples
 are intentionally excluded from the baseline set. No baseline root-cause symptom
-appears more than three times. Every sample identifies exactly one responsible node in
-`sample-jobs.json`, and the evidence file names that node.
+appears more than three times. Samples identify one responsible node when the
+evidence supports one. Pair-only `ibv_modify_qp` failures keep the endpoint pair
+without assigning either endpoint as the responsible node.
 
 The additional 20 workloads are a repeat-offender demo. They use 20 distinct
 users, 1 to 10 nodes per job, and the same responsible node (`node-0101`) for

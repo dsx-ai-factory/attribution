@@ -1,11 +1,20 @@
 {
-  "description": "Static quickstart corpus with one root-cause symptom and one responsible node per job, plus a 20-job XID-31 repeat-offender demo.",
+  "description": "Static quickstart corpus with one root-cause symptom per job, pair-only network evidence, cascade coverage, and a 20-job XID-31 repeat-offender demo.",
   "constraints": {
     "forbidden_sample_classes": [
       "generic-failed",
       "timeout-cancelled"
     ],
-    "responsible_nodes_per_job": 1,
+    "responsible_node_exceptions": [
+      "workload-0069",
+      "workload-0070"
+    ],
+    "responsible_node_assertion_workloads": [
+      "workload-0069",
+      "workload-0070",
+      "workload-0079",
+      "workload-0080"
+    ],
     "total_jobs": 118,
     "baseline_jobs": 98,
     "repeat_offender_jobs": 20,
@@ -1235,7 +1244,10 @@
       ],
       "evidence_source": "syslog",
       "evidence_marker": "Xid (PCI:0000:82:00): 149, (0x00400011 0x00000000",
-      "evidence_path": "docs/sample-data/static/syslog/workload-0004/node-0004/syslog.log"
+      "evidence_path": "docs/sample-data/static/syslog/workload-0004/node-0004/syslog.log",
+      "discarded_symptom_prefixes": [
+        "XID-145"
+      ]
     },
     {
       "id": "workload-0005",
@@ -26624,9 +26636,7 @@
         "node-0069-peer-1022",
         "node-0069-peer-1023"
       ],
-      "responsible_nodes": [
-        "node-0069"
-      ],
+      "responsible_nodes": [],
       "evidence_source": "applog",
       "evidence_marker": "Call to ibv_modify_qp failed with 110 Connection timed out",
       "evidence_path": "docs/sample-data/static/applog/workload-0069/application.log"
@@ -26670,9 +26680,7 @@
         "node-0070-peer-0030",
         "node-0070-peer-0031"
       ],
-      "responsible_nodes": [
-        "node-0070"
-      ],
+      "responsible_nodes": [],
       "evidence_source": "applog",
       "evidence_marker": "Call to ibv_modify_qp failed with 110 Connection timed out",
       "evidence_path": "docs/sample-data/static/applog/workload-0070/application.log"

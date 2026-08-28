@@ -297,6 +297,39 @@ def test_responsible_nodes_collected_from_resourceless_source_marker(tmp_path):
     assert json.loads(row[0]) == ["node-0201"]
 
 
+def test_responsible_nodes_exclude_ibv_modify_qp_pair_evidence(tmp_path):
+    """Pair evidence must not be reduced to one responsible endpoint."""
+    db = tmp_path / "out.db"
+    out = SQLiteOutput(str(db))
+    symptoms = (
+        "Call to ibv_modify_qp failed",
+        "Call to ibv_modify_qp failed: eno 110 timeout",
+    )
+    for index, symptom in enumerate(symptoms):
+        attribution = {
+            "verdict": {"attribution_outcome": "Fail InfraHW"},
+            "symptoms": {
+                symptom: [
+                    {
+                        "type": "NodeSource",
+                        "node": f"node-{index}",
+                        "source": {"line": symptom},
+                        "source_channel": "applog",
+                    },
+                ],
+            },
+        }
+        out.write(_make_context(job_id=f"job-{index}", sluid=f"sluid-{index}"), attribution)
+    out.close()
+
+    conn = _connect(db)
+    try:
+        rows = conn.execute("SELECT responsible_nodes_json FROM attribution_run ORDER BY started_at").fetchall()
+    finally:
+        conn.close()
+    assert [json.loads(row[0]) for row in rows] == [[], []]
+
+
 def test_responsible_nodes_empty_when_symptoms_absent(tmp_path):
     """No `symptoms` key → empty list (not NULL, not missing column)."""
     db = tmp_path / "out.db"

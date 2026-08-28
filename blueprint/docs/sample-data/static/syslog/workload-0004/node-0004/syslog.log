@@ -1,3 +1,4 @@
 2026-08-06T03:44:00+00:00 node-0004 systemd[1]: Started sample training scope for workload-0004.
 2026-08-06T03:54:00+00:00 node-0004 kernel: NVRM: Xid (PCI:0000:82:00): 149, (0x00400011 0x00000000 0x00000000 0x00000000)
+2026-08-06T03:55:00+00:00 node-0004 kernel: NVRM: Xid (PCI:0000:82:00): 145, pid=28311, NVLINK_RLW_ERROR RLW_SRC_TRACK ErrorStatus=0x00000004
 2026-08-06T04:24:00+00:00 node-0004 systemd[1]: Stopped sample training scope for workload-0004.
