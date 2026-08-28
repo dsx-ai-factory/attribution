@@ -199,4 +199,18 @@ describe('VerdictView', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Other runs on node-a' }))
     expect(mocks.nav).toHaveBeenCalledWith('node', { id: 'node-a' })
   })
+
+  it('renders error pairs in the verdict details', () => {
+    mocks.useParams.mockReturnValue({ id: 'run-1' })
+    mocks.useSWR.mockReturnValue({
+      data: run({ errorPairs: "{'src_node': 'node-a', 'dst_node': 'node-b'}" }),
+      isLoading: false,
+      error: undefined,
+    })
+
+    render(<VerdictView />)
+
+    expect(screen.getByText('error_pairs')).toBeTruthy()
+    expect(screen.getByText("{'src_node': 'node-a', 'dst_node': 'node-b'}")).toBeTruthy()
+  })
 })

@@ -241,6 +241,15 @@ function EvidenceList({ run }: { run: Run }) {
           >
             {run.detail}
           </KvCell>
+          {run.errorPairs !== undefined && run.errorPairs !== '' && (
+            <KvCell
+              label="error_pairs"
+              className="col-span-2 lg:col-span-4 xl:col-span-2"
+              valueClass="font-mono text-xs text-foreground-secondary whitespace-pre-wrap break-words"
+            >
+              {run.errorPairs}
+            </KvCell>
+          )}
           <KvCell label={<DefHover term="attempt-uid">attempt_uid</DefHover>} valueClass="font-mono text-xs text-foreground-secondary truncate">
             {run.attemptUid}
           </KvCell>

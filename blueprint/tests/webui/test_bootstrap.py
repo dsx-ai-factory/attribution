@@ -92,6 +92,16 @@ def test_run_to_react_core_fields(tmp_path):
     assert set(["hasPersona", "title", "summary", "impact", "action", "supportDetails"]) <= set(r["operatorDiagnose"])
 
 
+def test_run_to_react_includes_bad_pairs(tmp_path):
+    bad_pairs = "{'src_node': 'node-a', 'dst_node': 'node-b'}"
+    run = _seed_one(tmp_path)
+    run.raw_result["collectors"] = {"bad_pairs": bad_pairs}
+
+    r = bootstrap.run_to_react(run)
+
+    assert r["errorPairs"] == bad_pairs
+
+
 def test_run_to_react_falls_back_when_catalog_is_empty(tmp_path):
     run = _seed_one(tmp_path, catalog_id="xid-79")
     r = bootstrap.run_to_react(run)

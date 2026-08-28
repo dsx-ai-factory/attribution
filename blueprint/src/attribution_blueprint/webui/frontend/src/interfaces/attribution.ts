@@ -59,6 +59,7 @@ export interface Run {
   detail: string
   rootSymptom: RootSymptom
   symptoms: SymptomEntry[]
+  errorPairs?: string
   responsibleNodes: string[]
   pipeline: string
   service: string

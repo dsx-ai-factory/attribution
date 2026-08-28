@@ -305,6 +305,8 @@ def _gpu_count(run) -> int:
 
 def run_to_react(run) -> dict[str, Any]:
     verdict = (run.raw_result or {}).get("verdict") or {}
+    collectors = (run.raw_result or {}).get("collectors")
+    bad_pairs = collectors.get("bad_pairs") if isinstance(collectors, dict) else None
     root = verdict.get("root_symptom") or {}
     root_src = root.get("source") or {}
     job = run.job_id
@@ -339,6 +341,7 @@ def run_to_react(run) -> dict[str, Any]:
             "line": root_src.get("line") or "",
         },
         "symptoms": symptoms,
+        "errorPairs": bad_pairs if isinstance(bad_pairs, str) else "",
         "responsibleNodes": list(run.responsible_nodes or []),
         "pipeline": run.pipeline_version or "",
         "service": run.service_api_version or "",
