@@ -4,7 +4,7 @@
     {
       "id": "workload-0001",
       "expected_outcome": "Fail InfraHW",
-      "root_cause_symptom": "XID-145-InfraHW",
+      "root_cause_symptom": "XID-171-UNCORRECTABLE_DRAM_ERROR",
       "state": "NODE_FAIL",
       "nodes": [
         "node-0001",
@@ -44,7 +44,7 @@
         "node-0001"
       ],
       "evidence_source": "syslog",
-      "evidence_marker": "Xid (PCI:0000:81:00): 145, (0x00000007 0x00000010",
+      "evidence_marker": "Xid (PCI:0000:81:00): 171,",
       "evidence_path": "docs/sample-data/static/syslog/workload-0001/node-0001/syslog.log"
     },
     {

@@ -17,13 +17,14 @@ The additional 20 workloads are a repeat-offender demo. They use 20 distinct
 users, 1 to 10 nodes per job, and the same responsible node (`node-0101`) for
 every XID-31 event so the UI can show repeat-offender detection across jobs.
 
-Hardware Fault coverage includes XID-145, XID-149, XID-79, XID-48, XID-95,
-XID-119, XID-120, XID-74, XID-143, XID-172, GPU fatal timeout, PCIe fatal
-timeout, GSP allocation failure, and system power-down node faults. Non-XID
-coverage also includes IB Error-12, Lustre client eviction, GPU lost through
+Hardware Fault coverage includes XID-48, XID-64, XID-74, XID-79, XID-95,
+XID-110, XID-119, XID-120, XID-121, XID-140, XID-143, XID-149, XID-156,
+XID-171, XID-172, and GSP allocation failure. Non-XID coverage also includes
+SLURM node faults, IB device-open failures, storage-network connection loss,
+IB Error-12, network route and link failures, Lustre client eviction, GPU lost through
 SLURM/NVML, CUDA illegal address, CUDA devices unavailable, NUMA memory
-exhaustion, OOM kills, fabric manager absence, NMI watchdog lockups, general
-protection faults, and kernel invalid memory access.
+exhaustion, OOM kills, fabric manager absence, NMI watchdog lockups, local
+catastrophic errors, general protection faults, and kernel invalid memory access.
 
 The expected local layout is:
 
