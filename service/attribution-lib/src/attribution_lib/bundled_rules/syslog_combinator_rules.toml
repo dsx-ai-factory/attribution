@@ -247,17 +247,17 @@ line   = "Connection lost to node 42: host-359412e9"
 
 
 # --- SyslogOomKill: 3-way pick_one classification of kernel OOM-killer lines ----
-# main's syslog_oom_kill: system-service victims are infra failures (bad); a
-# cgroup OOM of a UID>0 task is a user-task failure (bad); everything else is
-# recorded as interesting context. The branch-2 `when` guards the OPTIONAL cgroup
-# and uid captures with `is not None` (load-time optional-capture guard).
+# main's syslog_oom_kill: system-service victims owned by a system UID are infra
+# failures (bad); a cgroup OOM of a UID>0 task is a user-task failure (bad);
+# everything else is recorded as interesting context. The `when` clauses guard
+# OPTIONAL captures with `is not None` (load-time optional-capture guard).
 [[extractor]]
 name = "SyslogOomKill"
 match_re = '(?P<cgroup>Memory cgroup )?[Oo]ut of memory: Killed process \d+ \((?P<process_name>[^)]+)\)(?:.*?UID:(?P<uid>\d+))?'
 [extractor.emit]
 type = "pick_one"
 [[extractor.emit.branches]]
-when = "is_system_service_process(process_name)"
+when = "uid is not None and int(uid) < 1000 and is_system_service_process(process_name)"
 type = "bad_node"
 symptom = "OOM kill of system service"
 derived_rule = "system-service-oom-kill"
@@ -274,7 +274,7 @@ derived_rule = "oom-kill-other"
 # branch 1: system-service victim (slurmd) -> bad, system-service symptom.
 [[extractor.cases]]
 expect  = "bad"
-line    = "Out of memory: Killed process 4242 (slurmd) total-vm:100kB"
+line    = "Out of memory: Killed process 4242 (slurmd) total-vm:100kB, UID:0"
 symptom = "OOM kill of system service"
 # branch 2: cgroup OOM of a UID>0 task -> bad, user-task symptom.
 [[extractor.cases]]
