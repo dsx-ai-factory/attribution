@@ -529,6 +529,31 @@ def test_attribute_batch_restores_prefilter_keywords_from_cache(request, event_m
     assert "Python Exception" in result.symptoms
 
 
+def test_attribute_batch_restores_prefilter_keywords_saved_by_ingest(request, event_manager, job_info):
+    """Restore direct-ingestion raw keywords through the batch cache path.
+
+    Args:
+        request: Pytest request used to name the event stream.
+        event_manager: Event manager fixture.
+        job_info: Job information fixture.
+    """
+    backend = MemoryCheckpointBackend()
+    observation = make_inbound_observation(
+        ObservationSource.APPLOG,
+        ObservationFormat.RAW_LOG_LINES,
+        lines=PYTHON_TRACEBACK_LINES,
+    )
+    direct_attributor = Attributor.new(event_manager.create_stream(request.node.name), job_info)
+    direct_attributor.ingest(observation)
+    direct_attributor.attribute(backend)
+
+    cached_attributor = Attributor.new(event_manager.create_stream(f"{request.node.name}_cached"), job_info)
+    cached_attributor.ingest_batch([observation], backend)
+    result = cached_attributor.attribute(backend)
+
+    assert "Python Exception" in result.symptoms
+
+
 def test_attribute_batch_retains_prefilter_keywords_during_incremental_extraction(request, event_manager, job_info):
     """Union cached raw keywords with an incrementally extracted suffix.
 

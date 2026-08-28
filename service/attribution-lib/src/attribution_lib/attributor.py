@@ -406,13 +406,17 @@ class Attributor:
                 needs_save = False
 
         if needs_save:
+            raw_keywords = set(self._batch_raw_keywords)
+            for ingested_observation in self.ingested_observations.values():
+                if ingested_observation.consumed is not None:
+                    raw_keywords.update(ingested_observation.consumed.result.raw_keywords.symptoms())
             save_extraction_cache(
                 checkpoint_backend,
                 cache_key,
                 event_manager,
                 job_id_str,
                 current_fingerprints,
-                raw_keywords=self._batch_raw_keywords,
+                raw_keywords=raw_keywords,
             )
 
         ckpt_name = f"_attr_{cache_key}"
