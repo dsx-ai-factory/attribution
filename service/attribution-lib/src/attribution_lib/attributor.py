@@ -79,6 +79,7 @@ class ConsumedObservation:
         """
         context = observation.context
         _validate_source_format(context)
+        result = CalcBadNodesAttributionResult()
 
         if context.source != ObservationSource.JOB_KEYWORDS:
             entry_source = EntrySourceBase.from_observation(observation)
@@ -86,15 +87,17 @@ class ConsumedObservation:
             if config is not None and config.requires_nodes and not job_info.nodes:
                 pass
             else:
-                process_observation_source(
+                source_raw_keywords = process_observation_source(
                     event_stream=event_stream,
                     observation_source=entry_source,
                     job_info=job_info,
                     rules_engine=_attribution_lib.get_rules_engine(),
                     pre_filtered=pre_filtered,
                 )
+                for keyword in source_raw_keywords:
+                    result.raw_keywords.add(job_info.source_value(keyword, datum=None, rule="pre-filter include"))
 
-        return cls(context, CalcBadNodesAttributionResult())
+        return cls(context, result)
 
 
 class IngestedObservation:
@@ -236,6 +239,9 @@ class Attributor:
             job_info=self.job_info,
             raw_keywords_in=raw_keywords_entry,
         )
+        for ingested_observation in self.ingested_observations.values():
+            if ingested_observation.consumed is not None:
+                bad_node_result.raw_keywords_update(ingested_observation.consumed.result.raw_keywords)
         return attribute(
             event_stream=self.event_stream,
             job_info=self.job_info,

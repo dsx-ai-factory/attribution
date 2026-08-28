@@ -348,6 +348,25 @@ def test_attribute_preingested(request, event_manager, job_info):
     assert result.outcome_attr is not None
 
 
+def test_attribute_applog_prefilter_keywords(request, event_manager, job_info):
+    event_stream = event_manager.create_stream(request.node.name)
+    attributor = Attributor.new(event_stream, job_info)
+    observation = make_inbound_observation(
+        ObservationSource.APPLOG,
+        ObservationFormat.RAW_LOG_LINES,
+        lines=[
+            "Traceback (most recent call last):",
+            '  File "/workspace/train.py", line 42, in train',
+            "RuntimeError: training failed",
+        ],
+    )
+
+    attributor.ingest(observation)
+    result = attributor.attribute()
+
+    assert "Python Exception" in result.symptoms
+
+
 def test_attribute_preingested_interleave(request, event_manager, job_info):
     event_stream = event_manager.create_stream(request.node.name)
     attributor = Attributor.new(event_stream, job_info)
