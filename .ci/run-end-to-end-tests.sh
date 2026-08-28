@@ -138,6 +138,16 @@ for job in manifest["jobs"]:
         if retained != []:
             cascade_mismatches.append((job["id"], prefix, retained))
 
+bad_pair_mismatches = []
+for job in manifest["jobs"]:
+    expected_bad_pairs = job.get("expected_bad_pairs")
+    if expected_bad_pairs is None or job["id"] not in actual:
+        continue
+    collectors = actual[job["id"]]["raw_result"].get("collectors", {})
+    actual_bad_pairs = collectors.get("bad_pairs") if isinstance(collectors, dict) else None
+    if expected_bad_pairs != actual_bad_pairs:
+        bad_pair_mismatches.append((job["id"], expected_bad_pairs, actual_bad_pairs))
+
 if run_count != expected_runs:
     raise SystemExit(f"expected {expected_runs} attribution runs, found {run_count}")
 if missing != [] or extra != [] or mismatches != []:
@@ -148,6 +158,8 @@ if responsible_node_mismatches != []:
     raise SystemExit(f"sample responsible-node mismatch: {responsible_node_mismatches}")
 if cascade_mismatches != []:
     raise SystemExit(f"sample cascade mismatch: {cascade_mismatches}")
+if bad_pair_mismatches != []:
+    raise SystemExit(f"sample bad-pair mismatch: {bad_pair_mismatches}")
 if responsible_node_count == 0:
     raise SystemExit("expected at least one attribution run with responsible nodes")
 
@@ -160,7 +172,7 @@ if web_run_count != expected_runs:
 
 print(
     f"end_to_end_results={run_count} outcome_mismatches=0 "
-    f"responsible_node_mismatches=0 cascade_mismatches=0 "
+    f"responsible_node_mismatches=0 cascade_mismatches=0 bad_pair_mismatches=0 "
     f"responsible_nodes={responsible_node_count} webui_total_runs={web_run_count}"
 )
 PY

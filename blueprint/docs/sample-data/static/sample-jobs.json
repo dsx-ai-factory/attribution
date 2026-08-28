@@ -26637,6 +26637,7 @@
         "node-0069-peer-1023"
       ],
       "responsible_nodes": [],
+      "expected_bad_pairs": "{'src_node': 'node-0069', 'dst_node': 'node-0069-peer-0001'}; {'src_node': 'node-0069-peer-0001', 'dst_node': 'node-0069-peer-0002'}",
       "evidence_source": "applog",
       "evidence_marker": "Call to ibv_modify_qp failed with 110 Connection timed out",
       "evidence_path": "docs/sample-data/static/applog/workload-0069/application.log"

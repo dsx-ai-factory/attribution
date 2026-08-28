@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import type { ReactNode } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { cleanup, fireEvent, render, screen } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, within } from '@testing-library/react'
 import type { Run } from '@/interfaces/attribution'
 import { NodeView } from '@/routers/node'
 import { VerdictView } from '@/routers/verdict'
@@ -201,9 +201,11 @@ describe('VerdictView', () => {
   })
 
   it('renders error pairs in the verdict details', () => {
+    const firstPair = "{'src_node': 'node-a', 'dst_node': 'node-b'}"
+    const secondPair = "{'src_node': 'node-c', 'dst_node': 'node-d'}"
     mocks.useParams.mockReturnValue({ id: 'run-1' })
     mocks.useSWR.mockReturnValue({
-      data: run({ errorPairs: "{'src_node': 'node-a', 'dst_node': 'node-b'}" }),
+      data: run({ errorPairs: `${firstPair}; ${secondPair}` }),
       isLoading: false,
       error: undefined,
     })
@@ -211,6 +213,9 @@ describe('VerdictView', () => {
     render(<VerdictView />)
 
     expect(screen.getByText('error_pairs')).toBeTruthy()
-    expect(screen.getByText("{'src_node': 'node-a', 'dst_node': 'node-b'}")).toBeTruthy()
+    const pairRows = within(screen.getByRole('list', { name: 'error pairs' })).getAllByRole('listitem')
+    expect(pairRows).toHaveLength(2)
+    expect(pairRows[0].textContent).toBe(firstPair)
+    expect(pairRows[1].textContent).toBe(secondPair)
   })
 })
