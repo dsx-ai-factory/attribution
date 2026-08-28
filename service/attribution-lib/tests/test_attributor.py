@@ -48,6 +48,11 @@ from test_support.helpers import make_node_to_ranks, make_syslog_entry
 # APPLOG registers "error" as an include-keyword.
 APPLOG_INCLUDE_TERM = "error"
 DEFAULT_LINES = [APPLOG_INCLUDE_TERM, "failure", "crash"]
+PYTHON_TRACEBACK_LINES = [
+    "Traceback (most recent call last):",
+    '  File "/workspace/train.py", line 42, in train',
+    "RuntimeError: training failed",
+]
 
 
 @pytest.fixture
@@ -475,6 +480,82 @@ def test_attribute_batch(request, event_manager, job_info):
     attributor.ingest_batch(observations, backend)
     result = attributor.attribute(backend)
     assert result is not None
+
+
+def test_attribute_batch_applog_prefilter_keywords(request, event_manager, job_info):
+    """Promote raw keywords collected during a full batch extraction.
+
+    Args:
+        request: Pytest request used to name the event stream.
+        event_manager: Event manager fixture.
+        job_info: Job information fixture.
+    """
+    event_stream = event_manager.create_stream(request.node.name)
+    attributor = Attributor.new(event_stream, job_info)
+    backend = MemoryCheckpointBackend()
+    observation = make_inbound_observation(
+        ObservationSource.APPLOG,
+        ObservationFormat.RAW_LOG_LINES,
+        lines=PYTHON_TRACEBACK_LINES,
+    )
+
+    attributor.ingest_batch([observation], backend)
+    result = attributor.attribute(backend)
+
+    assert "Python Exception" in result.symptoms
+
+
+def test_attribute_batch_restores_prefilter_keywords_from_cache(request, event_manager, job_info):
+    """Restore raw keywords when batch extraction is skipped on a cache hit.
+
+    Args:
+        request: Pytest request used to name the event stream.
+        event_manager: Event manager fixture.
+        job_info: Job information fixture.
+    """
+    backend = MemoryCheckpointBackend()
+    observation = make_inbound_observation(
+        ObservationSource.APPLOG,
+        ObservationFormat.RAW_LOG_LINES,
+        lines=PYTHON_TRACEBACK_LINES,
+    )
+    first_attributor = Attributor.new(event_manager.create_stream(request.node.name), job_info)
+    first_attributor.ingest_batch([observation], backend)
+
+    cached_attributor = Attributor.new(event_manager.create_stream(f"{request.node.name}_cached"), job_info)
+    cached_attributor.ingest_batch([observation], backend)
+    result = cached_attributor.attribute(backend)
+
+    assert "Python Exception" in result.symptoms
+
+
+def test_attribute_batch_retains_prefilter_keywords_during_incremental_extraction(request, event_manager, job_info):
+    """Union cached raw keywords with an incrementally extracted suffix.
+
+    Args:
+        request: Pytest request used to name the event stream.
+        event_manager: Event manager fixture.
+        job_info: Job information fixture.
+    """
+    backend = MemoryCheckpointBackend()
+    initial_observation = make_inbound_observation(
+        ObservationSource.APPLOG,
+        ObservationFormat.RAW_LOG_LINES,
+        lines=PYTHON_TRACEBACK_LINES,
+    )
+    first_attributor = Attributor.new(event_manager.create_stream(request.node.name), job_info)
+    first_attributor.ingest_batch([initial_observation], backend)
+
+    appended_observation = make_inbound_observation(
+        ObservationSource.APPLOG,
+        ObservationFormat.RAW_LOG_LINES,
+        lines=[*PYTHON_TRACEBACK_LINES, "training shutdown complete"],
+    )
+    incremental_attributor = Attributor.new(event_manager.create_stream(f"{request.node.name}_incremental"), job_info)
+    incremental_attributor.ingest_batch([appended_observation], backend)
+    result = incremental_attributor.attribute(backend)
+
+    assert "Python Exception" in result.symptoms
 
 
 def test_running(request, event_manager):

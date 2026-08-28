@@ -46,13 +46,14 @@ class DataFingerprint:
 
 @dataclass(frozen=True)
 class ExtractionCacheMetadata:
-    """Records the rule versions, job identity, and source fingerprints
+    """Records rule versions, job identity, fingerprints, and raw keywords
     associated with a cached extraction."""
 
     extractor_hash: str
     attribution_hash: str
     job_id: str
     data_fingerprints: dict[str, DataFingerprint] = field(default_factory=dict)
+    raw_keywords: Optional[tuple[str, ...]] = ()
     previous_outcome: Optional[str] = None
     attribution_attempt_count: int = 0
     last_attribution_timestamp: Optional[str] = None
@@ -65,6 +66,8 @@ class ExtractionCacheMetadata:
         }
         if self.data_fingerprints:
             data["data_fingerprints"] = {k: v.to_dict() for k, v in self.data_fingerprints.items()}
+        if self.raw_keywords is not None:
+            data["raw_keywords"] = list(self.raw_keywords)
         if self.previous_outcome is not None:
             data["previous_outcome"] = self.previous_outcome
         if self.attribution_attempt_count > 0:
@@ -82,6 +85,7 @@ class ExtractionCacheMetadata:
             attribution_hash=data["attribution_hash"],
             job_id=data["job_id"],
             data_fingerprints=fingerprints,
+            raw_keywords=tuple(data["raw_keywords"]) if "raw_keywords" in data else None,
             previous_outcome=data.get("previous_outcome"),
             attribution_attempt_count=data.get("attribution_attempt_count", 0),
             last_attribution_timestamp=data.get("last_attribution_timestamp"),

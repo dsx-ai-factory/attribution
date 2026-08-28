@@ -225,6 +225,20 @@ class TestExtractionCacheMetadata:
         raw = {"extractor_hash": "abc", "attribution_hash": "def", "job_id": "42"}
         metadata = ExtractionCacheMetadata.from_dict(raw)
         assert metadata.data_fingerprints == {}
+        assert metadata.raw_keywords is None
+
+    def test_round_trip_with_raw_keywords(self):
+        """Preserve raw keyword strings in checkpoint metadata."""
+        metadata = ExtractionCacheMetadata(
+            extractor_hash="abc",
+            attribution_hash="def",
+            job_id="42",
+            raw_keywords=('File "', "RuntimeError"),
+        )
+
+        restored = ExtractionCacheMetadata.from_dict(metadata.to_dict())
+
+        assert restored == metadata
 
     def test_round_trip_with_previous_outcome(self):
         metadata = ExtractionCacheMetadata(
@@ -274,6 +288,29 @@ class TestExtractionCacheMetadata:
 
 
 class TestMemoryCheckpointBackend:
+    def test_cache_without_raw_keywords_requires_reextraction(self, dummy_ctx):
+        """Invalidate legacy metadata that cannot restore raw keywords.
+
+        Args:
+            dummy_ctx: Observation context fixture used to populate events.
+        """
+        backend = MemoryCheckpointBackend()
+        fingerprints = {"applog": DataFingerprint(count=10, sample_hashes=("aaa", "bbb"))}
+        event_manager = EventManager(rules_engine=attribution_lib.get_rules_engine())
+        _populate(event_manager, dummy_ctx, count=4)
+        metadata = ExtractionCacheMetadata(
+            extractor_hash=attribution_lib.get_rules_engine().extractor_hash(),
+            attribution_hash=attribution_lib.get_rules_engine().attribution_hash(),
+            job_id="job_42",
+            data_fingerprints=fingerprints,
+            raw_keywords=None,
+        )
+        backend.save("cache_key", event_manager, metadata)
+
+        result = load_or_update_extraction_cache(backend, "cache_key", fingerprints)
+
+        assert result.needs_full_reextraction
+
     def test_save_then_load(self, dummy_ctx):
         backend = MemoryCheckpointBackend()
         event_manager = EventManager(rules_engine=attribution_lib.get_rules_engine())

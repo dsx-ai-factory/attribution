@@ -196,10 +196,11 @@ def save_extraction_cache(
     event_manager: EventManager,
     job_id: str,
     data_fingerprints: Optional[dict[str, DataFingerprint]] = None,
+    raw_keywords: Optional[set[str]] = None,
 ) -> None:
     """Build metadata from current rule hashes and delegate to the backend.
 
-    Saves extraction state (events + rule hashes + fingerprints).
+    Saves extraction state (events + rule hashes + fingerprints + raw keywords).
     Post-attribution metadata (outcome, attempt count, timestamp) should
     be written separately via backend.update_metadata() after attribution.
     """
@@ -210,6 +211,7 @@ def save_extraction_cache(
         attribution_hash=rules_engine.attribution_hash(),
         job_id=job_id,
         data_fingerprints=data_fingerprints or {},
+        raw_keywords=tuple(sorted(raw_keywords if raw_keywords is not None else ())),
     )
     backend.save(cache_key, event_manager, metadata)
 
@@ -238,6 +240,9 @@ def load_extraction_cache(
             metadata.extractor_hash[:12],
             current_extractor_hash[:12],
         )
+        return None
+    if metadata.raw_keywords is None:
+        logger.info("Extraction cache lacks raw keywords; re-extraction needed")
         return None
 
     event_manager = backend.load_event_manager(cache_key)
@@ -276,6 +281,9 @@ def load_or_update_extraction_cache(
             metadata.extractor_hash[:12],
             current_extractor_hash[:12],
         )
+        return CacheLoadResult(event_manager=None, metadata=metadata, data_diffs={}, needs_full_reextraction=True)
+    if metadata.raw_keywords is None:
+        logger.info("Extraction cache lacks raw keywords; full re-extraction needed")
         return CacheLoadResult(event_manager=None, metadata=metadata, data_diffs={}, needs_full_reextraction=True)
 
     data_diffs = diff_data(metadata.data_fingerprints, current_fingerprints, skipped_sources=skipped_sources)
