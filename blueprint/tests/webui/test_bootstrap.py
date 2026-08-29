@@ -2,6 +2,8 @@ import json
 import os
 from datetime import datetime, timezone
 
+import pytest
+
 from attribution_blueprint.connectors.outputs.sqlite import SQLiteOutput
 from attribution_blueprint.webui import (
     bootstrap,
@@ -85,6 +87,7 @@ def test_run_to_react_core_fields(tmp_path):
     assert r["rootSymptom"]["symptom"] == "GpuFell"
     assert r["rootSymptom"]["rule"] == "gpu_fell_off_bus"
     assert r["symptoms"] == [{"name": "GpuFell", "sites": 1}]
+    assert r["errorPairs"] == ""
     # log is matched-line evidence: root symptom line present at level 'symptom'
     assert any(entry["level"] == "symptom" and "Xid 79" in entry["text"] for entry in r["log"])
     # diagnose card present (camelCase keys)
@@ -100,6 +103,22 @@ def test_run_to_react_includes_bad_pairs(tmp_path):
     r = bootstrap.run_to_react(run)
 
     assert r["errorPairs"] == bad_pairs
+
+
+@pytest.mark.parametrize("collectors", [None, {}, {"bad_pairs": None}, {"bad_pairs": ""}, {"bad_pairs": 0}])
+def test_run_to_react_omits_invalid_bad_pairs(tmp_path, collectors):
+    """Return empty error pairs for missing or malformed collector data.
+
+    Args:
+        tmp_path: Pytest temporary directory fixture.
+        collectors: Collector payload being tested.
+    """
+    run = _seed_one(tmp_path)
+    run.raw_result["collectors"] = collectors
+
+    r = bootstrap.run_to_react(run)
+
+    assert r["errorPairs"] == ""
 
 
 def test_run_to_react_falls_back_when_catalog_is_empty(tmp_path):

@@ -35,6 +35,13 @@ REQUIRED_NON_XID_SYMPTOMS = {
     "OOM kill of user task",
     "OOM kill of system service",
     "OOM kill of a system pod",
+    "NS network connection lost",
+    "Fabric manager lost connection to all GPUs",
+    "Call to ibv_modify_qp failed: eno 110 timeout",
+    "ibv_open_device failed",
+    "No route to host",
+    "link down(east-west)",
+    "local catastrophic error",
 }
 
 
