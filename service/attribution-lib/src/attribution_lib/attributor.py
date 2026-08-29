@@ -188,7 +188,7 @@ class Attributor:
         if new_observation.context.source == ObservationSource.JOB_KEYWORDS:
             self._raw_keywords_observation = new_observation
         else:
-            fingerprint = compute_data_fingerprint(observation.lines)
+            fingerprint = compute_data_fingerprint(observation.lines, extraction_context=observation.context)
             if fingerprint is not None:
                 self._source_fingerprints[new_observation.context.source.value] = fingerprint
 
@@ -286,7 +286,7 @@ class Attributor:
         observations_by_source: dict[str, InboundObservation] = {}
         for observation in extraction_observations:
             source_name = observation.context.source.value
-            fingerprint = compute_data_fingerprint(observation.lines)
+            fingerprint = compute_data_fingerprint(observation.lines, extraction_context=observation.context)
             if fingerprint is not None:
                 current_fingerprints[source_name] = fingerprint
             observations_by_source[source_name] = observation

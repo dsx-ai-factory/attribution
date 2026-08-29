@@ -8,6 +8,7 @@
 # without an express license agreement from NVIDIA CORPORATION or
 # its affiliates is strictly prohibited.
 
+from dataclasses import replace
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
@@ -40,7 +41,8 @@ from attribution_lib.observation.inbound import (
     TimeInterval,
 )
 from attribution_lib.prefilters import PreFilterSpec
-from attribution_lib.resources.resource_set import AllJobResources
+from attribution_lib.resources.node import Node as NodeResource
+from attribution_lib.resources.resource_set import AllJobResources, ResourceSetClass
 from attribution_lib.rule_types.definitions import EventTriple, ExtractorRule, RuleLocation
 from attribution_lib.rules_engine import RuleLoader
 from test_support.helpers import make_node_to_ranks, make_syslog_entry
@@ -527,6 +529,84 @@ def test_attribute_batch_restores_prefilter_keywords_from_cache(request, event_m
     result = cached_attributor.attribute(backend)
 
     assert "Python Exception" in result.symptoms
+
+
+def test_attribute_batch_reextracts_when_prefilter_directive_changes(request, event_manager, job_info):
+    """Reject cached extraction performed under a different prefilter directive.
+
+    Args:
+        request: Pytest request used to name the event stream.
+        event_manager: Event manager fixture.
+        job_info: Job information fixture.
+    """
+    backend = MemoryCheckpointBackend()
+    unfiltered_observation = make_inbound_observation(
+        ObservationSource.APPLOG,
+        ObservationFormat.RAW_LOG_LINES,
+        lines=PYTHON_TRACEBACK_LINES,
+        pre_filtered=False,
+    )
+    first_attributor = Attributor.new(event_manager.create_stream(request.node.name), job_info)
+    first_attributor.ingest_batch([unfiltered_observation], backend)
+    first_result = first_attributor.attribute(backend)
+
+    prefiltered_observation = make_inbound_observation(
+        ObservationSource.APPLOG,
+        ObservationFormat.RAW_LOG_LINES,
+        lines=PYTHON_TRACEBACK_LINES,
+        pre_filtered=True,
+    )
+    second_attributor = Attributor.new(event_manager.create_stream(f"{request.node.name}_prefiltered"), job_info)
+    second_attributor.ingest_batch([prefiltered_observation], backend)
+    second_result = second_attributor.attribute(backend)
+
+    assert "Python Exception" in first_result.symptoms
+    assert "Python Exception" not in second_result.symptoms
+
+
+def test_saved_fingerprint_includes_extraction_context(request, event_manager, job_info):
+    """Change cache fingerprints when extraction-affecting context changes.
+
+    Args:
+        request: Pytest request used to name event streams.
+        event_manager: Event manager fixture.
+        job_info: Job information fixture.
+    """
+    observation = make_inbound_observation(
+        ObservationSource.APPLOG,
+        ObservationFormat.RAW_LOG_LINES,
+        lines=PYTHON_TRACEBACK_LINES,
+    )
+    baseline_backend = MemoryCheckpointBackend()
+    baseline_attributor = Attributor.new(event_manager.create_stream(request.node.name), job_info)
+    baseline_attributor.ingest(observation)
+    baseline_attributor.attribute(baseline_backend)
+    cache_key = baseline_attributor.get_cache_key(job_info)
+    baseline_metadata = baseline_backend.load_metadata(cache_key)
+    assert baseline_metadata is not None
+    baseline_fingerprint = baseline_metadata.data_fingerprints[ObservationSource.APPLOG.value]
+
+    context = observation.context
+    context_variants = [
+        replace(context, pre_filtered=True),
+        replace(context, timezone=ZoneInfo("UTC")),
+        replace(
+            context,
+            time_interval=TimeInterval(
+                start=context.time_interval.start + timedelta(days=1),
+                end=context.time_interval.end + timedelta(days=1),
+            ),
+        ),
+        replace(context, resources=ResourceSetClass([NodeResource(hostname="node1")])),
+    ]
+    for index, changed_context in enumerate(context_variants):
+        backend = MemoryCheckpointBackend()
+        attributor = Attributor.new(event_manager.create_stream(f"{request.node.name}_{index}"), job_info)
+        attributor.ingest(InboundObservation(changed_context, PYTHON_TRACEBACK_LINES))
+        attributor.attribute(backend)
+        metadata = backend.load_metadata(cache_key)
+        assert metadata is not None
+        assert metadata.data_fingerprints[ObservationSource.APPLOG.value] != baseline_fingerprint
 
 
 def test_attribute_batch_restores_prefilter_keywords_saved_by_ingest(request, event_manager, job_info):
