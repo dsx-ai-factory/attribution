@@ -79,6 +79,7 @@ class ConsumedObservation:
         """
         context = observation.context
         _validate_source_format(context)
+        result = CalcBadNodesAttributionResult()
 
         if context.source != ObservationSource.JOB_KEYWORDS:
             entry_source = EntrySourceBase.from_observation(observation)
@@ -86,15 +87,17 @@ class ConsumedObservation:
             if config is not None and config.requires_nodes and not job_info.nodes:
                 pass
             else:
-                process_observation_source(
+                source_raw_keywords = process_observation_source(
                     event_stream=event_stream,
                     observation_source=entry_source,
                     job_info=job_info,
                     rules_engine=_attribution_lib.get_rules_engine(),
                     pre_filtered=pre_filtered,
                 )
+                for keyword in source_raw_keywords:
+                    result.raw_keywords.add(job_info.source_value(keyword, datum=None, rule="pre-filter include"))
 
-        return cls(context, CalcBadNodesAttributionResult())
+        return cls(context, result)
 
 
 class IngestedObservation:
@@ -138,6 +141,7 @@ class Attributor:
     event_stream: EventStream
     ingested_observations: dict[ObservationId, IngestedObservation]
     _raw_keywords_observation: Optional[Observation]
+    _batch_raw_keywords: set[str]
     _source_fingerprints: dict[str, DataFingerprint]
 
     def __init__(
@@ -150,6 +154,7 @@ class Attributor:
         self.event_stream = event_stream
         self.ingested_observations = dict()
         self._raw_keywords_observation = None
+        self._batch_raw_keywords = set()
         self._source_fingerprints = {}
 
     @classmethod
@@ -183,7 +188,7 @@ class Attributor:
         if new_observation.context.source == ObservationSource.JOB_KEYWORDS:
             self._raw_keywords_observation = new_observation
         else:
-            fingerprint = compute_data_fingerprint(observation.lines)
+            fingerprint = compute_data_fingerprint(observation.lines, extraction_context=observation.context)
             if fingerprint is not None:
                 self._source_fingerprints[new_observation.context.source.value] = fingerprint
 
@@ -236,6 +241,11 @@ class Attributor:
             job_info=self.job_info,
             raw_keywords_in=raw_keywords_entry,
         )
+        for ingested_observation in self.ingested_observations.values():
+            if ingested_observation.consumed is not None:
+                bad_node_result.raw_keywords_update(ingested_observation.consumed.result.raw_keywords)
+        for keyword in self._batch_raw_keywords:
+            bad_node_result.raw_keywords.add(self.job_info.source_value(keyword, datum=None, rule="pre-filter include"))
         return attribute(
             event_stream=self.event_stream,
             job_info=self.job_info,
@@ -276,7 +286,7 @@ class Attributor:
         observations_by_source: dict[str, InboundObservation] = {}
         for observation in extraction_observations:
             source_name = observation.context.source.value
-            fingerprint = compute_data_fingerprint(observation.lines)
+            fingerprint = compute_data_fingerprint(observation.lines, extraction_context=observation.context)
             if fingerprint is not None:
                 current_fingerprints[source_name] = fingerprint
             observations_by_source[source_name] = observation
@@ -295,14 +305,28 @@ class Attributor:
             )
             event_manager = EventManager(rules_engine=rules_engine)
             event_stream = event_manager.create_stream(job_id_str)
-            _extract_observations(event_stream, extraction_observations, self.job_info, rules_engine)
+            self._batch_raw_keywords = _extract_observations(
+                event_stream, extraction_observations, self.job_info, rules_engine
+            )
             event_stream.flush()
             checkpoint_backend.cleanup()
-            save_extraction_cache(checkpoint_backend, cache_key, event_manager, job_id_str, current_fingerprints)
+            save_extraction_cache(
+                checkpoint_backend,
+                cache_key,
+                event_manager,
+                job_id_str,
+                current_fingerprints,
+                raw_keywords=self._batch_raw_keywords,
+            )
         else:
-            if cache_result.event_manager is None:
-                raise RuntimeError("Cache reported valid but returned no EventManager")
+            if (
+                cache_result.event_manager is None
+                or cache_result.metadata is None
+                or cache_result.metadata.raw_keywords is None
+            ):
+                raise RuntimeError("Cache reported valid but returned incomplete checkpoint state")
             event_manager = cache_result.event_manager
+            self._batch_raw_keywords = set(cache_result.metadata.raw_keywords)
             incremental_observations = []
             for source_name, diff in cache_result.data_diffs.items():
                 if diff.result == DataDiffResult.NEW_SOURCE:
@@ -333,9 +357,18 @@ class Attributor:
                     len(incremental_observations),
                 )
                 event_stream = event_manager.create_stream(job_id_str)
-                _extract_observations(event_stream, incremental_observations, self.job_info, rules_engine)
+                self._batch_raw_keywords.update(
+                    _extract_observations(event_stream, incremental_observations, self.job_info, rules_engine)
+                )
                 event_stream.flush()
-                save_extraction_cache(checkpoint_backend, cache_key, event_manager, job_id_str, current_fingerprints)
+                save_extraction_cache(
+                    checkpoint_backend,
+                    cache_key,
+                    event_manager,
+                    job_id_str,
+                    current_fingerprints,
+                    raw_keywords=self._batch_raw_keywords,
+                )
             else:
                 logger.info("job {}: checkpoint restored, all sources unchanged — skipping extraction", job_id_str)
 
@@ -373,7 +406,18 @@ class Attributor:
                 needs_save = False
 
         if needs_save:
-            save_extraction_cache(checkpoint_backend, cache_key, event_manager, job_id_str, current_fingerprints)
+            raw_keywords = set(self._batch_raw_keywords)
+            for ingested_observation in self.ingested_observations.values():
+                if ingested_observation.consumed is not None:
+                    raw_keywords.update(ingested_observation.consumed.result.raw_keywords.symptoms())
+            save_extraction_cache(
+                checkpoint_backend,
+                cache_key,
+                event_manager,
+                job_id_str,
+                current_fingerprints,
+                raw_keywords=raw_keywords,
+            )
 
         ckpt_name = f"_attr_{cache_key}"
         event_manager.checkpoint(ckpt_name)
@@ -393,8 +437,9 @@ def _extract_observations(
     observations_to_extract: list[InboundObservation],
     job_info: JobInfo,
     rules_engine,
-) -> None:
-    """Run extraction rules on observations into an event stream."""
+) -> set[str]:
+    """Run extraction rules and return their raw keyword evidence."""
+    raw_keywords: set[str] = set()
     for inbound_observation in observations_to_extract:
         observation = Observation.from_inbound_observation(inbound_observation)
         event_stream.register_observation_context(observation.context)
@@ -405,13 +450,16 @@ def _extract_observations(
         if config is not None and config.requires_nodes and not job_info.nodes:
             continue
 
-        process_observation_source(
-            event_stream=event_stream,
-            observation_source=entry_source,
-            job_info=job_info,
-            rules_engine=rules_engine,
-            pre_filtered=inbound_observation.context.pre_filtered,
+        raw_keywords.update(
+            process_observation_source(
+                event_stream=event_stream,
+                observation_source=entry_source,
+                job_info=job_info,
+                rules_engine=rules_engine,
+                pre_filtered=inbound_observation.context.pre_filtered,
+            )
         )
+    return raw_keywords
 
 
 def _validate_source_format(context: ObservationContext) -> None:

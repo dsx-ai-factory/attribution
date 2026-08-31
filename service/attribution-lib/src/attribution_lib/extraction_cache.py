@@ -40,6 +40,8 @@ from attribution_lib.cache_metadata import (
 )
 from attribution_lib.checkpoint_backends import CheckpointBackend
 from attribution_lib.events import EventManager
+from attribution_lib.observation.inbound import Context as ObservationContext
+from attribution_lib.resources.resource_set import serialize_resource_set
 
 # Re-export types so existing callers that import from here keep working
 __all__ = [
@@ -86,16 +88,44 @@ def _sample_indices(count: int, num_samples: int = _NUM_SAMPLE_POINTS) -> list[i
     return [round(i * step) for i in range(num_samples)]
 
 
-def compute_data_fingerprint(entries: list[Any]) -> Optional[DataFingerprint]:
-    """Compute a DataFingerprint for a list of observation entries.
+def compute_data_fingerprint(
+    entries: list[Any], extraction_context: Optional[ObservationContext] = None
+) -> Optional[DataFingerprint]:
+    """Compute a fingerprint for observation entries and extraction context.
 
-    Hashes entries at spread-sampled positions for robust change detection.
-    Returns ``None`` if the list is empty.
+    Args:
+        entries: Observation entries to sample.
+        extraction_context: Context that controls parsing, filtering, and
+            attribution provenance. Omit for a data-only fingerprint.
+
+    Returns:
+        A context-bound fingerprint, or ``None`` when entries is empty.
     """
     if not entries:
         return None
     indices = _sample_indices(len(entries))
     sample_hashes = tuple(_hash_entry(entries[i]) for i in indices)
+    if extraction_context is not None:
+        serialized_resources = serialize_resource_set(extraction_context.resources)
+        resources: Any
+        if isinstance(serialized_resources, str):
+            resources = serialized_resources
+        else:
+            resources = [resource.model_dump(mode="json") for resource in serialized_resources]
+        context_hash = _hash_entry(
+            {
+                "format": extraction_context.format.value,
+                "pre_filtered": extraction_context.pre_filtered,
+                "resources": resources,
+                "source": extraction_context.source.value,
+                "time_end": extraction_context.time_interval.end.isoformat(),
+                "time_start": extraction_context.time_interval.start.isoformat(),
+                "timezone": extraction_context.timezone.key,
+            }
+        )
+        sample_hashes = tuple(
+            _hash_entry({"context_hash": context_hash, "entry_hash": sample_hash}) for sample_hash in sample_hashes
+        )
     return DataFingerprint(count=len(entries), sample_hashes=sample_hashes)
 
 
@@ -196,10 +226,11 @@ def save_extraction_cache(
     event_manager: EventManager,
     job_id: str,
     data_fingerprints: Optional[dict[str, DataFingerprint]] = None,
+    raw_keywords: Optional[set[str]] = None,
 ) -> None:
     """Build metadata from current rule hashes and delegate to the backend.
 
-    Saves extraction state (events + rule hashes + fingerprints).
+    Saves extraction state (events + rule hashes + fingerprints + raw keywords).
     Post-attribution metadata (outcome, attempt count, timestamp) should
     be written separately via backend.update_metadata() after attribution.
     """
@@ -210,6 +241,7 @@ def save_extraction_cache(
         attribution_hash=rules_engine.attribution_hash(),
         job_id=job_id,
         data_fingerprints=data_fingerprints or {},
+        raw_keywords=tuple(sorted(raw_keywords if raw_keywords is not None else ())),
     )
     backend.save(cache_key, event_manager, metadata)
 
@@ -238,6 +270,9 @@ def load_extraction_cache(
             metadata.extractor_hash[:12],
             current_extractor_hash[:12],
         )
+        return None
+    if metadata.raw_keywords is None:
+        logger.info("Extraction cache lacks raw keywords; re-extraction needed")
         return None
 
     event_manager = backend.load_event_manager(cache_key)
@@ -276,6 +311,9 @@ def load_or_update_extraction_cache(
             metadata.extractor_hash[:12],
             current_extractor_hash[:12],
         )
+        return CacheLoadResult(event_manager=None, metadata=metadata, data_diffs={}, needs_full_reextraction=True)
+    if metadata.raw_keywords is None:
+        logger.info("Extraction cache lacks raw keywords; full re-extraction needed")
         return CacheLoadResult(event_manager=None, metadata=metadata, data_diffs={}, needs_full_reextraction=True)
 
     data_diffs = diff_data(metadata.data_fingerprints, current_fingerprints, skipped_sources=skipped_sources)
