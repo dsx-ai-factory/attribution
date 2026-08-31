@@ -2,6 +2,8 @@
 
 Contributions open at GA.
 
+Before you participate, read and follow our [Code of Conduct](CODE_OF_CONDUCT.md).
+
 During Early Access the rule schema, cascade-pattern syntax, and test framework are published so you can author and validate rules against your own Service instance. The rule catalog is curated by NVIDIA. The contribution workflow, reviewer register, and CLA publish at GA.
 
 ## Run the test gate
