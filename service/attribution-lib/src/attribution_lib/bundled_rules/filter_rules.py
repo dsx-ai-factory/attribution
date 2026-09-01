@@ -694,6 +694,20 @@ def demote_insufficient_permissions(context: FilterContext):
     )
 
 
+@filter_def(name="DemoteNonFatalInvalidState", author="NVIDIA Attribution team", priority=FilterPriority.LATE)
+def demote_nonfatal_invalid_state(context: FilterContext):
+    """Demote the non-fatal osapi invalid-state symptom to interesting.
+
+    Args:
+        context: Filter context containing the event stream.
+    """
+    _demote_bad_by_symptom(
+        context.event_stream,
+        frozenset(("NV_ERR_INVALID_STATE osapi.c",)),
+        "DemoteNonFatalInvalidState",
+    )
+
+
 @filter_def(name="FmNodeFailure", author="NVIDIA Attribution team", derived_rules=["fm-lost-connection-to-all-gpus"])
 def fm_node_failure(context: FilterContext):
     """Aggregate 'Fabric manager lost connection to GPU' per node.

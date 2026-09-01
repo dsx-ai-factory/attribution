@@ -456,6 +456,77 @@ def test_nv_err_insufficient_permissions_demotion_preserves_other_nv_errs(stream
     assert bad_rows[0][0] == 1
 
 
+def test_nv_err_invalid_state_osapi_demoted_to_interesting(stream, obs_ctx, job_info):
+    """Keep non-fatal osapi telemetry without treating it as a failure.
+
+    Args:
+        stream: Event stream fixture.
+        obs_ctx: Observation context fixture.
+        job_info: Job information fixture.
+    """
+    symptom = "NV_ERR_INVALID_STATE osapi.c"
+    timestamp = datetime(2024, 1, 1, 10, 5, 0, tzinfo=ZoneInfo("UTC"))
+    create_event(
+        stream,
+        obs_ctx,
+        "Attribution.node.bad",
+        {"node": "node01", "symptom": symptom},
+        timestamp,
+        100,
+    )
+
+    filter_events(stream, job_info)
+    stream.flush()
+
+    bad_id = stream.mgr.types.get_id("Attribution.node.bad")
+    interesting_id = stream.mgr.types.get_id("Attribution.node.interesting")
+
+    bad_rows = stream.query_raw("SELECT status FROM events WHERE event_type=? AND line_num=100", [bad_id])
+    assert bad_rows[0][0] == 0
+
+    interesting_rows = stream.query_raw(
+        "SELECT status, payload FROM events WHERE event_type=? AND line_num=100",
+        [interesting_id],
+    )
+    assert interesting_rows[0][0] == 1
+    assert symptom in interesting_rows[0][1]
+
+
+@pytest.mark.parametrize(
+    "symptom",
+    [
+        "NV_ERR_INVALID_STATE nv_gpu_ops.c",
+        "NV_ERR_INVALID_STATE kern_bus_ctrl.c",
+        "NV_ERR_INVALID_STATE gpu_fabric_probe.c",
+    ],
+)
+def test_nv_err_invalid_state_osapi_demotion_preserves_other_sources(stream, obs_ctx, job_info, symptom):
+    """Keep other invalid-state source files classified as bad.
+
+    Args:
+        stream: Event stream fixture.
+        obs_ctx: Observation context fixture.
+        job_info: Job information fixture.
+        symptom: Invalid-state symptom that must remain bad.
+    """
+    timestamp = datetime(2024, 1, 1, 10, 5, 0, tzinfo=ZoneInfo("UTC"))
+    create_event(
+        stream,
+        obs_ctx,
+        "Attribution.node.bad",
+        {"node": "node01", "symptom": symptom},
+        timestamp,
+        100,
+    )
+
+    filter_events(stream, job_info)
+    stream.flush()
+
+    bad_id = stream.mgr.types.get_id("Attribution.node.bad")
+    bad_rows = stream.query_raw("SELECT status FROM events WHERE event_type=? AND line_num=100", [bad_id])
+    assert bad_rows[0][0] == 1
+
+
 @pytest.mark.parametrize(
     "real_xid",
     [
