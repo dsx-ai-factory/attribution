@@ -403,7 +403,12 @@ class RuleLoader:
         )
 
     @classmethod
-    def load_all(cls, rules_paths: Iterable[Path]) -> RuleEngine:
+    def load_all(
+        cls,
+        rules_paths: Iterable[Path],
+        *,
+        extra_symptom_declarations: Iterable[SymptomDeclaration] = (),
+    ) -> RuleEngine:
         """Load every rule file under each path and build the engine."""
         with cls() as loader:
             for path in rules_paths:
@@ -412,6 +417,8 @@ class RuleLoader:
                         if file.endswith(".test.toml"):
                             continue  # co-located test files are run by the suite, not loaded
                         loader.load(str(path / file))
+            for declaration in extra_symptom_declarations:
+                loader.register_symptom_declaration(declaration)
             return loader.build()
 
 

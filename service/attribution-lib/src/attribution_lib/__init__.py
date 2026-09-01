@@ -21,6 +21,7 @@ from attribution_lib.exceptions import (
 )
 
 if TYPE_CHECKING:
+    from attribution_lib.cancellation import SlurmCancellationPolicy
     from attribution_lib.observation.inbound import Source as ObservationSource
     from attribution_lib.prefilters import MetricSpec, PreFilterSpec
     from attribution_lib.rules_engine import RuleEngine
@@ -30,6 +31,7 @@ ip_to_nodenames: dict[str, str] = {}
 ignored_hostname_prefixes: list[str] = []
 _rules_engine: Optional["RuleEngine"] = None
 _symptom_registry: Optional["GeneratedSymptomRegistry"] = None
+_slurm_cancellation_policy: Optional["SlurmCancellationPolicy"] = None
 
 
 def get_rules_engine() -> "RuleEngine":
@@ -54,6 +56,15 @@ def get_symptom_registry() -> "GeneratedSymptomRegistry":
             "attribution_lib.setup_rules() must be called before using the symptom registry"
         )
     return _symptom_registry
+
+
+def get_slurm_cancellation_policy() -> "SlurmCancellationPolicy":
+    """Return the cancellation policy active for the current rules engine."""
+    if _slurm_cancellation_policy is None:
+        raise UninitializedRuleEngineError(
+            "attribution_lib.setup_rules() must be called before using the Slurm cancellation policy"
+        )
+    return _slurm_cancellation_policy
 
 
 def get_pre_filter(source: "ObservationSource") -> "PreFilterSpec":

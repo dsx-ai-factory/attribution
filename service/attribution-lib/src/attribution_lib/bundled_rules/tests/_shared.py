@@ -32,6 +32,7 @@ def default_job_info(
     time_limit: int | None = 3600,
     exit_code_signal: int | None = 1,
     cancelled_by: str | None = None,
+    admin_comment: str | None = None,
     exit_code: int | None = None,
     tags: frozenset[str] = frozenset(),
 ) -> JobInfo:
@@ -62,6 +63,8 @@ def default_job_info(
     builder.tags(tags)
     if cancelled_by is not None:
         builder.cancelled_by(cancelled_by)
+    if admin_comment is not None:
+        builder.admin_comment(admin_comment)
     builder.interest_end_time(interest_end)
     if job_end_time is not None:
         builder.job_end_time(job_end_time)

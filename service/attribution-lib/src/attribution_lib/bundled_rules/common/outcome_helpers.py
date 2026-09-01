@@ -10,6 +10,7 @@
 
 from typing import TYPE_CHECKING
 
+import attribution_lib
 from attribution_lib.events import EventStream
 
 _SYSTEM_CANCEL_FLAGS = frozenset({"root", "Timeout", "PyTorch NCCL watchdog"})
@@ -41,7 +42,11 @@ def apply_user_cancellation_reclassification(
         return False
 
     cancelled_by = job_info.cancelled_by
-    if cancelled_by in _SYSTEM_CANCEL_FLAGS or cancelled_by.startswith("svc-"):
+    if (
+        cancelled_by in _SYSTEM_CANCEL_FLAGS
+        or cancelled_by.startswith("svc-")
+        or attribution_lib.get_slurm_cancellation_policy().is_operator(cancelled_by)
+    ):
         return False
 
     previous_source = attribution_result.outcome_attr.one_source() or job_info.source(

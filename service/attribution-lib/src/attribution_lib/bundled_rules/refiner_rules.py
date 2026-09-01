@@ -17,6 +17,7 @@ import re
 from datetime import timedelta
 from typing import Optional
 
+import attribution_lib
 from common.refiner_helpers import (
     _add_symptom_from_source,
     _get_earliest_watchdog_source,
@@ -893,7 +894,20 @@ def slurm_state_symptoms(context: RefinerContext):
     if job_info.state == "CANCELLED by 0":
         symptoms.add(job_info.source_value("Cancelled by root", job_info.state, "state cancelled by root"))
     elif job_info.state.startswith("CANCELLED"):
-        if job_info.cancelled_by == "site-automation-account":
+        cancellation_policy = attribution_lib.get_slurm_cancellation_policy()
+        decision = cancellation_policy.classify(
+            cancelled_by=job_info.cancelled_by,
+            admin_comment=job_info.admin_comment,
+        )
+        if decision is not None:
+            symptoms.add(
+                job_info.source_value(
+                    decision.rule.symptom,
+                    decision.evidence,
+                    "Slurm AdminComment cancellation policy",
+                )
+            )
+        elif cancellation_policy.is_operator(job_info.cancelled_by):
             symptoms.add(job_info.source_value("Cancelled by cluster operators", job_info.state, "state cancelled"))
         else:
             symptoms.add(job_info.source_value("Cancelled by user", job_info.state, "state cancelled"))
@@ -1004,6 +1018,8 @@ def cancellation_resolution(context: RefinerContext):
     elif "Cancelled by root" in symptoms:
         symptoms.discard("Cancelled by user")
     elif "Cancelled by cluster operators" in symptoms:
+        symptoms.discard("Cancelled by user")
+    elif any(symptom in symptoms for symptom in attribution_lib.get_slurm_cancellation_policy().configured_symptoms):
         symptoms.discard("Cancelled by user")
     elif singlehooks.CancelledByCleanup(job_info, symptoms):
         symptoms.discard("Cancelled by user")

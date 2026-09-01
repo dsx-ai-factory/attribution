@@ -60,6 +60,8 @@ def create_simple_job_info(
     source_name="artificial slurm",
     slurm_node_infos=None,
     failed_node=None,
+    cancelled_by=None,
+    admin_comment=None,
 ):
     if timezone is None:
         if request is None:
@@ -99,6 +101,10 @@ def create_simple_job_info(
         builder = builder.slurm_node_infos(slurm_node_infos)
     if failed_node is not None:
         builder = builder.failed_node(failed_node)
+    if cancelled_by is not None:
+        builder = builder.cancelled_by(cancelled_by)
+    if admin_comment is not None:
+        builder = builder.admin_comment(admin_comment)
     return builder.build()
 
 

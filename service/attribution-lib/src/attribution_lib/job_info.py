@@ -101,6 +101,9 @@ class JobInfo(NamedTuple):
     timezone: ZoneInfo
 
     l_context: ObservationContext
+    # Slurm administrator-only comment associated with the job. Consumers may
+    # configure cancellation policy rules that interpret this value.
+    admin_comment: Optional[str] = None
 
     def context(self) -> ObservationContext:
         return self.l_context
@@ -225,6 +228,7 @@ class JobInfo(NamedTuple):
             .exit_code(_coerce_optional_int(slurmdb_job.get("exit_code")))
             .tags(_coerce_tags(slurmdb_job.get("tags")))
             .cancelled_by(slurmdb_job["cancelled_by"])
+            .admin_comment(slurmdb_job.get("admin_comment"))
             .failed_node(slurmdb_job.get("failed_node", None))
             .slurm_node_infos(slurm_node_infos)
             .job_end_time(dt_end_time)
@@ -244,6 +248,7 @@ class JobInfoBuilder:
     _tags: Optional[frozenset[str]] = None
     _type: str
     _cancelled_by: Optional[str] = None
+    _admin_comment: Optional[str] = None
     _state: str
     _failed_node: Optional[str] = None
     _cluster: str
@@ -362,6 +367,14 @@ class JobInfoBuilder:
             self._cancelled_by = in_cancelled_by
         return self
 
+    def admin_comment(self, in_admin_comment: Optional[str]) -> "JobInfoBuilder":
+        """Set the optional Slurm administrator comment."""
+        if self._admin_comment is not None:
+            raise JobInfoDuplicateFieldError("admin_comment")
+        if in_admin_comment is not None and in_admin_comment != "":
+            self._admin_comment = in_admin_comment
+        return self
+
     def failed_node(self, in_failed_node: Optional[str]) -> "JobInfoBuilder":
         if self._failed_node is not None:
             raise JobInfoDuplicateFieldError("failed_node")
@@ -469,4 +482,5 @@ class JobInfoBuilder:
             l_context=context,
             job_script_content=self._job_script_content,
             node_from_rank=node_from_rank,
+            admin_comment=self._admin_comment,
         )

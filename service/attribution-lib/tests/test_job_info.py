@@ -63,6 +63,12 @@ class TestJobInfo:
 
         assert job_info.exceeded_time_limit() is False
 
+    def test_admin_comment_is_optional_scheduler_metadata(self, simple_job_factory):
+        comment = "Cancelled by a configured scheduler policy: details"
+
+        assert simple_job_factory().admin_comment is None
+        assert simple_job_factory(admin_comment=comment).admin_comment == comment
+
 
 def _builder(timezone, *, node_to_ranks, **overrides) -> JobInfoBuilder:
     kwargs = dict(

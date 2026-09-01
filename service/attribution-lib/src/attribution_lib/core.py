@@ -21,6 +21,7 @@ import attribution_lib
 from attribution_lib import nodename_utils
 from attribution_lib.attr_types import JobNodeAttributions
 from attribution_lib.bundled_rules.common.scrub_helpers import get_clean_bad_nodes
+from attribution_lib.cancellation import DEFAULT_SLURM_CANCELLATION_POLICY, SlurmCancellationPolicy
 from attribution_lib.decision_trace_recorder import DecisionRecorder
 from attribution_lib.events import EventStream
 from attribution_lib.filter import run_post_outcome_refiners, run_pre_outcome_refiners, run_scrub_phase_refiners
@@ -135,6 +136,7 @@ def setup_rules(
     node_mapping_file: Optional[str] = None,
     ignored_hostname_prefixes: Optional[list[str]] = None,
     node_domain_resolver: Optional[attribution_lib.NodeDomainResolver] = None,
+    slurm_cancellation_policy: Optional[SlurmCancellationPolicy] = None,
     rules_paths: Optional[list[Path]] = None,
     force: bool = False,
 ):
@@ -152,6 +154,9 @@ def setup_rules(
             (e.g., ['monitor-', 'scanner-'])
         node_domain_resolver: Optional callback that maps a node hostname to a
             hardware domain identifier. Return None for nodes without a domain.
+        slurm_cancellation_policy: Operator identities and optional AdminComment
+            rules used to classify Slurm cancellations. If omitted, the
+            built-in cancellation behavior is preserved.
         rules_paths: Directories to scan for rule plugin files (``*.py`` and
             ``*.toml``, excluding ``*.test.toml``).
             - ``None`` (default): loads the bundled rules shipped with this package.
@@ -171,6 +176,10 @@ def setup_rules(
 
     attribution_lib.initialized = True
     attribution_lib.node_domain_resolver = node_domain_resolver
+    active_cancellation_policy = (
+        slurm_cancellation_policy if slurm_cancellation_policy is not None else DEFAULT_SLURM_CANCELLATION_POLICY
+    )
+    attribution_lib._slurm_cancellation_policy = active_cancellation_policy
 
     # Reconfiguration must also clear a mapping from an earlier attribution run.
     nodename_utils.configure_node_mapping_file(node_mapping_file)
@@ -179,7 +188,10 @@ def setup_rules(
     if ignored_hostname_prefixes:
         attribution_lib.ignored_hostname_prefixes = ignored_hostname_prefixes
 
-    attribution_lib._rules_engine = RuleLoader.load_all(rules_paths)
+    attribution_lib._rules_engine = RuleLoader.load_all(
+        rules_paths,
+        extra_symptom_declarations=active_cancellation_policy.symptom_declarations(),
+    )
 
     # Compile loaded declarations into the runtime symptom registry once per
     # initialization. Per-job attribution reads this cached snapshot; it is only
