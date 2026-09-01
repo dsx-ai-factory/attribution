@@ -30,6 +30,7 @@ from app.observation import (
     ObservationSource,
 )
 from app.util import TimeInterval
+from app.v2.models import AttributionResponseV2
 from tests.conftest import (
     make_up_attributor_info,
     post_attributor,

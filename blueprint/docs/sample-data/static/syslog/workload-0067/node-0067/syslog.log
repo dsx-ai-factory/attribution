@@ -1,3 +1,10 @@
 2026-08-08T03:46:00+00:00 node-0067 systemd[1]: Started sample training scope for workload-0067.
-2026-08-08T03:56:00+00:00 node-0067 kernel: NVRM: Xid (PCI:0000:84:00): 125,
+2026-08-08T03:56:00+00:00 node-0067 nv-fabricmanager: Lost connection to GPU on nodeId 1, systemGuid 0xaaa, gpuGUID 0x0000000000000000, port LID 0x1, GPU state Error.
+2026-08-08T03:56:01+00:00 node-0067 nv-fabricmanager: Lost connection to GPU on nodeId 1, systemGuid 0xaaa, gpuGUID 0x0000000000000001, port LID 0x1, GPU state Error.
+2026-08-08T03:56:02+00:00 node-0067 nv-fabricmanager: Lost connection to GPU on nodeId 1, systemGuid 0xaaa, gpuGUID 0x0000000000000002, port LID 0x1, GPU state Error.
+2026-08-08T03:56:03+00:00 node-0067 nv-fabricmanager: Lost connection to GPU on nodeId 1, systemGuid 0xaaa, gpuGUID 0x0000000000000003, port LID 0x1, GPU state Error.
+2026-08-08T03:56:04+00:00 node-0067 nv-fabricmanager: Lost connection to GPU on nodeId 1, systemGuid 0xaaa, gpuGUID 0x0000000000000004, port LID 0x1, GPU state Error.
+2026-08-08T03:56:05+00:00 node-0067 nv-fabricmanager: Lost connection to GPU on nodeId 1, systemGuid 0xaaa, gpuGUID 0x0000000000000005, port LID 0x1, GPU state Error.
+2026-08-08T03:56:06+00:00 node-0067 nv-fabricmanager: Lost connection to GPU on nodeId 1, systemGuid 0xaaa, gpuGUID 0x0000000000000006, port LID 0x1, GPU state Error.
+2026-08-08T03:56:07+00:00 node-0067 nv-fabricmanager: Lost connection to GPU on nodeId 1, systemGuid 0xaaa, gpuGUID 0x0000000000000007, port LID 0x1, GPU state Error.
 2026-08-08T04:26:00+00:00 node-0067 systemd[1]: Stopped sample training scope for workload-0067.

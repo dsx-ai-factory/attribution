@@ -106,7 +106,7 @@ describe('fleet summary components', () => {
   it('renders the movers empty state and toggles a symptom', () => {
     const setFilter = vi.fn()
     const { rerender } = render(<MoversStrip movers={[]} filter={filter} setFilter={setFilter} />)
-    expect(screen.getByText('No symptoms moved materially in this window.')).toBeTruthy()
+    expect(screen.getByText('No symptoms moved materially.')).toBeTruthy()
 
     rerender(<MoversStrip
       movers={[{
@@ -163,7 +163,7 @@ describe('fleet summary components', () => {
       setFilter={setFilter}
     />)
 
-    expect(screen.getByText('No System Software Fault results in this window')).toBeTruthy()
+    expect(screen.getByText('No System Software Fault results')).toBeTruthy()
     const events = mocks.useECharts.mock.calls[0][2]
     events.click({ seriesName: 'Other' })
     expect(setFilter).not.toHaveBeenCalled()

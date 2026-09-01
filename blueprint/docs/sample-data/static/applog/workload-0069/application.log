@@ -1,3 +1,4 @@
 2026-08-08T00:41:00+00:00 - launcher - INFO - workload workload-0069 started on node-0069 with sample inputs.
-2026-08-08T00:51:00+00:00 - trainer - INFO - rank 0 completed warmup step 1069.
+0: 2026-08-08T00:51:00+00:00 Call to ibv_modify_qp failed with 110 Connection timed out, on dev mlx5_0:1, curr state INIT, next state RTR, local GID index 3, local GID sample-local-gid, remote GID node-0069-peer-0001
+8: 2026-08-08T00:52:00+00:00 Call to ibv_modify_qp failed with 110 Connection timed out, on dev mlx5_1:1, curr state INIT, next state RTR, local GID index 3, local GID sample-local-gid-2, remote GID node-0069-peer-0002
 2026-08-08T01:21:00+00:00 - launcher - INFO - workload workload-0069 cleanup completed after root symptom collection.

@@ -16,10 +16,20 @@ export interface BootstrapPayload {
   meta: Meta
 }
 
+export interface DateBounds {
+  min: string | null
+  max: string | null
+}
+
 export interface Meta {
   versions: { schema: string | null; pipeline: string | null; service: string | null }
-  dateBounds: { min: string | null; max: string | null }
-  totalRuns: number
+  dateBounds: DateBounds
+  /** Runs in the caller's query scope, which is not purely the date window. */
+  windowedRuns: number
+  /** Every run in the database. Unlike windowedRuns, no query scope narrows it. */
+  dbTotalRuns: number
+  /** File name of the database being served, or null when the server did not name one. */
+  database: string | null
   returnedRuns: number
 }
 
@@ -36,7 +46,7 @@ export interface FleetQuery {
 }
 
 export interface DashboardMetrics {
-  totalRuns: number
+  windowedRuns: number
   gpuHoursRaw: number
   gpuCount: number
   hwFailures: number

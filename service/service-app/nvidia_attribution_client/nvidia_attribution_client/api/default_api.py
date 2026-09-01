@@ -63,6 +63,7 @@ class DefaultApi:
         _headers: Optional[Dict[StrictStr, Any]] = None,
         _host_index: Annotated[StrictInt, Field(ge=0, le=0)] = 0,
         include_decision_graph: Annotated[Optional[StrictBool], Field(description="Include the runtime Decision DAG in the verdict.")] = None,
+        include_interesting: Annotated[Optional[StrictBool], Field(description="Include symptoms and node bindings that were demoted to supporting evidence.")] = None,
     ) -> AttributionResponseV2:
         """Attribute
 
@@ -72,6 +73,8 @@ class DefaultApi:
         :type att_id: str
         :param include_decision_graph: Include the runtime Decision DAG in the verdict.
         :type include_decision_graph: bool
+        :param include_interesting: Include symptoms and node bindings that were demoted to supporting evidence.
+        :type include_interesting: bool
         :param _request_timeout: timeout setting for this request. If one
                                  number provided, it will be total request
                                  timeout. It can also be a pair (tuple) of
@@ -97,6 +100,7 @@ class DefaultApi:
         _param = self._attribute_latest_attributor_att_id_attribution_get_serialize(
             att_id=att_id,
             include_decision_graph=include_decision_graph,
+            include_interesting=include_interesting,
             _request_auth=_request_auth,
             _content_type=_content_type,
             _headers=_headers,
@@ -137,6 +141,7 @@ class DefaultApi:
         _headers: Optional[Dict[StrictStr, Any]] = None,
         _host_index: Annotated[StrictInt, Field(ge=0, le=0)] = 0,
         include_decision_graph: Annotated[Optional[StrictBool], Field(description="Include the runtime Decision DAG in the verdict.")] = None,
+        include_interesting: Annotated[Optional[StrictBool], Field(description="Include symptoms and node bindings that were demoted to supporting evidence.")] = None,
     ) -> ApiResponse[AttributionResponseV2]:
         """Attribute
 
@@ -146,6 +151,8 @@ class DefaultApi:
         :type att_id: str
         :param include_decision_graph: Include the runtime Decision DAG in the verdict.
         :type include_decision_graph: bool
+        :param include_interesting: Include symptoms and node bindings that were demoted to supporting evidence.
+        :type include_interesting: bool
         :param _request_timeout: timeout setting for this request. If one
                                  number provided, it will be total request
                                  timeout. It can also be a pair (tuple) of
@@ -171,6 +178,7 @@ class DefaultApi:
         _param = self._attribute_latest_attributor_att_id_attribution_get_serialize(
             att_id=att_id,
             include_decision_graph=include_decision_graph,
+            include_interesting=include_interesting,
             _request_auth=_request_auth,
             _content_type=_content_type,
             _headers=_headers,
@@ -211,6 +219,7 @@ class DefaultApi:
         _headers: Optional[Dict[StrictStr, Any]] = None,
         _host_index: Annotated[StrictInt, Field(ge=0, le=0)] = 0,
         include_decision_graph: Annotated[Optional[StrictBool], Field(description="Include the runtime Decision DAG in the verdict.")] = None,
+        include_interesting: Annotated[Optional[StrictBool], Field(description="Include symptoms and node bindings that were demoted to supporting evidence.")] = None,
     ) -> RESTResponseType:
         """Attribute
 
@@ -220,6 +229,8 @@ class DefaultApi:
         :type att_id: str
         :param include_decision_graph: Include the runtime Decision DAG in the verdict.
         :type include_decision_graph: bool
+        :param include_interesting: Include symptoms and node bindings that were demoted to supporting evidence.
+        :type include_interesting: bool
         :param _request_timeout: timeout setting for this request. If one
                                  number provided, it will be total request
                                  timeout. It can also be a pair (tuple) of
@@ -245,6 +256,7 @@ class DefaultApi:
         _param = self._attribute_latest_attributor_att_id_attribution_get_serialize(
             att_id=att_id,
             include_decision_graph=include_decision_graph,
+            include_interesting=include_interesting,
             _request_auth=_request_auth,
             _content_type=_content_type,
             _headers=_headers,
@@ -267,6 +279,7 @@ class DefaultApi:
         self,
         att_id,
         include_decision_graph,
+        include_interesting,
         _request_auth,
         _content_type,
         _headers,
@@ -294,6 +307,10 @@ class DefaultApi:
         if include_decision_graph is not None:
             
             _query_params.append(('include_decision_graph', include_decision_graph))
+            
+        if include_interesting is not None:
+            
+            _query_params.append(('include_interesting', include_interesting))
             
         # process the header parameters
         # process the form parameters
@@ -618,6 +635,7 @@ class DefaultApi:
         _headers: Optional[Dict[StrictStr, Any]] = None,
         _host_index: Annotated[StrictInt, Field(ge=0, le=0)] = 0,
         include_decision_graph: Annotated[Optional[StrictBool], Field(description="Include the runtime Decision DAG in the verdict.")] = None,
+        include_interesting: Annotated[Optional[StrictBool], Field(description="Include symptoms and node bindings that were demoted to supporting evidence.")] = None,
     ) -> AttributionResponseV2:
         """Attribute
 
@@ -627,6 +645,8 @@ class DefaultApi:
         :type att_id: str
         :param include_decision_graph: Include the runtime Decision DAG in the verdict.
         :type include_decision_graph: bool
+        :param include_interesting: Include symptoms and node bindings that were demoted to supporting evidence.
+        :type include_interesting: bool
         :param _request_timeout: timeout setting for this request. If one
                                  number provided, it will be total request
                                  timeout. It can also be a pair (tuple) of
@@ -652,6 +672,7 @@ class DefaultApi:
         _param = self._attribute_v2_attributor_att_id_attribution_get_serialize(
             att_id=att_id,
             include_decision_graph=include_decision_graph,
+            include_interesting=include_interesting,
             _request_auth=_request_auth,
             _content_type=_content_type,
             _headers=_headers,
@@ -692,6 +713,7 @@ class DefaultApi:
         _headers: Optional[Dict[StrictStr, Any]] = None,
         _host_index: Annotated[StrictInt, Field(ge=0, le=0)] = 0,
         include_decision_graph: Annotated[Optional[StrictBool], Field(description="Include the runtime Decision DAG in the verdict.")] = None,
+        include_interesting: Annotated[Optional[StrictBool], Field(description="Include symptoms and node bindings that were demoted to supporting evidence.")] = None,
     ) -> ApiResponse[AttributionResponseV2]:
         """Attribute
 
@@ -701,6 +723,8 @@ class DefaultApi:
         :type att_id: str
         :param include_decision_graph: Include the runtime Decision DAG in the verdict.
         :type include_decision_graph: bool
+        :param include_interesting: Include symptoms and node bindings that were demoted to supporting evidence.
+        :type include_interesting: bool
         :param _request_timeout: timeout setting for this request. If one
                                  number provided, it will be total request
                                  timeout. It can also be a pair (tuple) of
@@ -726,6 +750,7 @@ class DefaultApi:
         _param = self._attribute_v2_attributor_att_id_attribution_get_serialize(
             att_id=att_id,
             include_decision_graph=include_decision_graph,
+            include_interesting=include_interesting,
             _request_auth=_request_auth,
             _content_type=_content_type,
             _headers=_headers,
@@ -766,6 +791,7 @@ class DefaultApi:
         _headers: Optional[Dict[StrictStr, Any]] = None,
         _host_index: Annotated[StrictInt, Field(ge=0, le=0)] = 0,
         include_decision_graph: Annotated[Optional[StrictBool], Field(description="Include the runtime Decision DAG in the verdict.")] = None,
+        include_interesting: Annotated[Optional[StrictBool], Field(description="Include symptoms and node bindings that were demoted to supporting evidence.")] = None,
     ) -> RESTResponseType:
         """Attribute
 
@@ -775,6 +801,8 @@ class DefaultApi:
         :type att_id: str
         :param include_decision_graph: Include the runtime Decision DAG in the verdict.
         :type include_decision_graph: bool
+        :param include_interesting: Include symptoms and node bindings that were demoted to supporting evidence.
+        :type include_interesting: bool
         :param _request_timeout: timeout setting for this request. If one
                                  number provided, it will be total request
                                  timeout. It can also be a pair (tuple) of
@@ -800,6 +828,7 @@ class DefaultApi:
         _param = self._attribute_v2_attributor_att_id_attribution_get_serialize(
             att_id=att_id,
             include_decision_graph=include_decision_graph,
+            include_interesting=include_interesting,
             _request_auth=_request_auth,
             _content_type=_content_type,
             _headers=_headers,
@@ -822,6 +851,7 @@ class DefaultApi:
         self,
         att_id,
         include_decision_graph,
+        include_interesting,
         _request_auth,
         _content_type,
         _headers,
@@ -849,6 +879,10 @@ class DefaultApi:
         if include_decision_graph is not None:
             
             _query_params.append(('include_decision_graph', include_decision_graph))
+            
+        if include_interesting is not None:
+            
+            _query_params.append(('include_interesting', include_interesting))
             
         # process the header parameters
         # process the form parameters

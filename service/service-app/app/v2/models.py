@@ -11,7 +11,7 @@
 from collections import defaultdict
 from collections.abc import Mapping
 from datetime import datetime
-from enum import Enum
+from enum import Enum, StrEnum
 from typing import Annotated, Any, Literal, Optional
 from zoneinfo import ZoneInfo
 
@@ -133,10 +133,18 @@ def _source_sort_key(s: LibSource) -> tuple:
     )
 
 
+class SymptomStatus(StrEnum):
+    """Whether a source still drives attribution, or was demoted to supporting evidence."""
+
+    BAD = "bad"
+    INTERESTING = "interesting"
+
+
 class ResourcelessSource(BaseModel):
     """A source not bound to any specific node (e.g. a job-level signal)."""
 
     type: Literal["ResourcelessSource"] = Field(default="ResourcelessSource")
+    status: SymptomStatus
     source: AttributionSource
 
 
@@ -145,6 +153,7 @@ class NodeSource(BaseModel):
 
     type: Literal["NodeSource"] = Field(default="NodeSource")
     node: str
+    status: SymptomStatus
     source: AttributionSource
 
 
@@ -351,32 +360,53 @@ class Verdict(BaseModel):
     )
 
 
-def _index_nodes_by_source(my_bad_nodes: JobNodeAttributions) -> dict[tuple[Symptom, LibSource], list[str]]:
-    """Invert the per-node attributions map into a (symptom, source) -> [nodes] lookup."""
-    idx: defaultdict[tuple[Symptom, LibSource], list[str]] = defaultdict(list)
+def _split_sources(source_set: SourceSet[str]) -> tuple[set[LibSource], set[LibSource]]:
+    """Split a source set into its bad and its interesting-only sources."""
+    bad = set(source_set)
+    return bad, set(source_set.all_sources()) - bad
+
+
+def _index_nodes_by_source(
+    my_bad_nodes: JobNodeAttributions,
+    include_interesting: bool,
+) -> dict[tuple[Symptom, LibSource], list[tuple[str, SymptomStatus]]]:
+    """Invert the per-node attributions map into a (symptom, source) -> [(node, status)] lookup."""
+    idx: defaultdict[tuple[Symptom, LibSource], list[tuple[str, SymptomStatus]]] = defaultdict(list)
     for node, node_group in my_bad_nodes.items():
-        for symptom, source_set in node_group.attributions.items():
-            for lib_source in source_set:
-                idx[(symptom, lib_source)].append(node)
+        attributions = node_group.attributions
+        symptom_items = attributions.all_items() if include_interesting else attributions.items()
+        for symptom, source_set in symptom_items:
+            bad, interesting = _split_sources(source_set)
+            for lib_source in bad:
+                idx[(symptom, lib_source)].append((node, SymptomStatus.BAD))
+            if include_interesting:
+                for lib_source in interesting:
+                    idx[(symptom, lib_source)].append((node, SymptomStatus.INTERESTING))
     return idx
 
 
 def _sites_for_symptom(
     symptom: Symptom,
     source_set: SourceSet[str],
-    nodes_by_key: Mapping[tuple[Symptom, LibSource], list[str]],
+    nodes_by_key: Mapping[tuple[Symptom, LibSource], list[tuple[str, SymptomStatus]]],
+    include_interesting: bool,
 ) -> list[SymptomSite]:
     """Build the list of SymptomSite entries for one symptom, emitting NodeSource per
     (node, source) binding or ResourcelessSource when a source has no node attribution."""
     sites: list[SymptomSite] = []
-    for lib_source in sorted(source_set, key=_source_sort_key):
+    bad, interesting = _split_sources(source_set)
+    candidates = bad | interesting if include_interesting else bad
+    for lib_source in sorted(candidates, key=_source_sort_key):
         attr_source = AttributionSource.from_lib(lib_source)
-        nodes = nodes_by_key.get((symptom, lib_source))
-        if nodes is None:
-            sites.append(ResourcelessSource(source=attr_source))
-            continue
-        for node in sorted(nodes):
-            sites.append(NodeSource(node=node, source=attr_source))
+        bindings = nodes_by_key.get((symptom, lib_source), [])
+        has_bad_node_binding = any(status is SymptomStatus.BAD for _node, status in bindings)
+        # Job's verdict, kept even if the only node that reported it demoted its copy.
+        if lib_source in bad and not has_bad_node_binding:
+            sites.append(ResourcelessSource(status=SymptomStatus.BAD, source=attr_source))
+        elif len(bindings) == 0:
+            sites.append(ResourcelessSource(status=SymptomStatus.INTERESTING, source=attr_source))
+        for node, node_status in sorted(bindings):
+            sites.append(NodeSource(node=node, status=node_status, source=attr_source))
     return sites
 
 
@@ -400,11 +430,12 @@ class AttributionResponseV2(ResponseModel):
         result: AttributionResult,
         decision_graph: Optional[LibDecisionDAG] = None,
         decision_graph_requested: bool = False,
+        include_interesting: bool = False,
     ) -> "AttributionResponseV2":
         """Build a V2 response from the lib's AttributionResult."""
         return cls(
             verdict=cls._build_verdict(result, decision_graph, decision_graph_requested),
-            symptoms=cls._build_symptoms(result),
+            symptoms=cls._build_symptoms(result, include_interesting),
             observation_context=sorted(ingested_observations),
             collectors=jsonable_encoder(result.collectors, custom_encoder=_LIB_TYPES_ENCODER),
         )
@@ -443,12 +474,16 @@ class AttributionResponseV2(ResponseModel):
         return Verdict(**fields)
 
     @staticmethod
-    def _build_symptoms(result: AttributionResult) -> dict[Symptom, list[SymptomSite]]:
+    def _build_symptoms(
+        result: AttributionResult,
+        include_interesting: bool = False,
+    ) -> dict[Symptom, list[SymptomSite]]:
         """Construct the symptoms map from the lib's AttributionResult."""
-        nodes_by_key = _index_nodes_by_source(result.bad_nodes_attr.my_bad_nodes)
+        nodes_by_key = _index_nodes_by_source(result.bad_nodes_attr.my_bad_nodes, include_interesting)
         out: dict[Symptom, list[SymptomSite]] = {}
-        for symptom, source_set in sorted(result.symptoms.items()):
-            sites = _sites_for_symptom(symptom, source_set, nodes_by_key)
+        symptom_items = result.symptoms.all_items() if include_interesting else result.symptoms.items()
+        for symptom, source_set in sorted(symptom_items):
+            sites = _sites_for_symptom(symptom, source_set, nodes_by_key, include_interesting)
             if len(sites) > 0:
                 out[symptom] = sites
         return out

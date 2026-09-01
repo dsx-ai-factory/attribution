@@ -5,15 +5,15 @@
 set -euo pipefail
 
 repository_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-expected_runs="${QUICKSTART_EXPECTED_RUNS:-118}"
-wait_seconds="${QUICKSTART_WAIT_SECONDS:-180}"
+expected_runs="${END_TO_END_EXPECTED_RUNS:-118}"
+wait_seconds="${END_TO_END_WAIT_SECONDS:-180}"
 service_port="${ATTRIBUTION_SERVICE_PORT:-18000}"
 web_port="${ATTRIBUTION_WEB_PORT:-18080}"
 run_suffix="${GITHUB_RUN_ID:-$$}"
 service_image="attribution-service-test:${run_suffix}"
 blueprint_image="attribution-blueprint-test:${run_suffix}"
 container_name="attribution-test-${run_suffix}"
-work_dir="$(mktemp -d "${TMPDIR:-/tmp}/attribution-quickstart.XXXXXX")"
+work_dir="$(mktemp -d "${TMPDIR:-/tmp}/attribution-end-to-end.XXXXXX")"
 database_dir="${work_dir}/data"
 database_path="${database_dir}/attributions.db"
 output_path="${work_dir}/attribution.log"
@@ -22,7 +22,7 @@ cleanup() {
     local status=$?
     docker rm --force "${container_name}" >/dev/null 2>&1 || true
     docker image rm --force "${service_image}" "${blueprint_image}" >/dev/null 2>&1 || true
-    if [[ -n "${work_dir}" && "${work_dir}" == "${TMPDIR:-/tmp}"/attribution-quickstart.* ]]; then
+    if [[ -n "${work_dir}" && "${work_dir}" == "${TMPDIR:-/tmp}"/attribution-end-to-end.* ]]; then
         rm -rf -- "${work_dir}"
     fi
     exit "${status}"
@@ -71,13 +71,13 @@ uv run --project blueprint --frozen nvidia-attribution-blueprint \
 
 if ! grep -F "Attribution complete: ${expected_runs}/${expected_runs} execution contexts succeeded." \
     "${output_path}" >/dev/null; then
-    echo "quickstart did not complete ${expected_runs}/${expected_runs} contexts" >&2
+    echo "end-to-end tests did not complete ${expected_runs}/${expected_runs} contexts" >&2
     exit 1
 fi
 
-QUICKSTART_DATABASE_PATH="${database_path}" \
-QUICKSTART_EXPECTED_RUNS="${expected_runs}" \
-QUICKSTART_WEB_PORT="${web_port}" \
+END_TO_END_DATABASE_PATH="${database_path}" \
+END_TO_END_EXPECTED_RUNS="${expected_runs}" \
+END_TO_END_WEB_PORT="${web_port}" \
 uv run --project blueprint --frozen python - <<'PY'
 import json
 import os
@@ -85,33 +85,68 @@ import sqlite3
 import urllib.request
 from pathlib import Path
 
-database_path = os.environ["QUICKSTART_DATABASE_PATH"]
-expected_runs = int(os.environ["QUICKSTART_EXPECTED_RUNS"])
+database_path = os.environ["END_TO_END_DATABASE_PATH"]
+expected_runs = int(os.environ["END_TO_END_EXPECTED_RUNS"])
 manifest_path = Path("blueprint/docs/sample-data/static/sample-jobs.json")
 
 with sqlite3.connect(database_path) as connection:
     run_count = connection.execute("select count(*) from attribution_run").fetchone()[0]
-    actual = dict(
-        connection.execute(
-            "select execution_context.job_id, attribution_run.outcome "
-            "from attribution_run join execution_context "
-            "on execution_context.id = attribution_run.execution_context_id"
-        )
-    )
+    rows = connection.execute(
+        "select execution_context.job_id, attribution_run.outcome, "
+        "attribution_run.responsible_nodes_json, attribution_run.raw_result_json "
+        "from attribution_run join execution_context "
+        "on execution_context.id = attribution_run.execution_context_id"
+    ).fetchall()
     responsible_node_count = connection.execute(
         "select count(*) from attribution_run "
         "where responsible_nodes_json is not null and responsible_nodes_json != '[]'"
     ).fetchone()[0]
 
 manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+actual = {
+    job_id: {
+        "outcome": outcome,
+        "responsible_nodes": json.loads(responsible_nodes_json),
+        "raw_result": json.loads(raw_result_json),
+    }
+    for job_id, outcome, responsible_nodes_json, raw_result_json in rows
+}
 expected = {job["id"]: job["expected_outcome"] for job in manifest["jobs"]}
+responsible_node_assertion_workloads = set(manifest["constraints"]["responsible_node_assertion_workloads"])
 missing = sorted(set(expected) - set(actual))
 extra = sorted(set(actual) - set(expected))
 mismatches = sorted(
-    (job_id, expected[job_id], actual[job_id])
+    (job_id, expected[job_id], actual[job_id]["outcome"])
     for job_id in set(expected) & set(actual)
-    if expected[job_id] != actual[job_id]
+    if expected[job_id] != actual[job_id]["outcome"]
 )
+responsible_node_mismatches = sorted(
+    (job["id"], job["responsible_nodes"], actual[job["id"]]["responsible_nodes"])
+    for job in manifest["jobs"]
+    if job["id"] in responsible_node_assertion_workloads
+    and job["id"] in actual
+    and job["responsible_nodes"] != actual[job["id"]]["responsible_nodes"]
+)
+cascade_mismatches = []
+for job in manifest["jobs"]:
+    discarded_prefixes = job.get("discarded_symptom_prefixes", [])
+    if discarded_prefixes == [] or job["id"] not in actual:
+        continue
+    actual_symptoms = actual[job["id"]]["raw_result"].get("symptoms", {})
+    for prefix in discarded_prefixes:
+        retained = sorted(symptom for symptom in actual_symptoms if symptom.startswith(prefix))
+        if retained != []:
+            cascade_mismatches.append((job["id"], prefix, retained))
+
+bad_pair_mismatches = []
+for job in manifest["jobs"]:
+    expected_bad_pairs = job.get("expected_bad_pairs")
+    if expected_bad_pairs is None or job["id"] not in actual:
+        continue
+    collectors = actual[job["id"]]["raw_result"].get("collectors", {})
+    actual_bad_pairs = collectors.get("bad_pairs") if isinstance(collectors, dict) else None
+    if expected_bad_pairs != actual_bad_pairs:
+        bad_pair_mismatches.append((job["id"], expected_bad_pairs, actual_bad_pairs))
 
 if run_count != expected_runs:
     raise SystemExit(f"expected {expected_runs} attribution runs, found {run_count}")
@@ -119,26 +154,33 @@ if missing != [] or extra != [] or mismatches != []:
     raise SystemExit(
         f"sample outcome mismatch: missing={missing}, extra={extra}, mismatches={mismatches}"
     )
+if responsible_node_mismatches != []:
+    raise SystemExit(f"sample responsible-node mismatch: {responsible_node_mismatches}")
+if cascade_mismatches != []:
+    raise SystemExit(f"sample cascade mismatch: {cascade_mismatches}")
+if bad_pair_mismatches != []:
+    raise SystemExit(f"sample bad-pair mismatch: {bad_pair_mismatches}")
 if responsible_node_count == 0:
     raise SystemExit("expected at least one attribution run with responsible nodes")
 
-web_port = os.environ["QUICKSTART_WEB_PORT"]
+web_port = os.environ["END_TO_END_WEB_PORT"]
 with urllib.request.urlopen(f"http://127.0.0.1:{web_port}/api/v1/dashboard", timeout=10) as response:
     web_payload = json.load(response)
-web_run_count = int(web_payload["meta"]["totalRuns"])
+web_run_count = int(web_payload["meta"]["dbTotalRuns"])
 if web_run_count != expected_runs:
     raise SystemExit(f"expected {expected_runs} web UI runs, found {web_run_count}")
 
 print(
-    f"quickstart_results={run_count} outcome_mismatches=0 "
+    f"end_to_end_results={run_count} outcome_mismatches=0 "
+    f"responsible_node_mismatches=0 cascade_mismatches=0 bad_pair_mismatches=0 "
     f"responsible_nodes={responsible_node_count} webui_total_runs={web_run_count}"
 )
 PY
 
 if docker logs "${container_name}" 2>&1 \
     | grep -E "500 Internal Server Error|exceptions must derive|IncompatibleObservation|ingest_observation failed"; then
-    echo "quickstart service logs contain ingestion errors" >&2
+    echo "end-to-end service logs contain ingestion errors" >&2
     exit 1
 fi
 
-echo "quickstart validation passed"
+echo "end-to-end tests passed"

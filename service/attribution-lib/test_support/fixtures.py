@@ -47,6 +47,12 @@ def setup_rules():
     core.setup_rules()
 
 
+@pytest.fixture(autouse=True)
+def deterministic_node_mapping(monkeypatch):
+    """Provide the explicit test inventory mapping used by peer-rule cases."""
+    monkeypatch.setattr(attribution_lib, "ip_to_nodenames", {"127.0.0.1": "localhost"})
+
+
 @pytest.fixture(scope="session", autouse=True)
 def timezone():
     return ZoneInfo("America/Los_Angeles")

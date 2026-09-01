@@ -1,3 +1,5 @@
 2026-08-06T11:17:00+00:00 - launcher - INFO - workload workload-0078 started on node-0078 with sample inputs.
-2026-08-06T11:27:00+00:00 - trainer - INFO - rank 0 completed warmup step 1078.
+2026-08-06T11:17:00+00:00 - trainer - INFO - [2026-08-06T11:17:00+00:00] iteration 1/100 | throughput per GPU (TFLOP/s/GPU): 100.0 |
+2026-08-06T112700+0000 0: [2026-08-06 11:27:00] NCCL WARN NET/IB : mlx5_0 port error responsible_node=node-0078
+0: [E0806 11:37:00.000000 ProcessGroupNCCL.cpp:685] [Rank 0] Watchdog caught collective operation timeout: WorkNCCL(SeqNum=123, OpType=ALLREDUCE, Timeout(ms)=600000) ran for 600000 milliseconds before timing out.
 2026-08-06T11:57:00+00:00 - launcher - INFO - workload workload-0078 cleanup completed after root symptom collection.

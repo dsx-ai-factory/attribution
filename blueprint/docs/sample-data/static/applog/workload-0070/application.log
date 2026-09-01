@@ -1,3 +1,3 @@
 2026-08-05T13:09:00+00:00 - launcher - INFO - workload workload-0070 started on node-0070 with sample inputs.
-2026-08-05T13:19:00+00:00 - trainer - INFO - rank 0 completed warmup step 1070.
+0: 2026-08-05T13:19:00+00:00 Call to ibv_modify_qp failed with 110 Connection timed out, on dev mlx5_0:1, curr state INIT, next state RTR, local GID index 3, local GID sample-local-gid, remote GID node-0070-peer-0001
 2026-08-05T13:49:00+00:00 - launcher - INFO - workload workload-0070 cleanup completed after root symptom collection.

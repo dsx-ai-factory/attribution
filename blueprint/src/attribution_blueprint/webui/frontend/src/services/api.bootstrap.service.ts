@@ -6,7 +6,7 @@ import { ApiService } from '@/services/api.service'
 
 const EMPTY_META: Meta = {
   versions: { schema: null, pipeline: null, service: null },
-  dateBounds: { min: null, max: null }, totalRuns: 0, returnedRuns: 0,
+  dateBounds: { min: null, max: null }, windowedRuns: 0, dbTotalRuns: 0, database: null, returnedRuns: 0,
 }
 
 /** Reads the server-injected bootstrap blob from the DOM, if present. */

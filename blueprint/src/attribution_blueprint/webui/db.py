@@ -21,6 +21,7 @@ import sqlite3
 from collections import Counter
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
+from pathlib import Path
 from typing import Any
 
 _REQUIRED_ATTRIBUTION_RUN_COLUMNS = frozenset({"terminal_state", "sub_domain"})
@@ -1296,11 +1297,49 @@ def _schema_meta_conn(conn: sqlite3.Connection) -> dict[str, Any]:
     }
 
 
+def _db_total_runs_conn(conn: sqlite3.Connection) -> int:
+    """Return the number of runs held by the whole database.
+
+    Args:
+        conn: SQLite connection.
+
+    Returns:
+        Count of runs across the database.
+    """
+
+    # Not count_runs(): that one exists to match list_runs' filters, and this denominator
+    # must stay unfiltered while the date window moves.
+    row = conn.execute("SELECT COUNT(*) AS n FROM attribution_run").fetchone()
+    return int(row["n"] if row is not None else 0)
+
+
+def _db_date_bounds_conn(conn: sqlite3.Connection) -> tuple[str | None, str | None]:
+    """Return the first and last run end days held by the whole database.
+
+    Args:
+        conn: SQLite connection.
+
+    Returns:
+        Inclusive ``(min, max)`` ISO day pair; both None when the database holds no runs.
+    """
+
+    row = conn.execute(
+        "SELECT MIN(c.end_time) AS lo, MAX(c.end_time) AS hi "
+        "FROM attribution_run r JOIN execution_context c ON c.id = r.execution_context_id"
+    ).fetchone()
+    if row is None:
+        return None, None
+    lo = row["lo"][:10] if row["lo"] is not None else None
+    hi = row["hi"][:10] if row["hi"] is not None else None
+    return lo, hi
+
+
 def _dashboard_data_from_rollup_conn(
     conn: sqlite3.Connection,
     *,
     since: str | None,
     until: str | None,
+    database: str,
     ledger_outcome: str | None = None,
 ) -> dict[str, Any]:
     """Return dashboard data from the denormalized quickstart rollup table.
@@ -1309,6 +1348,7 @@ def _dashboard_data_from_rollup_conn(
         conn: SQLite connection.
         since: Inclusive lower date bound.
         until: Inclusive upper date bound.
+        database: Display name of the database being served.
         ledger_outcome: Optional outcome filter for concentration ledgers.
 
     Returns:
@@ -1318,7 +1358,7 @@ def _dashboard_data_from_rollup_conn(
     clauses, params = _rollup_clauses(since=since, until=until)
     where_sql = " WHERE " + " AND ".join(clauses) if len(clauses) > 0 else ""
     metric_sql = (
-        "SELECT COUNT(*) AS total_runs, "
+        "SELECT COUNT(*) AS windowed_runs, "
         "SUM(gpu_hours) AS gpu_hours, "
         "SUM(gpu_count) AS gpu_count, "
         "SUM(CASE WHEN outcome = 'Fail InfraHW' THEN 1 ELSE 0 END) AS hw_failures, "
@@ -1328,7 +1368,7 @@ def _dashboard_data_from_rollup_conn(
     )
     # Daily buckets only cover the outcomes the day-by-day charts plot;
     # 'Fail Undetermined' is intentionally omitted (matches DailyBucket in
-    # the React interfaces). Window totals come from total_runs.
+    # the React interfaces). Window totals come from windowed_runs.
     daily_sql = (
         "SELECT end_day AS day, "
         "SUM(gpu_hours) AS gpu_hours, "
@@ -1351,9 +1391,14 @@ def _dashboard_data_from_rollup_conn(
             params,
             fallback_gpu_count=fallback_gpu_count,
         )
-    lo_hi = conn.execute("SELECT MIN(end_time) AS lo, MAX(end_time) AS hi FROM webui_run_fact").fetchone()
+    rollup_lo_hi = conn.execute("SELECT MIN(end_time) AS lo, MAX(end_time) AS hi FROM webui_run_fact").fetchone()
+    db_total_runs = _db_total_runs_conn(conn)
+    db_min, db_max = _db_date_bounds_conn(conn)
     days = _date_spine(
-        since, until, lo_hi["lo"] if lo_hi is not None else None, lo_hi["hi"] if lo_hi is not None else None
+        since,
+        until,
+        rollup_lo_hi["lo"] if rollup_lo_hi is not None else None,
+        rollup_lo_hi["hi"] if rollup_lo_hi is not None else None,
     )
     daily_rows = conn.execute(daily_sql, tuple(params)).fetchall()
     hw_breakdown = _daily_rollup_breakdown_conn(conn, outcome="Fail InfraHW", days=days, since=since, until=until)
@@ -1401,15 +1446,14 @@ def _dashboard_data_from_rollup_conn(
     return {
         "meta": {
             "versions": _schema_meta_conn(conn),
-            "dateBounds": {
-                "min": lo_hi["lo"][:10] if lo_hi is not None and lo_hi["lo"] is not None else None,
-                "max": lo_hi["hi"][:10] if lo_hi is not None and lo_hi["hi"] is not None else None,
-            },
-            "totalRuns": int(metric_row["total_runs"] if metric_row is not None else 0),
+            "dateBounds": {"min": db_min, "max": db_max},
+            "windowedRuns": int(metric_row["windowed_runs"] if metric_row is not None else 0),
+            "dbTotalRuns": db_total_runs,
+            "database": database,
             "returnedRuns": 0,
         },
         "metrics": {
-            "totalRuns": int(metric_row["total_runs"] if metric_row is not None else 0),
+            "windowedRuns": int(metric_row["windowed_runs"] if metric_row is not None else 0),
             "gpuHoursRaw": gpu_hours,
             "gpuCount": window_gpu_count,
             "hwFailures": hw_failures,
@@ -1742,6 +1786,7 @@ def dashboard_data(
                 conn,
                 since=since,
                 until=until,
+                database=Path(path).name,
                 ledger_outcome=ledger_outcome,
             )
 
@@ -1749,7 +1794,7 @@ def dashboard_data(
     clauses, params = _filtered_clauses(since=since, until=until)
     where_sql = " WHERE " + " AND ".join(clauses) if len(clauses) > 0 else ""
     metric_sql = (
-        "SELECT COUNT(*) AS total_runs, "
+        "SELECT COUNT(*) AS windowed_runs, "
         f"SUM({gpu_expr}) AS gpu_hours, "
         "SUM(CASE WHEN r.outcome = 'Fail InfraHW' THEN 1 ELSE 0 END) AS hw_failures, "
         "SUM(CASE WHEN r.outcome = 'Fail InfraSW' THEN 1 ELSE 0 END) AS sw_failures, "
@@ -1773,6 +1818,8 @@ def dashboard_data(
         metric_row = conn.execute(metric_sql, tuple(params)).fetchone()
         window_gpu_count = _window_gpu_count_conn(conn, clauses, params)
         lo_hi = conn.execute("SELECT MIN(end_time) AS lo, MAX(end_time) AS hi FROM execution_context").fetchone()
+        db_total_runs = _db_total_runs_conn(conn)
+        db_min, db_max = _db_date_bounds_conn(conn)
         summary = db_summary(path)
         days = _date_spine(since, until, lo_hi["lo"] if lo_hi else None, lo_hi["hi"] if lo_hi else None)
         daily_rows = conn.execute(daily_sql, tuple(params)).fetchall()
@@ -1820,15 +1867,14 @@ def dashboard_data(
                 "pipeline": None,
                 "service": None,
             },
-            "dateBounds": {
-                "min": lo_hi["lo"][:10] if lo_hi is not None and lo_hi["lo"] is not None else None,
-                "max": lo_hi["hi"][:10] if lo_hi is not None and lo_hi["hi"] is not None else None,
-            },
-            "totalRuns": int(metric_row["total_runs"] if metric_row is not None else 0),
+            "dateBounds": {"min": db_min, "max": db_max},
+            "windowedRuns": int(metric_row["windowed_runs"] if metric_row is not None else 0),
+            "dbTotalRuns": db_total_runs,
+            "database": Path(path).name,
             "returnedRuns": 0,
         },
         "metrics": {
-            "totalRuns": int(metric_row["total_runs"] if metric_row is not None else 0),
+            "windowedRuns": int(metric_row["windowed_runs"] if metric_row is not None else 0),
             "gpuHoursRaw": gpu_hours,
             "gpuCount": window_gpu_count,
             "hwFailures": hw_failures,

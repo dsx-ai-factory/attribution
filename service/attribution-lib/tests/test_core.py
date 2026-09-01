@@ -15,6 +15,7 @@ import pytest
 from common.refiner_helpers import _get_earliest_watchdog_source
 
 import attribution_lib
+import attribution_lib.core as core
 from attribution_lib.attr_types import JobNodeAttributions
 from attribution_lib.bundled_rules.common.outcome_helpers import apply_outcome_reclassification_rules
 from attribution_lib.bundled_rules.common.scrub_helpers import get_clean_bad_nodes
@@ -37,7 +38,20 @@ from attribution_lib.symptoms import (
     translate_and_prune_node_attributions,
 )
 from attribution_lib.symptoms.registry_generation import GeneratedSymptomRegistry
+from attribution_lib.utils import get_hostname
 from test_support.helpers import create_source_set, make_node_to_ranks
+
+
+def test_setup_rules_without_mapping_clears_previous_mapping(monkeypatch):
+    """A forced reconfiguration must not retain inventory from an earlier run."""
+    for attribute in ("initialized", "node_domain_resolver", "_rules_engine", "_symptom_registry"):
+        monkeypatch.setattr(attribution_lib, attribute, getattr(attribution_lib, attribute))
+    monkeypatch.setattr(attribution_lib, "ip_to_nodenames", {"192.0.2.1": "stale-node"})
+
+    core.setup_rules(rules_paths=[], force=True)
+
+    assert attribution_lib.ip_to_nodenames == {}
+    assert get_hostname("192.0.2.1") == "192.0.2.1"
 
 
 # Shared job info fixture for multiple test classes

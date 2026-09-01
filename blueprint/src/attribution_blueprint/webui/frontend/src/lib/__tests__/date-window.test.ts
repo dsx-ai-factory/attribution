@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { detectPreset, isoDate, presetRange } from '@/lib/date-window'
+import { boundsOutsideWindow, detectPreset, isoDate, presetRange } from '@/lib/date-window'
 import type { FleetFilter } from '@/interfaces/filter'
 
 const now = new Date('2026-06-11T10:00:00Z')
@@ -59,5 +59,76 @@ describe('detectPreset', () => {
 
   it('reports a window ending in the future as custom', () => {
     expect(detectPreset(filterWith('2026-06-06', '2026-06-13'), now)).toBe('custom')
+  })
+})
+
+describe('boundsOutsideWindow', () => {
+  it('returns null for an all-time filter', () => {
+    expect(boundsOutsideWindow(
+      { min: '2026-05-01', max: '2026-05-03' },
+      { status: 'failed', axis: 'symptom', metric: 'count' },
+    )).toBeNull()
+  })
+
+  it('returns null when the bounds sit inside the window', () => {
+    expect(boundsOutsideWindow(
+      { min: '2026-05-02', max: '2026-05-02' },
+      filterWith('2026-05-01', '2026-05-03'),
+    )).toBeNull()
+  })
+
+  it('returns null when the bounds land exactly on both window endpoints', () => {
+    // The comparison is inclusive on purpose: the backend covers both endpoint days
+    // in full, so a run on the first or last day is inside the window, not outside it.
+    expect(boundsOutsideWindow(
+      { min: '2026-05-01', max: '2026-05-03' },
+      filterWith('2026-05-01', '2026-05-03'),
+    )).toBeNull()
+  })
+
+  it('returns the bounds when they fall entirely outside the window', () => {
+    const bounds = { min: '2026-05-01', max: '2026-05-03' }
+
+    expect(boundsOutsideWindow(bounds, filterWith('2020-01-01', '2020-01-02'))).toEqual(bounds)
+    expect(boundsOutsideWindow(bounds, filterWith('2030-01-01', '2030-01-02'))).toEqual(bounds)
+  })
+
+  it('returns the bounds when they straddle the window edge', () => {
+    const bounds = { min: '2026-04-28', max: '2026-05-02' }
+
+    expect(boundsOutsideWindow(bounds, filterWith('2026-05-01', '2026-05-03'))).toEqual(bounds)
+  })
+
+  it('returns null when the database has no rows', () => {
+    expect(boundsOutsideWindow(null, filterWith('2026-05-01', '2026-05-03'))).toBeNull()
+    expect(boundsOutsideWindow(
+      { min: null, max: null },
+      filterWith('2026-05-01', '2026-05-03'),
+    )).toBeNull()
+  })
+
+  it('returns the bounds when the window sits strictly inside them', () => {
+    const bounds = { min: '2026-05-01', max: '2026-05-10' }
+
+    expect(boundsOutsideWindow(bounds, filterWith('2026-05-03', '2026-05-05'))).toEqual(bounds)
+  })
+
+  it('returns null when only one end of the window is set', () => {
+    const bounds = { min: '2026-05-01', max: '2026-05-10' }
+    const allTime: FleetFilter = { status: 'failed', axis: 'symptom', metric: 'count' }
+
+    expect(boundsOutsideWindow(bounds, { ...allTime, from: '2026-05-03' })).toBeNull()
+    expect(boundsOutsideWindow(bounds, { ...allTime, to: '2026-05-05' })).toBeNull()
+  })
+
+  it('returns null when only one end of the bounds is known', () => {
+    expect(boundsOutsideWindow(
+      { min: null, max: '2026-05-10' },
+      filterWith('2026-05-01', '2026-05-03'),
+    )).toBeNull()
+    expect(boundsOutsideWindow(
+      { min: '2026-04-01', max: null },
+      filterWith('2026-05-01', '2026-05-03'),
+    )).toBeNull()
   })
 })

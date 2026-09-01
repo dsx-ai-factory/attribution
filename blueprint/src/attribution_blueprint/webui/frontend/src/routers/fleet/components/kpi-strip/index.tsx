@@ -167,7 +167,7 @@ export function KpiStrip({
         <div className="flex items-end justify-between gap-2 mt-auto">
           <span className="font-mono text-[10px] tabular-nums text-foreground-muted">
             {combinedFailures === 0
-              ? 'no infra failures in window'
+              ? `no infra failures${range ? ' in window' : ''}`
               : `${fmtNum(gpuHoursRaw)} GPU-HOURS / ${combinedFailures} FAILS / 1000`}
           </span>
           <div className="w-14 h-5 shrink-0">
@@ -188,7 +188,7 @@ export function KpiStrip({
         <div className="flex items-end justify-between gap-2 mt-auto">
           <span className="font-mono text-[10px] tabular-nums text-foreground-muted">
             {hwFailures === 0
-              ? 'no HW failures in window'
+              ? `no HW failures${range ? ' in window' : ''}`
               : `${fmtNum(gpuHoursRaw)} GPU-HOURS / ${hwFailures} FAILS / 1000`}
           </span>
           <div className="w-14 h-5 shrink-0">

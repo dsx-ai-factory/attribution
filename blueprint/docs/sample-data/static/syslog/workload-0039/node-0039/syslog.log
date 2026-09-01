@@ -1,3 +1,3 @@
 2026-08-06T11:46:00+00:00 node-0039 systemd[1]: Started sample training scope for workload-0039.
-2026-08-06T11:56:00+00:00 node-0039 kernel: NVRM: Xid (PCI:0000:84:00): 167,
+2026-08-06T11:56:00+00:00 node-0039 kernel: NVRM: Xid (PCI:0000:83:00): 64,
 2026-08-06T12:26:00+00:00 node-0039 systemd[1]: Stopped sample training scope for workload-0039.

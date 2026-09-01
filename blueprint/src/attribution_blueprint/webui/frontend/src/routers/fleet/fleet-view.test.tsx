@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import type { ReactNode } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { cleanup, fireEvent, render, screen } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, within } from '@testing-library/react'
 import type { FleetFilter } from '@/interfaces/filter'
 import { FleetView } from '@/routers/fleet'
 
@@ -100,7 +100,7 @@ const dashboard = {
     mixFailures: 0,
     combinedFailures: 3,
     gpuCount: 16,
-    totalRuns: 4,
+    windowedRuns: 4,
   },
   daily: [{ day: '2026-05-01', hardware: 2 }],
   hwBreakdown: { days: ['2026-05-01'], series: [], total: 2 },
@@ -113,18 +113,24 @@ const dashboard = {
     outcome: [{ outcome: 'hardware', count: 2, nodeHours: 8 }],
   },
   movers: [{ symptom: 'Xid79', previous: 1, current: 2, delta: 1 }],
-  meta: { versions: { schema: '2' } },
+  meta: {
+    versions: { schema: '2' },
+    dateBounds: { min: '2026-05-01', max: '2026-05-03' },
+    dbTotalRuns: 1204,
+  },
 }
 
 beforeEach(() => {
   vi.clearAllMocks()
   mocks.searchParams = new URLSearchParams()
-  mocks.useDashboard.mockReturnValue({ dashboard, isLoading: false })
+  Element.prototype.scrollIntoView = vi.fn()
+  mocks.useDashboard.mockReturnValue({ dashboard, isLoading: false, error: null })
   mocks.useRunsTable.mockReturnValue({
     groups: [],
     total: 4,
     visibleRuns: [],
     isLoading: false,
+    error: null,
   })
 })
 
@@ -195,5 +201,219 @@ describe('FleetView', () => {
       pageSize: 25,
       pageByOutcome: { hardware: 1 },
     }))
+  })
+
+  it('names the database date range and jumps to it when the window excludes every row', () => {
+    mocks.searchParams = new URLSearchParams('window=custom&from=2020-01-01&to=2020-01-02')
+    mocks.useDashboard.mockReturnValue({
+      dashboard: { ...dashboard, metrics: { ...dashboard.metrics, windowedRuns: 0 } },
+      isLoading: false,
+      error: null,
+    })
+    render(<FleetView />)
+
+    // Inside the always-mounted polite region, not merely somewhere on the page:
+    // moving the notice out of it silently costs the announcement.
+    expect(
+      within(screen.getByRole('status')).getByText('Workloads exist outside the selected dates'),
+    ).toBeTruthy()
+    expect(screen.queryByText('No runs listed in this view')).toBeNull()
+    expect(screen.getByText(
+      'Workloads finished between 2026-05-01 and 2026-05-03. Nothing in the selected date range has an attribution result.',
+    )).toBeTruthy()
+
+    fireEvent.click(screen.getByRole('button', { name: /2026-05-01 → 2026-05-03/ }))
+    const params = mocks.setSearchParams.mock.calls[0][0] as URLSearchParams
+    expect(params.get('from')).toBe('2026-05-01')
+    expect(params.get('to')).toBe('2026-05-03')
+    expect(params.get('window')).toBe('custom')
+    expect(document.activeElement).toBe(screen.getByRole('region', { name: 'Runs' }))
+  })
+
+  it('shows no notice when the database reports no date bounds', () => {
+    mocks.searchParams = new URLSearchParams('window=custom&from=2020-01-01&to=2020-01-02')
+    mocks.useDashboard.mockReturnValue({
+      dashboard: {
+        ...dashboard,
+        metrics: { ...dashboard.metrics, windowedRuns: 0 },
+        meta: { ...dashboard.meta, dateBounds: { min: null, max: null } },
+      },
+      isLoading: false,
+      error: null,
+    })
+    render(<FleetView />)
+
+    expect(screen.queryByText('Workloads exist outside the selected dates')).toBeNull()
+    expect(screen.queryByText('No runs listed in this view')).toBeNull()
+  })
+
+  it('points at the run list, not the dates, when the window holds runs the table does not list', () => {
+    mocks.searchParams = new URLSearchParams(
+      'window=custom&from=2026-05-02&to=2026-05-10'
+      + '&outcome=hardware&symptom=Xid79&node=gpu-01&rule=xid-79&user=alice&q=job-100',
+    )
+    mocks.useRunsTable.mockReturnValue({
+      groups: [],
+      total: 0,
+      visibleRuns: [],
+      isLoading: false,
+      error: null,
+    })
+    render(<FleetView />)
+
+    // Inside the always-mounted polite region, not merely somewhere on the page:
+    // moving the notice out of it silently costs the announcement.
+    expect(
+      within(screen.getByRole('status')).getByText('No runs listed in this view'),
+    ).toBeTruthy()
+    expect(screen.queryByText('Workloads exist outside the selected dates')).toBeNull()
+    expect(screen.getByText(
+      'This view contains runs, but none of them appear in the run list below.',
+    )).toBeTruthy()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Clear run filters' }))
+    const params = mocks.setSearchParams.mock.calls[0][0] as URLSearchParams
+    expect(params.get('status')).toBe('all')
+    expect(params.has('outcome')).toBe(false)
+    expect(params.has('symptom')).toBe(false)
+    expect(params.has('node')).toBe(false)
+    expect(params.has('rule')).toBe(false)
+    expect(params.has('user')).toBe(false)
+    expect(params.has('q')).toBe(false)
+    // The dates are the other notice's business: this action must leave the window intact.
+    expect(params.get('from')).toBe('2026-05-02')
+    expect(params.get('to')).toBe('2026-05-10')
+    expect(document.activeElement).toBe(screen.getByRole('region', { name: 'Runs' }))
+  })
+
+  it('says the database is empty rather than blaming the dates or the filters', () => {
+    mocks.useDashboard.mockReturnValue({ dashboard: null, isLoading: true, error: null })
+    mocks.useRunsTable.mockReturnValue({
+      groups: [],
+      total: 0,
+      visibleRuns: [],
+      isLoading: false,
+      error: null,
+    })
+    const { rerender } = render(<FleetView />)
+
+    expect(screen.queryByText('This database has no attribution runs')).toBeNull()
+
+    mocks.useDashboard.mockReturnValue({
+      dashboard: {
+        ...dashboard,
+        metrics: { ...dashboard.metrics, windowedRuns: 0 },
+        meta: { ...dashboard.meta, dbTotalRuns: 0, dateBounds: { min: null, max: null } },
+      },
+      isLoading: false,
+      error: null,
+    })
+    rerender(<FleetView />)
+
+    const region = screen.getByRole('status')
+    expect(within(region).getByText('This database has no attribution runs')).toBeTruthy()
+    expect(screen.queryByText('Workloads exist outside the selected dates')).toBeNull()
+    expect(screen.queryByText('No runs listed in this view')).toBeNull()
+    // Nothing is left to loosen, so this notice carries no action to take.
+    expect(within(region).queryByRole('button')).toBeNull()
+    expect(mocks.runsProps).toHaveBeenLastCalledWith(
+      expect.objectContaining({ databaseEmpty: true }),
+    )
+  })
+
+  it('counts the listed runs against the whole database, populated, filtered down, or empty', () => {
+    const { rerender } = render(<FleetView />)
+
+    expect(screen.getByText('4 of 1,204 runs in database')).toBeTruthy()
+
+    mocks.useRunsTable.mockReturnValue({
+      groups: [],
+      total: 0,
+      visibleRuns: [],
+      isLoading: false,
+      error: null,
+    })
+    rerender(<FleetView />)
+
+    expect(screen.getByText('0 of 1,204 runs in database')).toBeTruthy()
+
+    mocks.useDashboard.mockReturnValue({
+      dashboard: {
+        ...dashboard,
+        metrics: { ...dashboard.metrics, windowedRuns: 0 },
+        meta: { ...dashboard.meta, dbTotalRuns: 0, dateBounds: { min: null, max: null } },
+      },
+      isLoading: false,
+      error: null,
+    })
+    rerender(<FleetView />)
+
+    expect(screen.getByText('0 of 0 runs in database')).toBeTruthy()
+  })
+
+  it('names no counts while a fetch is in flight and says so when one fails', () => {
+    mocks.useDashboard.mockReturnValue({ dashboard: null, isLoading: true, error: null })
+    const { rerender } = render(<FleetView />)
+
+    expect(screen.queryByText(/runs in database/)).toBeNull()
+    expect(screen.queryByText('Run counts unavailable')).toBeNull()
+
+    mocks.useDashboard.mockReturnValue({ dashboard, isLoading: false, error: null })
+    mocks.useRunsTable.mockReturnValue({
+      groups: [],
+      total: 0,
+      visibleRuns: [],
+      isLoading: true,
+      error: null,
+    })
+    rerender(<FleetView />)
+
+    expect(screen.queryByText(/runs in database/)).toBeNull()
+
+    mocks.useDashboard.mockReturnValue({
+      dashboard: null,
+      isLoading: false,
+      error: new Error('dashboard fetch failed'),
+    })
+    mocks.useRunsTable.mockReturnValue({
+      groups: [],
+      total: 0,
+      visibleRuns: [],
+      isLoading: false,
+      error: null,
+    })
+    rerender(<FleetView />)
+
+    expect(screen.getByText('Run counts unavailable')).toBeTruthy()
+    expect(screen.queryByText(/runs in database/)).toBeNull()
+  })
+
+  it('keeps both notices hidden while the runs fetch is in flight and when it fails', () => {
+    mocks.searchParams = new URLSearchParams(
+      'window=custom&from=2026-05-02&to=2026-05-10&outcome=hardware',
+    )
+    mocks.useRunsTable.mockReturnValue({
+      groups: [],
+      total: 0,
+      visibleRuns: [],
+      isLoading: false,
+      error: new Error('runs fetch failed'),
+    })
+    const { rerender } = render(<FleetView />)
+
+    expect(screen.queryByText('Workloads exist outside the selected dates')).toBeNull()
+    expect(screen.queryByText('No runs listed in this view')).toBeNull()
+
+    mocks.useRunsTable.mockReturnValue({
+      groups: [],
+      total: 0,
+      visibleRuns: [],
+      isLoading: true,
+      error: null,
+    })
+    rerender(<FleetView />)
+
+    expect(screen.queryByText('Workloads exist outside the selected dates')).toBeNull()
+    expect(screen.queryByText('No runs listed in this view')).toBeNull()
   })
 })

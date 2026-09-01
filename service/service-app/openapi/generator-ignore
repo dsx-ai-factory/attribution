@@ -1,0 +1,20 @@
+# Ignore extra generated files.
+.github/**/*
+.gitlab-ci.yml
+.travis.yml
+git_push.sh
+requirements.txt
+setup.cfg
+setup.py
+test-requirements.txt
+tox.ini
+docs/*
+
+# The generator's per-model test stubs have empty bodies and assert nothing.
+# Real coverage lives in service-app's tests/ directory.
+test/*
+
+# Hand-maintained files.
+pyproject.toml
+README.md
+LICENSE

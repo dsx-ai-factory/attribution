@@ -172,10 +172,9 @@ def setup_rules(
     attribution_lib.initialized = True
     attribution_lib.node_domain_resolver = node_domain_resolver
 
-    if node_mapping_file:
-        # Configure node name mapping file if provided
-        nodename_utils.configure_node_mapping_file(node_mapping_file)
-        attribution_lib.ip_to_nodenames = nodename_utils.get_ip_to_node_name_mapping()
+    # Reconfiguration must also clear a mapping from an earlier attribution run.
+    nodename_utils.configure_node_mapping_file(node_mapping_file)
+    attribution_lib.ip_to_nodenames = nodename_utils.get_ip_to_node_name_mapping() if node_mapping_file else {}
 
     if ignored_hostname_prefixes:
         attribution_lib.ignored_hostname_prefixes = ignored_hostname_prefixes

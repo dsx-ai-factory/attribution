@@ -16,7 +16,8 @@ const blob = {
       responsibleNodes: [], pipeline: '', service: '', log: [] },
   ],
   meta: { versions: { schema: '1', pipeline: null, service: null },
-          dateBounds: { min: '2026-05-02', max: '2026-05-02' }, totalRuns: 2, returnedRuns: 2 },
+          dateBounds: { min: '2026-05-02', max: '2026-05-02' }, windowedRuns: 2, dbTotalRuns: 2,
+          returnedRuns: 2 },
 }
 
 describe('ApiBootstrapService', () => {
@@ -44,6 +45,6 @@ describe('ApiBootstrapService', () => {
   it('resolves a single run and meta', async () => {
     const ds = new ApiBootstrapService()
     expect((await ds.getRun('a'))?.id).toBe('a')
-    expect((await ds.getMeta()).totalRuns).toBe(2)
+    expect((await ds.getMeta()).windowedRuns).toBe(2)
   })
 })

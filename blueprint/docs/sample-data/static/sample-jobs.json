@@ -1,11 +1,20 @@
 {
-  "description": "Static quickstart corpus with one root-cause symptom and one responsible node per job, plus a 20-job XID-31 repeat-offender demo.",
+  "description": "Static quickstart corpus with one root-cause symptom per job, pair-only network evidence, cascade coverage, and a 20-job XID-31 repeat-offender demo.",
   "constraints": {
     "forbidden_sample_classes": [
       "generic-failed",
       "timeout-cancelled"
     ],
-    "responsible_nodes_per_job": 1,
+    "responsible_node_exceptions": [
+      "workload-0069",
+      "workload-0070"
+    ],
+    "responsible_node_assertion_workloads": [
+      "workload-0069",
+      "workload-0070",
+      "workload-0079",
+      "workload-0080"
+    ],
     "total_jobs": 118,
     "baseline_jobs": 98,
     "repeat_offender_jobs": 20,
@@ -32,7 +41,7 @@
     {
       "id": "workload-0001",
       "expected_outcome": "Fail InfraHW",
-      "root_cause_symptom": "XID-145-InfraHW",
+      "root_cause_symptom": "XID-171-UNCORRECTABLE_DRAM_ERROR",
       "state": "NODE_FAIL",
       "nodes": [
         "node-0001",
@@ -72,13 +81,13 @@
         "node-0001"
       ],
       "evidence_source": "syslog",
-      "evidence_marker": "Xid (PCI:0000:81:00): 145, (0x00000007 0x00000010",
+      "evidence_marker": "Xid (PCI:0000:81:00): 171,",
       "evidence_path": "docs/sample-data/static/syslog/workload-0001/node-0001/syslog.log"
     },
     {
       "id": "workload-0002",
       "expected_outcome": "Fail InfraHW",
-      "root_cause_symptom": "XID-145-InfraHW",
+      "root_cause_symptom": "XID-171-UNCORRECTABLE_DRAM_ERROR",
       "state": "NODE_FAIL",
       "nodes": [
         "node-0002",
@@ -150,13 +159,13 @@
         "node-0002"
       ],
       "evidence_source": "syslog",
-      "evidence_marker": "Xid (PCI:0000:81:00): 145, (0x00000007 0x00000010",
+      "evidence_marker": "Xid (PCI:0000:81:00): 171,",
       "evidence_path": "docs/sample-data/static/syslog/workload-0002/node-0002/syslog.log"
     },
     {
       "id": "workload-0003",
       "expected_outcome": "Fail InfraHW",
-      "root_cause_symptom": "XID-145-InfraHW",
+      "root_cause_symptom": "XID-171-UNCORRECTABLE_DRAM_ERROR",
       "state": "NODE_FAIL",
       "nodes": [
         "node-0003",
@@ -1188,7 +1197,7 @@
         "node-0003"
       ],
       "evidence_source": "syslog",
-      "evidence_marker": "Xid (PCI:0000:81:00): 145, (0x00000007 0x00000010",
+      "evidence_marker": "Xid (PCI:0000:81:00): 171,",
       "evidence_path": "docs/sample-data/static/syslog/workload-0003/node-0003/syslog.log"
     },
     {
@@ -1235,7 +1244,10 @@
       ],
       "evidence_source": "syslog",
       "evidence_marker": "Xid (PCI:0000:82:00): 149, (0x00400011 0x00000000",
-      "evidence_path": "docs/sample-data/static/syslog/workload-0004/node-0004/syslog.log"
+      "evidence_path": "docs/sample-data/static/syslog/workload-0004/node-0004/syslog.log",
+      "discarded_symptom_prefixes": [
+        "XID-145"
+      ]
     },
     {
       "id": "workload-0005",
@@ -12814,7 +12826,7 @@
     {
       "id": "workload-0034",
       "expected_outcome": "Fail InfraHW",
-      "root_cause_symptom": "XID-158-GPU_FATAL_TIMEOUT",
+      "root_cause_symptom": "XID-149.37-NETIR_LINK_DOWN-PEER_RESET_EVENT-0",
       "state": "NODE_FAIL",
       "nodes": [
         "node-0034",
@@ -12854,13 +12866,13 @@
         "node-0034"
       ],
       "evidence_source": "syslog",
-      "evidence_marker": "Xid (PCI:0000:84:00): 158,",
+      "evidence_marker": "Xid (PCI:0000:82:00): 149, (0x02500011 0x00000000",
       "evidence_path": "docs/sample-data/static/syslog/workload-0034/node-0034/syslog.log"
     },
     {
       "id": "workload-0035",
       "expected_outcome": "Fail InfraHW",
-      "root_cause_symptom": "XID-158-GPU_FATAL_TIMEOUT",
+      "root_cause_symptom": "XID-149.37-NETIR_LINK_DOWN-PEER_RESET_EVENT-0",
       "state": "NODE_FAIL",
       "nodes": [
         "node-0035",
@@ -12932,13 +12944,13 @@
         "node-0035"
       ],
       "evidence_source": "syslog",
-      "evidence_marker": "Xid (PCI:0000:84:00): 158,",
+      "evidence_marker": "Xid (PCI:0000:82:00): 149, (0x02500011 0x00000000",
       "evidence_path": "docs/sample-data/static/syslog/workload-0035/node-0035/syslog.log"
     },
     {
       "id": "workload-0036",
       "expected_outcome": "Fail InfraHW",
-      "root_cause_symptom": "XID-158-GPU_FATAL_TIMEOUT",
+      "root_cause_symptom": "XID-149.37-NETIR_LINK_DOWN-PEER_RESET_EVENT-0",
       "state": "NODE_FAIL",
       "nodes": [
         "node-0036",
@@ -13970,13 +13982,13 @@
         "node-0036"
       ],
       "evidence_source": "syslog",
-      "evidence_marker": "Xid (PCI:0000:84:00): 158,",
+      "evidence_marker": "Xid (PCI:0000:82:00): 149, (0x02500011 0x00000000",
       "evidence_path": "docs/sample-data/static/syslog/workload-0036/node-0036/syslog.log"
     },
     {
       "id": "workload-0037",
       "expected_outcome": "Fail InfraHW",
-      "root_cause_symptom": "XID-167-PCIE_FATAL_TIMEOUT",
+      "root_cause_symptom": "XID-64-INFOROM_DRAM_RETIREMENT_FAILURE",
       "state": "NODE_FAIL",
       "nodes": [
         "node-0037",
@@ -14016,13 +14028,13 @@
         "node-0037"
       ],
       "evidence_source": "syslog",
-      "evidence_marker": "Xid (PCI:0000:84:00): 167,",
+      "evidence_marker": "Xid (PCI:0000:83:00): 64,",
       "evidence_path": "docs/sample-data/static/syslog/workload-0037/node-0037/syslog.log"
     },
     {
       "id": "workload-0038",
       "expected_outcome": "Fail InfraHW",
-      "root_cause_symptom": "XID-167-PCIE_FATAL_TIMEOUT",
+      "root_cause_symptom": "XID-64-INFOROM_DRAM_RETIREMENT_FAILURE",
       "state": "NODE_FAIL",
       "nodes": [
         "node-0038",
@@ -14094,13 +14106,13 @@
         "node-0038"
       ],
       "evidence_source": "syslog",
-      "evidence_marker": "Xid (PCI:0000:84:00): 167,",
+      "evidence_marker": "Xid (PCI:0000:83:00): 64,",
       "evidence_path": "docs/sample-data/static/syslog/workload-0038/node-0038/syslog.log"
     },
     {
       "id": "workload-0039",
       "expected_outcome": "Fail InfraHW",
-      "root_cause_symptom": "XID-167-PCIE_FATAL_TIMEOUT",
+      "root_cause_symptom": "XID-64-INFOROM_DRAM_RETIREMENT_FAILURE",
       "state": "NODE_FAIL",
       "nodes": [
         "node-0039",
@@ -15132,13 +15144,13 @@
         "node-0039"
       ],
       "evidence_source": "syslog",
-      "evidence_marker": "Xid (PCI:0000:84:00): 167,",
+      "evidence_marker": "Xid (PCI:0000:83:00): 64,",
       "evidence_path": "docs/sample-data/static/syslog/workload-0039/node-0039/syslog.log"
     },
     {
       "id": "workload-0040",
       "expected_outcome": "Fail InfraHW",
-      "root_cause_symptom": "XID-168-REDUCED_GPU_MEMORY_CAPACITY",
+      "root_cause_symptom": "XID-149.33-NETIR_LINK_DOWN-PEER_DISABLE-0",
       "state": "NODE_FAIL",
       "nodes": [
         "node-0040",
@@ -15178,13 +15190,13 @@
         "node-0040"
       ],
       "evidence_source": "syslog",
-      "evidence_marker": "Xid (PCI:0000:84:00): 168,",
+      "evidence_marker": "Xid (PCI:0000:84:00): 149, (0x02100011 0x00000000",
       "evidence_path": "docs/sample-data/static/syslog/workload-0040/node-0040/syslog.log"
     },
     {
       "id": "workload-0041",
       "expected_outcome": "Fail InfraHW",
-      "root_cause_symptom": "XID-168-REDUCED_GPU_MEMORY_CAPACITY",
+      "root_cause_symptom": "XID-149.33-NETIR_LINK_DOWN-PEER_DISABLE-0",
       "state": "NODE_FAIL",
       "nodes": [
         "node-0041",
@@ -15256,13 +15268,13 @@
         "node-0041"
       ],
       "evidence_source": "syslog",
-      "evidence_marker": "Xid (PCI:0000:84:00): 168,",
+      "evidence_marker": "Xid (PCI:0000:84:00): 149, (0x02100011 0x00000000",
       "evidence_path": "docs/sample-data/static/syslog/workload-0041/node-0041/syslog.log"
     },
     {
       "id": "workload-0042",
       "expected_outcome": "Fail InfraHW",
-      "root_cause_symptom": "XID-168-REDUCED_GPU_MEMORY_CAPACITY",
+      "root_cause_symptom": "XID-149.33-NETIR_LINK_DOWN-PEER_DISABLE-0",
       "state": "NODE_FAIL",
       "nodes": [
         "node-0042",
@@ -16294,7 +16306,7 @@
         "node-0042"
       ],
       "evidence_source": "syslog",
-      "evidence_marker": "Xid (PCI:0000:84:00): 168,",
+      "evidence_marker": "Xid (PCI:0000:84:00): 149, (0x02100011 0x00000000",
       "evidence_path": "docs/sample-data/static/syslog/workload-0042/node-0042/syslog.log"
     },
     {
@@ -24356,8 +24368,8 @@
     {
       "id": "workload-0065",
       "expected_outcome": "Fail InfraHW",
-      "root_cause_symptom": "XID-124-SPI_PMU_RPC_ERASE_FAIL",
-      "state": "NODE_FAIL",
+      "root_cause_symptom": "NS network connection lost",
+      "state": "FAILED",
       "nodes": [
         "node-0065",
         "node-0065-peer-0001",
@@ -24428,14 +24440,14 @@
         "node-0065"
       ],
       "evidence_source": "syslog",
-      "evidence_marker": "Xid (PCI:0000:84:00): 124,",
+      "evidence_marker": "connection2:0: detected conn error (1020)",
       "evidence_path": "docs/sample-data/static/syslog/workload-0065/node-0065/syslog.log"
     },
     {
       "id": "workload-0066",
       "expected_outcome": "Fail InfraHW",
-      "root_cause_symptom": "XID-124-SPI_PMU_RPC_ERASE_FAIL",
-      "state": "NODE_FAIL",
+      "root_cause_symptom": "NS network connection lost",
+      "state": "FAILED",
       "nodes": [
         "node-0066",
         "node-0066-peer-0001",
@@ -25466,14 +25478,14 @@
         "node-0066"
       ],
       "evidence_source": "syslog",
-      "evidence_marker": "Xid (PCI:0000:84:00): 124,",
+      "evidence_marker": "connection2:0: detected conn error (1020)",
       "evidence_path": "docs/sample-data/static/syslog/workload-0066/node-0066/syslog.log"
     },
     {
       "id": "workload-0067",
       "expected_outcome": "Fail InfraHW",
-      "root_cause_symptom": "XID-125-INFOROM_FS_ERROR",
-      "state": "NODE_FAIL",
+      "root_cause_symptom": "Fabric manager lost connection to all GPUs",
+      "state": "FAILED",
       "nodes": [
         "node-0067",
         "node-0067-peer-0001",
@@ -25512,14 +25524,14 @@
         "node-0067"
       ],
       "evidence_source": "syslog",
-      "evidence_marker": "Xid (PCI:0000:84:00): 125,",
+      "evidence_marker": "Lost connection to GPU on nodeId 1, systemGuid 0xaaa, gpuGUID 0x0000000000000000",
       "evidence_path": "docs/sample-data/static/syslog/workload-0067/node-0067/syslog.log"
     },
     {
       "id": "workload-0068",
       "expected_outcome": "Fail InfraHW",
-      "root_cause_symptom": "XID-125-INFOROM_FS_ERROR",
-      "state": "NODE_FAIL",
+      "root_cause_symptom": "Fabric manager lost connection to all GPUs",
+      "state": "FAILED",
       "nodes": [
         "node-0068",
         "node-0068-peer-0001",
@@ -25590,14 +25602,14 @@
         "node-0068"
       ],
       "evidence_source": "syslog",
-      "evidence_marker": "Xid (PCI:0000:84:00): 125,",
+      "evidence_marker": "Lost connection to GPU on nodeId 1, systemGuid 0xaaa, gpuGUID 0x0000000000000000",
       "evidence_path": "docs/sample-data/static/syslog/workload-0068/node-0068/syslog.log"
     },
     {
       "id": "workload-0069",
       "expected_outcome": "Fail InfraHW",
-      "root_cause_symptom": "XID-136-ALI_TRAINING_FAIL",
-      "state": "NODE_FAIL",
+      "root_cause_symptom": "Call to ibv_modify_qp failed: eno 110 timeout",
+      "state": "FAILED",
       "nodes": [
         "node-0069",
         "node-0069-peer-0001",
@@ -26624,18 +26636,17 @@
         "node-0069-peer-1022",
         "node-0069-peer-1023"
       ],
-      "responsible_nodes": [
-        "node-0069"
-      ],
-      "evidence_source": "syslog",
-      "evidence_marker": "Xid (PCI:0000:84:00): 136,",
-      "evidence_path": "docs/sample-data/static/syslog/workload-0069/node-0069/syslog.log"
+      "responsible_nodes": [],
+      "expected_bad_pairs": "{'src_node': 'node-0069', 'dst_node': 'node-0069-peer-0001'}; {'src_node': 'node-0069-peer-0001', 'dst_node': 'node-0069-peer-0002'}",
+      "evidence_source": "applog",
+      "evidence_marker": "Call to ibv_modify_qp failed with 110 Connection timed out",
+      "evidence_path": "docs/sample-data/static/applog/workload-0069/application.log"
     },
     {
       "id": "workload-0070",
       "expected_outcome": "Fail InfraHW",
-      "root_cause_symptom": "XID-136-ALI_TRAINING_FAIL",
-      "state": "NODE_FAIL",
+      "root_cause_symptom": "Call to ibv_modify_qp failed: eno 110 timeout",
+      "state": "FAILED",
       "nodes": [
         "node-0070",
         "node-0070-peer-0001",
@@ -26670,18 +26681,16 @@
         "node-0070-peer-0030",
         "node-0070-peer-0031"
       ],
-      "responsible_nodes": [
-        "node-0070"
-      ],
-      "evidence_source": "syslog",
-      "evidence_marker": "Xid (PCI:0000:84:00): 136,",
-      "evidence_path": "docs/sample-data/static/syslog/workload-0070/node-0070/syslog.log"
+      "responsible_nodes": [],
+      "evidence_source": "applog",
+      "evidence_marker": "Call to ibv_modify_qp failed with 110 Connection timed out",
+      "evidence_path": "docs/sample-data/static/applog/workload-0070/application.log"
     },
     {
       "id": "workload-0071",
       "expected_outcome": "Fail InfraHW",
-      "root_cause_symptom": "XID-141-FAST_PATH_ERROR",
-      "state": "NODE_FAIL",
+      "root_cause_symptom": "ibv_open_device failed",
+      "state": "FAILED",
       "nodes": [
         "node-0071",
         "node-0071-peer-0001",
@@ -26751,15 +26760,15 @@
       "responsible_nodes": [
         "node-0071"
       ],
-      "evidence_source": "syslog",
-      "evidence_marker": "Xid (PCI:0000:84:00): 141,",
-      "evidence_path": "docs/sample-data/static/syslog/workload-0071/node-0071/syslog.log"
+      "evidence_source": "applog",
+      "evidence_marker": "ibv_open_device failed",
+      "evidence_path": "docs/sample-data/static/applog/workload-0071/application.log"
     },
     {
       "id": "workload-0072",
       "expected_outcome": "Fail InfraHW",
-      "root_cause_symptom": "XID-141-FAST_PATH_ERROR",
-      "state": "NODE_FAIL",
+      "root_cause_symptom": "ibv_open_device failed",
+      "state": "FAILED",
       "nodes": [
         "node-0072",
         "node-0072-peer-0001",
@@ -27789,15 +27798,15 @@
       "responsible_nodes": [
         "node-0072"
       ],
-      "evidence_source": "syslog",
-      "evidence_marker": "Xid (PCI:0000:84:00): 141,",
-      "evidence_path": "docs/sample-data/static/syslog/workload-0072/node-0072/syslog.log"
+      "evidence_source": "applog",
+      "evidence_marker": "ibv_open_device failed",
+      "evidence_path": "docs/sample-data/static/applog/workload-0072/application.log"
     },
     {
       "id": "workload-0073",
       "expected_outcome": "Fail InfraHW",
-      "root_cause_symptom": "XID-155-NVLINK_SW_DEFINED_ERROR",
-      "state": "NODE_FAIL",
+      "root_cause_symptom": "No route to host",
+      "state": "FAILED",
       "nodes": [
         "node-0073",
         "node-0073-peer-0001",
@@ -27835,15 +27844,15 @@
       "responsible_nodes": [
         "node-0073"
       ],
-      "evidence_source": "syslog",
-      "evidence_marker": "Xid (PCI:0000:84:00): 155,",
-      "evidence_path": "docs/sample-data/static/syslog/workload-0073/node-0073/syslog.log"
+      "evidence_source": "applog",
+      "evidence_marker": "No route to host",
+      "evidence_path": "docs/sample-data/static/applog/workload-0073/application.log"
     },
     {
       "id": "workload-0074",
       "expected_outcome": "Fail InfraHW",
-      "root_cause_symptom": "XID-155-NVLINK_SW_DEFINED_ERROR",
-      "state": "NODE_FAIL",
+      "root_cause_symptom": "No route to host",
+      "state": "FAILED",
       "nodes": [
         "node-0074",
         "node-0074-peer-0001",
@@ -27913,9 +27922,9 @@
       "responsible_nodes": [
         "node-0074"
       ],
-      "evidence_source": "syslog",
-      "evidence_marker": "Xid (PCI:0000:84:00): 155,",
-      "evidence_path": "docs/sample-data/static/syslog/workload-0074/node-0074/syslog.log"
+      "evidence_source": "applog",
+      "evidence_marker": "No route to host",
+      "evidence_path": "docs/sample-data/static/applog/workload-0074/application.log"
     },
     {
       "id": "workload-0075",
@@ -29004,8 +29013,8 @@
     {
       "id": "workload-0077",
       "expected_outcome": "Fail InfraHW",
-      "root_cause_symptom": "XID-157-RESOURCE_RETIREMENT_FAILURE",
-      "state": "NODE_FAIL",
+      "root_cause_symptom": "link down(east-west)",
+      "state": "FAILED",
       "nodes": [
         "node-0077",
         "node-0077-peer-0001",
@@ -29075,15 +29084,15 @@
       "responsible_nodes": [
         "node-0077"
       ],
-      "evidence_source": "syslog",
-      "evidence_marker": "Xid (PCI:0000:84:00): 157,",
-      "evidence_path": "docs/sample-data/static/syslog/workload-0077/node-0077/syslog.log"
+      "evidence_source": "applog",
+      "evidence_marker": "mlx5_0 port error",
+      "evidence_path": "docs/sample-data/static/applog/workload-0077/application.log"
     },
     {
       "id": "workload-0078",
       "expected_outcome": "Fail InfraHW",
-      "root_cause_symptom": "XID-157-RESOURCE_RETIREMENT_FAILURE",
-      "state": "NODE_FAIL",
+      "root_cause_symptom": "link down(east-west)",
+      "state": "FAILED",
       "nodes": [
         "node-0078",
         "node-0078-peer-0001",
@@ -30113,15 +30122,15 @@
       "responsible_nodes": [
         "node-0078"
       ],
-      "evidence_source": "syslog",
-      "evidence_marker": "Xid (PCI:0000:84:00): 157,",
-      "evidence_path": "docs/sample-data/static/syslog/workload-0078/node-0078/syslog.log"
+      "evidence_source": "applog",
+      "evidence_marker": "mlx5_0 port error",
+      "evidence_path": "docs/sample-data/static/applog/workload-0078/application.log"
     },
     {
       "id": "workload-0079",
       "expected_outcome": "Fail InfraHW",
-      "root_cause_symptom": "XID-80-PBDMA_PUSHBUFFER_CRC_MISMATCH",
-      "state": "NODE_FAIL",
+      "root_cause_symptom": "local catastrophic error",
+      "state": "FAILED",
       "nodes": [
         "node-0079",
         "node-0079-peer-0001",
@@ -30159,15 +30168,15 @@
       "responsible_nodes": [
         "node-0079"
       ],
-      "evidence_source": "syslog",
-      "evidence_marker": "Xid (PCI:0000:84:00): 80,",
-      "evidence_path": "docs/sample-data/static/syslog/workload-0079/node-0079/syslog.log"
+      "evidence_source": "applog",
+      "evidence_marker": "local catastrophic error",
+      "evidence_path": "docs/sample-data/static/applog/workload-0079/application.log"
     },
     {
       "id": "workload-0080",
       "expected_outcome": "Fail InfraHW",
-      "root_cause_symptom": "XID-80-PBDMA_PUSHBUFFER_CRC_MISMATCH",
-      "state": "NODE_FAIL",
+      "root_cause_symptom": "local catastrophic error",
+      "state": "FAILED",
       "nodes": [
         "node-0080",
         "node-0080-peer-0001",
@@ -30237,9 +30246,9 @@
       "responsible_nodes": [
         "node-0080"
       ],
-      "evidence_source": "syslog",
-      "evidence_marker": "Xid (PCI:0000:84:00): 80,",
-      "evidence_path": "docs/sample-data/static/syslog/workload-0080/node-0080/syslog.log"
+      "evidence_source": "applog",
+      "evidence_marker": "local catastrophic error",
+      "evidence_path": "docs/sample-data/static/applog/workload-0080/application.log"
     },
     {
       "id": "workload-0081",

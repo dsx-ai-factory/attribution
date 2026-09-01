@@ -125,6 +125,39 @@ def test_node_not_responding_preserves_hardware_policy():
     assert not registry.contains("Not responding")
 
 
+def test_corroborated_node_failure_maps_to_infra_hw_and_discards_component_signals():
+    """Classify the composite as hardware and keep its inputs as supporting evidence."""
+    registry = _load_committed_registry()
+
+    match = registry.outcome_for(["Corroborated node failure"])
+
+    assert match is not None
+    assert match.matched_prefix == "Corroborated node failure"
+    assert match.outcome == "Fail InfraHW"
+    assert match.hw_cause == "Known HW Cause - Node"
+    assert match.tier_index == OUTCOME_PRIORITIES.index(OutcomePriority.HIGH_HW)
+    assert registry.cascade_discards_for("Corroborated node failure") == [
+        "Node failure reported by slurm",
+        "Node not responding",
+    ]
+
+
+@pytest.mark.parametrize(
+    "stronger_symptom",
+    (
+        "NMI watchdog hard LOCKUP",
+        "XID-",
+        "general protection fault",
+        "Fabric manager lost connection to all GPUs",
+    ),
+)
+def test_specific_node_failures_discard_corroborated_node_failure(stronger_symptom):
+    """Keep the composite subordinate to independently identified causes."""
+    registry = _load_committed_registry()
+
+    assert "Corroborated node failure" in registry.cascade_discards_for(stronger_symptom)
+
+
 def test_slurm_node_failure_yields_to_node_not_responding_in_any_order():
     """Prefer node non-response hardware evidence over the scheduler state."""
     registry = _load_committed_registry()

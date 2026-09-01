@@ -84,6 +84,10 @@ def attribute(
         bool,
         Query(description="Include the runtime Decision DAG in the verdict."),
     ] = False,
+    include_interesting: Annotated[
+        bool,
+        Query(description="Include symptoms and node bindings that were demoted to supporting evidence."),
+    ] = False,
 ) -> AttributionResponseV2:
     """Perform attribution on specified attributor based on all previous observation ingested on this attributor."""
     ctx: AttributionContext = request.app.state.aim.get_attributor(att_id).attribute(
@@ -95,6 +99,7 @@ def attribute(
         ctx.result,
         ctx.decision_graph,
         ctx.decision_graph_requested,
+        include_interesting,
     )
 
 

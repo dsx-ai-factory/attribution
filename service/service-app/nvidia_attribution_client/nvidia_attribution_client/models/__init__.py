@@ -56,6 +56,7 @@ from nvidia_attribution_client.models.sourced_symptom import SourcedSymptom
 from nvidia_attribution_client.models.storage_attribution import StorageAttribution
 from nvidia_attribution_client.models.straggler_attribution import StragglerAttribution
 from nvidia_attribution_client.models.switch_attribution import SwitchAttribution
+from nvidia_attribution_client.models.symptom_status import SymptomStatus
 from nvidia_attribution_client.models.symptoms_value_inner import SymptomsValueInner
 from nvidia_attribution_client.models.time_interval import TimeInterval
 from nvidia_attribution_client.models.unknown_attributor_id_error import UnknownAttributorIdError
@@ -65,3 +66,4 @@ from nvidia_attribution_client.models.validation_error_response import Validatio
 from nvidia_attribution_client.models.verdict import Verdict
 from nvidia_attribution_client.models.workload_record import WorkloadRecord
 from nvidia_attribution_client.models.workload_type_enum import WorkloadTypeEnum
+

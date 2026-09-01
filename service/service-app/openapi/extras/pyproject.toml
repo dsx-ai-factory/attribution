@@ -1,0 +1,45 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: LicenseRef-NvidiaProprietary
+
+# NVIDIA CORPORATION, its affiliates and licensors retain all intellectual
+# property and proprietary rights in and to this material, related
+# documentation and any modifications thereto. Any use, reproduction,
+# disclosure or distribution of this material and related documentation
+# without an express license agreement from NVIDIA CORPORATION or
+# its affiliates is strictly prohibited.
+
+[project]
+name = "nvidia-attribution-client"
+dynamic = ["version"]
+description = "NVIDIA Attribution Service"
+authors = [
+    {name = "NVIDIA Corporation"}
+]
+readme = "README.md"
+license = "LicenseRef-NvidiaProprietary"
+license-files = ["LICENSE"]
+keywords = ["NVIDIA Attribution Service", "OpenAPI", "OpenAPI-Generator"]
+requires-python = ">=3.10"
+
+dependencies = [
+    "urllib3>=2.7.0,<3.0.0",
+    "python-dateutil>=2.8.2",
+    "pydantic>=2",
+    "typing-extensions>=4.7.1",
+]
+
+[project.urls]
+Repository = "https://github.com/NVIDIA/attribution"
+
+[tool.hatch.build.targets.sdist]
+packages = ["nvidia_attribution_client"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["nvidia_attribution_client"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.version]
+path = "nvidia_attribution_client/__init__.py"

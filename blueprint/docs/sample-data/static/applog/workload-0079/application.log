@@ -1,3 +1,5 @@
 2026-08-06T10:53:00+00:00 - launcher - INFO - workload workload-0079 started on node-0079 with sample inputs.
-2026-08-06T11:03:00+00:00 - trainer - INFO - rank 0 completed warmup step 1079.
+2026-08-06T10:53:00+00:00 - trainer - INFO - [2026-08-06T10:53:00+00:00] iteration 1/100 | throughput per GPU (TFLOP/s/GPU): 100.0 |
+2026-08-06T11:03:00+00:00 0: NCCL WARN local catastrophic error responsible_node=node-0079
+0: NCCL WARN local catastrophic error responsible_node=node-0079
 2026-08-06T11:33:00+00:00 - launcher - INFO - workload workload-0079 cleanup completed after root symptom collection.

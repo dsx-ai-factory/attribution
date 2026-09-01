@@ -1,14 +1,16 @@
 import { useMemo, useCallback, useEffect, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
+import { CircleAlert } from 'lucide-react'
 import { OUTCOMES } from '@/lib/attribution-data'
 import { useDashboard } from '@/hooks/use-dashboard'
 import { useRunsTable, type PageByOutcome } from '@/hooks/use-runs-table'
 import { parseFilter, serializeFilter } from '@/lib/filter-state'
-import { detectPreset, isoDate, presetRange, windowLabel, type WindowPreset } from '@/lib/date-window'
+import { boundsOutsideWindow, detectPreset, isoDate, presetRange, windowLabel, type WindowPreset } from '@/lib/date-window'
 import type { OutcomeKey } from '@/interfaces/attribution'
 import type { FleetFilter } from '@/interfaces/filter'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
+import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
 import { DatePicker } from '@/routers/fleet/components/date-picker'
 import { KpiStrip } from '@/routers/fleet/components/kpi-strip'
@@ -16,6 +18,7 @@ import { ParetoCard } from '@/routers/fleet/components/pareto'
 import { BreakdownByDay } from '@/routers/fleet/components/breakdown-by-day'
 import { MoversStrip } from '@/routers/fleet/components/movers-strip'
 import { RunsSection } from '@/routers/fleet/components/runs-section'
+import { scrollToRuns } from '@/routers/fleet/components/mtbi-primitives'
 
 const OUTCOME_ORDER: OutcomeKey[] = ['hardware', 'software', 'multi', 'user', 'undetermined', 'pass']
 const DEFAULT_PAGE_SIZE = 10
@@ -31,6 +34,35 @@ function SectionLabel({ children, count }: { children: React.ReactNode; count?: 
       )}
       <span className="flex-1 h-px bg-border" />
     </div>
+  )
+}
+
+function NoResultsNotice({
+  title,
+  detail,
+  actionLabel,
+  onAction,
+}: {
+  title: string
+  detail: string
+  actionLabel?: string
+  onAction?: () => void
+}) {
+  return (
+    <Alert role="presentation" className="flex flex-wrap items-center gap-x-4 gap-y-2">
+      <CircleAlert className="text-primary" />
+      <div className="flex flex-col gap-1 min-w-0 flex-1">
+        <AlertTitle className="font-mono text-xs tracking-widest uppercase">
+          {title}
+        </AlertTitle>
+        <AlertDescription className="font-mono text-xs">{detail}</AlertDescription>
+      </div>
+      {actionLabel !== undefined && onAction !== undefined && (
+        <Button variant="outline" size="sm" onClick={onAction}>
+          {actionLabel}
+        </Button>
+      )}
+    </Alert>
   )
 }
 
@@ -64,7 +96,7 @@ export function FleetView() {
     }),
     [filter, range],
   )
-  const { dashboard, isLoading: dashboardLoading } = useDashboard({
+  const { dashboard, isLoading: dashboardLoading, error: dashboardError } = useDashboard({
     from: effectiveFilter.from,
     to: effectiveFilter.to,
     outcome: effectiveFilter.outcome,
@@ -162,43 +194,117 @@ export function FleetView() {
   const ruleLedger = dashboard?.ledgers.rule ?? []
   const outcomeLedger = dashboard?.ledgers.outcome ?? []
   const movers = dashboard?.movers ?? []
+  const dbTotalRuns = dashboard?.meta.dbTotalRuns ?? 0
+  const outsideBounds = boundsOutsideWindow(dashboard?.meta?.dateBounds ?? null, filter)
+  const showDateNotice = metrics?.windowedRuns === 0 && outsideBounds !== null
+  const showFilterNotice =
+    metrics !== undefined &&
+    metrics.windowedRuns > 0 &&
+    !table.isLoading &&
+    table.error === null &&
+    table.total === 0
+  const databaseEmpty =
+    dashboard !== null && !dashboardLoading && dashboardError === null && dbTotalRuns === 0
+  const runCountLabel =
+    dashboardError !== null || table.error !== null
+      ? 'Run counts unavailable'
+      : dashboard !== null && !dashboardLoading && !table.isLoading
+        ? `${table.total.toLocaleString()} of ${dbTotalRuns.toLocaleString()} runs in database`
+        : null
+
+  const focusRuns = useCallback(() => {
+    document.getElementById('runs-section')?.focus({ preventScroll: true })
+    scrollToRuns()
+  }, [])
+
+  const jumpToBounds = useCallback(() => {
+    if (outsideBounds === null) return
+    setFilter({ ...filter, window: 'custom', from: outsideBounds.min, to: outsideBounds.max })
+    focusRuns()
+  }, [filter, outsideBounds, setFilter, focusRuns])
+
+  const clearRunFilters = useCallback(() => {
+    setFilter({
+      ...filter,
+      outcome: undefined,
+      symptom: undefined,
+      node: undefined,
+      rule: undefined,
+      user: undefined,
+      q: undefined,
+      status: 'all',
+    })
+    focusRuns()
+  }, [filter, setFilter, focusRuns])
 
   return (
     <div>
       {/* Filter bar */}
-      <div className="sticky top-0 z-20 flex items-center gap-2.5 bg-background-active border border-border rounded-md px-3 py-2.5 mb-5">
-        <ToggleGroup
-          type="single"
-          value={preset}
-          // Re-clicking the pressed preset emits '' (Radix deselect); re-apply
-          // it instead so clicking 30d always re-anchors the window to now.
-          onValueChange={(v) => setPreset((v || preset) as WindowPreset)}
-          variant="outline"
-          size="sm"
-          className="font-mono"
-        >
-          <ToggleGroupItem value="all">All</ToggleGroupItem>
-          <ToggleGroupItem value="24h">24h</ToggleGroupItem>
-          <ToggleGroupItem value="7d">7d</ToggleGroupItem>
-          <ToggleGroupItem value="30d">30d</ToggleGroupItem>
-          <ToggleGroupItem value="custom">Custom</ToggleGroupItem>
-        </ToggleGroup>
-        <div className="flex items-center gap-1.5">
-          <label className="font-mono text-xs uppercase tracking-wider text-foreground-muted">
-            From
-          </label>
-          <DatePicker value={range?.from} onChange={setFrom} maxDate={range?.to} />
+      <div className="sticky top-0 z-20 mb-5 bg-background flex flex-col gap-2">
+        <div className="flex items-center gap-2.5 bg-background-active border border-border rounded-md px-3 py-2.5">
+          <ToggleGroup
+            type="single"
+            value={preset}
+            // Re-clicking the pressed preset emits '' (Radix deselect); re-apply
+            // it instead so clicking 30d always re-anchors the window to now.
+            onValueChange={(v) => setPreset((v || preset) as WindowPreset)}
+            variant="outline"
+            size="sm"
+            className="font-mono"
+          >
+            <ToggleGroupItem value="all">All</ToggleGroupItem>
+            <ToggleGroupItem value="24h">24h</ToggleGroupItem>
+            <ToggleGroupItem value="7d">7d</ToggleGroupItem>
+            <ToggleGroupItem value="30d">30d</ToggleGroupItem>
+            <ToggleGroupItem value="custom">Custom</ToggleGroupItem>
+          </ToggleGroup>
+          <div className="flex items-center gap-1.5">
+            <label className="font-mono text-xs uppercase tracking-wider text-foreground-muted">
+              From
+            </label>
+            <DatePicker value={range?.from} onChange={setFrom} maxDate={range?.to} />
+          </div>
+          <div className="flex items-center gap-1.5">
+            <label className="font-mono text-xs uppercase tracking-wider text-foreground-muted">
+              To
+            </label>
+            <DatePicker value={range?.to} onChange={setTo} minDate={range?.from} />
+          </div>
+          <div className="flex-1" />
+          {runCountLabel !== null && (
+            <span className="font-mono text-xs text-foreground-muted whitespace-nowrap">
+              {runCountLabel}
+            </span>
+          )}
+          <Button variant="default" size="sm" onClick={() => setSearchParams(serializeFilter(filter), { replace: false })}>
+            Refresh
+          </Button>
         </div>
-        <div className="flex items-center gap-1.5">
-          <label className="font-mono text-xs uppercase tracking-wider text-foreground-muted">
-            To
-          </label>
-          <DatePicker value={range?.to} onChange={setTo} minDate={range?.from} />
+
+        <div role="status" aria-live="polite" className="contents">
+          {databaseEmpty && (
+            <NoResultsNotice
+              title="This database has no attribution runs"
+              detail="Nothing has been attributed yet. See blueprint/docs/quickstart.md to run your first attribution, then refresh."
+            />
+          )}
+          {showDateNotice && outsideBounds !== null && (
+            <NoResultsNotice
+              title="Workloads exist outside the selected dates"
+              detail={`Workloads finished between ${outsideBounds.min} and ${outsideBounds.max}. Nothing in the selected date range has an attribution result.`}
+              actionLabel={`View ${outsideBounds.min} → ${outsideBounds.max}`}
+              onAction={jumpToBounds}
+            />
+          )}
+          {showFilterNotice && (
+            <NoResultsNotice
+              title="No runs listed in this view"
+              detail="This view contains runs, but none of them appear in the run list below."
+              actionLabel="Clear run filters"
+              onAction={clearRunFilters}
+            />
+          )}
         </div>
-        <div className="flex-1" />
-        <Button variant="default" size="sm" onClick={() => setSearchParams(serializeFilter(filter), { replace: false })}>
-          Refresh
-        </Button>
       </div>
 
       {/* KPI strip (compressed top-line) */}
@@ -215,7 +321,7 @@ export function FleetView() {
         combinedFailures={metrics?.combinedFailures ?? 0}
         range={range}
         gpuCount={metrics?.gpuCount ?? 0}
-        runCount={metrics?.totalRuns ?? 0}
+        runCount={metrics?.windowedRuns ?? 0}
         loading={dashboardLoading}
       />
 
@@ -260,10 +366,10 @@ export function FleetView() {
       <MoversStrip movers={movers} filter={filter} setFilter={setFilter} />
 
       {/* Unified runs table */}
-      <div id="runs-section">
+      <div id="runs-section" role="region" aria-label="Runs" tabIndex={-1} className="scroll-mt-16">
         <RunsSection
           groups={table.groups}
-          totalRuns={table.total}
+          matchingRuns={table.total}
           visibleRuns={table.visibleRuns}
           filter={filter}
           setFilter={setFilter}
@@ -272,6 +378,7 @@ export function FleetView() {
           setPageSize={setPageSize}
           setGroupPage={setGroupPage}
           loading={table.isLoading}
+          databaseEmpty={databaseEmpty}
         />
       </div>
 

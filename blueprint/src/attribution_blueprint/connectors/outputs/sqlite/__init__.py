@@ -33,6 +33,7 @@ SCHEMA_DESCRIPTION = (
     "attribution_run carries terminal_state, sub_domain, and responsible node taxonomy"
 )
 _RESPONSIBLE_NODE_MARKER = re.compile(r"\bresponsible_node=([A-Za-z0-9_.:-]+)")
+_PAIR_ONLY_SYMPTOM_PREFIXES = ("Call to ibv_modify_qp failed",)
 
 _SCHEMA_DDL = (
     "CREATE TABLE IF NOT EXISTS schema_version ("
@@ -167,7 +168,9 @@ def _responsible_nodes_from(attribution: dict | None) -> list[str]:
     if not isinstance(symptoms, dict):
         return []
 
-    for sites in symptoms.values():
+    for symptom, sites in symptoms.items():
+        if isinstance(symptom, str) and symptom.startswith(_PAIR_ONLY_SYMPTOM_PREFIXES):
+            continue
         if not isinstance(sites, list):
             continue
         for site in sites:

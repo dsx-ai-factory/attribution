@@ -5,6 +5,7 @@ import { OUTCOMES, SYMPTOM_PALETTE, OTHER_COLOR, breakdownHighlight } from '@/li
 import type { DailyBreakdown, OutcomeKey } from '@/interfaces/attribution'
 import type { FleetFilter } from '@/interfaces/filter'
 import { withDimension } from '@/lib/filter-state'
+import { isWindowed } from '@/lib/date-window'
 import { Card, CardContent } from '@/components/ui/card'
 
 const MONO = 'JetBrains Mono Variable, ui-monospace, monospace'
@@ -129,10 +130,10 @@ function BreakdownChart({
   return <div ref={ref} className="w-full h-64" />
 }
 
-function EmptyChart({ label }: { label: string }) {
+function EmptyChart({ label, windowed }: { label: string; windowed: boolean }) {
   return (
     <div className="w-full h-64 flex items-center justify-center font-mono text-xs text-foreground-muted">
-      No {label} results in this window
+      No {label} results{windowed ? ' in this window' : ''}
     </div>
   )
 }
@@ -182,7 +183,7 @@ export function BreakdownByDay({
                 {OUTCOMES[outcome].label}
               </div>
               {breakdown.total === 0 ? (
-                <EmptyChart label={OUTCOMES[outcome].label} />
+                <EmptyChart label={OUTCOMES[outcome].label} windowed={isWindowed(filter)} />
               ) : (
                 <BreakdownChart
                   breakdown={breakdown}

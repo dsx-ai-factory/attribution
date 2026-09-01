@@ -80,6 +80,9 @@ _SCRUB_ORDER = [
     "SchedulerNodeFailure",
     "SchedulerNotResponding",
     "ScrubBadNodes",
+    # Combine only the scheduler failure and surviving independent epilog
+    # non-response evidence after more specific per-node causes are scrubbed.
+    "CorroboratedNodeFailure",
 ]
 
 _SCRUB_BASE = FilterPriority.SCRUB
@@ -107,6 +110,8 @@ _REFINER_ORDER = [
     "WatchdogTerminateResolution",
     "NodeOfflineComposite",
     "IBSymptomCleanup",
+    # Run after IBSymptomCleanup so the IB hierarchy is already normalized.
+    "KernelCrashIbCascadeCleanup",
     "WatchdogGpuCascadeCleanup",
     "CudaXidCascades",
     "ConnectionClosedCascade",
@@ -279,10 +284,12 @@ _PYXIS_NVIDIA_SPECIFIC_CLI_SYMPTOMS = frozenset(
 
 # Symptoms that mean the node became unusable mid-job. Used by cascade-scrub
 # rules whose root cause is "the node went away."
+_CORROBORATED_NODE_FAILURE = "Corroborated node failure"
 _NODE_FAILURE_SYMPTOMS = frozenset(
     {
         "Node failure reported by slurm",
         "Node not responding",
+        _CORROBORATED_NODE_FAILURE,
         "Node unexpectedly rebooted",
     }
 )
@@ -351,6 +358,7 @@ _NON_IB_ROOT_CAUSE_PATTERNS = [
     "%CE deadlock DETECTED%",
     "%JSONDecodeError%",
     "%Node failure reported by slurm%",
+    "%Corroborated node failure%",
     "%Power Supply Unit failure%",
     "%System is powering down%",
     "%EOFError: Ran out of input%",
@@ -408,9 +416,22 @@ _XID145_RXPIPE_COMPANIONS = frozenset(
 _XID145_RXPIPE_COMPANION_WINDOW = timedelta(seconds=1)
 _XID_PCI_ID_RE = re.compile(r"NVRM:\s+Xid \(PCI:(?P<pci_id>[0-9a-fA-F.:]+)\):")
 _IB_CLEANUP_SKIP_SYMPTOMS = frozenset({_XID145_RXPIPE_SYMPTOM, "XID-137-NVLINK_PRIV_ERR"})
+_KERNEL_CRASH_SYMPTOMS = frozenset(
+    {
+        "kernel panic",
+        "kernel oops",
+        "kernel invalid memory access",
+    }
+)
+_IB_ERROR_12_PREFIX = "IB Error-12"
 
 
 # IBSymptomCleanup helpers
+
+
+def _is_ib_error_12(symptom: str) -> bool:
+    """Match Error-12 as a complete code, including its formatted variants."""
+    return symptom == _IB_ERROR_12_PREFIX or symptom.startswith(f"{_IB_ERROR_12_PREFIX} ")
 
 
 def _deactivate_bad_pairs(event_stream: EventStream, rule_name: str) -> None:
@@ -657,6 +678,45 @@ def scrub_bad_nodes_refiner(context: RefinerContext):
         # Error 803 is the specific cause behind the generic device-count failure.
         if "cudaErrorSystemDriverMismatch" in my_bad_nodes[k]:
             my_bad_nodes[k].discard("Unexpected error from cudaGetDeviceCount()")
+
+
+@refiner_def(
+    name="CorroboratedNodeFailure",
+    author="NVIDIA Attribution team",
+    priority=_priority("CorroboratedNodeFailure"),
+)
+def corroborated_node_failure_refiner(context: RefinerContext):
+    """Combine independent scheduler and epilog failure evidence on one node.
+
+    A SLURM ``NODE_FAIL`` alone is scheduler evidence and remains InfraSW. When
+    the epilog health check independently reports that the same node did not
+    respond, emit the stronger ``Corroborated node failure`` symptom. A
+    scheduler-derived node reason is not independent evidence and must not
+    trigger this composite.
+    """
+    my_bad_nodes = context.my_bad_nodes
+    if my_bad_nodes is None:
+        return
+
+    slurm_failure = RegisteredSymptoms.NODE_FAILURE_REPORTED_BY_SLURM.value
+    node_not_responding = RegisteredSymptoms.NODE_NOT_RESPONDING.value
+    epilog_rule = NodeNotRespondingProvenance.EPILOG_HEALTH_CHECK.value
+
+    for _node, node_group in my_bad_nodes.items():
+        node_attributions = node_group.attributions
+        if slurm_failure not in node_attributions or node_not_responding not in node_attributions:
+            continue
+
+        epilog_sources = [source for source in node_attributions[node_not_responding] if source.rule == epilog_rule]
+        if not epilog_sources:
+            continue
+
+        combined_sources = SourceSet(_CORROBORATED_NODE_FAILURE)
+        for source in node_attributions[slurm_failure]:
+            combined_sources.add(source)
+        for source in epilog_sources:
+            combined_sources.add(source)
+        node_group.add(combined_sources)
 
 
 # Raw-keyword promotion rules
@@ -1423,6 +1483,52 @@ def ib_symptom_cleanup(context: RefinerContext):
 
     if "cudaErrorInvalidValue" in symptoms:
         symptoms.discard("EFA Error-5")
+
+
+@refiner_def(
+    name="KernelCrashIbCascadeCleanup",
+    author="NVIDIA Attribution team",
+    priority=_priority("KernelCrashIbCascadeCleanup"),
+)
+def kernel_crash_ib_cascade_cleanup(context: RefinerContext):
+    """Discard peer IB cascades caused by a node's kernel crash.
+
+    A crashed node stops servicing its queue pairs, so peers can report
+    retry-exceeded IB Error-12 against a healthy fabric. IB evidence on the
+    crashed node itself is preserved.
+    """
+    symptoms = context.symptoms
+    my_bad_nodes = context.my_bad_nodes
+    if symptoms is None or my_bad_nodes is None:
+        return
+
+    crashed_nodes = {
+        node
+        for node, node_group in my_bad_nodes.items()
+        if any(symptom in node_group.attributions for symptom in _KERNEL_CRASH_SYMPTOMS)
+    }
+    if len(crashed_nodes) == 0:
+        return
+
+    discarded: set[str] = set()
+    for node, node_group in my_bad_nodes.items():
+        if node in crashed_nodes:
+            continue
+        errors = node_group.attributions
+        if not any(_is_ib_error_12(symptom) for symptom in errors.symptoms()):
+            continue
+        before = set(errors.symptoms())
+        _discard_ib_cascade(errors)
+        discarded.update(before - set(errors.symptoms()))
+
+    if len(discarded) == 0:
+        return
+
+    surviving = {
+        symptom for _node, node_group in my_bad_nodes.items() for symptom in node_group.attributions.symptoms()
+    }
+    for symptom in discarded - surviving:
+        symptoms.discard(symptom)
 
 
 @refiner_def(

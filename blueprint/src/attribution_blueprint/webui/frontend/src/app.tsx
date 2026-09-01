@@ -1,6 +1,7 @@
 import { useEffect } from 'react'
 import { BrowserRouter, Routes, Route, useLocation } from 'react-router-dom'
 import { TopBar } from '@/components/top-bar'
+import { useMeta } from '@/hooks/use-meta'
 import { FleetView } from '@/routers/fleet'
 import { VerdictView } from '@/routers/verdict'
 import { NodeView } from '@/routers/node'
@@ -11,6 +12,7 @@ function Shell() {
   const { pathname } = useLocation()
   const { name } = navigateService.match(pathname)
   const nav = useNav()
+  const { meta } = useMeta()
 
   // Esc returns to fleet from any drill-down — matches the prototype's demo nav.
   useEffect(() => {
@@ -29,7 +31,7 @@ function Shell() {
   return (
     <div className="min-h-screen bg-background">
       <div className="mx-auto max-w-screen-2xl px-7 pt-5 pb-20">
-        <TopBar name={name} />
+        <TopBar name={name} database={meta?.database ?? null} />
         <Routes>
           <Route path="/" element={<FleetView />} />
           <Route path="/verdict/:id" element={<VerdictView />} />

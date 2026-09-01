@@ -1,3 +1,5 @@
 2026-08-07T04:12:00+00:00 - launcher - INFO - workload workload-0071 started on node-0071 with sample inputs.
-2026-08-07T04:22:00+00:00 - trainer - INFO - rank 0 completed warmup step 1071.
+2026-08-07T04:12:00+00:00 - trainer - INFO - [2026-08-07T04:12:00+00:00] iteration 1/100 | throughput per GPU (TFLOP/s/GPU): 100.0 |
+2026-08-07T04:22:00+00:00 0: ibv_open_device failed responsible_node=node-0071
+0: ibv_open_device failed
 2026-08-07T04:52:00+00:00 - launcher - INFO - workload workload-0071 cleanup completed after root symptom collection.

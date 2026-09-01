@@ -98,11 +98,11 @@ describe('ApiServerService', () => {
   })
 
   it('encodes run IDs and exposes metadata', async () => {
-    httpGetMock.mockResolvedValueOnce(run('a/b')).mockResolvedValueOnce({ totalRuns: 1 })
+    httpGetMock.mockResolvedValueOnce(run('a/b')).mockResolvedValueOnce({ windowedRuns: 1 })
     const api = new ApiServerService()
 
     await expect(api.getRun('a/b')).resolves.toEqual(run('a/b'))
-    await expect(api.getMeta()).resolves.toEqual({ totalRuns: 1 })
+    await expect(api.getMeta()).resolves.toEqual({ windowedRuns: 1 })
     expect(httpGetMock).toHaveBeenNthCalledWith(1, '/runs/a%2Fb')
     expect(httpGetMock).toHaveBeenNthCalledWith(2, '/meta')
   })

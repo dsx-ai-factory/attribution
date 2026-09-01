@@ -1035,7 +1035,7 @@ nodes = [
   "node-0072-peer-1022",
   "node-0072-peer-1023"
 ]
-state = "NODE_FAIL"
+state = "FAILED"
 name = "workload-0072"
 user_name = "heidi"
 workload_type = "slurm"

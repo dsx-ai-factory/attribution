@@ -1,3 +1,3 @@
 2026-08-07T00:45:00+00:00 node-0074 systemd[1]: Started sample training scope for workload-0074.
-2026-08-07T00:55:00+00:00 node-0074 kernel: NVRM: Xid (PCI:0000:84:00): 155,
+2026-08-07T00:55:00+00:00 node-0074 systemd[1]: Sample workload heartbeat for workload-0074.
 2026-08-07T01:25:00+00:00 node-0074 systemd[1]: Stopped sample training scope for workload-0074.

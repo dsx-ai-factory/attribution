@@ -1,0 +1,25 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: LicenseRef-NvidiaProprietary
+#
+# NVIDIA CORPORATION, its affiliates and licensors retain all intellectual
+# property and proprietary rights in and to this material, related
+# documentation and any modifications thereto. Any use, reproduction,
+# disclosure or distribution of this material and related documentation
+# without an express license agreement from NVIDIA CORPORATION or
+# its affiliates is strictly prohibited.
+
+repos:
+  - repo: local
+    hooks:
+      - id: client-drift
+        name: regenerate OpenAPI client
+        entry: service/service-app/openapi/generate-client.sh --fail-on-change
+        language: system
+        pass_filenames: false
+        # Every input the client is generated from:
+        # - routes and schemas
+        # - openapi/ holding the templates and extras copied into the package
+        # - pyproject.toml pinning the generator
+        # - app/__init__.py supplying packageVersion
+        # - attribution-lib types embedded in the API models
+        files: ^service/(attribution-lib/|service-app/(app/|openapi/|openapi\.json$|nvidia_attribution_client/|pyproject\.toml$|uv\.lock$))

@@ -1058,6 +1058,34 @@ expected_symptom = "OOM kill of system service"
 expected_rule = "system-service-oom-kill"
 
 [[cases]]
+description = "cgroup oom kill of user-owned slurmstepd is attributed to user task"
+line = "Memory cgroup out of memory: Killed process 680540 (slurmstepd) total-vm:50000kB, anon-rss:20000kB, file-rss:0kB, shmem-rss:0kB, UID:155202 pgtables:48kB oom_score_adj:0"
+expect = "bad"
+expected_symptom = "OOM kill of user task"
+expected_rule = "user-task-oom-kill"
+
+[[cases]]
+description = "cgroup oom kill of slurmstepd without uid is recorded as interesting"
+line = "Memory cgroup out of memory: Killed process 9999 (slurmstepd) total-vm:50000kB, anon-rss:20000kB, file-rss:0kB, shmem-rss:0kB, pgtables:48kB oom_score_adj:-1000"
+expect = "interesting"
+expected_symptom = "OOM kill (other)"
+expected_rule = "oom-kill-other"
+
+[[cases]]
+description = "cgroup oom kill of slurmstepd at highest system uid is a system-service failure"
+line = "Memory cgroup out of memory: Killed process 9999 (slurmstepd) total-vm:50000kB, anon-rss:20000kB, file-rss:0kB, shmem-rss:0kB, UID:999 pgtables:48kB oom_score_adj:-1000"
+expect = "bad"
+expected_symptom = "OOM kill of system service"
+expected_rule = "system-service-oom-kill"
+
+[[cases]]
+description = "cgroup oom kill of slurmstepd at first user uid is attributed to user task"
+line = "Memory cgroup out of memory: Killed process 9999 (slurmstepd) total-vm:50000kB, anon-rss:20000kB, file-rss:0kB, shmem-rss:0kB, UID:1000 pgtables:48kB oom_score_adj:-1000"
+expect = "bad"
+expected_symptom = "OOM kill of user task"
+expected_rule = "user-task-oom-kill"
+
+[[cases]]
 description = "cgroup oom kill of unknown root process is recorded as interesting (root oom != failure)"
 line = "Memory cgroup out of memory: Killed process 7777 (kubelet) total-vm:60000kB, anon-rss:30000kB, file-rss:0kB, shmem-rss:0kB, UID:0 pgtables:48kB oom_score_adj:0"
 expect = "interesting"

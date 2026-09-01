@@ -59,6 +59,7 @@ def create_app(db_path: str) -> FastAPI:
     def meta() -> dict[str, Any]:
         summary = db.db_summary(str(backend))
         lo, hi = db.date_range_bounds(str(backend))
+        n_runs = summary.get("n_runs", 0)
         return {
             "versions": {
                 "schema": summary.get("schema_version"),
@@ -66,7 +67,9 @@ def create_app(db_path: str) -> FastAPI:
                 "service": None,
             },
             "dateBounds": {"min": lo[:10] if lo is not None else None, "max": hi[:10] if hi is not None else None},
-            "totalRuns": summary.get("n_runs", 0),
+            "windowedRuns": n_runs,
+            "dbTotalRuns": n_runs,
+            "database": backend.name,
             "returnedRuns": 0,
         }
 

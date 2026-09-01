@@ -21,6 +21,7 @@ import { JobHoverCard } from '@/components/job-hover-card'
 import { NodeHoverCard } from '@/components/node-hover-card'
 import { TimeHover } from '@/components/time-hover'
 import { attemptGpuHours } from '@/lib/metric'
+import { isWindowed } from '@/lib/date-window'
 import { useNav } from '@/hooks/use-nav'
 
 const OUTCOME_ORDER: { key: OutcomeKey; label: string; dot: string }[] = [
@@ -191,7 +192,7 @@ function PaginationRow({
 
 export function RunsSection({
   groups,
-  totalRuns,
+  matchingRuns,
   visibleRuns,
   filter,
   setFilter,
@@ -200,9 +201,10 @@ export function RunsSection({
   setPageSize,
   setGroupPage,
   loading = false,
+  databaseEmpty = false,
 }: {
   groups: RunsTableGroup[]
-  totalRuns: number
+  matchingRuns: number
   visibleRuns: Run[]
   filter: FleetFilter
   setFilter: (next: FleetFilter) => void
@@ -211,6 +213,7 @@ export function RunsSection({
   setPageSize: (next: number) => void
   setGroupPage: (outcome: OutcomeKey, page: number) => void
   loading?: boolean
+  databaseEmpty?: boolean
 }) {
   const [collapsed, setCollapsed] = useState<Set<OutcomeKey>>(new Set())
 
@@ -224,6 +227,15 @@ export function RunsSection({
     [groups],
   )
 
+  const windowed = isWindowed(filter)
+  const hints = databaseEmpty ? [] : [
+    filter.outcome || filter.symptom || filter.node || filter.rule || filter.user || filter.q
+      ? 'clear the active filter chips above'
+      : null,
+    filter.status === 'failed' ? 'uncheck "Failed only" to include passing runs' : null,
+    windowed ? 'widen the date range' : null,
+  ].filter((hint) => hint !== null)
+
   const toggleCollapse = (k: OutcomeKey) => {
     setCollapsed((prev) => {
       const next = new Set(prev)
@@ -235,7 +247,7 @@ export function RunsSection({
 
   return (
     <div>
-      <RunsToolbar runs={totalRuns} filteredRuns={visibleRuns} filter={filter} setFilter={setFilter} />
+      <RunsToolbar runs={matchingRuns} filteredRuns={visibleRuns} filter={filter} setFilter={setFilter} />
 
       <ScrollArea className="border border-border rounded-md bg-card">
         <Table>
@@ -251,14 +263,16 @@ export function RunsSection({
                   </TableCell>
                 </TableRow>
               ))
-            ) : totalRuns === 0 ? (
+            ) : matchingRuns === 0 ? (
               <TableRow>
                 <TableCell
                   colSpan={COL_COUNT}
                   className="text-foreground-muted text-center py-8"
                 >
-                  <div className="font-mono text-sm text-foreground mb-1">No failures in this window</div>
-                  <div className="text-xs">Try selecting "All" in the date toggle, or widen the range and remove filters.</div>
+                  <div className="font-mono text-sm text-foreground mb-1">
+                    {databaseEmpty ? 'No runs in this database' : 'No runs in this view'}
+                  </div>
+                  {hints.length > 0 && <div className="text-xs">Try to {hints.join(', or ')}.</div>}
                 </TableCell>
               </TableRow>
             ) : (

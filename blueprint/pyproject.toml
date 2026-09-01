@@ -7,6 +7,7 @@ name = "nvidia-attribution-blueprint"
 version = "0.1.0"
 requires-python = ">=3.11"
 dependencies = [
+    "nvidia-attribution-client",
     "requests>=2.31",
     "loguru>=0.7",
 ]
@@ -28,6 +29,9 @@ web = [
 [project.scripts]
 nvidia-attribution-blueprint = "attribution_blueprint.cli:main"
 nvidia-attribution-blueprint-web = "attribution_blueprint.webui.cli:main"
+
+[tool.uv.sources]
+nvidia-attribution-client = { path = "../service/service-app/nvidia_attribution_client", editable = false }
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/attribution_blueprint"]

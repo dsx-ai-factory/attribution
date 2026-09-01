@@ -6,6 +6,7 @@ from __future__ import annotations
 import json as _json
 import re
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any
 
 from attribution_blueprint.taxonomy import taxonomy_for_service_value
@@ -304,6 +305,8 @@ def _gpu_count(run) -> int:
 
 def run_to_react(run) -> dict[str, Any]:
     verdict = (run.raw_result or {}).get("verdict") or {}
+    collectors = (run.raw_result or {}).get("collectors")
+    bad_pairs = collectors.get("bad_pairs") if isinstance(collectors, dict) else None
     root = verdict.get("root_symptom") or {}
     root_src = root.get("source") or {}
     job = run.job_id
@@ -338,6 +341,7 @@ def run_to_react(run) -> dict[str, Any]:
             "line": root_src.get("line") or "",
         },
         "symptoms": symptoms,
+        "errorPairs": bad_pairs if isinstance(bad_pairs, str) else "",
         "responsibleNodes": list(run.responsible_nodes or []),
         "pipeline": run.pipeline_version or "",
         "service": run.service_api_version or "",
@@ -356,7 +360,8 @@ def build_payload(
     from attribution_blueprint.webui import db as dbmod
 
     runs = dbmod.list_runs(db_path, since=since, until=until, job_query=q)
-    total = dbmod.count_runs(db_path, since=since, until=until, job_query=q)
+    windowed_total = dbmod.count_runs(db_path, since=since, until=until, job_query=q)
+    db_total = dbmod.count_runs(db_path)
     summary = dbmod.db_summary(db_path)
     lo, hi = dbmod.date_range_bounds(db_path)
     pipeline = runs[0].pipeline_version if runs else None
@@ -371,7 +376,9 @@ def build_payload(
                 "service": service,
             },
             "dateBounds": {"min": lo[:10] if lo else None, "max": hi[:10] if hi else None},
-            "totalRuns": total,
+            "windowedRuns": windowed_total,
+            "dbTotalRuns": db_total,
+            "database": Path(db_path).name,
             "returnedRuns": len(mapped),
         },
     }

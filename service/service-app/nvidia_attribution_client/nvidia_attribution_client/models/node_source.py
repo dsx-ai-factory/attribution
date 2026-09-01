@@ -19,6 +19,7 @@ import json
 from pydantic import BaseModel, ConfigDict, StrictStr, field_validator
 from typing import Any, ClassVar, Dict, List, Optional
 from nvidia_attribution_client.models.attribution_source import AttributionSource
+from nvidia_attribution_client.models.symptom_status import SymptomStatus
 from typing import Optional, Set
 from typing_extensions import Self
 from pydantic_core import to_jsonable_python
@@ -29,8 +30,9 @@ class NodeSource(BaseModel):
     """ # noqa: E501
     type: Optional[StrictStr] = 'NodeSource'
     node: StrictStr
+    status: SymptomStatus
     source: AttributionSource
-    __properties: ClassVar[List[str]] = ["type", "node", "source"]
+    __properties: ClassVar[List[str]] = ["type", "node", "status", "source"]
 
     @field_validator('type')
     def type_validate_enum(cls, value):
@@ -98,6 +100,7 @@ class NodeSource(BaseModel):
         _obj = cls.model_validate({
             "type": obj.get("type") if obj.get("type") is not None else 'NodeSource',
             "node": obj.get("node"),
+            "status": obj.get("status"),
             "source": AttributionSource.from_dict(obj["source"]) if obj.get("source") is not None else None
         })
         return _obj

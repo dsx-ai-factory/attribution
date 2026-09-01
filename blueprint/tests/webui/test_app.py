@@ -75,6 +75,27 @@ def _attr(cls, symptom="XID-79", node="node-a", rule="r"):
     }
 
 
+def _seed_rollup(path, rows):
+    """Create webui_run_fact and fill it, which makes the dashboard take the rollup path."""
+    conn = sqlite3.connect(path)
+    try:
+        conn.execute(
+            "CREATE TABLE webui_run_fact ("
+            "run_id TEXT PRIMARY KEY, end_time TEXT NOT NULL, end_day TEXT NOT NULL, "
+            "job_id TEXT NOT NULL, outcome TEXT NOT NULL, gpu_hours REAL NOT NULL, "
+            "gpu_count INTEGER NOT NULL, root_symptom TEXT NOT NULL)"
+        )
+        conn.executemany(
+            "INSERT INTO webui_run_fact"
+            "(run_id, end_time, end_day, job_id, outcome, gpu_hours, gpu_count, root_symptom) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            rows,
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
 @pytest.fixture
 def populated_db(tmp_path):
     p = tmp_path / "test.db"
@@ -92,7 +113,10 @@ def test_index_serves_spa_with_bootstrap(populated_db):
     assert 'id="root"' in r.text
     assert "attr-bootstrap" not in r.text
     dashboard = client.get("/api/v1/dashboard").json()
-    assert dashboard["meta"]["totalRuns"] == 2
+    assert dashboard["meta"]["windowedRuns"] == 2
+    # Both payloads name the backend, and each is built by its own handler.
+    assert dashboard["meta"]["database"] == "test.db"
+    assert client.get("/api/v1/meta").json()["database"] == "test.db"
 
 
 def test_dashboard_query_params_filter_server_payload(tmp_path):
@@ -115,7 +139,7 @@ def test_dashboard_query_params_filter_server_payload(tmp_path):
     assert r.status_code == 200
     assert "attr-bootstrap" not in r.text
     dashboard = client.get("/api/v1/dashboard", params={"from": "2099-01-01", "to": "2099-01-02"}).json()
-    assert dashboard["meta"]["totalRuns"] == 0
+    assert dashboard["meta"]["windowedRuns"] == 0
 
 
 def test_empty_db_serves_empty_payload(tmp_path):
@@ -127,7 +151,7 @@ def test_empty_db_serves_empty_payload(tmp_path):
     r = client.get("/")
     assert r.status_code == 200
     assert "attr-bootstrap" not in r.text
-    assert client.get("/api/v1/dashboard").json()["meta"]["totalRuns"] == 0
+    assert client.get("/api/v1/dashboard").json()["meta"]["windowedRuns"] == 0
 
 
 def test_deep_link_returns_spa_shell(populated_db):
@@ -208,7 +232,7 @@ def test_dashboard_failure_metrics_count_attempts_not_distinct_jobs(tmp_path):
 
     dashboard = client.get("/api/v1/dashboard").json()
 
-    assert dashboard["metrics"]["totalRuns"] == 2
+    assert dashboard["metrics"]["windowedRuns"] == 2
     assert dashboard["metrics"]["hwFailures"] == 2
     assert dashboard["daily"][0]["hw"] == 2
 
@@ -280,7 +304,7 @@ def test_dashboard_surfaces_undetermined_outcome(tmp_path):
     client = TestClient(create_app(str(p)))
 
     dashboard = client.get("/api/v1/dashboard").json()
-    assert dashboard["meta"]["totalRuns"] == 2
+    assert dashboard["meta"]["windowedRuns"] == 2
     assert dashboard["ledgers"]["outcome"] == [
         {"outcome": "hardware", "count": 1, "nodeHours": 1000.0},
         {"outcome": "undetermined", "count": 1, "nodeHours": 500.0},
@@ -339,7 +363,7 @@ def test_dashboard_rollup_outcome_ledger_includes_undetermined(tmp_path):
     client = TestClient(create_app(str(p)))
 
     dashboard = client.get("/api/v1/dashboard").json()
-    assert dashboard["metrics"]["totalRuns"] == 2
+    assert dashboard["metrics"]["windowedRuns"] == 2
     assert dashboard["ledgers"]["outcome"] == [
         {"outcome": "hardware", "count": 1, "nodeHours": 1000.0},
         {"outcome": "undetermined", "count": 1, "nodeHours": 500.0},
@@ -348,6 +372,59 @@ def test_dashboard_rollup_outcome_ledger_includes_undetermined(tmp_path):
         {"symptom": "JobCrash", "count": 1, "nodeHours": 500.0, "outcomes": {"undetermined": 1}},
         {"symptom": "XID", "count": 1, "nodeHours": 1000.0, "outcomes": {"hardware": 1}},
     ]
+
+
+def test_db_total_runs_counts_every_row(populated_db):
+    empty_window = {"from": "2099-01-01", "to": "2099-01-02"}
+    client = TestClient(create_app(populated_db))
+    direct = client.get("/api/v1/dashboard").json()
+    direct_excluded = client.get("/api/v1/dashboard", params=empty_window).json()
+    assert direct["meta"]["dbTotalRuns"] == 2
+    assert direct_excluded["meta"]["windowedRuns"] == 0
+    assert direct_excluded["meta"]["dbTotalRuns"] == 2
+
+    # A rollup that has only caught up with one of the two runs. The dashboard prefers this
+    # table over the normalized ones once it exists, so the window metrics go stale with it
+    # while the whole-database denominator must not.
+    _seed_rollup(
+        populated_db,
+        [("rollup-1", "2026-05-01T01:00:00+00:00", "2026-05-01", "100", "Fail InfraHW", 1000, 8, "XID-79")],
+    )
+
+    client = TestClient(create_app(populated_db))
+    rollup = client.get("/api/v1/dashboard").json()
+    rollup_excluded = client.get("/api/v1/dashboard", params=empty_window).json()
+    assert rollup["metrics"]["windowedRuns"] == 1
+    assert rollup["meta"]["dbTotalRuns"] == 2
+    assert rollup_excluded["meta"]["windowedRuns"] == 0
+    assert rollup_excluded["meta"]["dbTotalRuns"] == 2
+    # The filter bar counts the listed runs against dbTotalRuns, and the run list never
+    # consults the rollup, so the two have to keep agreeing while the rollup is behind.
+    assert client.get("/api/v1/runs", params={"status": "all"}).json()["total"] == 2
+
+
+def test_date_bounds_span_runs_the_rollup_table_left_behind(tmp_path):
+    """Bounds the fleet view resets the window to must cover every run, not just rolled-up ones."""
+    p = tmp_path / "rollup-bounds.db"
+    out = SQLiteOutput(str(p))
+    out.write(_ctx("100", "sluid-A"), _attr("Fail InfraHW"))
+    late = _ctx("101", "sluid-B")
+    late["start_time"] = datetime(2026, 6, 9, 0, tzinfo=timezone.utc)
+    late["end_time"] = datetime(2026, 6, 9, 1, tzinfo=timezone.utc)
+    out.write(late, _attr("Fail InfraSW"))
+    out.close()
+    # The rollup has only caught up with the May run, so its own MIN/MAX stops at 2026-05-01.
+    _seed_rollup(
+        p,
+        [("rollup-1", "2026-05-01T01:00:00+00:00", "2026-05-01", "100", "Fail InfraHW", 1000, 8, "XID-79")],
+    )
+
+    payload = TestClient(create_app(str(p))).get("/api/v1/dashboard").json()
+
+    assert payload["meta"]["dbTotalRuns"] == 2
+    assert payload["meta"]["dateBounds"] == {"min": "2026-05-01", "max": "2026-06-09"}
+    # Window metrics still come off the rollup; only the database-wide fields bypass it.
+    assert payload["metrics"]["windowedRuns"] == 1
 
 
 def test_dashboard_rejects_malformed_dates(tmp_path):
@@ -438,7 +515,7 @@ def test_dashboard_rollup_window_gpu_count_uses_unique_nodes(tmp_path):
 
     metrics = client.get("/api/v1/dashboard").json()["metrics"]
 
-    assert metrics["totalRuns"] == 2
+    assert metrics["windowedRuns"] == 2
     assert metrics["gpuCount"] == 12
 
 
@@ -485,7 +562,7 @@ def test_dashboard_rollup_failure_metrics_count_attempts_not_distinct_jobs(tmp_p
 
     dashboard = client.get("/api/v1/dashboard").json()
 
-    assert dashboard["metrics"]["totalRuns"] == 2
+    assert dashboard["metrics"]["windowedRuns"] == 2
     assert dashboard["metrics"]["hwFailures"] == 2
     assert dashboard["daily"][0]["hw"] == 2
 
@@ -535,7 +612,7 @@ def test_dashboard_uses_webui_rollup_when_present(tmp_path):
     dashboard = client.get("/api/v1/dashboard").json()
     metrics = dashboard["metrics"]
 
-    assert metrics["totalRuns"] == 3
+    assert metrics["windowedRuns"] == 3
     assert metrics["gpuHoursRaw"] == 1750
     assert metrics["hwFailures"] == 1
     assert metrics["swFailures"] == 1
@@ -707,7 +784,7 @@ def test_dashboard_rollup_pareto_ledgers_follow_outcome_filter(tmp_path):
     dashboard = client.get("/api/v1/dashboard", params={"outcome": "hardware"}).json()
     ledgers = dashboard["ledgers"]
 
-    assert dashboard["metrics"]["totalRuns"] == 28
+    assert dashboard["metrics"]["windowedRuns"] == 28
     assert [entry["symptom"] for entry in ledgers["symptom"]] == [f"hw-symptom-{idx:02d}" for idx in range(4)]
     assert [entry["node"] for entry in ledgers["node"]] == [f"hw-node-{idx:02d}" for idx in range(4)]
     assert [entry["rule"] for entry in ledgers["rule"]] == [f"hw-rule-{idx:02d}" for idx in range(4)]

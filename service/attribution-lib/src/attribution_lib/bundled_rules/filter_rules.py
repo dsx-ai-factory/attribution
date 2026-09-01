@@ -694,6 +694,30 @@ def demote_insufficient_permissions(context: FilterContext):
     )
 
 
+@filter_def(name="DemoteBufferTooSmallJournal", author="NVIDIA Attribution team", priority=FilterPriority.LATE)
+def demote_buffer_too_small_journal(context: FilterContext):
+    """Demote RM journal-dump BUFFER_TOO_SMALL from bad to interesting.
+
+    ``NV_ERR_BUFFER_TOO_SMALL`` at ``journal.c`` is ``rcdbDumpSystemInfo`` /
+    ``prbEncNestedStart`` failing to encode a debug dump during CUDA process
+    teardown. It is not a live GPU or driver fault. It appears on every node
+    after SIGUSR1, scancel, or a rank crash and would otherwise outrank
+    Cancelled by user (FALLBACK) because BUFFER_TOO_SMALL is MEDIUM_SW.
+
+    Other ``NV_ERR_BUFFER_TOO_SMALL`` files are left as bad.
+
+    Args:
+        context: Filter context containing the event stream.
+    """
+    # Extractor emits "{error_code} {file}" without the line number, e.g.
+    # "NV_ERR_BUFFER_TOO_SMALL journal.c". starts_with keeps any accidental suffix.
+    _demote_bad_by_symptom_prefix(
+        context.event_stream,
+        ["NV_ERR_BUFFER_TOO_SMALL journal.c"],
+        "DemoteBufferTooSmallJournal",
+    )
+
+
 @filter_def(name="DemoteNonFatalInvalidState", author="NVIDIA Attribution team", priority=FilterPriority.LATE)
 def demote_nonfatal_invalid_state(context: FilterContext):
     """Demote the non-fatal osapi invalid-state symptom to interesting.

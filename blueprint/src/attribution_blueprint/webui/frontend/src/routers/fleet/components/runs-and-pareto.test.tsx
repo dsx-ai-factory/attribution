@@ -126,7 +126,7 @@ describe('RunsSection', () => {
     const setGroupPage = vi.fn()
     const props = {
       groups: [{ outcome: 'hardware' as const, runs: [run()], total: 12, page: 0, pageSize: 10 }],
-      totalRuns: 12,
+      matchingRuns: 12,
       visibleRuns: [run()],
       filter,
       setFilter: vi.fn(),
@@ -158,7 +158,7 @@ describe('RunsSection', () => {
   it('renders loading and empty states', () => {
     const common = {
       groups: [],
-      totalRuns: 0,
+      matchingRuns: 0,
       visibleRuns: [],
       filter,
       setFilter: vi.fn(),
@@ -171,7 +171,43 @@ describe('RunsSection', () => {
     expect(document.querySelectorAll('[class*="animate-pulse"]')).toHaveLength(6)
 
     rerender(<RunsSection {...common} />)
-    expect(screen.getByText('No failures in this window')).toBeTruthy()
+    expect(screen.getByText('No runs in this view')).toBeTruthy()
+    expect(screen.getByText(
+      'Try to uncheck "Failed only" to include passing runs.',
+    )).toBeTruthy()
+    expect(screen.queryByText(/filter chips above/)).toBeNull()
+    expect(screen.queryByText(/widen the date range/)).toBeNull()
+
+    rerender(
+      <RunsSection
+        {...common}
+        filter={{ ...filter, node: 'node-1', from: '2026-05-01', to: '2026-05-03' }}
+      />,
+    )
+    expect(screen.getByText(
+      'Try to clear the active filter chips above, or uncheck "Failed only" to include '
+      + 'passing runs, or widen the date range.',
+    )).toBeTruthy()
+  })
+
+  it('drops the loosen-a-filter advice when the database itself is empty', () => {
+    render(
+      <RunsSection
+        groups={[]}
+        matchingRuns={0}
+        visibleRuns={[]}
+        filter={{ ...filter, node: 'node-1', from: '2026-05-01', to: '2026-05-03' }}
+        setFilter={vi.fn()}
+        pageByOutcome={{}}
+        pageSize={10}
+        setPageSize={vi.fn()}
+        setGroupPage={vi.fn()}
+        databaseEmpty
+      />,
+    )
+
+    expect(screen.getByText('No runs in this database')).toBeTruthy()
+    expect(screen.queryByText(/^Try to/)).toBeNull()
   })
 })
 

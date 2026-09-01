@@ -1,7 +1,7 @@
 import logoUrl from '@/assets/logo.svg'
 import type { RouterName } from '@/services/navigate.service'
 
-export function TopBar({ name }: { name: RouterName }) {
+export function TopBar({ name, database }: { name: RouterName; database?: string | null }) {
   const view = name
   return (
     <div className="flex items-center gap-4 pt-3 pb-3.5 mb-5 border-b border-border">
@@ -19,6 +19,12 @@ export function TopBar({ name }: { name: RouterName }) {
         <span className="text-zinc-700">·</span>
         <span>pipeline · 0.1.0</span>
         <span className="text-zinc-700">·</span>
+        {database !== null && database !== undefined && database !== '' && (
+          <>
+            <span>db · {database}</span>
+            <span className="text-zinc-700">·</span>
+          </>
+        )}
         <span>ingesting</span>
       </div>
     </div>

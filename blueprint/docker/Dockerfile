@@ -20,6 +20,7 @@ COPY blueprint/pyproject.toml blueprint/uv.lock ./
 COPY blueprint/src/ ./src/
 # built SPA -> the package's static dir, BEFORE uv sync packages it
 COPY --from=web-build /frontend/dist ./src/attribution_blueprint/webui/static/
+COPY service/service-app/nvidia_attribution_client/ /opt/service/service-app/nvidia_attribution_client/
 RUN uv sync --extra web --no-dev --no-editable --frozen
 
 WORKDIR /opt/attribution-service

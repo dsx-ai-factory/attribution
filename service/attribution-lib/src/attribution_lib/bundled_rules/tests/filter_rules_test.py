@@ -425,8 +425,52 @@ def test_nv_err_insufficient_permissions_demoted_to_interesting(stream, obs_ctx,
 @pytest.mark.parametrize(
     "symptom",
     [
+        "NV_ERR_BUFFER_TOO_SMALL journal.c",
+        "NV_ERR_BUFFER_TOO_SMALL journal.c:1184",
+    ],
+)
+def test_nv_err_buffer_too_small_journal_demoted_to_interesting(stream, obs_ctx, job_info, symptom):
+    """Keep journal.c BUFFER_TOO_SMALL as context without treating it as a failure.
+
+    Args:
+        stream: Event stream fixture.
+        obs_ctx: Observation context fixture.
+        job_info: Job information fixture.
+        symptom: journal.c BUFFER_TOO_SMALL symptom to demote.
+    """
+    timestamp = datetime(2024, 1, 1, 10, 5, 0, tzinfo=ZoneInfo("UTC"))
+    create_event(
+        stream,
+        obs_ctx,
+        "Attribution.node.bad",
+        {"node": "node01", "symptom": symptom},
+        timestamp,
+        100,
+    )
+
+    filter_events(stream, job_info)
+    stream.flush()
+
+    bad_id = stream.mgr.types.get_id("Attribution.node.bad")
+    interesting_id = stream.mgr.types.get_id("Attribution.node.interesting")
+
+    bad_rows = stream.query_raw("SELECT status FROM events WHERE event_type=? AND line_num=100", [bad_id])
+    assert bad_rows[0][0] == 0
+
+    interesting_rows = stream.query_raw(
+        "SELECT status, payload FROM events WHERE event_type=? AND line_num=100",
+        [interesting_id],
+    )
+    assert interesting_rows[0][0] == 1
+    assert symptom in interesting_rows[0][1]
+
+
+@pytest.mark.parametrize(
+    "symptom",
+    [
         "NV_ERR_INSUFFICIENT_PERMISSIONS_FATAL kern_profiler_v2_ctrl.c",
         "NV_ERR_INSUFFICIENT_RESOURCES mem_multicast_fabric.c",
+        "NV_ERR_BUFFER_TOO_SMALL mem_multicast_fabric.c",
     ],
 )
 def test_nv_err_insufficient_permissions_demotion_preserves_other_nv_errs(stream, obs_ctx, job_info, symptom):

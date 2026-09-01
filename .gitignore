@@ -6,3 +6,4 @@ __pycache__/
 .quickstart-validate/
 node_modules/
 /blueprint/src/attribution_blueprint/webui/static/
+build/

@@ -59,6 +59,7 @@ export interface Run {
   detail: string
   rootSymptom: RootSymptom
   symptoms: SymptomEntry[]
+  errorPairs?: string
   responsibleNodes: string[]
   pipeline: string
   service: string
@@ -70,7 +71,7 @@ export interface Run {
 
 // Daily buckets cover only the outcomes the day-by-day charts plot. 'undetermined'
 // is intentionally omitted (kept in sync with the daily SQL in webui/db.py); window
-// totals come from metrics.totalRuns, not from summing these buckets.
+// totals come from metrics.windowedRuns, not from summing these buckets.
 export interface DailyBucket {
   date: string
   hw: number

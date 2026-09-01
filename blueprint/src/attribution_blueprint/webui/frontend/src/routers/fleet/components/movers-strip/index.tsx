@@ -2,6 +2,7 @@ import type { SymptomMover } from '@/interfaces/attribution'
 import { OUTCOMES } from '@/lib/attribution-data'
 import type { FleetFilter } from '@/interfaces/filter'
 import { withDimension } from '@/lib/filter-state'
+import { isWindowed } from '@/lib/date-window'
 import { Card, CardContent } from '@/components/ui/card'
 import { MtbiSparkline } from '@/routers/fleet/components/mtbi-primitives'
 
@@ -21,7 +22,7 @@ export function MoversStrip({
   if (movers.length === 0) {
     return (
       <div className="mb-5 rounded-md border border-border bg-background-active px-3 py-3 font-mono text-xs text-foreground-muted">
-        No symptoms moved materially in this window.
+        No symptoms moved materially{isWindowed(filter) ? ' in this window' : ''}.
       </div>
     )
   }

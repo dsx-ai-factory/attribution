@@ -6,6 +6,7 @@ import App from '@/app'
 vi.mock('@/routers/fleet', () => ({ FleetView: () => <div>Fleet screen</div> }))
 vi.mock('@/routers/verdict', () => ({ VerdictView: () => <div>Verdict screen</div> }))
 vi.mock('@/routers/node', () => ({ NodeView: () => <div>Node screen</div> }))
+vi.mock('@/hooks/use-meta', () => ({ useMeta: () => ({ meta: { database: 'demo.db' } }) }))
 
 beforeEach(() => {
   window.history.replaceState({}, '', '/')
@@ -25,6 +26,7 @@ describe('App routing shell', () => {
 
     expect(screen.getByText(expected)).toBeTruthy()
     expect(screen.getByText(`NVIDIA Attribution · v0.3.0 · ${routeName}`)).toBeTruthy()
+    expect(screen.getByText('db · demo.db')).toBeTruthy()
     expect(window.scrollTo).toHaveBeenCalledWith({ top: 0, behavior: 'instant' })
   })
 

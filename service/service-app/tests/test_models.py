@@ -30,6 +30,7 @@ from attribution_lib.sources import (
 from app.observation import ObservationSource
 from app.v2.models import (
     AttributionResponseV2,
+    NodeSource,
     ResourcelessSource,
 )
 
@@ -70,6 +71,26 @@ def _add_job_symptom(result: AttributionResult, symptom: str, *sources: LibSourc
     for s in sources:
         ss.add(s)
     result.symptoms.add(ss)
+
+
+def _demote_job_sources(result: AttributionResult, symptom: str, *sources: LibSource) -> None:
+    """Demote selected job-level sources the way a refiner does, leaving the rest bad.
+
+    discard_selected moves the matched sources from the bad set to the interesting
+    set rather than dropping them, which is the non-purge default across the lib.
+    """
+    result.symptoms[symptom].discard_selected(sources)
+
+
+def _demote_node_symptom(result: AttributionResult, node: str, symptom: str) -> None:
+    """Demote a whole per-node symptom, the way a scrub rule clears a cascaded
+    symptom off the peers of the node that actually failed."""
+    result.bad_nodes_attr.my_bad_nodes.discard([node], [symptom])
+
+
+def _site_key(site) -> tuple:
+    """Identify a site by everything a caller would notice, so a status flip fails the check."""
+    return (type(site).__name__, getattr(site, "node", None), site.status, site.source.pos)
 
 
 def _set_outcome(result: AttributionResult, outcome: OutcomeAttribution, *driver_sources: LibSource) -> None:
@@ -197,6 +218,67 @@ class TestV2Models:
         assert len(sites) == 1
         assert isinstance(sites[0], ResourcelessSource)
         assert sites[0].source.rule == "slurm_state"
+
+    def test_sites_report_bad_status_when_interesting_evidence_is_not_requested(self):
+        """Every site on the default path is attribution-driving, so it reports status bad."""
+        src = _lib_source(rule="xid_79")
+        result = _empty_result()
+        _add_node_symptom(result, "gpu-node-042", "XID-79-", src)
+        _add_job_symptom(result, "XID-79-", src)
+        _add_job_symptom(result, "Cancelled by Timeout", _lib_source(rule="slurm_state", line_num=1))
+
+        response = AttributionResponseV2.from_lib_attribution(set(), result)
+
+        assert all(site.status == "bad" for sites in response.symptoms.values() for site in sites)
+
+    def test_fully_demoted_symptom_is_omitted_unless_interesting_evidence_is_requested(self):
+        """A symptom whose every source was demoted is hidden by default and surfaces on request."""
+        src = _lib_source(rule="link_down")
+        result = _empty_result()
+        _add_job_symptom(result, "link down(east-west)", src)
+        _demote_job_sources(result, "link down(east-west)", src)
+
+        default = AttributionResponseV2.from_lib_attribution(set(), result)
+        with_interesting = AttributionResponseV2.from_lib_attribution(set(), result, include_interesting=True)
+
+        assert default.symptoms == {}
+        sites = with_interesting.symptoms["link down(east-west)"]
+        assert len(sites) == 1
+        assert isinstance(sites[0], ResourcelessSource)
+        assert sites[0].status == "interesting"
+
+    def test_partially_demoted_symptom_reports_its_surviving_and_demoted_sources_separately(self):
+        """Demotion is per source, so one symptom can carry both bad and interesting sites."""
+        kept = _lib_source(rule="link_down", line_num=10)
+        demoted = _lib_source(rule="link_down", line_num=2)
+        result = _empty_result()
+        _add_job_symptom(result, "link down(east-west)", kept, demoted)
+        _demote_job_sources(result, "link down(east-west)", demoted)
+
+        default = AttributionResponseV2.from_lib_attribution(set(), result)
+        with_interesting = AttributionResponseV2.from_lib_attribution(set(), result, include_interesting=True)
+
+        assert [s.source.pos for s in default.symptoms["link down(east-west)"]] == [10]
+        sites = with_interesting.symptoms["link down(east-west)"]
+        assert [(s.source.pos, s.status) for s in sites] == [(2, "interesting"), (10, "bad")]
+
+    def test_demoting_a_sources_only_node_binding_keeps_its_job_level_bad_site(self):
+        """A node whose only evidence was demoted is named as interesting, and the job-level
+        bad site it came from is kept rather than replaced by that node binding."""
+        src = _lib_source(rule="dataloader")
+        result = _empty_result()
+        _add_node_symptom(result, "node-b", "DataLoader Exception", src)
+        _add_job_symptom(result, "DataLoader Exception", src)
+        _demote_node_symptom(result, "node-b", "DataLoader Exception")
+
+        response = AttributionResponseV2.from_lib_attribution(set(), result, include_interesting=True)
+
+        sites = response.symptoms["DataLoader Exception"]
+        assert [(type(s), s.status) for s in sites] == [
+            (ResourcelessSource, "bad"),
+            (NodeSource, "interesting"),
+        ]
+        assert sites[1].node == "node-b"
 
     def test_peer_symptom_emits_one_node_source_per_attributed_node(self):
         """When a single Source is attributed to multiple nodes V2 emits one NodeSource per node."""

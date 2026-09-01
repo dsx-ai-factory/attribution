@@ -8,10 +8,8 @@
 # without an express license agreement from NVIDIA CORPORATION or
 # its affiliates is strictly prohibited.
 
-import functools
 import logging
 import re
-import socket
 from collections.abc import Callable, Iterable
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, NamedTuple, Optional
@@ -57,30 +55,47 @@ def convert_hostname_to_short_format(hostname: str) -> str:
     return hostname
 
 
-@functools.lru_cache(maxsize=None)  # maxsize=None means the cache can grow without bound
+def matches_ignored_hostname_prefix(peer: str, prefixes: Optional[Iterable[str]] = None) -> bool:
+    """Return True if *peer* should be skipped by ignored hostname prefixes.
+
+    Hostnames are compared in short form (first DNS label), so
+    ``scanner-001.example.com`` matches prefix ``scanner-``. IP addresses are
+    compared in full; they are not split on dots.
+
+    Args:
+        peer: Hostname or IP after node resolution, or the raw peer string
+            from a log line.
+        prefixes: Prefixes to test. Defaults to
+            ``attribution_lib.ignored_hostname_prefixes``.
+
+    Returns:
+        True if the peer matches an ignored prefix and should be excluded.
+    """
+    if prefixes is None:
+        prefixes = attribution_lib.ignored_hostname_prefixes
+    if not prefixes:
+        return False
+    identity = convert_hostname_to_short_format(peer)
+    return any(identity.startswith(prefix) for prefix in prefixes)
+
+
 def get_hostname(ip_or_hostname: str) -> str:
-    """Convert IP address or hostname to short hostname format.
+    """Resolve a node identifier without consulting network services.
+
+    IP addresses are resolved only through the node mapping configured by the
+    caller. Unmapped IP addresses are returned unchanged. Hostnames are already
+    node identifiers, so they are normalized to their short form without a
+    forward or reverse DNS lookup.
+
     Args:
         ip_or_hostname: Either an IP address (e.g. "192.168.1.1")
                        or a hostname (e.g. "host-a1b2c3d4.example.internal")
     Returns:
-        Short hostname format (e.g., "host-a1b2c3d4")
+        A mapped node name, normalized hostname, or the original unmapped IP.
     """
-    try:
-        # Convert hostname to IP if needed
-        ip_address = ip_or_hostname
-        if not (is_ipv4(ip_address) or is_ipv6(ip_address)):
-            ip_address = socket.gethostbyname(ip_or_hostname)
-
-        # Check mapping to find hostname
-        if ip_address in attribution_lib.ip_to_nodenames:
-            return attribution_lib.ip_to_nodenames[ip_address]
-
-        # Do reverse DNS lookup
-        hostname, _, _ = socket.gethostbyaddr(ip_address)
-        return convert_hostname_to_short_format(hostname)
-    except (socket.herror, socket.gaierror, socket.timeout, UnicodeError):
-        return ip_address  # Return passed input if lookup fails
+    if is_ipv4(ip_or_hostname) or is_ipv6(ip_or_hostname):
+        return attribution_lib.ip_to_nodenames.get(ip_or_hostname, ip_or_hostname)
+    return convert_hostname_to_short_format(ip_or_hostname)
 
 
 RANK_REGEX = re.compile(r"^\[rank\s*:?\s*(?P<rank>\d+)\]")

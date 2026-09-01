@@ -24,7 +24,9 @@ from attribution_lib.core import (
     calculate_symptoms,
     get_bundled_rules_path,
 )
+from attribution_lib.decision_trace_recorder import Action, DecisionRecorder, NodeType
 from attribution_lib.events import EventManager
+from attribution_lib.failed_node_provenance import FailedNodeResolution
 from attribution_lib.filter import run_post_outcome_refiners, run_pre_outcome_refiners, run_scrub_phase_refiners
 from attribution_lib.hooks import singlehooks
 from attribution_lib.bundled_rules.tests._shared import default_job_info
@@ -94,7 +96,7 @@ def _register_ctx(stream, obs_ctx):
     stream.register_observation_context(obs_ctx)
 
 
-def _make_source(obs_ctx, source_time=None, *, datum="test", line_num=1) -> Source:
+def _make_source(obs_ctx, source_time=None, *, datum="test", line_num=1, rule="test") -> Source:
     """Create a minimal Source for building SymptomSets."""
     return Source(
         source_context=obs_ctx,
@@ -102,7 +104,7 @@ def _make_source(obs_ctx, source_time=None, *, datum="test", line_num=1) -> Sour
         datum=datum,
         time=source_time or datetime(2024, 1, 1, 10, 30, 0, tzinfo=ZoneInfo("UTC")),
         resources=AllJobResources,
-        rule="test",
+        rule=rule,
     )
 
 
@@ -158,13 +160,15 @@ def _job_info_with(**overrides) -> JobInfo:
     return default_job_info(job_end_time=_DEFAULT_END, **overrides)
 
 
-def _run_scrub(stream, job_info, bad_nodes):
+def _run_scrub(stream, job_info, bad_nodes, recorder=None):
     """Run only SCRUB-phase refiners on my_bad_nodes."""
-    run_scrub_phase_refiners(stream, job_info, my_bad_nodes=bad_nodes)
+    run_scrub_phase_refiners(stream, job_info, my_bad_nodes=bad_nodes, recorder=recorder)
 
 
 class TestScrubBadNodes:
     """Tests for the ScrubBadNodes refiner (SCRUB phase, pre-aggregation)."""
+
+    _CORROBORATED_FAILURE = "Corroborated node failure"
 
     def test_scheduler_raw_not_responding_reason_emits_renamed_symptom(self, stream, obs_ctx, job_info):
         job_info = job_info._replace(slurm_node_infos={"node01": {"reason": "Health check: Not responding"}})
@@ -176,6 +180,114 @@ class TestScrubBadNodes:
         assert "Not responding" not in bad_nodes["node01"]
         source = bad_nodes["node01"].attributions["Node not responding"].one_source()
         assert source.rule == NodeNotRespondingProvenance.SLURM_NODE_REASON.value
+
+    def test_slurm_failure_with_epilog_non_response_emits_corroborated_node_failure(self, stream, obs_ctx):
+        job_info = _job_info_with(state="NODE_FAIL")._replace(failed_node="node01")
+        epilog_source = _make_source(
+            obs_ctx,
+            datum="Health check failed: Not responding",
+            rule=NodeNotRespondingProvenance.EPILOG_HEALTH_CHECK.value,
+        )
+        bad_nodes = JobNodeAttributions()
+        bad_nodes.add(
+            ["node01"],
+            SourceSet.new_one(RegisteredSymptoms.NODE_NOT_RESPONDING.value, epilog_source),
+        )
+        recorder = DecisionRecorder(job_info.id)
+
+        _run_scrub(stream, job_info, bad_nodes, recorder=recorder)
+
+        corroborated_failure = self._CORROBORATED_FAILURE
+        assert corroborated_failure in bad_nodes["node01"]
+        source_rules = {source.rule for source in bad_nodes["node01"].attributions[corroborated_failure]}
+        assert source_rules == {
+            NodeNotRespondingProvenance.EPILOG_HEALTH_CHECK.value,
+            FailedNodeResolution.SLURM_FAILED_NODE_FIELD.value,
+        }
+        created = [
+            event
+            for event in recorder.events
+            if event.node_type is NodeType.SCRUB
+            and event.rule_name == "CorroboratedNodeFailure"
+            and event.action is Action.CREATED
+            and event.symptom == corroborated_failure
+        ]
+        assert len(created) == 1
+        assert created[0].hostname == "node01"
+        assert created[0].evidence is not None
+        assert {source["rule_name"] for source in created[0].evidence["sources"]} == source_rules
+
+    def test_corroborated_node_failure_is_the_pruned_infra_hw_root_cause(self, stream, obs_ctx):
+        job_info = _job_info_with(state="NODE_FAIL")._replace(failed_node="node01")
+        epilog_source = _make_source(
+            obs_ctx,
+            datum="Health check failed: Not responding",
+            rule=NodeNotRespondingProvenance.EPILOG_HEALTH_CHECK.value,
+        )
+        bad_nodes = JobNodeAttributions()
+        bad_nodes.add(
+            ["node01"],
+            SourceSet.new_one(RegisteredSymptoms.NODE_NOT_RESPONDING.value, epilog_source),
+        )
+
+        symptoms = calculate_symptoms(event_stream=stream, job_info=job_info, my_bad_nodes=bad_nodes)
+        outcome = calculate_outcome(symptoms).value()
+
+        corroborated_failure = self._CORROBORATED_FAILURE
+        assert corroborated_failure in symptoms
+        assert RegisteredSymptoms.NODE_FAILURE_REPORTED_BY_SLURM.value not in symptoms
+        assert RegisteredSymptoms.NODE_NOT_RESPONDING.value not in symptoms
+        assert outcome.outcome == "Fail InfraHW"
+        assert outcome.root_cause_symptom == corroborated_failure
+
+    def test_slurm_derived_non_response_does_not_emit_corroborated_node_failure(self, stream, obs_ctx):
+        job_info = _job_info_with(state="NODE_FAIL")._replace(failed_node="node01")
+        slurm_reason_source = _make_source(
+            obs_ctx,
+            rule=NodeNotRespondingProvenance.SLURM_NODE_REASON.value,
+        )
+        bad_nodes = JobNodeAttributions()
+        bad_nodes.add(
+            ["node01"],
+            SourceSet.new_one(RegisteredSymptoms.NODE_NOT_RESPONDING.value, slurm_reason_source),
+        )
+
+        _run_scrub(stream, job_info, bad_nodes)
+
+        assert self._CORROBORATED_FAILURE not in bad_nodes["node01"]
+
+    def test_failure_and_epilog_non_response_on_different_nodes_do_not_combine(self, stream, obs_ctx):
+        job_info = _job_info_with(nodes=["node01", "node02"], state="NODE_FAIL")._replace(failed_node="node01")
+        epilog_source = _make_source(
+            obs_ctx,
+            rule=NodeNotRespondingProvenance.EPILOG_HEALTH_CHECK.value,
+        )
+        bad_nodes = JobNodeAttributions()
+        bad_nodes.add(
+            ["node02"],
+            SourceSet.new_one(RegisteredSymptoms.NODE_NOT_RESPONDING.value, epilog_source),
+        )
+
+        _run_scrub(stream, job_info, bad_nodes)
+
+        corroborated_failure = self._CORROBORATED_FAILURE
+        assert all(corroborated_failure not in bad_nodes[node] for node in bad_nodes)
+
+    def test_specific_node_failure_evidence_prevents_hardware_composite(self, stream, obs_ctx):
+        job_info = _job_info_with(state="NODE_FAIL")._replace(failed_node="node01")
+        epilog_source = _make_source(
+            obs_ctx,
+            rule=NodeNotRespondingProvenance.EPILOG_HEALTH_CHECK.value,
+        )
+        bad_nodes = _make_bad_nodes(obs_ctx, {"node01": ["XID-94-CONTAINED_ERROR"]})
+        bad_nodes.add(
+            ["node01"],
+            SourceSet.new_one(RegisteredSymptoms.NODE_NOT_RESPONDING.value, epilog_source),
+        )
+
+        _run_scrub(stream, job_info, bad_nodes)
+
+        assert self._CORROBORATED_FAILURE not in bad_nodes["node01"]
 
     def test_node_not_responding_discards_node_rebooted(self, stream, obs_ctx, job_info):
         bad_nodes = _make_bad_nodes(obs_ctx, {"node01": ["Node not responding", "Node unexpectedly rebooted"]})
@@ -785,6 +897,125 @@ class TestIBSymptomCleanup:
             symptoms=None,
             my_bad_nodes=None,
         )
+
+
+class TestKernelCrashIbCascadeCleanup:
+    """Kernel crashes discard the IB cascade reported by peer nodes."""
+
+    @pytest.fixture
+    def two_node_job(self):
+        return _job_info_with(nodes=["node01", "node02"])
+
+    @pytest.mark.parametrize("crash_symptom", ["kernel panic", "kernel oops", "kernel invalid memory access"])
+    def test_peer_kernel_crash_discards_ib_error_12(self, stream, obs_ctx, two_node_job, crash_symptom):
+        """Every kernel crash type makes a peer's IB Error-12 a cascade."""
+        ib12 = "IB Error-12 (IBV_WC_RETRY_EXC_ERR)"
+        symptoms = _make_symptoms(obs_ctx, crash_symptom, ib12)
+        bad_nodes = _make_bad_nodes(obs_ctx, {"node01": [crash_symptom], "node02": [ib12]})
+
+        _run(stream, two_node_job, symptoms, bad_nodes)
+
+        assert crash_symptom in symptoms
+        assert ib12 not in symptoms
+        assert ib12 not in bad_nodes["node02"].attributions
+
+    @pytest.mark.parametrize(
+        "ib12",
+        [
+            "IB Error-12",
+            "IB Error-12 (IBV_WC_RETRY_EXC_ERR)",
+            "IB Error-12 Vendor-1",
+            "IB Error-12 Vendor-129 (IBV_WC_RETRY_EXC_ERR)",
+        ],
+    )
+    def test_all_peer_ib_error_12_forms_trigger(self, stream, obs_ctx, two_node_job, ib12):
+        """Every emitted IB Error-12 spelling triggers the peer cleanup."""
+        symptoms = _make_symptoms(obs_ctx, "kernel panic", ib12)
+        bad_nodes = _make_bad_nodes(obs_ctx, {"node01": ["kernel panic"], "node02": [ib12]})
+
+        _run(stream, two_node_job, symptoms, bad_nodes)
+
+        assert ib12 not in symptoms
+        assert ib12 not in bad_nodes["node02"].attributions
+
+    def test_ib_error_120_does_not_trigger_peer_cleanup(self, stream, obs_ctx, two_node_job):
+        """Error-120 must not be mistaken for the Error-12 cascade trigger."""
+        ib120 = "IB Error-120"
+        symptoms = _make_symptoms(obs_ctx, "kernel panic", ib120)
+        bad_nodes = _make_bad_nodes(obs_ctx, {"node01": ["kernel panic"], "node02": [ib120]})
+
+        _run(stream, two_node_job, symptoms, bad_nodes)
+
+        assert ib120 in symptoms
+        assert ib120 in bad_nodes["node02"].attributions
+
+    def test_peer_error_12_discards_full_ib_cascade(self, stream, obs_ctx, two_node_job):
+        """Error-12 triggers the shared full IB/EFA/NCCL cascade cleanup."""
+        peer_cascade = [
+            "IB Error-12 (IBV_WC_RETRY_EXC_ERR)",
+            "IB Error-5 (IBV_WC_WR_FLUSH_ERR)",
+            "EFA Error-107",
+            "ncclTimeout",
+        ]
+        symptoms = _make_symptoms(obs_ctx, "kernel panic", *peer_cascade)
+        bad_nodes = _make_bad_nodes(obs_ctx, {"node01": ["kernel panic"], "node02": peer_cascade})
+
+        _run(stream, two_node_job, symptoms, bad_nodes)
+
+        assert "kernel panic" in symptoms
+        assert all(symptom not in symptoms for symptom in peer_cascade)
+        assert all(symptom not in bad_nodes["node02"].attributions for symptom in peer_cascade)
+
+    def test_ib_error_12_on_crashed_node_is_kept(self, stream, obs_ctx, job_info):
+        """IB evidence on the crashed node itself is not treated as peer cascade."""
+        ib12 = "IB Error-12 (IBV_WC_RETRY_EXC_ERR)"
+        symptoms = _make_symptoms(obs_ctx, "kernel panic", ib12)
+        bad_nodes = _make_bad_nodes(obs_ctx, {"node01": ["kernel panic", ib12]})
+
+        _run(stream, job_info, symptoms, bad_nodes)
+
+        assert ib12 in symptoms
+        assert ib12 in bad_nodes["node01"].attributions
+
+    def test_crashed_node_evidence_keeps_job_level_symptom(self, stream, obs_ctx, two_node_job):
+        """Peer cleanup does not erase the same IB evidence retained by a crashed node."""
+        ib12 = "IB Error-12 (IBV_WC_RETRY_EXC_ERR)"
+        symptoms = _make_symptoms(obs_ctx, "kernel panic", ib12)
+        bad_nodes = _make_bad_nodes(
+            obs_ctx,
+            {
+                "node01": ["kernel panic", ib12],
+                "node02": [ib12],
+            },
+        )
+
+        _run(stream, two_node_job, symptoms, bad_nodes)
+
+        assert ib12 in symptoms
+        assert ib12 in bad_nodes["node01"].attributions
+        assert ib12 not in bad_nodes["node02"].attributions
+
+    def test_soft_lockup_does_not_trigger_peer_cleanup(self, stream, obs_ctx, two_node_job):
+        """A soft lockup is not one of the kernel crash signals."""
+        ib12 = "IB Error-12 (IBV_WC_RETRY_EXC_ERR)"
+        symptoms = _make_symptoms(obs_ctx, "kernel soft lockup", ib12)
+        bad_nodes = _make_bad_nodes(obs_ctx, {"node01": ["kernel soft lockup"], "node02": [ib12]})
+
+        _run(stream, two_node_job, symptoms, bad_nodes)
+
+        assert ib12 in symptoms
+        assert ib12 in bad_nodes["node02"].attributions
+
+    def test_peer_without_error_12_is_unchanged(self, stream, obs_ctx, two_node_job):
+        """A peer carrying only another IB error does not trigger cleanup."""
+        ib5 = "IB Error-5 (IBV_WC_WR_FLUSH_ERR)"
+        symptoms = _make_symptoms(obs_ctx, "kernel panic", ib5)
+        bad_nodes = _make_bad_nodes(obs_ctx, {"node01": ["kernel panic"], "node02": [ib5]})
+
+        _run(stream, two_node_job, symptoms, bad_nodes)
+
+        assert ib5 in symptoms
+        assert ib5 in bad_nodes["node02"].attributions
 
 
 class TestSlurmStateSymptoms:
