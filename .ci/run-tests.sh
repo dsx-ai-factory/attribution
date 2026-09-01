@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
 
 set -euo pipefail
 
@@ -40,6 +42,16 @@ run_service_app_client_drift() {
     (
         cd "${repository_root}"
         bash .ci/check-client-drift.sh
+    )
+}
+
+run_license_compliance() {
+    (
+        cd "${repository_root}"
+        uv run --project service/attribution-lib --frozen \
+            pytest -q .ci/tests/test_license_compliance.py
+        uv run --project service/attribution-lib --frozen \
+            python .ci/check-license-compliance.py --root .
     )
 }
 
@@ -88,6 +100,9 @@ case "${suite}" in
     service-app-client-drift)
         run_service_app_client_drift
         ;;
+    license-compliance)
+        run_license_compliance
+        ;;
     blueprint)
         run_blueprint
         ;;
@@ -102,11 +117,12 @@ case "${suite}" in
         run_attribution_lib
         run_service_app
         run_service_app_client_drift
+        run_license_compliance
         run_blueprint
         run_frontend
         ;;
     *)
-        echo "usage: $0 {all|attribution-lib|service-app|blueprint|service-app-client-drift|frontend|end-to-end}" >&2
+        echo "usage: $0 {all|attribution-lib|service-app|blueprint|service-app-client-drift|license-compliance|frontend|end-to-end}" >&2
         exit 2
         ;;
 esac

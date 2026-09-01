@@ -224,9 +224,9 @@ run it with the command above. The
 [sample corpus](./sample-data/static/README.md) describes what the static
 workloads contain.
 
-## Before Opening The MR
+## Before Opening The PR
 
-- [ ] New files carry the appropriate license header, copied from an existing file
+- [ ] New first-party files that support comments carry the Apache-2.0 SPDX header, copied from an existing first-party file
 - [ ] `schema=` declares every key `_build` reads, and a bad config raises
       `MCAError`
 - [ ] Any third-party library is an extra in [`pyproject.toml`](../pyproject.toml) with

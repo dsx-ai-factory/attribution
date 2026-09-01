@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
 """A compiled closure and load-time coverage both see registered helpers.
 
 Mirrors tests/declarative/test_emit.py: the `dummy_ctx` fixture (conftest), a real

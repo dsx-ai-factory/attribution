@@ -1,4 +1,7 @@
 # syntax=docker/dockerfile:1.7
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
 # Stage 1: build the React SPA
 FROM node:22-bookworm-slim AS web-build
 WORKDIR /frontend
@@ -7,7 +10,9 @@ RUN corepack enable && pnpm install --frozen-lockfile && pnpm exec tsc -b && pnp
 
 # Stage 2: python app
 FROM python:3.14.6-slim-trixie
+LABEL com.nvidia.attribution.project.license="Apache-2.0"
 COPY --from=ghcr.io/astral-sh/uv:0.10.12 /uv /uvx /bin/
+COPY LICENSE /licenses/LICENSE
 
 ENV UV_COMPILE_BYTECODE=1
 ENV UV_LINK_MODE=copy
@@ -16,7 +21,7 @@ ENV ATTRIBUTION_SERVICE_PORT=8000
 ENV ATTRIBUTION_WEB_PORT=8080
 
 WORKDIR /opt/blueprint
-COPY blueprint/pyproject.toml blueprint/uv.lock ./
+COPY blueprint/pyproject.toml blueprint/uv.lock blueprint/LICENSE ./
 COPY blueprint/src/ ./src/
 # built SPA -> the package's static dir, BEFORE uv sync packages it
 COPY --from=web-build /frontend/dist ./src/attribution_blueprint/webui/static/

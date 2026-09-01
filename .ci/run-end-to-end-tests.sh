@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-# SPDX-License-Identifier: LicenseRef-NvidiaProprietary
+# SPDX-License-Identifier: Apache-2.0
 
 set -euo pipefail
 
@@ -14,6 +14,7 @@ service_image="attribution-service-test:${run_suffix}"
 blueprint_image="attribution-blueprint-test:${run_suffix}"
 container_name="attribution-test-${run_suffix}"
 work_dir="$(mktemp -d "${TMPDIR:-/tmp}/attribution-end-to-end.XXXXXX")"
+source_root="${work_dir}/source"
 database_dir="${work_dir}/data"
 database_path="${database_dir}/attributions.db"
 output_path="${work_dir}/attribution.log"
@@ -41,17 +42,40 @@ wait_for_url() {
     curl --fail --silent --show-error "${url}" >/dev/null
 }
 
+assert_image_license() {
+    local image="$1"
+    local actual_label
+    actual_label="$(
+        docker image inspect \
+            --format '{{ index .Config.Labels "com.nvidia.attribution.project.license" }}' \
+            "${image}"
+    )"
+    if [[ "${actual_label}" != "Apache-2.0" ]]; then
+        echo "${image}: expected Apache-2.0 project license label, found ${actual_label}" >&2
+        return 1
+    fi
+    docker run --rm \
+        --entrypoint python \
+        --volume "${source_root}/LICENSE:/expected/LICENSE:ro" \
+        "${image}" \
+        -c 'from pathlib import Path; raise SystemExit(Path("/licenses/LICENSE").read_bytes() != Path("/expected/LICENSE").read_bytes())'
+}
+
 cd "${repository_root}"
+mkdir -p "${source_root}"
+git checkout-index --all --prefix="${source_root}/"
 mkdir -p "${database_dir}"
 
 docker build \
-    --file service/service-app/Dockerfile \
+    --file "${source_root}/service/service-app/Dockerfile" \
     --tag "${service_image}" \
-    .
+    "${source_root}"
 docker build \
-    --file blueprint/docker/Dockerfile \
+    --file "${source_root}/blueprint/docker/Dockerfile" \
     --tag "${blueprint_image}" \
-    .
+    "${source_root}"
+assert_image_license "${service_image}"
+assert_image_license "${blueprint_image}"
 docker run --detach --rm \
     --name "${container_name}" \
     --env ATTRIBUTION_DB=/data/attributions.db \

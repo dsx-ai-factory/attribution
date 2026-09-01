@@ -1,6 +1,8 @@
 **
 
+!LICENSE
 !blueprint/
+!blueprint/LICENSE
 !blueprint/pyproject.toml
 !blueprint/uv.lock
 !blueprint/src/
@@ -25,6 +27,28 @@
 !service/attribution-lib/LICENSE
 !service/attribution-lib/src/
 !service/attribution-lib/src/**
+
+# Exclude generated Python packaging residue after broad source re-includes.
+service/attribution-lib/build
+service/attribution-lib/src/*.egg-info
+blueprint/src/*.egg-info
+
+# Exclude local environments, caches, build output, and secret files after all
+# broad source re-includes above.
+**/.venv
+**/__pycache__
+**/.pytest_cache
+**/.ruff_cache
+**/.mypy_cache
+**/.cache
+**/build
+**/dist
+**/*.egg-info
+**/*.py[co]
+**/.env
+**/.env.*
+**/*secret*
+**/*credential*
 
 # Exclude frontend build artifacts/deps (must come AFTER !blueprint/src/**)
 blueprint/src/attribution_blueprint/webui/frontend/node_modules
