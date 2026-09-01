@@ -15,7 +15,7 @@ NVIDIA Attribution ships in two components that share one rules engine. Pick the
 * **Attribution Blueprint.** A Python reference orchestrator that discovers workloads from your scheduler, collects log and metric evidence from your telemetry stack, calls the Attribution Service, and persists the diagnosis. The Blueprint owns the connector contracts (scheduler, logs, metrics, output) and is the fastest path to a running system. Use when you want a working deployment fast, for a proof-of-concept, an early-access deployment, or as the starting point for your own production topology. Ships with a read-side dashboard that renders the per-workload diagnosis and its symptom chain.
 * **Attribution Service.** A self-hosted HTTP REST service that owns the rules engine and returns one diagnosis per workload. Use when you want a shared attribution endpoint across many workloads and a single deployment to operate.
 
-Both are distributed under the NVIDIA AI Enterprise Early Access agreement during private preview. The Blueprint is the orchestrator that wires the Service into a real cluster. It implements a modular connector architecture designed to be extended and customized for your production environment. Run it as-is or adapt it to your topology, and contribute improvements back once the project reaches GA.
+Both use the Apache License 2.0 and are currently in private preview. The Blueprint is the orchestrator that wires the Service into a real cluster. It implements a modular connector architecture designed to be extended and customized for your production environment. Run it as-is or adapt it to your topology, and contribute improvements back once the project reaches GA.
 
 ## What NVIDIA Attribution does
 
@@ -178,7 +178,9 @@ Before you participate, read and follow our [Code of Conduct](CODE_OF_CONDUCT.md
 
 ## License
 
-NVIDIA Attribution is currently distributed under the NVIDIA Software and Model Evaluation License during private preview. This project will download and install additional third-party open source software projects. Review the license terms of these open source projects before use.
+NVIDIA Attribution is licensed under the Apache License 2.0. See [LICENSE](LICENSE).
+
+The [Code of Conduct](CODE_OF_CONDUCT.md) keeps its separate CC BY-SA 4.0 terms. Vendored OpenAPI Generator templates keep the terms in [their accompanying license](service/service-app/openapi/templates/LICENSE). Other third-party dependencies keep their own license terms.
 
 ## Use cases
 

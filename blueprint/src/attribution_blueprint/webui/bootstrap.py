@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
 """Map the read-only SQLite rows to the React SPA's Run shape and build the
 bootstrap payload injected into index.html. No JSON API; see the design spec."""
 

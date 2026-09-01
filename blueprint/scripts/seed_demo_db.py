@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
 """Seed a v1-schema demo SQLite DB so the webui has data to render.
 
 Mirrors the schema in src/attribution_blueprint/connectors/outputs/sqlite/__init__.py

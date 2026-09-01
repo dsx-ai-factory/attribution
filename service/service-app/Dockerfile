@@ -1,13 +1,6 @@
 # syntax=docker/dockerfile:1.7
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-# SPDX-License-Identifier: LicenseRef-NvidiaProprietary
-#
-# NVIDIA CORPORATION, its affiliates and licensors retain all intellectual
-# property and proprietary rights in and to this material, related
-# documentation and any modifications thereto. Any use, reproduction,
-# disclosure or distribution of this material and related documentation
-# without an express license agreement from NVIDIA CORPORATION or
-# its affiliates is strictly prohibited.
+# SPDX-License-Identifier: Apache-2.0
 
 # Runtime base image. Override with an air-gapped mirror via --build-arg.
 ARG BASE_IMAGE=python:3.14.6-slim-trixie
@@ -42,11 +35,13 @@ RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --frozen --no-editable --no-dev
 
 FROM ${BASE_IMAGE}
+LABEL com.nvidia.attribution.project.license="Apache-2.0"
 
 ENV PATH="/app/.venv/bin:$PATH"
 
 # Copy the environment, but not the source code
 COPY --from=builder /app/.venv /app/.venv
+COPY LICENSE /licenses/LICENSE
 
 EXPOSE 8000
 

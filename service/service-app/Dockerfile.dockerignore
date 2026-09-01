@@ -1,6 +1,28 @@
 **
+!LICENSE
 !service/
 !service/service-app/
 !service/service-app/**
 !service/attribution-lib/
 !service/attribution-lib/**
+
+# Exclude generated Python packaging residue after the broad re-include.
+service/attribution-lib/build
+service/attribution-lib/src/*.egg-info
+
+# Exclude local environments, caches, build output, and secret files after all
+# broad source re-includes above.
+**/.venv
+**/__pycache__
+**/.pytest_cache
+**/.ruff_cache
+**/.mypy_cache
+**/.cache
+**/build
+**/dist
+**/*.egg-info
+**/*.py[co]
+**/.env
+**/.env.*
+**/*secret*
+**/*credential*

@@ -1,12 +1,5 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-# SPDX-License-Identifier: LicenseRef-NvidiaProprietary
-#
-# NVIDIA CORPORATION, its affiliates and licensors retain all intellectual
-# property and proprietary rights in and to this material, related
-# documentation and any modifications thereto. Any use, reproduction,
-# disclosure or distribution of this material and related documentation
-# without an express license agreement from NVIDIA CORPORATION or
-# its affiliates is strictly prohibited.
+# SPDX-License-Identifier: Apache-2.0
 
 # yaml-language-server: $schema=https://coderabbit.ai/integrations/schema.v2.json
 
@@ -19,7 +12,7 @@ reviews:
   path_instructions:
     - path: "**"
       instructions: |
-        - Newly added, manually maintained source and configuration files that support comments must include the repository-standard NVIDIA SPDX copyright and license header.
+        - Newly added, manually maintained first-party source and configuration files that support comments must include the repository-standard NVIDIA SPDX copyright and Apache-2.0 license header.
         - For generated files, ensure the generator or template emits the header instead of recommending manual edits to generated output.
         - Do not require source-code headers on vendored files, lockfiles, fixtures, sample data, binaries, or file formats that cannot carry comments.
 
