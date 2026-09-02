@@ -1,0 +1,55 @@
+version: 2
+updates:
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    groups:
+      github-actions:
+        patterns:
+          - "*"
+
+  - package-ecosystem: "uv"
+    directory: "/blueprint"
+    schedule:
+      interval: "weekly"
+    groups:
+      blueprint-python:
+        patterns:
+          - "*"
+
+  - package-ecosystem: "uv"
+    directory: "/service/attribution-lib"
+    schedule:
+      interval: "weekly"
+    groups:
+      attribution-lib-python:
+        patterns:
+          - "*"
+
+  - package-ecosystem: "uv"
+    directory: "/service/service-app"
+    schedule:
+      interval: "weekly"
+    groups:
+      service-app-python:
+        patterns:
+          - "*"
+
+  - package-ecosystem: "npm"
+    directory: "/blueprint/src/attribution_blueprint/webui/frontend"
+    schedule:
+      interval: "weekly"
+    groups:
+      frontend:
+        patterns:
+          - "*"
+
+  - package-ecosystem: "pre-commit"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    groups:
+      pre-commit:
+        patterns:
+          - "*"
