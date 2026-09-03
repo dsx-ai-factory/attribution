@@ -2429,6 +2429,80 @@ class TestCudaXidCascades:
         assert "cudaErrorDevicesUnavailable" not in symptoms
 
 
+class TestCudaOomXidCascade:
+    """Test CUDA out-of-memory precedence over the complete XID cascade."""
+
+    _CUDA_OOM = "cudaError out of memory"
+    _XID_SYMPTOMS = (
+        "XID-145-RLW_REMAP-4",
+        "XID-145-InfraSW",
+        "XID-137-NVLINK_PRIV_ERR",
+        "XID-94-CONTAINED_ERROR",
+    )
+
+    def test_complete_xid_cascade_becomes_interesting(self, stream, obs_ctx, job_info):
+        """Demote every matching XID when CUDA out-of-memory and all three XID groups coexist.
+
+        Args:
+            stream: Event stream used to run refiners.
+            obs_ctx: Observation context for symptom sources.
+            job_info: Job metadata supplied to refiners.
+
+        Returns:
+            None.
+        """
+        symptoms = _make_symptoms(obs_ctx, self._CUDA_OOM, *self._XID_SYMPTOMS)
+        bad_nodes = _make_bad_nodes(obs_ctx, {"node01": list(self._XID_SYMPTOMS)})
+
+        _run(stream, job_info, symptoms, bad_nodes)
+
+        assert self._CUDA_OOM in symptoms
+        for symptom in self._XID_SYMPTOMS:
+            assert symptom not in symptoms
+            assert symptoms._data[symptom].has_interesting()
+            assert symptom not in bad_nodes["node01"].attributions
+            assert bad_nodes["node01"].attributions._data[symptom].has_interesting()
+
+    @pytest.mark.parametrize(
+        "missing_group",
+        (
+            _CUDA_OOM,
+            "XID-145-",
+            "XID-137-",
+            "XID-94-",
+        ),
+    )
+    def test_xids_remain_bad_when_required_group_is_missing(
+        self,
+        stream,
+        obs_ctx,
+        job_info,
+        missing_group,
+    ):
+        """Preserve XIDs unless CUDA out-of-memory and all three XID groups coexist.
+
+        Args:
+            stream: Event stream used to run refiners.
+            obs_ctx: Observation context for symptom sources.
+            job_info: Job metadata supplied to refiners.
+            missing_group: Required trigger group omitted from this case.
+
+        Returns:
+            None.
+        """
+        all_symptoms = (self._CUDA_OOM, *self._XID_SYMPTOMS)
+        present_symptoms = tuple(symptom for symptom in all_symptoms if symptom.startswith(missing_group) is False)
+        present_xids = tuple(symptom for symptom in present_symptoms if symptom.startswith("XID-") is True)
+        symptoms = _make_symptoms(obs_ctx, *present_symptoms)
+        bad_nodes = _make_bad_nodes(obs_ctx, {"node01": list(present_xids)})
+
+        _run(stream, job_info, symptoms, bad_nodes)
+
+        for symptom in present_xids:
+            assert symptom in symptoms
+            assert symptom in bad_nodes["node01"].attributions
+
+
 # Dedicated coverage for ConnectionClosedCascade trigger handling.
 class TestConnectionClosedCascade:
     """Tests for the dedicated ConnectionClosedCascade refiner rule."""

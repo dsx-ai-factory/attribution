@@ -114,6 +114,7 @@ _REFINER_ORDER = [
     "KernelCrashIbCascadeCleanup",
     "WatchdogGpuCascadeCleanup",
     "CudaXidCascades",
+    "CudaOomXidCascade",
     "ConnectionClosedCascade",
     "XidGenericCleanup",
     "Xid145RxpipePrivErrCascade",
@@ -410,6 +411,7 @@ _XID145_RXPIPE_COMPANIONS = frozenset(
         "XID-94-CONTAINED_ERROR",
     }
 )
+_CUDA_OOM_XID_PREFIXES = ("XID-145-", "XID-137-", "XID-94-")
 # In the regression fixture, XID-94 preceded RXPIPE by 70 ms, and XID-137
 # followed it by 20 us. A 1 s bound tolerates kernel-log scheduling and
 # interleaving while restricting correlation to the immediate episode.
@@ -1587,6 +1589,44 @@ def cuda_xid_cascades(context: RefinerContext):
     # DataLoader root cause → cudaErrorDevicesUnavailable is cascaded
     if "DataLoader Exception" in symptoms:
         symptoms.discard("cudaErrorDevicesUnavailable")
+
+
+@refiner_def(
+    name="CudaOomXidCascade",
+    author="NVIDIA Attribution team",
+    priority=_priority("CudaOomXidCascade"),
+)
+def cuda_oom_xid_cascade(context: RefinerContext):
+    """Demote XID-145, XID-137, and XID-94 when CUDA out-of-memory accompanies all three.
+
+    Args:
+        context: Refiner inputs containing job and node symptoms.
+
+    Returns:
+        None.
+    """
+    symptoms = context.symptoms
+    if symptoms is None or "cudaError out of memory" not in symptoms:
+        return
+
+    active_symptoms = tuple(symptoms.symptoms())
+    has_complete_xid_cascade = all(
+        any(symptom.startswith(prefix) for symptom in active_symptoms) for prefix in _CUDA_OOM_XID_PREFIXES
+    )
+    if has_complete_xid_cascade is False:
+        return
+
+    xid_symptoms = tuple(
+        symptom for symptom in active_symptoms if any(symptom.startswith(prefix) for prefix in _CUDA_OOM_XID_PREFIXES)
+    )
+    for symptom in xid_symptoms:
+        symptoms.discard(symptom)
+
+    if context.my_bad_nodes is None:
+        return
+    for _node, node_group in context.my_bad_nodes.items():
+        for symptom in xid_symptoms:
+            node_group.attributions.discard(symptom)
 
 
 @refiner_def(
