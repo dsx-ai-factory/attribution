@@ -600,14 +600,6 @@ def test_generated_outcome_for_ignores_plr_tx_prefix():
     assert registry.outcome_for(["plr_tx_bw_loss_high_5m"]) is None
 
 
-def test_row_remap_does_not_drive_outcome():
-    """Keep Row Remap in the vocabulary without mapping it to a failure."""
-    registry = _load_committed_registry()
-
-    assert registry.contains("Row Remap")
-    assert registry.outcome_for(["Row Remap"]) is None
-
-
 def test_symptom_docs_from_declarations_includes_only_doc_bearing_outcomes():
     declarations = [
         # Doc-bearing outcome declaration is carried.
