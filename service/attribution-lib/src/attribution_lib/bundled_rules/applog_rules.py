@@ -141,12 +141,13 @@ declare_rule_names(
     "DataLoader Exception",
 )
 
-# Event types emitted by helpers (_bad, _bad_peers) and shared across multiple extractors.
+# Event types emitted by helpers, shared across extractors, or exposed for rule extensions.
 declare_event_types(
     "Attribution.node.bad",
     "Attribution.node.bad_peers",
     "Application.bad_pair.complete",
     "Application.bad_pair.partial",
+    "Application.healthy",
     "Application.pytorch.nccl_watchdog",
     "Application.dataloader.exception",
     "Application.megatron-lm.runtime_args",

@@ -31,7 +31,9 @@ from attribution_lib.sources import Source
 @pytest.fixture(autouse=True)
 def _preload_test_rules(event_manager):
     """Preload rule names specific to this test file."""
-    event_manager.preload_rule_names({"thermal_monitor_rule", "attribution_analyzer", "mfu_monitor"})
+    event_manager.preload_rule_names(
+        {"thermal_monitor_rule", "attribution_analyzer", "mfu_monitor", "example_health_monitor"}
+    )
 
 
 @pytest.fixture
@@ -166,6 +168,22 @@ class TestEventRule:
         assert isinstance(payload["time_interval"]["start"], str)
         assert datetime.fromisoformat(payload["time_interval"]["start"]) == dt
         assert datetime.fromisoformat(payload["time_interval"]["end"]) == dt
+
+    def test_healthy_marker(self, event_stream, sample_source):
+        """A rule can emit a generic marker while the job remains healthy."""
+        stream = event_stream("healthy-job")
+        stream.register_observation_context(sample_source.source_context)
+        marker_source = sample_source.derived(datum="training heartbeat", rule="example_health_monitor")
+
+        stream.add_event("Application.healthy", {}, marker_source)
+        stream.flush()
+
+        healthy_type = stream.mgr.types.get_id("Application.healthy")
+        [(event_id, _event_type, payload, source)] = query_events_with_source(stream, healthy_type)
+        assert event_id is not None
+        assert payload == {}
+        assert source.datum == "training heartbeat"
+        assert source.rule == "example_health_monitor"
 
     def test_mfu_rule(self, event_stream):
         """Test event creation and SQL queries"""
