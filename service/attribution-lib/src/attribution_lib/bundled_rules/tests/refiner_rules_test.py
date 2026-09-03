@@ -2502,6 +2502,31 @@ class TestCudaOomXidCascade:
             assert symptom in symptoms
             assert symptom in bad_nodes["node01"].attributions
 
+    @pytest.mark.parametrize("secondary_symptom", ("Connection closed", "ncclUnhandledCudaError"))
+    def test_xid_dependent_cleanup_runs_before_oom_demotion(
+        self,
+        stream,
+        obs_ctx,
+        job_info,
+        secondary_symptom,
+    ):
+        """Let downstream cleanup rules consume XID triggers before OOM demotes them.
+
+        Args:
+            stream: Event stream used to run refiners.
+            obs_ctx: Observation context for symptom sources.
+            job_info: Job metadata supplied to refiners.
+            secondary_symptom: Cascade symptom that depends on an active XID.
+
+        Returns:
+            None.
+        """
+        symptoms = _make_symptoms(obs_ctx, self._CUDA_OOM, *self._XID_SYMPTOMS, secondary_symptom)
+
+        _run(stream, job_info, symptoms)
+
+        assert secondary_symptom not in symptoms
+
 
 # Dedicated coverage for ConnectionClosedCascade trigger handling.
 class TestConnectionClosedCascade:
