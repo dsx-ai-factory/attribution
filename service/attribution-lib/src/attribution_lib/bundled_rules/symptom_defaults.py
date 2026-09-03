@@ -1005,19 +1005,7 @@ outcome_symptom(
     hw_cause="Known HW Cause - Node",
 )
 
-outcome_symptom(
-    "Row Remap",
-    outcome="Fail InfraHW",
-    priority=OutcomePriority.MEDIUM_SW,
-    doc="row-remap",
-    hw_cause="Known HW Cause - Node",
-    cascade_discards=(
-        "error running nvidia-smi",
-        "UserBuffer timeout",
-        "cudaErrorECCUncorrectable",
-        "ncclUnhandledCudaError",
-    ),
-)
+known_symptom("Row Remap")
 
 outcome_symptom(
     "Page Retirement",

@@ -379,6 +379,42 @@ def test_clean_informational_xids_demoted(stream, obs_ctx, job_info):
         assert xid in rows[0][1], f"{xid} should appear in interesting payload"
 
 
+def test_row_remap_demoted_to_interesting(stream, obs_ctx, job_info):
+    """Keep row-remap telemetry without treating it as a failure.
+
+    Args:
+        stream: Event stream fixture.
+        obs_ctx: Observation context fixture.
+        job_info: Job information fixture.
+    """
+    symptom = "Row Remap"
+    timestamp = datetime(2024, 1, 1, 10, 5, 0, tzinfo=ZoneInfo("UTC"))
+    create_event(
+        stream,
+        obs_ctx,
+        "Attribution.node.bad",
+        {"node": "node01", "symptom": symptom},
+        timestamp,
+        100,
+    )
+
+    filter_events(stream, job_info)
+    stream.flush()
+
+    bad_id = stream.mgr.types.get_id("Attribution.node.bad")
+    interesting_id = stream.mgr.types.get_id("Attribution.node.interesting")
+
+    bad_rows = stream.query_raw("SELECT status FROM events WHERE event_type=? AND line_num=100", [bad_id])
+    assert bad_rows[0][0] == 0
+
+    interesting_rows = stream.query_raw(
+        "SELECT status, payload FROM events WHERE event_type=? AND line_num=100",
+        [interesting_id],
+    )
+    assert interesting_rows[0][0] == 1
+    assert symptom in interesting_rows[0][1]
+
+
 @pytest.mark.parametrize(
     "symptom",
     [

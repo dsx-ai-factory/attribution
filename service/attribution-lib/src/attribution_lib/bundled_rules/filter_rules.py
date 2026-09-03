@@ -24,7 +24,7 @@ from attribution_lib.event_helpers import query_events_with_source
 from attribution_lib.events import DemotionTypes, EventStream, sql_placeholders
 from attribution_lib.rules import FilterContext, FilterPriority, declare_event_types, filter_def
 from attribution_lib.sources import Source
-from attribution_lib.symptoms import INFORMATIONAL_XIDS
+from attribution_lib.symptoms import INFORMATIONAL_XIDS, RegisteredSymptoms
 
 _DEMOTION_KEYS = frozenset(e.value for e in DemotionTypes)
 
@@ -676,6 +676,20 @@ def handle_xid_burst_events(context: FilterContext):
 def clean_informational_xids(context: FilterContext):
     """Demote informational-only XIDs from bad to interesting."""
     _demote_bad_by_symptom(context.event_stream, INFORMATIONAL_XIDS, "CleanInformationalXids")
+
+
+@filter_def(name="DemoteNonFatalRowRemap", author="NVIDIA Attribution team", priority=FilterPriority.LATE)
+def demote_nonfatal_row_remap(context: FilterContext):
+    """Demote non-fatal row-remap telemetry to interesting.
+
+    Args:
+        context: Filter context containing the event stream.
+    """
+    _demote_bad_by_symptom(
+        context.event_stream,
+        frozenset((RegisteredSymptoms.ROW_REMAP.value,)),
+        "DemoteNonFatalRowRemap",
+    )
 
 
 @filter_def(name="DemoteInsufficientPermissions", author="NVIDIA Attribution team", priority=FilterPriority.LATE)
