@@ -304,12 +304,16 @@ class JobInfoBuilder:
         self._node_to_ranks = copied
 
     @staticmethod
-    def uniform_node_to_ranks(nodes: Sequence[str], ranks_per_node: int) -> dict[str, list[int]]:
+    def uniform_node_to_ranks(
+        nodes: Sequence[str], ranks_per_node: int, *, start_rank: int = 0
+    ) -> dict[str, list[int]]:
         """Build a uniform node_to_ranks mapping.
 
         Args:
             nodes: The node names to assign ranks to.
             ranks_per_node: The number of ranks to assign to each node.
+            start_rank: The first global rank assigned to the first node. This is useful when the
+                supplied nodes are one component of a larger distributed job.
 
         Returns:
             A dictionary mapping node names to lists of ranks.
@@ -319,10 +323,20 @@ class JobInfoBuilder:
             {'node-a': [0, 1, 2, 3], 'node-b': [4, 5, 6, 7]}
             >>> JobInfoBuilder.uniform_node_to_ranks(["node-a"], 1)
             {'node-a': [0]}
+            >>> JobInfoBuilder.uniform_node_to_ranks(["node-a", "node-b"], 4, start_rank=8)
+            {'node-a': [8, 9, 10, 11], 'node-b': [12, 13, 14, 15]}
             >>> JobInfoBuilder.uniform_node_to_ranks([], 8)
             {}
         """
-        return {n: list(range(i * ranks_per_node, (i + 1) * ranks_per_node)) for i, n in enumerate(nodes)}
+        return {
+            n: list(
+                range(
+                    start_rank + i * ranks_per_node,
+                    start_rank + (i + 1) * ranks_per_node,
+                )
+            )
+            for i, n in enumerate(nodes)
+        }
 
     def srun_cmd(self, in_srun_cmd: str) -> "JobInfoBuilder":
         if self._srun_cmd is not None:

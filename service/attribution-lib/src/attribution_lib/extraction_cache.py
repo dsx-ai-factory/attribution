@@ -112,14 +112,16 @@ def compute_data_fingerprint(
             resources = serialized_resources
         else:
             resources = [resource.model_dump(mode="json") for resource in serialized_resources]
+        time_start = extraction_context.time_interval.start
+        time_end = extraction_context.time_interval.end
         context_hash = _hash_entry(
             {
                 "format": extraction_context.format.value,
                 "pre_filtered": extraction_context.pre_filtered,
                 "resources": resources,
                 "source": extraction_context.source.value,
-                "time_end": extraction_context.time_interval.end.isoformat(),
-                "time_start": extraction_context.time_interval.start.isoformat(),
+                "time_end": time_end.isoformat() if time_end is not None else None,
+                "time_start": time_start.isoformat() if time_start is not None else None,
                 "timezone": extraction_context.timezone.key,
             }
         )

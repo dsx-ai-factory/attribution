@@ -182,6 +182,12 @@ class TestUniformNodeToRanks:
     def test_single_node_with_single_rank(self):
         assert JobInfoBuilder.uniform_node_to_ranks(["solo"], 1) == {"solo": [0]}
 
+    def test_starts_component_at_global_rank_offset(self):
+        assert JobInfoBuilder.uniform_node_to_ranks(["component-node-a", "component-node-b"], 4, start_rank=8) == {
+            "component-node-a": [8, 9, 10, 11],
+            "component-node-b": [12, 13, 14, 15],
+        }
+
 
 class TestNodeToRanksLookup:
     """Lookup methods consult the explicit dict when present."""

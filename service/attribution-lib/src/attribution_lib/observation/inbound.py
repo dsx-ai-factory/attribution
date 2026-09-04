@@ -13,7 +13,7 @@ from collections.abc import Iterable
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
-from typing import Any, Generic, NamedTuple, NewType, NotRequired, TypeAlias, TypedDict, TypeVar, cast
+from typing import Any, Generic, NamedTuple, NewType, NotRequired, Optional, TypeAlias, TypedDict, TypeVar, cast
 from zoneinfo import ZoneInfo
 
 from attribution_lib.exceptions import (
@@ -246,6 +246,48 @@ class Format(str, Enum):
         }
       ]
       ```
+
+    - `entry_timeseries`:
+
+      JSON-based.
+
+      Top-Level Structure:
+      - An array of entry objects.
+
+      Details:
+      - Each entry object contains:
+        - `body` (string): *Required*. No rank-like prefix is expected or parsed.
+        - `ts` (int or null): Unix timestamp in **nanoseconds**, or null/absent when the producer
+          has no timestamp for this entry. It means "this entry occurred no later than this time".
+          Rounded up to microsecond precision internally, since that is all a `datetime` holds. An
+          entry without a timestamp is never dropped by time filtering.
+        - `resources` (optional): What this entry is about. Either the exact string `"AllJobResources"`
+          or an array naming exactly one `{"kind": "node", "hostname": ...}`, optionally alongside
+          `{"kind": "replica", "name": ...}` objects, which are recorded but not attributed on. Absent,
+          null and `"AllJobResources"` all mean every job resource, so they single out no node. Neither
+          does an array that fails to name exactly one node the job owns — for example `[]`, several
+          nodes, replicas with no node, or a hostname outside the job. Singling out no node is what
+          decides the entry's fate: a source that requires one drops it, a source that does not records
+          it against every job resource. Either way the rest of the array is still processed.
+      - Any other key in an entry is permitted but ignored.
+
+      Unlike every other format, entries here are only time-filtered by the observation context's
+      `time_interval`. That interval is the producer's declared intent: a null bound means unbounded on
+      that side, so an interval of two nulls disables time filtering for the observation entirely.
+
+      Example:
+      ```json
+      [
+        {
+          "ts": 1744734437830498000,
+          "resources": [{"kind": "node", "hostname": "host-a1b2c3d4"}],
+          "body": "some log message"
+        },
+        {
+          "body": "a continuation entry the producer could not timestamp"
+        }
+      ]
+      ```
     """
 
     UNDEFINED = ""
@@ -257,14 +299,22 @@ class Format(str, Enum):
     UFMLOG = "ufmlog"
     PROMETHEUS_METRICS = "prometheus_metrics"
     CSP_EVENT_LIST = "csp_event_list"
+    ENTRY_TIMESERIES = "entry_timeseries"
 
 
 class TimeInterval(NamedTuple):
-    start: datetime
-    end: datetime
+    """The window a producer declares an observation covers; a null bound is unbounded on that side."""
+
+    start: Optional[datetime]
+    end: Optional[datetime]
 
     def __hash__(self) -> int:
-        return hash((self.start.isoformat(), self.end.isoformat()))
+        return hash(
+            (
+                self.start.isoformat() if self.start is not None else None,
+                self.end.isoformat() if self.end is not None else None,
+            )
+        )
 
 
 TimestampNsFieldStr: TypeAlias = str
@@ -336,6 +386,17 @@ class CspEventEntry(TypedDict):
 CspEventEntrySeries: TypeAlias = list[CspEventEntry]
 
 StringList: TypeAlias = list[str]
+
+
+class TimeseriesEntry(TypedDict):
+    """One entry of an `entry_timeseries` observation. See `Format` for the wire contract."""
+
+    body: RawLogLine
+    ts: NotRequired[Optional[TimestampNsField]]
+    resources: NotRequired[Optional[ResourceSet]]
+
+
+TimeseriesEntrySeries: TypeAlias = list[TimeseriesEntry]
 
 
 @dataclass

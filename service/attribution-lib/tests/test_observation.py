@@ -11,6 +11,7 @@
 import json
 from datetime import datetime, timedelta
 from pathlib import Path
+from unittest.mock import Mock
 
 import pytest
 from pydantic_core import PydanticCustomError
@@ -20,6 +21,7 @@ from attribution_lib.exceptions import (
     UnhandledObservationFormatError,
     UnknownObservationFormatError,
     UnknownObservationSourceError,
+    UnknownResourceError,
 )
 from attribution_lib.job_info import JobInfoBuilder
 from attribution_lib.observation import (
@@ -45,13 +47,21 @@ from attribution_lib.observation.processing import (
     RawLineEntry,
     RawLineEntrySource,
     RawLokiStreamsEntrySource,
+    TimeseriesEntrySource,
     _extract_timestamp_from_iso_format,
     _extract_timestamp_from_log_line,
     _extract_timestamp_from_pytorch_format,
     extract_body_and_node,
     raw_loki_unpack,
 )
-from test_support.helpers import make_node_to_ranks
+from attribution_lib.resources import Node, Replica
+from attribution_lib.resources.resource_set import ResourceSetClass
+from attribution_lib.rules_engine import process_observation_source
+from test_support.helpers import make_node_to_ranks, observation_base
+
+JOB_NODE = "fake-node-a"
+OTHER_JOB_NODE = "fake-node-b"
+NODE_RESOURCE = [{"kind": "node", "hostname": JOB_NODE}]
 
 
 @pytest.fixture
@@ -174,6 +184,62 @@ def metric_data_from_labels():
             "instance": "test-node-002:9100",
         },
     }
+
+
+@pytest.fixture
+def timeseries_context(job_resources, timezone):
+    """The format declares its own window, so these tests pin it open and let each entry carry its own ts."""
+    return InboundContext(
+        TimeInterval(None, None),
+        job_resources,
+        ObservationSource.SYSLOG,
+        ObservationFormat.ENTRY_TIMESERIES,
+        timezone,
+    )
+
+
+@pytest.fixture
+def syslog_job_info(simple_job_factory):
+    """A two-node job, so a test can name a second one and still be inside the workload."""
+    return simple_job_factory(nodes=[JOB_NODE, OTHER_JOB_NODE])
+
+
+def entry(body, *, ts=None, resources=None):
+    """A wire entry, omitting the optional keys the caller left out rather than nulling them."""
+    made = {"body": body}
+    if ts is not None:
+        made["ts"] = ts
+    if resources is not None:
+        made["resources"] = resources
+    return made
+
+
+def ns(moment):
+    return int(moment.timestamp() * 1e9)
+
+
+def only_entry(context, resources):
+    """The single entry of a one-entry observation declaring `resources`."""
+    return next(iter(TimeseriesEntrySource(Observation(context, [entry("a body", resources=resources)]))))
+
+
+@pytest.fixture
+def extract(timezone):
+    """The bodies that survive time filtering, read straight off the rules engine seam."""
+
+    def _extract(job_info, source, format, lines, *, time_interval=None):
+        engine = Mock()
+        process_observation_source(
+            event_stream=None,
+            observation_source=observation_base(job_info, timezone, source, format, lines, time_interval=time_interval),
+            job_info=job_info,
+            rules_engine=engine,
+            pre_filtered=True,
+        )
+        processed = engine.observation_processor.return_value.process_line
+        return [call.args[0].datum for call in processed.call_args_list]
+
+    return _extract
 
 
 class TestTimeInterval:
@@ -636,6 +702,92 @@ class TestMetricEntry:
 
         assert entry.component == "mlx5_2"  # Should get value from labels["device"]
         assert entry.cluster == "test-cluster"  # Should get value from labels["s_cluster"]
+
+
+class TestTimeseriesEntry:
+    """The entry_timeseries format: explicit timestamps, explicit resources, a declared filter window."""
+
+    def test_an_entry_decodes_its_timestamp_declared_resources_and_verbatim_body(
+        self, timeseries_context, syslog_job_info, timezone
+    ):
+        entries = [
+            entry(
+                "declared",
+                ts=1744734437347712782,
+                resources=[{"kind": "node", "hostname": JOB_NODE.upper()}, {"kind": "replica", "name": "worker-0"}],
+            ),
+            entry("undeclared"),
+        ]
+
+        declared, undeclared = TimeseriesEntrySource(Observation(timeseries_context, entries))
+
+        # ts only promises the entry is no later than it, so the trailing 782ns rounds the microsecond up.
+        assert declared.time() == datetime.fromtimestamp(1744734437, timezone) + timedelta(microseconds=347713)
+        assert declared.node(syslog_job_info) == JOB_NODE
+        # For now, replicas ride along unread, as they do on loki_dict_list.
+        assert declared.resources(syslog_job_info) == ResourceSetClass(
+            [Node(hostname=JOB_NODE), Replica(name="worker-0")]
+        )
+        assert undeclared.body() == "undeclared"
+        assert undeclared.resources(syslog_job_info) is ResourceSetClass.ANY
+
+    def test_an_absent_null_or_zero_timestamp(self, timeseries_context, timezone):
+        entries = [{"body": "no ts key"}, {"body": "explicit null", "ts": None}, {"body": "epoch", "ts": 0}]
+
+        source = TimeseriesEntrySource(Observation(timeseries_context, entries))
+
+        assert [item.time() for item in source] == [None, None, datetime.fromtimestamp(0, timezone)]
+
+    @pytest.mark.parametrize(
+        "declared",
+        [
+            pytest.param(
+                [{"kind": "node", "hostname": OTHER_JOB_NODE}, {"kind": "node", "hostname": JOB_NODE}],
+                id="two_nodes",
+            ),
+            pytest.param([], id="empty_array"),
+            pytest.param([{"kind": "replica", "name": "worker-0"}], id="replica_without_a_node"),
+        ],
+    )
+    def test_an_entry_naming_anything_but_one_job_node_raises_unknown_resource_error(
+        self, timeseries_context, syslog_job_info, declared
+    ):
+        entry_obj = only_entry(timeseries_context, declared)
+
+        with pytest.raises(UnknownResourceError):
+            entry_obj.node(syslog_job_info)
+
+
+class TestTimeseriesExtraction:
+    def test_the_declared_interval_is_the_only_time_filter(self, extract, syslog_job_info):
+        before_job = syslog_job_info.job_start_time - timedelta(hours=2)
+        in_declared = "inside the declared window"
+        in_job_window = "inside the job window"
+        untimed = "no timestamp at all"
+        entries = [
+            entry(in_declared, ts=ns(before_job + timedelta(minutes=30)), resources=NODE_RESOURCE),
+            entry(
+                in_job_window,
+                ts=ns(syslog_job_info.job_start_time + timedelta(minutes=30)),
+                resources=NODE_RESOURCE,
+            ),
+            entry(untimed, resources=NODE_RESOURCE),
+        ]
+
+        def surviving(time_interval):
+            return extract(
+                syslog_job_info,
+                ObservationSource.SYSLOG,
+                ObservationFormat.ENTRY_TIMESERIES,
+                entries,
+                time_interval=time_interval,
+            )
+
+        # An untimed entry cannot be outside a window, so it survives every one of them.
+        assert surviving(TimeInterval(before_job, before_job + timedelta(hours=1))) == [in_declared, untimed]
+        assert surviving(TimeInterval(None, None)) == [in_declared, in_job_window, untimed]
+        # A half-null interval still filters on the bound it has, which two nulls would never exercise.
+        assert surviving(TimeInterval(syslog_job_info.job_start_time, None)) == [in_job_window, untimed]
 
 
 class TestTimestampExtraction:

@@ -11,7 +11,7 @@ import json
 import re
 from abc import ABC, abstractmethod
 from collections.abc import Callable, Generator, Iterable, Iterator
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import (
     Any,
     Generic,
@@ -44,10 +44,13 @@ from attribution_lib.observation.inbound import (
     NodeStr,
     RawLogLine,
     Source as ObservationSource,
+    TimeseriesEntry,
 )
+from attribution_lib.resources import get_single_node
+from attribution_lib.resources.base import Base as ResourceBase
 from attribution_lib.resources.node import Node as NodeResource
 from attribution_lib.resources.replica import Replica as ReplicaResource
-from attribution_lib.resources.resource_set import ResourceSet, ResourceSetClass
+from attribution_lib.resources.resource_set import ResourceSet, ResourceSetClass, validate_resource_set
 from attribution_lib.sources import Source
 from attribution_lib.ufmlog_common import extract_ufmlog_line_node
 from attribution_lib.utils import get_hostname, method_cache
@@ -126,6 +129,8 @@ class EntrySourceBase(ABC, Generic[E, T_co]):
                 return PrometheusMetricsEntrySource(observation)
             case Format.CSP_EVENT_LIST:
                 return CspEventEntrySource(observation)
+            case Format.ENTRY_TIMESERIES:
+                return TimeseriesEntrySource(observation)
             case _:
                 raise UnknownObservationFormatError(observation.context.format)
 
@@ -535,7 +540,7 @@ class JobKeywordEntry(EntryBase):
         self._pos = pos
         self._item = item
 
-    def time(self) -> datetime:
+    def time(self) -> Optional[datetime]:
         return self._context.time_interval.end
 
     def node(self, _job_info: JobInfo) -> NodeStr:
@@ -842,3 +847,90 @@ class PrometheusMetricsEntrySource(EntrySourceBase[dict[str, Any], MetricEntry])
             component=component,  # Pass component to MetricEntry
             cluster=cluster,  # Pass cluster to MetricEntry
         )
+
+
+class TimeseriesEntryObj(EntryBase):
+    """Entry for the `entry_timeseries` format.
+
+    Nothing is parsed back out of the body. The producer declares the timestamp and the resources.
+    """
+
+    _context: Context
+    _pos: int
+    _ts: Optional[int]
+    _body: RawLogLine
+    _resources: Optional[ResourceSet]
+
+    def __init__(self, context: Context, pos: int, entry: TimeseriesEntry):
+        self._context = context
+        self._pos = pos
+        self._ts = entry.get("ts")  # nanoseconds
+        self._body = entry["body"]
+        declared = entry.get("resources")
+        self._resources = validate_resource_set(declared) if declared is not None else None
+
+    def time(self) -> Optional[datetime]:
+        if self._ts is None:
+            return None
+        # `ts` represents "entry occurred no later than this time". A datetime holds microseconds
+        # (see https://docs.python.org/3/library/datetime.html), so leftover nanoseconds round up.
+        seconds, micro = divmod(-(-self._ts // 1_000), 10**6)
+        return datetime.fromtimestamp(seconds, self._context.timezone) + timedelta(microseconds=micro)
+
+    @method_cache
+    def _verified_resources(self, job_info: JobInfo) -> ResourceSet:
+        """The declared resources, with the declared node checked against the job.
+
+        ANY only when nothing or `AllJobResources` was declared. Replicas ride along unread.
+
+        Raises UnidentifiableNodeError unless exactly one node is declared.
+        """
+        if self._resources is None or self._resources == ResourceSetClass.ANY:
+            return ResourceSetClass.ANY
+
+        verified: list[ResourceBase] = []
+        node_count = 0
+        for resource in self._resources:
+            if isinstance(resource, NodeResource):
+                node_count += 1
+                verified.append(NodeResource(hostname=job_info.verify_node(resource.hostname)))
+            else:
+                verified.append(resource)
+
+        # Potentially relaxable later; for now this matches every other format's one node per entry.
+        if node_count != 1:
+            raise UnidentifiableNodeError(self.body())
+
+        return ResourceSetClass(verified)
+
+    @method_cache
+    def node(self, job_info: JobInfo) -> NodeStr:
+        """The one job node this entry declares.
+
+        Callers use this as a keep-or-drop gate; attribution reads the full set from resources().
+        Raises UnknownResourceError when no job node is identifiable, which
+        process_observation_source treats as skip-this-entry.
+        """
+        verified = self._verified_resources(job_info)
+        if verified == ResourceSetClass.ANY:
+            raise UnidentifiableNodeError(self.body())
+        return get_single_node(verified).hostname
+
+    def body(self) -> str:
+        return self._body
+
+    def resources(self, job_info: Optional[JobInfo] = None) -> ResourceSet:
+        if job_info is None:
+            return ResourceSetClass.ANY
+        return self._verified_resources(job_info)
+
+
+class TimeseriesEntrySource(EntrySourceBase[TimeseriesEntry, TimeseriesEntryObj]):
+    """Process `entry_timeseries` entries."""
+
+    @classmethod
+    def make_line_iter(cls, lines: Any) -> Iterator[TimeseriesEntry]:
+        return iter(lines)
+
+    def make_line_base(self, pos: int, line: TimeseriesEntry) -> TimeseriesEntryObj:
+        return TimeseriesEntryObj(context=self.context, pos=pos, entry=line)

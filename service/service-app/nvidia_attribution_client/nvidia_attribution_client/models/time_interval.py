@@ -18,17 +18,17 @@ import json
 
 from datetime import datetime
 from pydantic import BaseModel, ConfigDict
-from typing import Any, ClassVar, Dict, List
+from typing import Any, ClassVar, Dict, List, Optional
 from typing import Optional, Set
 from typing_extensions import Self
 from pydantic_core import to_jsonable_python
 
 class TimeInterval(BaseModel):
     """
-    TimeInterval
+    The window an observation declares it covers.  Both keys are required, so a payload that omits one is a validation error rather than unbounded. A null bound means unbounded on that side, and only the `entry_timeseries` format accepts one.
     """ # noqa: E501
-    start: datetime
-    end: datetime
+    start: Optional[datetime]
+    end: Optional[datetime]
     __properties: ClassVar[List[str]] = ["start", "end"]
 
     model_config = ConfigDict(
@@ -70,6 +70,16 @@ class TimeInterval(BaseModel):
             exclude=excluded_fields,
             exclude_none=True,
         )
+        # set to None if start (nullable) is None
+        # and model_fields_set contains the field
+        if self.start is None and "start" in self.model_fields_set:
+            _dict['start'] = None
+
+        # set to None if end (nullable) is None
+        # and model_fields_set contains the field
+        if self.end is None and "end" in self.model_fields_set:
+            _dict['end'] = None
+
         return _dict
 
     @classmethod

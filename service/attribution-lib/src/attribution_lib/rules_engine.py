@@ -33,7 +33,10 @@ from attribution_lib.exceptions import (
 )
 from attribution_lib.job_info import JobInfo
 from attribution_lib.logline_filtering import log_ignored_node_line, log_ignored_time_line
-from attribution_lib.observation.inbound import Source as ObservationSource
+from attribution_lib.observation.inbound import (
+    Format as ObservationFormat,
+    Source as ObservationSource,
+)
 from attribution_lib.observation.processing import EntryProtocol, EntrySourceBase
 from attribution_lib.prefilters import MetricSpec, PreFilterCallable, PreFilterSpec
 from attribution_lib.rule_types.bases import (
@@ -517,8 +520,14 @@ def process_observation_source(
     """
     source_type = observation_source.context.source
     config = SOURCE_CONFIGS.get(source_type)
-    time_start = config.time_start(job_info) if config and config.time_start else None
-    time_end = config.time_end(job_info) if config and config.time_end else None
+    if observation_source.context.format is ObservationFormat.ENTRY_TIMESERIES:
+        # The declared interval is what the producer meant to cover, so the per-source window in
+        # SOURCE_CONFIGS does not apply. A null bound is unbounded on that side.
+        time_start = observation_source.context.time_interval.start
+        time_end = observation_source.context.time_interval.end
+    else:
+        time_start = config.time_start(job_info) if config and config.time_start else None
+        time_end = config.time_end(job_info) if config and config.time_end else None
     fallback_unknown_nodes = config.fallback_unknown_nodes if config else False
 
     raw_keywords: set[str] = set()
@@ -542,12 +551,14 @@ def process_observation_source(
         # Time filtering
         if time_start is not None or time_end is not None:
             entry_time = entry.time()
-            if time_start is not None and entry_time < time_start:
-                log_ignored_time_line(entry, job_info, "before_start", entry.context().source)
-                continue
-            if time_end is not None and entry_time > time_end:
-                log_ignored_time_line(entry, job_info, "after_end", entry.context().source)
-                continue
+            # An entry with no timestamp is never dropped.
+            if entry_time is not None:
+                if time_start is not None and entry_time < time_start:
+                    log_ignored_time_line(entry, job_info, "before_start", entry.context().source)
+                    continue
+                if time_end is not None and entry_time > time_end:
+                    log_ignored_time_line(entry, job_info, "after_end", entry.context().source)
+                    continue
 
         # Node resolution and source building
         if fallback_unknown_nodes:
