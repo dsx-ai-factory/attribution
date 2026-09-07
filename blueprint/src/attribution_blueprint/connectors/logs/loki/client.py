@@ -27,7 +27,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from datetime import datetime, timedelta, timezone
-from typing import TypedDict
+from typing import NotRequired, TypedDict
 
 import requests
 
@@ -63,6 +63,8 @@ class LokiEntry(TypedDict):
     body: str
     labels: dict[str, str]
     node: str | None
+    # Loki's per-line structured metadata, when the response carries it.
+    structured_metadata: NotRequired[dict[str, str]]
 
 
 def node_from_labels(
@@ -203,7 +205,11 @@ class LokiQueryClient:
                     timestamp_ns = int(value[0])
                 except (TypeError, ValueError):
                     continue
-                page.append({"timestamp": timestamp_ns, "body": str(value[1]), "labels": labels, "node": node})
+                entry: LokiEntry = {"timestamp": timestamp_ns, "body": str(value[1]), "labels": labels, "node": node}
+                metadata = value[2] if len(value) >= 3 else None
+                if isinstance(metadata, Mapping):
+                    entry["structured_metadata"] = {str(key): str(item) for key, item in metadata.items()}
+                page.append(entry)
         return page
 
 
