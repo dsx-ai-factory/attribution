@@ -138,7 +138,7 @@ def test_flatten_resolves_node_from_preferred_label_then_explicit_fallbacks():
     streams = [
         _stream([["1", "preferred"]], host_name="n1", hostname="ignored"),
         _stream([["2", "fallback"]], hostname="n2"),
-        _stream([["3", "none"]], service="x"),
+        _stream([["3", "none", {"node_name": "n3"}]], service="x"),
     ]
     client = _client(_Session(lambda data: _Response(streams)), node_label_fallbacks=("hostname",))
 
@@ -146,6 +146,9 @@ def test_flatten_resolves_node_from_preferred_label_then_explicit_fallbacks():
 
     assert [entry["node"] for entry in entries] == ["n1", "n2", None]
     assert entries[0]["labels"] == {"host_name": "n1", "hostname": "ignored"}
+    # Structured metadata travels with the line; it is not a node fallback.
+    assert entries[2]["structured_metadata"] == {"node_name": "n3"}
+    assert "structured_metadata" not in entries[0]
 
 
 def test_node_from_labels_prefers_configured_label_and_assumes_no_fallbacks():
