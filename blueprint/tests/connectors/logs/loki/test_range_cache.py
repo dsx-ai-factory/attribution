@@ -237,3 +237,27 @@ def test_file_store_rejects_unexpected_keys(tmp_path):
     store = FileRangeCacheStore(tmp_path)
     with pytest.raises(ValueError):
         store.get("../escape")
+
+
+def test_cached_returns_stored_buckets_without_fetching(tmp_path):
+    cache = LokiRangeCache(FileRangeCacheStore(tmp_path))
+    start = NOW - timedelta(hours=2)
+    cache._store_bucket("q", {}, start, [_entry(start + timedelta(minutes=1), "stored")], now=NOW)
+
+    entries = cache.cached(
+        query="q", config={}, start=start, end=start + timedelta(minutes=15), timestamp=_timestamp, now=NOW
+    )
+
+    assert [item["value"] for item in entries] == ["stored"]
+    assert cache.cached(query="q", config={}, start=start, end=start, timestamp=_timestamp, now=NOW) == []
+    # A hot bucket is never read from the store, and a different query sees nothing.
+    assert (
+        cache.cached(query="q", config={}, start=NOW - timedelta(minutes=5), end=NOW, timestamp=_timestamp, now=NOW)
+        == []
+    )
+    assert (
+        cache.cached(
+            query="other", config={}, start=start, end=start + timedelta(minutes=15), timestamp=_timestamp, now=NOW
+        )
+        == []
+    )
