@@ -676,3 +676,59 @@ def test_collect_batch_slices_a_long_context_from_the_live_fetch_and_cached_buck
     body = json.loads(second["job"][0]["body"])
     assert [e["body"] for e in body] == ["first-poll", "second-poll"]
     assert second["job"][0]["context"]["time_interval"] == {"start": context_start, "end": second_end}
+
+
+def test_collect_batch_reads_cached_history_node_scoped_per_context(mocker, tmp_path):
+    """A later batch gives each context only its own node's cached history from one node-scoped read."""
+    from attribution_blueprint.connectors.logs.loki import FileRangeCacheStore, LokiRangeCache
+
+    ns = lambda dt: int(dt.timestamp() * 1e9)  # noqa: E731
+    start = datetime(2026, 5, 1, 9, 0, tzinfo=timezone.utc)
+    first_end = start + timedelta(hours=1)
+    second_end = start + timedelta(hours=3)
+    lines = {
+        (ns(start + timedelta(minutes=30)), "n1"): "n1-deep",
+        (ns(start + timedelta(minutes=30)), "n2"): "n2-deep",
+    }
+
+    def respond(*_args, **kwargs):
+        lo, hi = int(kwargs["data"]["start"]), int(kwargs["data"]["end"])
+        streams = [
+            {"stream": {"host_name": node}, "values": [[str(ts), body]]}
+            for (ts, node), body in lines.items()
+            if lo <= ts <= hi
+        ]
+        fake = mocker.Mock()
+        fake.json.return_value = {"data": {"result": streams}}
+        fake.raise_for_status = mocker.Mock()
+        return fake
+
+    mocker.patch("requests.Session.post", side_effect=respond)
+    clock = [first_end + timedelta(hours=1)]
+    conn = LokiConnector(
+        endpoint="https://loki.example",
+        auth=TokenAuth("tok"),
+        source=Source.SYSLOG,
+        query_kwargs={"service_name": "x"},
+        templates={Source.SYSLOG: ['{{service_name="{service_name}"}}']},
+        batch_window_hours=1.0,
+        range_cache=LokiRangeCache(FileRangeCacheStore(tmp_path)),
+        clock=lambda: clock[0],
+    )
+
+    conn.collect_batch(
+        [
+            {"id": "a", "nodes": ["n1"], "start_time": start, "end_time": first_end},
+            {"id": "b", "nodes": ["n2"], "start_time": start, "end_time": first_end},
+        ]
+    )
+    clock[0] = second_end + timedelta(hours=1)
+    result = conn.collect_batch(
+        [
+            {"id": "a", "nodes": ["n1"], "start_time": start, "end_time": second_end},
+            {"id": "b", "nodes": ["n2"], "start_time": start, "end_time": second_end},
+        ]
+    )
+
+    assert [entry["body"] for entry in json.loads(result["a"][0]["body"])] == ["n1-deep"]
+    assert [entry["body"] for entry in json.loads(result["b"][0]["body"])] == ["n2-deep"]
