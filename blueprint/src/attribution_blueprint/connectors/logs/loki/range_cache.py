@@ -335,13 +335,15 @@ class LokiRangeCache:
         timestamp: TimestampExtractor[T],
         now: datetime,
         node_of: NodeExtractor[T],
-    ) -> Iterator[list[T]]:
-        """Yield cached entries one bucket's node partition at a time, newest first.
+    ) -> Iterator[tuple[datetime, list[T]]]:
+        """Yield `(bucket_start, entries)` one bucket at a time, node-scoped, newest first.
 
-        Nothing is held beyond a single bucket's requested-node lines, so a caller
-        streams a window of any length with memory independent of how many buckets
-        it spans. `start` is clamped forward to `now - ttl`; buckets never stored,
-        expired, or still hot yield nothing.
+        One bucket is decoded whole (a partitioned bucket holds every node) and
+        then scoped to the requested nodes, so the resident unit is a single
+        bucket and a caller streams a window of any length with memory independent
+        of how many buckets it spans; the bucket start lets it cut cleanly on a
+        bucket boundary. `start` is clamped forward to `now - ttl`; buckets never
+        stored, expired, or still hot yield nothing.
         """
         if end <= start:
             return
@@ -365,7 +367,7 @@ class LokiRangeCache:
                 if start_ns <= timestamp(item) < end_ns
             ]
             if entries:
-                yield entries
+                yield bucket_start, entries
 
     @staticmethod
     def _iter_bucket_entries(value: object, node_of: NodeExtractor[T] | None, nodes: set[str] | None):
