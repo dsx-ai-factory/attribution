@@ -202,6 +202,35 @@ class LokiRangeCache:
             raise LokiQueryBudgetExceeded(result)
         return result
 
+    def cached(
+        self,
+        *,
+        query: str,
+        config: Mapping[str, object],
+        start: datetime,
+        end: datetime,
+        timestamp: TimestampExtractor[T],
+        now: datetime,
+    ) -> list[T]:
+        """Return the entries of every bucket already cached inside `[start, end)`.
+
+        Nothing is fetched: buckets that were never stored, expired, or are still
+        hot contribute no entries. This is how a polling deployment attributes
+        a long workload from the windows earlier polls already fetched.
+        """
+        if end <= start:
+            return []
+        start_ns = datetime_to_nanoseconds(start)
+        end_ns = datetime_to_nanoseconds(end)
+        merged: list[T] = []
+        for bucket_start, _bucket_end in self._buckets(start, end):
+            if self._is_hot(bucket_start, now):
+                continue
+            value = self._store.get(self._bucket_key(query, config, bucket_start))
+            if isinstance(value, list):
+                merged.extend(item for item in value if start_ns <= timestamp(item) < end_ns)
+        return sorted(merged, key=timestamp)
+
     def _store_bucket(
         self,
         query: str,
