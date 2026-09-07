@@ -211,25 +211,45 @@ class LokiRangeCache:
         end: datetime,
         timestamp: TimestampExtractor[T],
         now: datetime,
+        max_entries: int | None = None,
     ) -> list[T]:
         """Return the entries of every bucket already cached inside `[start, end)`.
 
         Nothing is fetched: buckets that were never stored, expired, or are still
         hot contribute no entries. This is how a polling deployment attributes
         a long workload from the windows earlier polls already fetched.
+
+        `start` is first clamped forward to `now - ttl`: buckets older than the
+        cache lifetime have expired, so probing them wastes one store lookup per
+        bucket and returns nothing. `max_entries`, when set, caps how many
+        entries are materialized: buckets are read newest first and reading stops
+        once the cap is reached, so the newest entries are kept and the peak
+        memory a single caller can pin is bounded to one bucket beyond the cap.
         """
         if end <= start:
+            return []
+        ttl_floor = now - timedelta(seconds=self._ttl_seconds)
+        if start < ttl_floor:
+            start = ttl_floor
+        if end <= start:
+            return []
+        if max_entries is not None and max_entries <= 0:
             return []
         start_ns = datetime_to_nanoseconds(start)
         end_ns = datetime_to_nanoseconds(end)
         merged: list[T] = []
-        for bucket_start, _bucket_end in self._buckets(start, end):
+        for bucket_start, _bucket_end in reversed(self._buckets(start, end)):
             if self._is_hot(bucket_start, now):
                 continue
             value = self._store.get(self._bucket_key(query, config, bucket_start))
             if isinstance(value, list):
                 merged.extend(item for item in value if start_ns <= timestamp(item) < end_ns)
-        return sorted(merged, key=timestamp)
+                if max_entries is not None and len(merged) >= max_entries:
+                    break
+        merged.sort(key=timestamp)
+        if max_entries is not None and len(merged) > max_entries:
+            merged = merged[-max_entries:]
+        return merged
 
     def _store_bucket(
         self,
