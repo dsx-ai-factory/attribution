@@ -27,7 +27,7 @@ import json
 import os
 import re
 import time
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import TypeVar
@@ -38,6 +38,7 @@ T = TypeVar("T")
 
 RangeFetcher = Callable[[str, datetime, datetime], list[T]]
 TimestampExtractor = Callable[[T], int]
+NodeExtractor = Callable[[T], str]
 
 _KEY_RE = re.compile(r"^[0-9a-f]{64}:\d+$")
 
@@ -60,7 +61,7 @@ class FileRangeCacheStore:
             raise ValueError(f"unsupported range cache key: {key!r}")
         return self.root / key[:2] / f"{key.replace(':', '_')}.json"
 
-    def get(self, key: str) -> list | None:
+    def get(self, key: str) -> list | dict | None:
         path = self._path(key)
         try:
             payload = json.loads(path.read_text())
@@ -69,7 +70,7 @@ class FileRangeCacheStore:
         except (OSError, ValueError):
             path.unlink(missing_ok=True)
             return None
-        if not isinstance(payload, dict) or not isinstance(payload.get("value"), list):
+        if not isinstance(payload, dict) or not isinstance(payload.get("value"), (list, dict)):
             path.unlink(missing_ok=True)
             return None
         expires_at = payload.get("expires_at")
@@ -78,7 +79,7 @@ class FileRangeCacheStore:
             return None
         return payload["value"]
 
-    def put(self, key: str, value: list, *, ttl_seconds: float) -> None:
+    def put(self, key: str, value: list | dict, *, ttl_seconds: float) -> None:
         path = self._path(key)
         path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
         payload = json.dumps({"expires_at": time.time() + ttl_seconds, "value": value}, separators=(",", ":"))
@@ -130,6 +131,7 @@ class LokiRangeCache:
         fetch: RangeFetcher[T],
         timestamp: TimestampExtractor[T],
         now: datetime,
+        node_of: NodeExtractor[T] | None = None,
     ) -> list[T]:
         """Return one requested window, fetching only the missing ranges.
 
@@ -139,6 +141,10 @@ class LokiRangeCache:
         entry inside the half-open missing range. A `LokiQueryBudgetExceeded`
         raised by `fetch` stops fetching; the partial result is re-raised the
         same way so callers can keep what was retrieved.
+
+        `node_of`, when set, partitions each stored bucket by node so a later
+        `read(nodes=...)` materializes only those nodes' lines. This method
+        still returns every node's entries for the requested window.
         """
         if end <= start:
             return []
@@ -150,11 +156,11 @@ class LokiRangeCache:
             value: object | None = None
             if not self._is_hot(bucket_start, now):
                 value = self._store.get(self._bucket_key(query, config, bucket_start))
-            if isinstance(value, list):
+            if value is not None:
                 if missing_start is not None:
                     missing.append((missing_start, bucket_start))
                     missing_start = None
-                cached[bucket_start] = value
+                cached[bucket_start] = list(self._iter_bucket_entries(value, node_of, None))
             elif missing_start is None:
                 missing_start = bucket_start
             if bucket_end == buckets[-1][1] and missing_start is not None:
@@ -179,7 +185,7 @@ class LokiRangeCache:
                     for item in values
                     if datetime_to_nanoseconds(bucket_start) <= timestamp(item) < datetime_to_nanoseconds(bucket_end)
                 ]
-                self._store_bucket(query, config, bucket_start, list(bucket_values), now=now)
+                self._store_bucket(query, config, bucket_start, list(bucket_values), now=now, node_of=node_of)
 
         merged: list[T] = []
         for bucket_start in sorted(cached):
@@ -226,6 +232,63 @@ class LokiRangeCache:
         once the cap is reached, so the newest entries are kept and the peak
         memory a single caller can pin is bounded to one bucket beyond the cap.
         """
+        return self._read_window(
+            query=query,
+            config=config,
+            start=start,
+            end=end,
+            nodes=None,
+            timestamp=timestamp,
+            now=now,
+            max_entries=max_entries,
+        )
+
+    def read(
+        self,
+        *,
+        query: str,
+        config: Mapping[str, object],
+        start: datetime,
+        end: datetime,
+        nodes: Iterable[str],
+        timestamp: TimestampExtractor[T],
+        now: datetime,
+        node_of: NodeExtractor[T],
+        max_entries: int | None = None,
+    ) -> list[T]:
+        """Return already-cached entries inside `[start, end)` for `nodes` only.
+
+        Like `cached`, but node-scoped: buckets stored node-partitioned by
+        `query(node_of=...)` yield only the requested nodes' lines, so the memory
+        a batch pins scales with its nodes, not the cluster. Legacy flat buckets
+        fall back to filtering each entry by `node_of`.
+        """
+        return self._read_window(
+            query=query,
+            config=config,
+            start=start,
+            end=end,
+            nodes=set(nodes),
+            timestamp=timestamp,
+            now=now,
+            max_entries=max_entries,
+            node_of=node_of,
+        )
+
+    def _read_window(
+        self,
+        *,
+        query: str,
+        config: Mapping[str, object],
+        start: datetime,
+        end: datetime,
+        nodes: set[str] | None,
+        timestamp: TimestampExtractor[T],
+        now: datetime,
+        max_entries: int | None = None,
+        node_of: NodeExtractor[T] | None = None,
+    ) -> list[T]:
+        """Read cached buckets newest first, node-scoped and capped."""
         if end <= start:
             return []
         ttl_floor = now - timedelta(seconds=self._ttl_seconds)
@@ -242,14 +305,43 @@ class LokiRangeCache:
             if self._is_hot(bucket_start, now):
                 continue
             value = self._store.get(self._bucket_key(query, config, bucket_start))
-            if isinstance(value, list):
-                merged.extend(item for item in value if start_ns <= timestamp(item) < end_ns)
-                if max_entries is not None and len(merged) >= max_entries:
-                    break
+            if value is None:
+                continue
+            merged.extend(
+                item
+                for item in self._iter_bucket_entries(value, node_of, nodes)
+                if start_ns <= timestamp(item) < end_ns
+            )
+            if max_entries is not None and len(merged) >= max_entries:
+                break
         merged.sort(key=timestamp)
         if max_entries is not None and len(merged) > max_entries:
             merged = merged[-max_entries:]
         return merged
+
+    @staticmethod
+    def _iter_bucket_entries(value: object, node_of: NodeExtractor[T] | None, nodes: set[str] | None):
+        """Yield a stored bucket's entries, optionally only those on `nodes`.
+
+        A bucket is stored node-partitioned as ``{node: [entries]}`` when a node
+        extractor was in use, or as a flat list otherwise (and by older writers).
+        For the partitioned form only the requested nodes are materialized; for
+        the flat form each entry is filtered by `node_of`.
+        """
+        if isinstance(value, dict):
+            if nodes is None:
+                for node_entries in value.values():
+                    yield from node_entries
+            else:
+                for node in nodes:
+                    yield from value.get(node, ())
+        elif isinstance(value, list):
+            if nodes is None or node_of is None:
+                yield from value
+            else:
+                for entry in value:
+                    if node_of(entry) in nodes:
+                        yield entry
 
     def _store_bucket(
         self,
@@ -259,12 +351,24 @@ class LokiRangeCache:
         entries: list[object],
         *,
         now: datetime,
+        node_of: NodeExtractor[T] | None = None,
     ) -> None:
-        """Store one complete bucket unless it is still hot."""
+        """Store one complete bucket unless it is still hot.
+
+        With `node_of` the bucket is partitioned by node so a later
+        `read(nodes=...)` materializes only those nodes' lines.
+        """
         aligned = self._align(bucket_start)
         if self._is_hot(aligned, now):
             return
-        self._store.put(self._bucket_key(query, config, aligned), list(entries), ttl_seconds=self._ttl_seconds)
+        if node_of is None:
+            payload: object = list(entries)
+        else:
+            partitioned: dict[str, list[object]] = {}
+            for entry in entries:
+                partitioned.setdefault(node_of(entry), []).append(entry)
+            payload = partitioned
+        self._store.put(self._bucket_key(query, config, aligned), payload, ttl_seconds=self._ttl_seconds)
 
     def _align(self, value: datetime) -> datetime:
         seconds = int(value.timestamp())
