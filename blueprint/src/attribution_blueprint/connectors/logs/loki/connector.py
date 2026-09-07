@@ -40,6 +40,13 @@ _MAX_IN_FLIGHT = 4
 # every cached line back to its start, and a batch of them exhausts memory.
 _MAX_CACHED_ENTRIES = 50_000
 
+
+def _entry_node(entry: LokiEntry) -> str:
+    """Return an entry's node lowercased, matching the per-context slice key."""
+    node = entry["node"]
+    return node.lower() if isinstance(node, str) else ""
+
+
 # RE2 metacharacters (https://github.com/google/re2/wiki/Syntax). Unlike
 # Python re, RE2 rejects unrecognized escape sequences (e.g. `\-`), so
 # re.escape() can't be used for Loki — it backslashes too many characters.
@@ -180,29 +187,30 @@ class LokiConnector:
         fetch_end = max(window[1] for window in windows.values())
         queries = self._batch_queries(contexts)
         entries = self._query_batch(queries, fetch_start, fetch_end)
+        if self._range_cache is not None:
+            # Extend the batch's window back to its earliest context start with
+            # buckets earlier batches stored, reading the batch's nodes once;
+            # nothing before `fetch_start` is fetched.
+            batch_start = min(assert_aware(ctx["start_time"], "start_time") for ctx in contexts)
+            if batch_start < fetch_start:
+                all_nodes = {node.lower() for ctx in contexts for node in (ctx.get("nodes") or []) if node}
+                earlier = self._cached_entries(queries, batch_start, fetch_start, all_nodes)
+                if earlier:
+                    entries = self._merge_entries([entries, earlier])
         result: dict[str, list[Observation]] = {}
         for ctx in contexts:
             ctx_id = str(ctx["id"])
             window_start, window_end = windows[ctx_id]
             nodes = {node.lower() for node in (ctx.get("nodes") or []) if node}
-            # A per-context view of the shared fetch; never mutate `entries`, or
-            # each context's cached history would grow the pool the next context
-            # re-merges and re-scans.
-            context_entries = entries
             if self._range_cache is not None:
-                # Extend the slice back to the context's own start with buckets
-                # earlier batches stored; nothing before `fetch_start` is fetched.
                 context_start = assert_aware(ctx["start_time"], "start_time")
                 if context_start < window_start:
-                    earlier = self._cached_entries(queries, context_start, window_start)
-                    if earlier:
-                        context_entries = self._merge_entries([entries, earlier])
                     window_start = context_start
             start_ns = datetime_to_nanoseconds(window_start)
             end_ns = datetime_to_nanoseconds(window_end)
             selected = [
                 entry
-                for entry in context_entries
+                for entry in entries
                 if entry["node"] is not None
                 and entry["node"].lower() in nodes
                 and start_ns <= entry["timestamp"] <= end_ns
@@ -210,23 +218,25 @@ class LokiConnector:
             result[ctx_id] = [self._observation(selected, window_start, window_end)] if selected else []
         return result
 
-    def _cached_entries(self, queries: list[str], start: datetime, end: datetime) -> list[LokiEntry]:
-        """Return already-cached entries for `queries` inside `[start, end)` without fetching.
+    def _cached_entries(self, queries: list[str], start: datetime, end: datetime, nodes: set[str]) -> list[LokiEntry]:
+        """Return cached entries for `queries` on `nodes` inside `[start, end)` without fetching.
 
-        The cap keeps the newest `_MAX_CACHED_ENTRIES` materialized per query and
-        reading stops there, bounding the memory a long context can pin to the
-        cached history of the deep past.
+        Node-scoped: only the requested nodes' lines are materialized, so a batch
+        pins memory proportional to its nodes, not the cluster. The cap keeps the
+        newest `_MAX_CACHED_ENTRIES` per query and reading stops there.
         """
         assert self._range_cache is not None
         now = self._clock()
         pages = [
-            self._range_cache.cached(
+            self._range_cache.read(
                 query=query,
                 config=self._cache_config,
                 start=start,
                 end=end,
+                nodes=nodes,
                 timestamp=lambda entry: entry["timestamp"],
                 now=now,
+                node_of=_entry_node,
                 max_entries=_MAX_CACHED_ENTRIES,
             )
             for query in queries
@@ -308,6 +318,7 @@ class LokiConnector:
             fetch=fetch_missing,
             timestamp=lambda entry: entry["timestamp"],
             now=self._clock(),
+            node_of=_entry_node,
         )
 
     def _observation(self, entries: list[LokiEntry], start: datetime, end: datetime) -> Observation:
