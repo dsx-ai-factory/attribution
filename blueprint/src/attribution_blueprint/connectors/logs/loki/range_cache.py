@@ -50,6 +50,11 @@ class FileRangeCacheStore:
     them, so a store can be shared by sequential runs. The directory and files
     are created with owner-only permissions because cached log lines may carry
     tenant data.
+
+    A bucket value is a flat list of entries or a ``{node: [entries]}`` mapping
+    when the range cache partitions by node. A reader from before node
+    partitioning treats the mapping as corrupt and drops the file, so a cache
+    directory shared across versions only loses hits, never returns wrong data.
     """
 
     def __init__(self, root: str | Path) -> None:
