@@ -21,7 +21,8 @@ def test_build_session_applies_auth_and_mounts_retrying_adapter():
     assert session.headers["X-Scope-OrgID"] == "tenant"
     retry = session.get_adapter("https://loki.example").max_retries
     assert retry.total == 2
-    assert retry.read == 0
+    assert retry.read == 2
+    assert retry.backoff_jitter == 1.0
     assert retry.status_forcelist == (429, 500, 502, 503, 504)
     assert retry.allowed_methods == frozenset({"POST"})
     assert retry.raise_on_status is False
