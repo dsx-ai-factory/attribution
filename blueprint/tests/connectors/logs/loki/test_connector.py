@@ -626,3 +626,53 @@ def test_collect_batch_reuses_cached_buckets_across_calls(mocker, tmp_path):
     assert post.call_count == 1
     assert json.loads(first["a"][0]["body"])[0]["timestamp"] == ns(end - timedelta(minutes=10)) + 1
     assert second == first
+
+
+def test_collect_batch_slices_a_long_context_from_the_live_fetch_and_cached_buckets(mocker, tmp_path):
+    """Two polls, two hours apart, over a three-hour context: the second poll fetches only its
+    trailing window but the context's slice also carries the bucket the first poll stored."""
+    from attribution_blueprint.connectors.logs.loki import FileRangeCacheStore, LokiRangeCache
+
+    ns = lambda dt: int(dt.timestamp() * 1e9)  # noqa: E731
+    context_start = datetime(2026, 5, 1, 9, 0, tzinfo=timezone.utc)
+    first_end = context_start + timedelta(hours=1)
+    second_end = context_start + timedelta(hours=3)
+    lines = {
+        ns(context_start + timedelta(minutes=30)): "first-poll",
+        ns(second_end - timedelta(minutes=30)): "second-poll",
+    }
+
+    def respond(*_args, **kwargs):
+        lo, hi = int(kwargs["data"]["start"]), int(kwargs["data"]["end"])
+        values = [[str(ts), body] for ts, body in sorted(lines.items()) if lo <= ts <= hi]
+        fake = mocker.Mock()
+        fake.json.return_value = {"data": {"result": [{"stream": {"host_name": "n1"}, "values": values}]}}
+        fake.raise_for_status = mocker.Mock()
+        return fake
+
+    post = mocker.patch("requests.Session.post", side_effect=respond)
+    clock = [first_end + timedelta(hours=1)]
+    conn = LokiConnector(
+        endpoint="https://loki.example",
+        auth=TokenAuth("tok"),
+        source=Source.SYSLOG,
+        query_kwargs={"service_name": "x"},
+        templates={Source.SYSLOG: ['{{service_name="{service_name}"}}']},
+        batch_window_hours=1.0,
+        range_cache=LokiRangeCache(FileRangeCacheStore(tmp_path)),
+        clock=lambda: clock[0],
+    )
+
+    first = conn.collect_batch([{"id": "job", "nodes": ["n1"], "start_time": context_start, "end_time": first_end}])
+    fetched_after_first = post.call_count
+    clock[0] = second_end + timedelta(hours=1)
+    second = conn.collect_batch([{"id": "job", "nodes": ["n1"], "start_time": context_start, "end_time": second_end}])
+
+    assert [e["body"] for e in json.loads(first["job"][0]["body"])] == ["first-poll"]
+    # The second poll fetched only [second_end - 1 h, second_end] ...
+    later_calls = post.call_args_list[fetched_after_first:]
+    assert min(int(c.kwargs["data"]["start"]) for c in later_calls) == ns(second_end - timedelta(hours=1))
+    # ... yet the context's observation spans its whole window and carries both lines.
+    body = json.loads(second["job"][0]["body"])
+    assert [e["body"] for e in body] == ["first-poll", "second-poll"]
+    assert second["job"][0]["context"]["time_interval"] == {"start": context_start, "end": second_end}

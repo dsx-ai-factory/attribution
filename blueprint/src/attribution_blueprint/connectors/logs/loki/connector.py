@@ -56,8 +56,12 @@ class LokiConnector:
     one window for a whole batch and slices the result per context by node and
     time. Both read through `LokiQueryClient` (bounded, bisected, forward
     requests), optionally through a `LokiRangeCache` so overlapping windows
-    only fetch the five-minute buckets they lack. The orchestrator uses
-    `collect_batch` when `[collection] mode = "batch"`.
+    only fetch the five-minute buckets they lack. With a cache and a trailing
+    `batch_window_hours`, each context is still sliced over its whole window:
+    the part before the fetched window comes from buckets earlier batches
+    stored, so a long workload gains coverage with every pass at no extra
+    query. The orchestrator uses `collect_batch` when `[collection] mode =
+    "batch"`.
     """
 
     def __init__(
@@ -169,11 +173,21 @@ class LokiConnector:
         windows = {str(ctx["id"]): self._context_window(ctx) for ctx in contexts}
         fetch_start = min(window[0] for window in windows.values())
         fetch_end = max(window[1] for window in windows.values())
-        entries = self._query_batch(self._batch_queries(contexts), fetch_start, fetch_end)
+        queries = self._batch_queries(contexts)
+        entries = self._query_batch(queries, fetch_start, fetch_end)
         result: dict[str, list[Observation]] = {}
         for ctx in contexts:
             ctx_id = str(ctx["id"])
             window_start, window_end = windows[ctx_id]
+            if self._range_cache is not None:
+                # Extend the slice back to the context's own start with buckets
+                # earlier batches stored; nothing before `fetch_start` is fetched.
+                context_start = assert_aware(ctx["start_time"], "start_time")
+                if context_start < window_start:
+                    earlier = self._cached_entries(queries, context_start, window_start)
+                    if earlier:
+                        entries = self._merge_entries([entries, earlier])
+                    window_start = context_start
             nodes = {node.lower() for node in (ctx.get("nodes") or []) if node}
             start_ns = datetime_to_nanoseconds(window_start)
             end_ns = datetime_to_nanoseconds(window_end)
@@ -186,6 +200,23 @@ class LokiConnector:
             ]
             result[ctx_id] = [self._observation(selected, window_start, window_end)] if selected else []
         return result
+
+    def _cached_entries(self, queries: list[str], start: datetime, end: datetime) -> list[LokiEntry]:
+        """Return already-cached entries for `queries` inside `[start, end)` without fetching."""
+        assert self._range_cache is not None
+        now = self._clock()
+        pages = [
+            self._range_cache.cached(
+                query=query,
+                config=self._cache_config,
+                start=start,
+                end=end,
+                timestamp=lambda entry: entry["timestamp"],
+                now=now,
+            )
+            for query in queries
+        ]
+        return self._merge_entries(pages)
 
     def _context_window(self, context: ExecutionContext) -> tuple[datetime, datetime]:
         start = assert_aware(context["start_time"], "start_time")
@@ -226,6 +257,11 @@ class LokiConnector:
         else:
             with ThreadPoolExecutor(max_workers=min(_MAX_IN_FLIGHT, len(queries))) as executor:
                 pages = list(executor.map(run, queries))
+        return self._merge_entries(pages)
+
+    @staticmethod
+    def _merge_entries(pages: Sequence[Sequence[LokiEntry]]) -> list[LokiEntry]:
+        """Union entry lists, dropping duplicates by (labels, timestamp, body), in timestamp order."""
         seen: set[tuple[str, int, str]] = set()
         merged: list[LokiEntry] = []
         for page in pages:
