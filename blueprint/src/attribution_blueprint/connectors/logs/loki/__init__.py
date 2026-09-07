@@ -15,13 +15,11 @@ from attribution_blueprint.connectors.logs.loki.connector import LokiConnector
 from attribution_blueprint.connectors.logs.loki.range_cache import FileRangeCacheStore, LokiRangeCache
 from attribution_blueprint.connectors.logs.loki.templates import BARE_TEMPLATES, TEMPLATES
 from attribution_blueprint.exceptions import MCAError
-from attribution_blueprint.mca_registry import _PARAM
+from attribution_blueprint.mca_registry import _PARAM, _coerce_bool, _coerce_float, _coerce_int
 from attribution_blueprint.types import Source
 
 
 def _build(spec: dict, ctx: dict) -> LokiConnector:
-    from attribution_blueprint.mca import _coerce_bool, _coerce_float, _coerce_int
-
     source: Source = ctx["source"]
     prefix = f"log.{source.name.lower()}.loki"
     endpoint = spec.get("endpoint")
