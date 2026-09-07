@@ -446,5 +446,9 @@ def test_iter_partitions_streams_buckets_newest_first_node_scoped(tmp_path):
             node_of=_node_of,
         )
     )
-    # One list per bucket, newest bucket first, only the requested node's lines.
-    assert [[entry["value"] for entry in part] for part in partitions] == [["new-n1"], ["old-n1"]]
+    # One (bucket_start, entries) per bucket, newest first, only the requested node's lines.
+    assert [[entry["value"] for entry in entries] for _bucket_start, entries in partitions] == [["new-n1"], ["old-n1"]]
+    assert [bucket_start for bucket_start, _entries in partitions] == [
+        cache._align(new_bucket),
+        cache._align(old_bucket),
+    ]
