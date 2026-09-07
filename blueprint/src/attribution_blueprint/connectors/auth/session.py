@@ -41,9 +41,14 @@ def apply_auth(session: requests.Session, auth: Auth | None) -> None:
 def build_session(auth: Auth | None, *, retries: int = DEFAULT_RETRIES) -> requests.Session:
     """Return a session carrying `auth` that retries transient POST failures.
 
-    Connection failures and HTTP 429/5xx responses are retried `retries` times
-    with exponential backoff, and the last response is returned so the caller's
-    `raise_for_status` reports it. Read timeouts are not retried.
+    Connection failures, read-phase failures (including a peer connection reset
+    mid-request), and HTTP 429/5xx responses are retried `retries` times with
+    jittered exponential backoff, and the last response is returned so the
+    caller's `raise_for_status` reports it. Retrying read-phase failures is safe
+    here because the only POSTs are idempotent query reads (Loki `query_range`,
+    PromQL). The jitter decorrelates retries so a correlated reset burst from a
+    rate-limiting or connection-limiting gateway does not resynchronize and fail
+    again in lockstep.
     """
     if retries < 0:
         raise ValueError(f"retries must not be negative, got {retries}")
@@ -51,9 +56,10 @@ def build_session(auth: Auth | None, *, retries: int = DEFAULT_RETRIES) -> reque
     retry = Retry(
         total=retries,
         connect=retries,
-        read=0,
+        read=retries,
         status=retries,
         backoff_factor=1.0,
+        backoff_jitter=1.0,
         status_forcelist=RETRYABLE_HTTP_STATUS,
         allowed_methods=frozenset({"POST"}),
         raise_on_status=False,
