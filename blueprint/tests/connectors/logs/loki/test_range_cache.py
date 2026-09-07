@@ -261,3 +261,63 @@ def test_cached_returns_stored_buckets_without_fetching(tmp_path):
         )
         == []
     )
+
+
+def test_cached_caps_materialized_entries_newest_first(tmp_path):
+    cache = LokiRangeCache(FileRangeCacheStore(tmp_path))
+    a = NOW - timedelta(minutes=30)
+    b = NOW - timedelta(minutes=25)
+    c = NOW - timedelta(minutes=20)
+    for bucket, tag in ((a, "a"), (b, "b"), (c, "c")):
+        cache._store_bucket(
+            "q",
+            {},
+            bucket,
+            [_entry(bucket + timedelta(seconds=1), tag + "0"), _entry(bucket + timedelta(seconds=2), tag + "1")],
+            now=NOW,
+        )
+
+    uncapped = cache.cached(query="q", config={}, start=a, end=NOW, timestamp=_timestamp, now=NOW)
+    assert [item["value"] for item in uncapped] == ["a0", "a1", "b0", "b1", "c0", "c1"]
+
+    capped = cache.cached(query="q", config={}, start=a, end=NOW, timestamp=_timestamp, now=NOW, max_entries=3)
+    # Newest first, so the three most recent entries survive in ascending order.
+    assert [item["value"] for item in capped] == ["b1", "c0", "c1"]
+    assert cache.cached(query="q", config={}, start=a, end=NOW, timestamp=_timestamp, now=NOW, max_entries=0) == []
+
+
+def test_cached_skips_buckets_older_than_ttl(tmp_path):
+    class CountingStore:
+        """Wrap a store and record every key looked up."""
+
+        def __init__(self, inner):
+            self.inner = inner
+            self.gets = []
+
+        def get(self, key):
+            self.gets.append(key)
+            return self.inner.get(key)
+
+        def put(self, key, value, *, ttl_seconds):
+            self.inner.put(key, value, ttl_seconds=ttl_seconds)
+
+    store = CountingStore(FileRangeCacheStore(tmp_path))
+    cache = LokiRangeCache(store, ttl_seconds=3600)
+    expired_bucket = NOW - timedelta(hours=2)
+    live_bucket = NOW - timedelta(minutes=30)
+    cache._store_bucket("q", {}, expired_bucket, [_entry(expired_bucket + timedelta(seconds=1), "old")], now=NOW)
+    cache._store_bucket("q", {}, live_bucket, [_entry(live_bucket + timedelta(seconds=1), "recent")], now=NOW)
+    store.gets.clear()
+
+    entries = cache.cached(
+        query="q",
+        config={},
+        start=NOW - timedelta(hours=3),
+        end=NOW - timedelta(minutes=15),
+        timestamp=_timestamp,
+        now=NOW,
+    )
+
+    assert [item["value"] for item in entries] == ["recent"]
+    expired_key = cache._bucket_key("q", {}, cache._align(expired_bucket))
+    assert expired_key not in store.gets
