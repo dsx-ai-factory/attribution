@@ -321,3 +321,97 @@ def test_cached_skips_buckets_older_than_ttl(tmp_path):
     assert [item["value"] for item in entries] == ["recent"]
     expired_key = cache._bucket_key("q", {}, cache._align(expired_bucket))
     assert expired_key not in store.gets
+
+
+def _node_entry(at: datetime, node: str, value: str) -> dict:
+    return {"timestamp": datetime_to_nanoseconds(at), "node": node, "value": value}
+
+
+def _node_of(entry: dict) -> str:
+    return str(entry["node"])
+
+
+def test_read_returns_only_requested_nodes(tmp_path):
+    cache = LokiRangeCache(FileRangeCacheStore(tmp_path))
+    start = NOW - timedelta(minutes=30)
+    entries = [
+        _node_entry(start + timedelta(seconds=1), "n1", "a1"),
+        _node_entry(start + timedelta(seconds=2), "n2", "b1"),
+        _node_entry(start + timedelta(seconds=3), "n1", "a2"),
+    ]
+    cache._store_bucket("q", {}, start, entries, now=NOW, node_of=_node_of)
+
+    got = cache.read(
+        query="q",
+        config={},
+        start=start,
+        end=start + timedelta(minutes=5),
+        nodes=["n1"],
+        timestamp=_timestamp,
+        now=NOW,
+        node_of=_node_of,
+    )
+    assert [entry["value"] for entry in got] == ["a1", "a2"]
+    # cached() stays node-agnostic and returns every node.
+    every = cache.cached(
+        query="q", config={}, start=start, end=start + timedelta(minutes=5), timestamp=_timestamp, now=NOW
+    )
+    assert sorted(entry["value"] for entry in every) == ["a1", "a2", "b1"]
+
+
+def test_read_filters_legacy_flat_buckets_by_node(tmp_path):
+    cache = LokiRangeCache(FileRangeCacheStore(tmp_path))
+    start = NOW - timedelta(minutes=30)
+    # A flat bucket written before node partitioning (no node_of).
+    cache._store_bucket(
+        "q",
+        {},
+        start,
+        [_node_entry(start + timedelta(seconds=1), "n1", "a1"), _node_entry(start + timedelta(seconds=2), "n2", "b1")],
+        now=NOW,
+    )
+
+    got = cache.read(
+        query="q",
+        config={},
+        start=start,
+        end=start + timedelta(minutes=5),
+        nodes=["n1"],
+        timestamp=_timestamp,
+        now=NOW,
+        node_of=_node_of,
+    )
+    assert [entry["value"] for entry in got] == ["a1"]
+
+
+def test_query_partitions_by_node_so_read_can_scope(tmp_path):
+    cache = LokiRangeCache(FileRangeCacheStore(tmp_path))
+    start = NOW - timedelta(minutes=30)
+    calls: list[tuple[datetime, datetime]] = []
+
+    def fetch(_query, range_start, range_end):
+        calls.append((range_start, range_end))
+        return [
+            _node_entry(start + timedelta(seconds=1), "n1", "a"),
+            _node_entry(start + timedelta(seconds=2), "n2", "b"),
+        ]
+
+    end = start + timedelta(minutes=5)
+    first = cache.query(
+        query="q", config={}, start=start, end=end, fetch=fetch, timestamp=_timestamp, now=NOW, node_of=_node_of
+    )
+    assert sorted(entry["value"] for entry in first) == ["a", "b"]
+
+    # The second query is served from the partitioned cache without fetching.
+    calls.clear()
+    second = cache.query(
+        query="q", config={}, start=start, end=end, fetch=fetch, timestamp=_timestamp, now=NOW, node_of=_node_of
+    )
+    assert calls == []
+    assert sorted(entry["value"] for entry in second) == ["a", "b"]
+
+    # And a node-scoped read draws only one node's lines from those buckets.
+    n1 = cache.read(
+        query="q", config={}, start=start, end=end, nodes=["n1"], timestamp=_timestamp, now=NOW, node_of=_node_of
+    )
+    assert [entry["value"] for entry in n1] == ["a"]
