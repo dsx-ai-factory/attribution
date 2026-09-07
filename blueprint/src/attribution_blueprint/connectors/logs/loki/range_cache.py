@@ -27,7 +27,7 @@ import json
 import os
 import re
 import time
-from collections.abc import Callable, Iterable, Mapping
+from collections.abc import Callable, Iterable, Iterator, Mapping
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import TypeVar
@@ -323,6 +323,49 @@ class LokiRangeCache:
         if max_entries is not None and len(merged) > max_entries:
             merged = merged[-max_entries:]
         return merged
+
+    def iter_partitions(
+        self,
+        *,
+        query: str,
+        config: Mapping[str, object],
+        start: datetime,
+        end: datetime,
+        nodes: Iterable[str],
+        timestamp: TimestampExtractor[T],
+        now: datetime,
+        node_of: NodeExtractor[T],
+    ) -> Iterator[list[T]]:
+        """Yield cached entries one bucket's node partition at a time, newest first.
+
+        Nothing is held beyond a single bucket's requested-node lines, so a caller
+        streams a window of any length with memory independent of how many buckets
+        it spans. `start` is clamped forward to `now - ttl`; buckets never stored,
+        expired, or still hot yield nothing.
+        """
+        if end <= start:
+            return
+        ttl_floor = now - timedelta(seconds=self._ttl_seconds)
+        if start < ttl_floor:
+            start = ttl_floor
+        if end <= start:
+            return
+        node_set = set(nodes)
+        start_ns = datetime_to_nanoseconds(start)
+        end_ns = datetime_to_nanoseconds(end)
+        for bucket_start, _bucket_end in reversed(self._buckets(start, end)):
+            if self._is_hot(bucket_start, now):
+                continue
+            value = self._store.get(self._bucket_key(query, config, bucket_start))
+            if value is None:
+                continue
+            entries = [
+                item
+                for item in self._iter_bucket_entries(value, node_of, node_set)
+                if start_ns <= timestamp(item) < end_ns
+            ]
+            if entries:
+                yield entries
 
     @staticmethod
     def _iter_bucket_entries(value: object, node_of: NodeExtractor[T] | None, nodes: set[str] | None):
