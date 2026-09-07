@@ -11,9 +11,10 @@ from this registry rather than from hard-coded tables.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import datetime
 from typing import Any, Callable
 
-from attribution_blueprint.exceptions import RegistryError
+from attribution_blueprint.exceptions import MCAError, RegistryError
 
 _PARAM = object()
 """Sentinel marking a schema leaf parameter. The token after a _PARAM key is the value."""
@@ -148,3 +149,52 @@ def build_schema() -> dict:
             node["_instances"] = _selector_for(fw.name)
         schema[fw.name] = node
     return schema
+
+
+# Value coercion shared by component builders. Kept here, away from `mca`, so a
+# component module can import it at registration time without building the
+# schema early.
+def _coerce_int(value: Any, field: str) -> int:
+    if isinstance(value, bool):
+        raise MCAError(f"{field} must be an int")
+    if isinstance(value, int):
+        return value
+    try:
+        return int(str(value))
+    except ValueError as exc:
+        raise MCAError(f"{field}={value!r} must be an int") from exc
+
+
+def _coerce_bool(value: Any, field: str) -> bool:
+    if isinstance(value, bool):
+        return value
+    text = str(value).strip().lower()
+    if text in {"1", "true", "yes", "on"}:
+        return True
+    if text in {"0", "false", "no", "off"}:
+        return False
+    raise MCAError(f"{field}={value!r} must be a boolean")
+
+
+def _coerce_float(value: Any, field: str) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError) as exc:
+        raise MCAError(f"{field}={value!r} must be a float") from exc
+
+
+def _coerce_datetime(value: Any, field: str) -> datetime:
+    if isinstance(value, datetime):
+        return value
+    try:
+        return datetime.fromisoformat(str(value))
+    except ValueError as exc:
+        raise MCAError(f"{field}={value!r} must be ISO-8601") from exc
+
+
+def _coerce_str_list(value: Any, field: str) -> list[str]:
+    if isinstance(value, list):
+        return [str(v) for v in value]
+    if isinstance(value, str):
+        return [piece.strip() for piece in value.split(",") if piece.strip()]
+    raise MCAError(f"{field}={value!r} must be a list or comma-separated string")

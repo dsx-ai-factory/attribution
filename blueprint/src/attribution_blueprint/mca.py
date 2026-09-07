@@ -33,6 +33,13 @@ from attribution_blueprint.connectors.batch import COLLECTION_MODES, DEFAULT_BAT
 from attribution_blueprint.connectors.logs import LogConnector
 from attribution_blueprint.connectors.metrics import MetricsConnector
 from attribution_blueprint.connectors.outputs import OutputConnector
+from attribution_blueprint.mca_registry import (  # noqa: F401  (re-exported for component builders)
+    _coerce_bool,
+    _coerce_datetime,
+    _coerce_float,
+    _coerce_int,
+    _coerce_str_list,
+)
 from attribution_blueprint.exceptions import MCAError
 from attribution_blueprint.mca_registry import _PARAM
 from attribution_blueprint.types import Source
@@ -570,52 +577,6 @@ class Config:
     collection_mode: str = "context"
     batch_window_hours: float = DEFAULT_BATCH_WINDOW_HOURS
     batch_max_contexts: int | None = None
-
-
-def _coerce_int(value: Any, field: str) -> int:
-    if isinstance(value, bool):
-        raise MCAError(f"{field} must be an int")
-    if isinstance(value, int):
-        return value
-    try:
-        return int(str(value))
-    except ValueError as exc:
-        raise MCAError(f"{field}={value!r} must be an int") from exc
-
-
-def _coerce_bool(value: Any, field: str) -> bool:
-    if isinstance(value, bool):
-        return value
-    text = str(value).strip().lower()
-    if text in {"1", "true", "yes", "on"}:
-        return True
-    if text in {"0", "false", "no", "off"}:
-        return False
-    raise MCAError(f"{field}={value!r} must be a boolean")
-
-
-def _coerce_float(value: Any, field: str) -> float:
-    try:
-        return float(value)
-    except (TypeError, ValueError) as exc:
-        raise MCAError(f"{field}={value!r} must be a float") from exc
-
-
-def _coerce_datetime(value: Any, field: str) -> datetime:
-    if isinstance(value, datetime):
-        return value
-    try:
-        return datetime.fromisoformat(str(value))
-    except ValueError as exc:
-        raise MCAError(f"{field}={value!r} must be ISO-8601") from exc
-
-
-def _coerce_str_list(value: Any, field: str) -> list[str]:
-    if isinstance(value, list):
-        return [str(v) for v in value]
-    if isinstance(value, str):
-        return [piece.strip() for piece in value.split(",") if piece.strip()]
-    raise MCAError(f"{field}={value!r} must be a list or comma-separated string")
 
 
 def _component_or_raise(framework: str, name: str):

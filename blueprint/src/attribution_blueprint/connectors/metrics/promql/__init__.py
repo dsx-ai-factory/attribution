@@ -15,13 +15,11 @@ from attribution_blueprint.connectors.metrics.promql.connector import (
 )
 from attribution_blueprint.connectors.metrics.promql.templates import TEMPLATES
 from attribution_blueprint.exceptions import MCAError
-from attribution_blueprint.mca_registry import _PARAM
+from attribution_blueprint.mca_registry import _PARAM, _coerce_float, _coerce_int
 from attribution_blueprint.types import Source
 
 
 def _build(spec: dict, ctx: dict) -> PromQLMetricsConnector:
-    from attribution_blueprint.mca import _coerce_float, _coerce_int
-
     source: Source = ctx["source"]
     prefix = f"metrics.{source.name.lower()}.promql"
     endpoint = spec.get("endpoint")
