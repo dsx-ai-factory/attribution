@@ -415,3 +415,36 @@ def test_query_partitions_by_node_so_read_can_scope(tmp_path):
         query="q", config={}, start=start, end=end, nodes=["n1"], timestamp=_timestamp, now=NOW, node_of=_node_of
     )
     assert [entry["value"] for entry in n1] == ["a"]
+
+
+def test_iter_partitions_streams_buckets_newest_first_node_scoped(tmp_path):
+    cache = LokiRangeCache(FileRangeCacheStore(tmp_path))
+    old_bucket = NOW - timedelta(minutes=30)
+    new_bucket = NOW - timedelta(minutes=25)
+    for bucket, tag in ((old_bucket, "old"), (new_bucket, "new")):
+        cache._store_bucket(
+            "q",
+            {},
+            bucket,
+            [
+                _node_entry(bucket + timedelta(seconds=1), "n1", f"{tag}-n1"),
+                _node_entry(bucket + timedelta(seconds=2), "n2", f"{tag}-n2"),
+            ],
+            now=NOW,
+            node_of=_node_of,
+        )
+
+    partitions = list(
+        cache.iter_partitions(
+            query="q",
+            config={},
+            start=old_bucket,
+            end=NOW,
+            nodes=["n1"],
+            timestamp=_timestamp,
+            now=NOW,
+            node_of=_node_of,
+        )
+    )
+    # One list per bucket, newest bucket first, only the requested node's lines.
+    assert [[entry["value"] for entry in part] for part in partitions] == [["new-n1"], ["old-n1"]]
