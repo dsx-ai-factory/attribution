@@ -105,10 +105,12 @@ def _sql_demote_events(
 
     # Demotion rules become the replacement events' provenance. Resolve every
     # distinct rule through the mgr's rules lookup rather than writing to the
-    # `rules` table directly: ids are computed by _stable_id(), not a DEFAULT
-    # column expression, so a bare INSERT omitting id would violate the NOT
-    # NULL/PRIMARY KEY constraint. preload_rule_names() does the batched
-    # insert-if-missing + cache warm.
+    # `rules` table directly: it's a read-only view over a shared, ATTACHed
+    # lookup database plus this instance's local overlay table, so raw
+    # INSERTs against it fail (and even against a plain table, ids are
+    # computed by _stable_id(), not a DEFAULT column expression, so a bare
+    # INSERT omitting id would violate the PRIMARY KEY). preload_rule_names()
+    # does the batched insert-if-missing + cache warm.
     demote_rule_rows = event_stream.query_raw(
         f"""
         SELECT DISTINCT json_extract_string(e.payload, ?) AS demote_rule

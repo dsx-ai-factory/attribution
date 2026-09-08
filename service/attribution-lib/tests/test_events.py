@@ -173,6 +173,34 @@ class TestStableIdCollisionDetection:
         assert "rule_e" in str(error)
 
 
+class TestConnectionTuning:
+    """EventManager creates its own private DuckDB connection per instance. DuckDB
+    defaults threads to the host's full CPU count and memory_limit to ~80% of system
+    RAM -- callers that create many short-lived EventManagers (one per unit of work)
+    need a way to cap that per-connection overhead."""
+
+    def test_defaults_are_unchanged_when_not_specified(self):
+        """No threads/memory_limit args -> today's DuckDB host-sized defaults, unchanged."""
+        import os
+
+        mgr = EventManager(RuleLoader().build())
+        (threads,) = mgr._conn.execute("SELECT current_setting('threads')").fetchone()
+        assert threads == os.cpu_count()
+        mgr.close()
+
+    def test_threads_can_be_capped(self):
+        mgr = EventManager(RuleLoader().build(), threads=1)
+        (threads,) = mgr._conn.execute("SELECT current_setting('threads')").fetchone()
+        assert threads == 1
+        mgr.close()
+
+    def test_memory_limit_can_be_capped(self):
+        mgr = EventManager(RuleLoader().build(), memory_limit="128MB")
+        (memory_limit,) = mgr._conn.execute("SELECT current_setting('memory_limit')").fetchone()
+        assert "GiB" not in memory_limit
+        mgr.close()
+
+
 class TestEnumPopulation:
     """Test that observation source and format enums are automatically populated."""
 
