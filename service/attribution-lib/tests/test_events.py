@@ -16,6 +16,7 @@ from pydantic import AwareDatetime, BaseModel
 
 from attribution_lib.event_helpers import query_events_with_source
 from attribution_lib.events import EventManager, _stable_id
+from attribution_lib.exceptions import EventStorageOutOfMemoryError
 from attribution_lib.observation import Context as ObservationContext
 from attribution_lib.observation.inbound import (
     Format as ObsFormat,
@@ -199,6 +200,48 @@ class TestConnectionTuning:
         (memory_limit,) = mgr._conn.execute("SELECT current_setting('memory_limit')").fetchone()
         assert "GiB" not in memory_limit
         mgr.close()
+
+    def test_disk_spill_enabled_by_default(self):
+        """Unchanged from today's DuckDB default: deployments with disk to
+        spare (e.g. bare metal) get graceful degradation instead of a hard
+        failure when memory_limit is exceeded."""
+        mgr = EventManager(RuleLoader().build())
+        (temp_dir,) = mgr._conn.execute("SELECT current_setting('temp_directory')").fetchone()
+        assert temp_dir != ""
+        mgr.close()
+
+    def test_disk_spill_can_be_disabled(self):
+        """Deployments with no writable disk (e.g. read-only containers) need
+        to opt out of DuckDB's default spill-to-disk-on-overflow behavior."""
+        mgr = EventManager(RuleLoader().build(), allow_disk_spill=False)
+        (temp_dir,) = mgr._conn.execute("SELECT current_setting('temp_directory')").fetchone()
+        assert temp_dir == ""
+        mgr.close()
+
+
+class TestOutOfMemoryHandling:
+    """With disk spill disabled, exceeding memory_limit must surface as a
+    catchable, stable library exception -- not force every caller to know
+    about (and catch) duckdb's own exception hierarchy."""
+
+    def test_overflow_raises_library_exception_not_raw_duckdb_exception(self):
+        mgr = EventManager(RuleLoader().build(), memory_limit="16MB", allow_disk_spill=False)
+        stream = mgr.create_stream("job_1")
+        try:
+            with pytest.raises(EventStorageOutOfMemoryError):
+                stream.execute("CREATE TABLE big AS SELECT repeat('x', 1000000) FROM range(50)")
+        finally:
+            mgr.close()
+
+    def test_overflow_with_disk_spill_enabled_does_not_raise(self):
+        """Same oversized write, but with disk spill allowed (the default) --
+        it should succeed by spilling to disk instead of erroring."""
+        mgr = EventManager(RuleLoader().build(), memory_limit="16MB")
+        stream = mgr.create_stream("job_1")
+        try:
+            stream.execute("CREATE TABLE big AS SELECT repeat('x', 1000000) FROM range(50)")
+        finally:
+            mgr.close()
 
 
 class TestEnumPopulation:

@@ -8,6 +8,7 @@
 # without an express license agreement from NVIDIA CORPORATION or
 # its affiliates is strictly prohibited.
 import atexit
+import contextlib
 import json
 import shutil
 import tempfile
@@ -22,6 +23,7 @@ from typing import TYPE_CHECKING, Any, Optional, TypeAlias
 import duckdb
 
 from attribution_lib.exceptions import (
+    EventStorageOutOfMemoryError,
     StableIdCollisionError,
     UndeclaredEventTypeError,
     UndeclaredRuleError,
@@ -68,11 +70,28 @@ class TableName(str, Enum):
 BAD_PAIR_EVENT_TYPES = ["Application.bad_pair.partial", "Application.bad_pair.complete"]
 
 
+@contextlib.contextmanager
+def _translate_out_of_memory():
+    """Re-raise duckdb's OutOfMemoryException as EventStorageOutOfMemoryError.
+
+    Deployments with no writable disk construct EventManager with
+    allow_disk_spill=False, so exceeding memory_limit raises instead of
+    DuckDB silently spilling to a local .tmp directory. Callers should be
+    able to catch a stable, library-level exception type rather than needing
+    to know about duckdb's own exception hierarchy.
+    """
+    try:
+        yield
+    except duckdb.OutOfMemoryException as e:
+        raise EventStorageOutOfMemoryError(str(e)) from e
+
+
 def _get_or_create_id(conn: duckdb.DuckDBPyConnection, table: TableName, name: str) -> int:
     """Get or create an ID for a string in a lookup table. Returns None if name is None."""
-    # Insert if not exists, then get the ID
-    conn.execute(f"INSERT INTO {table.value} (name) VALUES (?) ON CONFLICT (name) DO NOTHING", [name])
-    return execute_fetch_one(conn, f"SELECT id FROM {table.value} WHERE name=?", [name])
+    with _translate_out_of_memory():
+        # Insert if not exists, then get the ID
+        conn.execute(f"INSERT INTO {table.value} (name) VALUES (?) ON CONFLICT (name) DO NOTHING", [name])
+        return execute_fetch_one(conn, f"SELECT id FROM {table.value} WHERE name=?", [name])
 
 
 def sql_placeholders(count: int) -> str:
@@ -361,10 +380,11 @@ class EventStream:
             values_clause = ",".join(["(?, ?, ?, 1, ?, ?, ?, ?, ?, ?)"] * len(event_rows))
             # Flatten all rows into a single parameter list
             flat_params = [param for row in event_rows for param in row]
-            self._conn.execute(
-                f"INSERT INTO events ({_COLS}) VALUES {values_clause}",
-                flat_params,
-            )
+            with _translate_out_of_memory():
+                self._conn.execute(
+                    f"INSERT INTO events ({_COLS}) VALUES {values_clause}",
+                    flat_params,
+                )
 
         # Clear the batch
         self._batch.clear()
@@ -383,20 +403,21 @@ class EventStream:
 
         # Insert the observation context immediately (not batched)
         # This ensures the foreign key exists when events are later flushed
-        self._conn.execute(
-            """INSERT OR REPLACE INTO observation_contexts (id, time_start, time_end, source, format, timezone)
-               SELECT ?, ?, ?, os.id, of.id, ?
-               FROM obs_sources os, obs_formats of
-               WHERE os.name = ? AND of.name = ?""",
-            [
-                obs.id,
-                obs.time_interval.start,
-                obs.time_interval.end,
-                obs.timezone.key,
-                obs.source.value,
-                obs.format.value,
-            ],
-        )
+        with _translate_out_of_memory():
+            self._conn.execute(
+                """INSERT OR REPLACE INTO observation_contexts (id, time_start, time_end, source, format, timezone)
+                   SELECT ?, ?, ?, os.id, of.id, ?
+                   FROM obs_sources os, obs_formats of
+                   WHERE os.name = ? AND of.name = ?""",
+                [
+                    obs.id,
+                    obs.time_interval.start,
+                    obs.time_interval.end,
+                    obs.timezone.key,
+                    obs.source.value,
+                    obs.format.value,
+                ],
+            )
 
     def add_event(self, event_type: str, payload: dict[str, Any], source: Source) -> None:
         """Add an event to the stream. Events are batched and flushed periodically.
@@ -423,11 +444,13 @@ class EventStream:
         """Execute SQL query and return raw rows."""
         # Flush pending events to ensure query sees all events
         self._flush()
-        return self._conn.execute(sql, params).fetchall()
+        with _translate_out_of_memory():
+            return self._conn.execute(sql, params).fetchall()
 
     def execute(self, sql: str, params: list = []) -> None:
         """Execute SQL statement (for mutations)."""
-        self._conn.execute(sql, params)
+        with _translate_out_of_memory():
+            self._conn.execute(sql, params)
 
 
 def execute_fetch_one(conn: duckdb.DuckDBPyConnection, sql: str, params: list = []) -> Any:
@@ -472,7 +495,8 @@ class _ReadOnlyLookup:
 
     def load_from_shared(self) -> None:
         """Warm the cache from the shared, already-preloaded table. Read-only."""
-        rows = self._conn.execute(f"SELECT name, id FROM {self._view_name}").fetchall()
+        with _translate_out_of_memory():
+            rows = self._conn.execute(f"SELECT name, id FROM {self._view_name}").fetchall()
         for name, id_val in rows:
             self._id_cache[name] = id_val
             self._str_cache[id_val] = name
@@ -501,17 +525,18 @@ class _ReadOnlyLookup:
 
         values_clause = ",".join(["(?, ?)"] * len(missing))
         params = [param for name in missing for param in (id_by_name[name], name)]
-        self._conn.execute(
-            f"INSERT OR IGNORE INTO {self._local_table} (id, name) VALUES {values_clause}",
-            params,
-        )
+        with _translate_out_of_memory():
+            self._conn.execute(
+                f"INSERT OR IGNORE INTO {self._local_table} (id, name) VALUES {values_clause}",
+                params,
+            )
 
-        ids = list(id_by_name.values())
-        id_placeholders = ",".join(["?"] * len(ids))
-        rows = self._conn.execute(
-            f"SELECT id, name FROM {self._view_name} WHERE id IN ({id_placeholders})",
-            ids,
-        ).fetchall()
+            ids = list(id_by_name.values())
+            id_placeholders = ",".join(["?"] * len(ids))
+            rows = self._conn.execute(
+                f"SELECT id, name FROM {self._view_name} WHERE id IN ({id_placeholders})",
+                ids,
+            ).fetchall()
         persisted_name_by_id = {id_val: persisted_name for id_val, persisted_name in rows}
 
         for name in missing:
@@ -548,6 +573,7 @@ class EventManager:
         *,
         threads: Optional[int] = None,
         memory_limit: Optional[str] = None,
+        allow_disk_spill: bool = True,
     ):
         """
         Args:
@@ -561,12 +587,25 @@ class EventManager:
             memory_limit: DuckDB memory_limit for this connection (e.g. "128MB").
                 Defaults to DuckDB's own default (~80% of system RAM) when
                 omitted.
+            allow_disk_spill: whether DuckDB may spill data exceeding
+                memory_limit to a local .tmp directory instead of raising.
+                Defaults to True, matching DuckDB's own default -- suitable
+                for deployments where local disk can be assumed (e.g. bare
+                metal). Set to False for deployments with no writable disk
+                (e.g. read-only containers): exceeding memory_limit then
+                raises EventStorageOutOfMemoryError instead of writing to
+                disk. Independent of memory_limit -- DuckDB always has some
+                memory_limit (its host-RAM-based default if none is given
+                here), so this can matter even without setting memory_limit
+                explicitly.
         """
         self._conn = duckdb.connect(":memory:")
         if threads is not None:
             self._conn.execute("SET threads = ?", [threads])
         if memory_limit is not None:
             self._conn.execute("SET memory_limit = ?", [memory_limit])
+        if not allow_disk_spill:
+            self._conn.execute("SET temp_directory = ''")
 
         self._streams: dict[str, EventStream] = {}
         self._closed = False  # Track if already closed to prevent double-logging
@@ -798,14 +837,16 @@ class EventManager:
         for stream in self._streams.values():
             stream.flush()
         shadow = f"_ckpt_{name}"
-        self._conn.execute(f'DROP TABLE IF EXISTS "{shadow}"')
-        self._conn.execute(f'CREATE TABLE "{shadow}" AS SELECT * FROM events')
+        with _translate_out_of_memory():
+            self._conn.execute(f'DROP TABLE IF EXISTS "{shadow}"')
+            self._conn.execute(f'CREATE TABLE "{shadow}" AS SELECT * FROM events')
 
     def restore(self, name: str) -> None:
         """Restore the events table from a previous checkpoint."""
         shadow = f"_ckpt_{name}"
-        self._conn.execute("DELETE FROM events")
-        self._conn.execute(f'INSERT INTO events SELECT * FROM "{shadow}"')
+        with _translate_out_of_memory():
+            self._conn.execute("DELETE FROM events")
+            self._conn.execute(f'INSERT INTO events SELECT * FROM "{shadow}"')
 
     def drop_checkpoint(self, name: str) -> None:
         """Remove the shadow table for a checkpoint."""

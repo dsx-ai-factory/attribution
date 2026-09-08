@@ -291,6 +291,23 @@ class DatabaseError(AttributionError):
     """Base error for DB-related issues"""
 
 
+class EventStorageOutOfMemoryError(DatabaseError):
+    """Raised when an EventManager/EventStream's DuckDB connection exceeds
+    its memory_limit and cannot (or is configured not to) spill to disk.
+
+    Deployments with no writable disk (e.g. read-only containers) should
+    construct EventManager with allow_disk_spill=False, so this is raised
+    instead of DuckDB silently writing to a local .tmp directory. Wraps the
+    underlying duckdb.OutOfMemoryException so callers can catch a stable,
+    library-level type instead of depending on duckdb's own exception
+    hierarchy.
+    """
+
+    def __init__(self, message: str) -> None:
+        self.message = message
+        super().__init__(message)
+
+
 class UnexpectedEmptyQueryResultError(DatabaseError):
     """Error for when a query result is unexpectly empty."""
 
