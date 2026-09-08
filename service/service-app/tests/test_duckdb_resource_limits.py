@@ -40,3 +40,29 @@ def test_attributor_duckdb_connection_has_bounded_resources(app, client):
     # DuckDB reports this as a human string (e.g. "128.0 MiB"); just confirm
     # it's nowhere near the multi-GiB host-RAM-based default.
     assert "GiB" not in memory_limit, f"expected a small bounded memory_limit, got {memory_limit!r}"
+
+
+def test_disk_spill_disabled_by_default(app, client):
+    """This service is primarily deployed in containers with little or no
+    writable disk, so exceeding memory_limit should fail fast and be
+    catchable (see test_event_storage_overflow.py) rather than silently
+    spill to a local .tmp directory."""
+    info = make_up_attributor_info(id="duckdb-limits-2")
+    att_id = post_attributor(client, info)
+
+    conn = app.state.aim.attributors[att_id].attributor.event_stream.conn
+    (temp_dir,) = conn.execute("SELECT current_setting('temp_directory')").fetchone()
+    assert temp_dir == "", f"expected disk spill disabled by default, got temp_directory={temp_dir!r}"
+
+
+def test_disk_spill_can_be_enabled_via_env_var(app, client, monkeypatch):
+    """Deployments where local disk can be assumed (e.g. bare metal) can opt
+    back into DuckDB's own default graceful-degradation-via-disk-spill
+    behavior."""
+    monkeypatch.setenv("ATTRIBUTOR_ALLOW_DISK_SPILL", "true")
+    info = make_up_attributor_info(id="duckdb-limits-3")
+    att_id = post_attributor(client, info)
+
+    conn = app.state.aim.attributors[att_id].attributor.event_stream.conn
+    (temp_dir,) = conn.execute("SELECT current_setting('temp_directory')").fetchone()
+    assert temp_dir != "", "expected disk spill enabled when ATTRIBUTOR_ALLOW_DISK_SPILL=true"

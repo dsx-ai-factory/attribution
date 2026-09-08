@@ -8,6 +8,7 @@
 # without an express license agreement from NVIDIA CORPORATION or
 # its affiliates is strictly prohibited.
 
+import os
 import threading
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -24,6 +25,7 @@ from attribution_lib.decision_trace_recorder import DecisionRecorder
 from attribution_lib.events import EventManager
 from attribution_lib.exceptions import (
     DuplicateObservationError as LibDuplicateObservationError,
+    EventStorageOutOfMemoryError as LibEventStorageOutOfMemoryError,
     MismatchedSourceAndFormatError as LibMismatchedSourceAndFormatError,
 )
 from attribution_lib.job_info import JobInfo
@@ -34,10 +36,26 @@ from pydantic import ConfigDict, Field, field_validator
 from app.exceptions import (
     DAG_SHAPE_ERRORS,
     DuplicateObservationError,
+    EventStorageOverflowError,
     IncompatibleObservationSourceFormatError,
 )
 from app.observation import Observation, ObservationId
 from app.util import HashableModel
+
+
+def _allow_disk_spill() -> bool:
+    """Whether an attributor's per-connection DuckDB storage may spill excess
+    data (beyond memory_limit) to a local .tmp directory on disk instead of
+    raising. Defaults to false: this service is primarily deployed in
+    containers with little or no writable disk, so failing fast with a
+    catchable, isolated-to-one-request error is safer than silently writing
+    to whatever ephemeral storage the container happens to have. Deployments
+    where local disk can be assumed (e.g. bare metal) can opt back into
+    DuckDB's own default (graceful degradation via disk spill) with
+    ATTRIBUTOR_ALLOW_DISK_SPILL=true.
+    """
+    return os.environ.get("ATTRIBUTOR_ALLOW_DISK_SPILL", "false").strip().lower() == "true"
+
 
 AttributorId: TypeAlias = str
 
@@ -184,7 +202,9 @@ class AttributorWrapper:
         # Each attributor's dataset is one job's worth of events and never
         # benefits from intra-query parallelism, so cap DuckDB's per-connection
         # host-sized defaults (threads=cpu_count, memory_limit=~80% of RAM).
-        event_manager = EventManager(rules_engine=rules_engine, threads=1, memory_limit="128MB")
+        event_manager = EventManager(
+            rules_engine=rules_engine, threads=1, memory_limit="128MB", allow_disk_spill=_allow_disk_spill()
+        )
         event_stream = event_manager.create_stream(str(job_info.id))
 
         self.attributor = Attributor.new(event_stream, job_info)
@@ -220,6 +240,9 @@ class AttributorWrapper:
                     source=e.source,
                     format=e.format,
                 ).to_http_exception() from e
+            except LibEventStorageOutOfMemoryError as e:
+                logger.error(f"Event storage overflow for attributor {self.id}: {e}")
+                raise EventStorageOverflowError.new(self.id).to_http_exception() from e
             return _id
 
     def attribute(self, include_decision_graph: bool = False) -> AttributionContext:
@@ -252,6 +275,9 @@ class AttributorWrapper:
                 )
                 logger.info(f"Attribution completed for attributor {self.id}")
                 return ctx
+            except LibEventStorageOutOfMemoryError as e:
+                logger.error(f"Event storage overflow for attributor {self.id}: {e}")
+                raise EventStorageOverflowError.new(self.id).to_http_exception() from e
             except Exception as e:
                 logger.error(f"Attribution failed for attributor {self.id}: {str(e)}")
                 raise
