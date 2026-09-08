@@ -181,7 +181,10 @@ class AttributorWrapper:
         self.id = str(hash(info))
 
         rules_engine = attribution_lib.get_rules_engine()
-        event_manager = EventManager(rules_engine=rules_engine)
+        # Each attributor's dataset is one job's worth of events and never
+        # benefits from intra-query parallelism, so cap DuckDB's per-connection
+        # host-sized defaults (threads=cpu_count, memory_limit=~80% of RAM).
+        event_manager = EventManager(rules_engine=rules_engine, threads=1, memory_limit="128MB")
         event_stream = event_manager.create_stream(str(job_info.id))
 
         self.attributor = Attributor.new(event_stream, job_info)
