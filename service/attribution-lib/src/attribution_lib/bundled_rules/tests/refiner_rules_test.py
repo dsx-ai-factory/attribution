@@ -151,6 +151,31 @@ def _run_ib_cleanup(stream, job_info, symptoms, bad_nodes):
     run_pre_outcome_refiners(stream, job_info, symptoms=symptoms, my_bad_nodes=bad_nodes)
 
 
+def _attribute_outcome(stream, job_info, obs_ctx) -> str:
+    """Run the pre-outcome -> outcome -> post-outcome chain and return the outcome.
+
+    Mirrors core.attribute for tests that need the final outcome for a job with no
+    node/log evidence, e.g. a cancellation resolved purely from SLURM state.
+    """
+    symptoms = _make_symptoms(obs_ctx)
+    bad_nodes = JobNodeAttributions()
+    run_pre_outcome_refiners(stream, job_info, symptoms=symptoms, my_bad_nodes=bad_nodes)
+
+    result = AttributionResult(event_stream=stream, bad_nodes_attr=CalcBadNodesAttributionResult())
+    result.symptoms.update(symptoms)
+    result.outcome_attr = calculate_outcome(result.symptoms)
+    run_post_outcome_refiners(
+        stream,
+        job_info,
+        symptoms=result.symptoms,
+        my_bad_nodes=bad_nodes,
+        outcome=result.outcome_attr,
+        cancelled_by=job_info.cancelled_by,
+        attribution_result=result,
+    )
+    return result.outcome_attr.value().outcome
+
+
 _DEFAULT_START = datetime(2024, 1, 1, 10, 0, 0, tzinfo=ZoneInfo("UTC"))
 _DEFAULT_END = _DEFAULT_START + timedelta(hours=1)
 
@@ -1058,6 +1083,48 @@ class TestSlurmStateSymptoms:
         _run(stream, ji, symptoms)
         assert "Cancelled by user" not in symptoms
         assert "Job requeued" not in symptoms
+
+    def test_uid0_cancel_genuine_root_still_root(self, stream, obs_ctx):
+        """A real admin scancel (uid 0, no automation canceller) stays 'Cancelled by root'."""
+        ji = _job_info_with(state="CANCELLED by 0", exit_code_signal=None)
+        symptoms = _make_symptoms(obs_ctx)
+        _run(stream, ji, symptoms)
+        assert "Cancelled by root" in symptoms
+        assert "Cancelled by user" not in symptoms
+
+    def test_root_canceller_without_uid_decoration_is_root(self, stream, obs_ctx):
+        """When the projection normalizes the state to a bare 'CANCELLED', root is
+        still detected from the resolved canceller identity."""
+        ji = _job_info_with(state="CANCELLED", cancelled_by="root", exit_code_signal=None)
+        symptoms = _make_symptoms(obs_ctx)
+        _run(stream, ji, symptoms)
+        assert "Cancelled by root" in symptoms
+        assert "Cancelled by user" not in symptoms
+
+    def test_uid0_cancel_with_timeout_canceller_not_root(self, stream, obs_ctx):
+        """slurmctld cancels a job's steps as uid 0 when the job hits its time limit.
+        When the resolved canceller is Timeout, the step is automation, not a human
+        root scancel, so it must route to the timeout path, not 'Cancelled by root'."""
+        ji = _job_info_with(state="CANCELLED by 0", cancelled_by="Timeout", exit_code_signal=None)
+        symptoms = _make_symptoms(obs_ctx)
+        _run(stream, ji, symptoms)
+        assert "Cancelled by root" not in symptoms
+        assert "Cancelled by user" not in symptoms
+        assert "Cancelled by Timeout" in symptoms
+
+    def test_uid0_timeout_step_reaches_pass_end_to_end(self, stream, obs_ctx):
+        """Full pipeline: a uid-0 step cancel whose job hit its time limit must reach
+        Pass, matching a state=TIMEOUT job. The old 'CANCELLED by 0' -> 'Cancelled by
+        root' mapping made it Fail User and blocked the timeout reclassification."""
+        ji = _job_info_with(state="CANCELLED by 0", cancelled_by="Timeout", time_limit=3600, exit_code_signal=None)
+        outcome = _attribute_outcome(stream, ji, obs_ctx)
+        assert outcome == "Pass"
+
+    def test_uid0_genuine_root_reaches_fail_user_end_to_end(self, stream, obs_ctx):
+        """Full pipeline: a genuine admin scancel (uid 0, canceller root) stays Fail User."""
+        ji = _job_info_with(state="CANCELLED by 0", cancelled_by="root", time_limit=3600, exit_code_signal=None)
+        outcome = _attribute_outcome(stream, ji, obs_ctx)
+        assert outcome == "Fail User"
 
 
 class TestProcessCompletesCleanup:

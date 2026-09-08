@@ -882,6 +882,23 @@ def empty_symptoms_fallback(context: RefinerContext):
 # Symptom cleanup and resolution rules
 
 
+def _is_root_cancellation(job_info: JobInfo) -> bool:
+    """Whether a cancellation is a genuine human root scancel, not automation.
+
+    slurmctld cancels a job's steps as uid 0 (root) when the job hits its time
+    limit, so a raw ``CANCELLED by 0`` step state is ambiguous. Treat it as a
+    root scancel only when the resolved canceller is root; when the job-level
+    canceller is ``Timeout`` the cancellation is Slurm enforcing the limit and
+    must flow to the timeout handling instead. Keys on the resolved
+    ``cancelled_by`` identity so it stays correct once the projection normalizes
+    the state to a bare ``CANCELLED``; the raw-string check remains a fallback
+    for feeds that emit the decoration without resolving the canceller.
+    """
+    if job_info.cancelled_by == "Timeout":
+        return False
+    return job_info.cancelled_by == "root" or job_info.state == "CANCELLED by 0"
+
+
 @refiner_def(name="SlurmStateSymptoms", author="NVIDIA Attribution team", priority=_priority("SlurmStateSymptoms"))
 def slurm_state_symptoms(context: RefinerContext):
     """Add symptoms based on SLURM job state (CANCELLED, REQUEUED)."""
@@ -890,11 +907,13 @@ def slurm_state_symptoms(context: RefinerContext):
     if symptoms is None or job_info is None:
         return
 
-    if job_info.state == "CANCELLED by 0":
+    if _is_root_cancellation(job_info):
         symptoms.add(job_info.source_value("Cancelled by root", job_info.state, "state cancelled by root"))
     elif job_info.state.startswith("CANCELLED"):
         if job_info.cancelled_by == "site-automation-account":
             symptoms.add(job_info.source_value("Cancelled by cluster operators", job_info.state, "state cancelled"))
+        elif job_info.cancelled_by == "Timeout":
+            symptoms.add(job_info.source_value("Cancelled by Timeout", job_info.state, "state cancelled by timeout"))
         else:
             symptoms.add(job_info.source_value("Cancelled by user", job_info.state, "state cancelled"))
     elif job_info.state == "REQUEUED":
@@ -1761,7 +1780,7 @@ def last_resort_symptoms(context: RefinerContext):
     if not symptoms or (len(symptoms) == 1 and ("Cancelled by user" in symptoms or "FalsePositive-XID-64" in symptoms)):
         if job_info.state == "COMPLETED":
             symptoms.add(job_info.source_value("the process completes", job_info.state, "last resort; slurm status"))
-        elif job_info.state == "CANCELLED by 0":
+        elif _is_root_cancellation(job_info):
             symptoms.add(job_info.source_value("Cancelled by root", job_info.state, "last resort; slurm status"))
         elif job_info.state.startswith("CANCELLED"):
             symptoms.add(job_info.source_value("Cancelled by user", job_info.state, "last resort; slurm status"))
