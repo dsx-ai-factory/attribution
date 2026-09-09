@@ -48,10 +48,18 @@ def apply_user_cancellation_reclassification(
         cancelled_by, "slurmdb cancelled_by"
     )
 
+    # Both pipelines alias service/scheduler accounts (e.g. svc-hwinf-cs-sched) to
+    # "site-automation-account" before attribution, so the svc-/flag guard above never
+    # matches. Attribute it like the job-level CANCELLED-state rule does, not to the user.
+    if cancelled_by == "site-automation-account":
+        outcome, root_cause_symptom = "Cancelled by cluster operators", "Cancelled by cluster operators"
+    else:
+        outcome, root_cause_symptom = "Cancelled by User", f"Cancelled by {cancelled_by}"
+
     new_outcome = OutcomeAttribution(
-        outcome="Cancelled by User",
+        outcome=outcome,
         hw_cause="Not Applicable",
-        root_cause_symptom=f"Cancelled by {cancelled_by}",
+        root_cause_symptom=root_cause_symptom,
     )
 
     attribution_result.outcome_attr = SourceSet(new_outcome).add(

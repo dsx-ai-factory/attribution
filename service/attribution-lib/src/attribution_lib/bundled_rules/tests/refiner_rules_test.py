@@ -3979,6 +3979,20 @@ class TestOutcomeReclassification:
         _run_post_outcome(stream, ji, symptoms, outcome=result.outcome_attr, attribution_result=result)
         assert result.outcome_attr.value().outcome == "Fail InfraHW"
 
+    def test_site_automation_reclassified_to_cluster_operators(self, stream, obs_ctx):
+        """Both pipelines alias service/scheduler accounts to 'site-automation-account'
+        before attribution, so the service-account guard never sees an 'svc-' string.
+        A site-automation cancel must become 'Cancelled by cluster operators', not the
+        self-contradictory 'Cancelled by User'."""
+        ji = _job_info_with(cancelled_by="site-automation-account")
+        bad_nodes_result = CalcBadNodesAttributionResult()
+        result = AttributionResult(event_stream=stream, bad_nodes_attr=bad_nodes_result)
+        result.outcome_attr = _make_outcome("Fail User")
+
+        symptoms = _make_symptoms(obs_ctx, "Python Exception")
+        _run_post_outcome(stream, ji, symptoms, outcome=result.outcome_attr, attribution_result=result)
+        assert result.outcome_attr.value().outcome == "Cancelled by cluster operators"
+
 
 class TestSingleNodeInfraBackfill:
     """SingleNodeInfraBackfill refiner: blame the sole node of a single-node job when
