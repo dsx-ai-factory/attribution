@@ -19,23 +19,54 @@ The real overflow (memory_limit + no disk spill) is exercised in
 attribution-lib's own test suite; these tests verify only the translation at
 the app layer, so they trigger it deterministically via monkeypatching
 rather than depending on real DuckDB memory pressure.
+
+Two levels are covered, matching the pattern in test_attributor_manager.py:
+- AttributorWrapper.ingest()/attribute() raise AttributionHTTPException
+  directly (pytest.raises, no HTTP layer involved).
+- The full HTTP stack turns that into a 507 JSON response.
 """
 
+import pytest
 from attribution_lib.exceptions import EventStorageOutOfMemoryError as LibEventStorageOutOfMemoryError
 
-from app.exceptions import EventStorageOverflowError
+from app.exceptions import AttributionHTTPException, EventStorageOverflowError
 from tests.conftest import make_up_attributor_info, post_attributor
 from tests.test_basic_functionality import fake_applog_observation
+
+
+def _raise_overflow(*args, **kwargs):
+    raise LibEventStorageOutOfMemoryError("simulated overflow")
+
+
+def test_ingest_raises_attribution_http_exception_on_overflow(client, monkeypatch):
+    att_id = post_attributor(client, make_up_attributor_info(id="overflow-ingest-raises"))
+    wrapper = client.app.state.aim.attributors[att_id]
+    monkeypatch.setattr(wrapper.attributor, "ingest", _raise_overflow)
+
+    obs = fake_applog_observation("Example\nLines")
+    with pytest.raises(AttributionHTTPException) as e:
+        wrapper.ingest(obs)
+
+    assert e.value.status_code == EventStorageOverflowError.code
+    assert e.value.detail["att_id"] == att_id
+
+
+def test_attribute_raises_attribution_http_exception_on_overflow(client, monkeypatch):
+    att_id = post_attributor(client, make_up_attributor_info(id="overflow-attribute-raises"))
+    wrapper = client.app.state.aim.attributors[att_id]
+    monkeypatch.setattr(wrapper.attributor, "attribute", _raise_overflow)
+
+    with pytest.raises(AttributionHTTPException) as e:
+        wrapper.attribute()
+
+    assert e.value.status_code == EventStorageOverflowError.code
+    assert e.value.detail["att_id"] == att_id
 
 
 def test_ingest_translates_overflow_to_507(client, monkeypatch):
     att_id = post_attributor(client, make_up_attributor_info(id="overflow-ingest"))
     wrapper = client.app.state.aim.attributors[att_id]
-
-    def raise_overflow(*args, **kwargs):
-        raise LibEventStorageOutOfMemoryError("simulated overflow")
-
-    monkeypatch.setattr(wrapper.attributor, "ingest", raise_overflow)
+    monkeypatch.setattr(wrapper.attributor, "ingest", _raise_overflow)
 
     obs = fake_applog_observation("Example\nLines")
     response = client.post(f"/v1/attributor/{att_id}/observation", content=obs.model_dump_json())
@@ -47,11 +78,7 @@ def test_ingest_translates_overflow_to_507(client, monkeypatch):
 def test_attribute_translates_overflow_to_507(client, monkeypatch):
     att_id = post_attributor(client, make_up_attributor_info(id="overflow-attribute"))
     wrapper = client.app.state.aim.attributors[att_id]
-
-    def raise_overflow(*args, **kwargs):
-        raise LibEventStorageOutOfMemoryError("simulated overflow")
-
-    monkeypatch.setattr(wrapper.attributor, "attribute", raise_overflow)
+    monkeypatch.setattr(wrapper.attributor, "attribute", _raise_overflow)
 
     response = client.get(f"/v1/attributor/{att_id}/attribution")
 
