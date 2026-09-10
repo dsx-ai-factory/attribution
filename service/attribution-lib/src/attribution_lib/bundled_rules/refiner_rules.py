@@ -894,9 +894,9 @@ def _is_root_cancellation(job_info: JobInfo) -> bool:
     the state to a bare ``CANCELLED``; the raw-string check remains a fallback
     for feeds that emit the decoration without resolving the canceller.
     """
-    if job_info.cancelled_by == "Timeout":
-        return False
-    return job_info.cancelled_by == "root" or job_info.state == "CANCELLED by 0"
+    if job_info.cancelled_by is not None:
+        return job_info.cancelled_by == "root"
+    return job_info.state == "CANCELLED by 0"
 
 
 @refiner_def(name="SlurmStateSymptoms", author="NVIDIA Attribution team", priority=_priority("SlurmStateSymptoms"))

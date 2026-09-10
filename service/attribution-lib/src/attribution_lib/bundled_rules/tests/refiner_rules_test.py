@@ -1077,6 +1077,30 @@ class TestSlurmStateSymptoms:
         assert "Cancelled by cluster operators" in symptoms
         assert "Cancelled by user" not in symptoms
 
+    @pytest.mark.parametrize(
+        ("cancelled_by", "expected_symptom"),
+        [
+            ("site-automation-account", "Cancelled by cluster operators"),
+            ("alice", "Cancelled by user"),
+        ],
+    )
+    def test_uid0_cancel_respects_resolved_canceller(self, stream, obs_ctx, cancelled_by, expected_symptom):
+        """Resolved identities override UID 0 throughout the pre-outcome rules.
+
+        Args:
+            stream: Event stream for the job.
+            obs_ctx: Observation context for symptom sources.
+            cancelled_by: Resolved non-root canceller identity.
+            expected_symptom: Cancellation symptom expected for that identity.
+        """
+        ji = _job_info_with(state="CANCELLED by 0", cancelled_by=cancelled_by, exit_code_signal=None)
+        symptoms = _make_symptoms(obs_ctx)
+        _run(stream, ji, symptoms)
+        assert expected_symptom in symptoms
+        assert "Cancelled by root" not in symptoms
+        if cancelled_by == "site-automation-account":
+            assert "Cancelled by user" not in symptoms
+
     def test_failed_state_no_cancelled_symptom(self, stream, obs_ctx):
         ji = _job_info_with(state="FAILED")
         symptoms = _make_symptoms(obs_ctx)
