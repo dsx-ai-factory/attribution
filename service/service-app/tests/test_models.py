@@ -247,6 +247,67 @@ class TestV2Models:
         assert isinstance(sites[0], ResourcelessSource)
         assert sites[0].status == "interesting"
 
+    def test_include_all_bad_nodes_surfaces_demoted_symptom_pruned_from_verdict(self):
+        """A per-node symptom pruned from the job-level verdict but demoted (not removed) on
+        my_bad_nodes is exposed only with include_all_bad_nodes, independent of include_interesting,
+        and reports its node-level interesting status. Captured via the full my_bad_nodes index."""
+        src = _lib_source(rule="xid_cascade")
+        result = _empty_result()
+        _add_node_symptom(result, "node-a", "XID-79 (cascaded off failed peer)", src)
+        _demote_node_symptom(result, "node-a", "XID-79 (cascaded off failed peer)")
+        # deliberately no _add_job_symptom: the symptom is absent from result.symptoms
+
+        default = AttributionResponseV2.from_lib_attribution(set(), result)
+        interesting_only = AttributionResponseV2.from_lib_attribution(set(), result, include_interesting=True)
+        all_bad_nodes = AttributionResponseV2.from_lib_attribution(set(), result, include_all_bad_nodes=True)
+
+        sym = "XID-79 (cascaded off failed peer)"
+        assert sym not in default.symptoms  # default response unchanged
+        assert sym not in interesting_only.symptoms  # include_interesting alone does not surface it
+        sites = all_bad_nodes.symptoms[sym]
+        assert len(sites) == 1
+        assert isinstance(sites[0], NodeSource)
+        assert sites[0].node == "node-a"
+        assert sites[0].status == "interesting"
+
+    def test_include_all_bad_nodes_reports_bad_status_for_kept_pruned_symptom(self):
+        """A symptom pruned from the job-level verdict but kept bad on my_bad_nodes must be
+        surfaced with its real bad status, not forced to interesting, so it is not misrouted."""
+        src = _lib_source(rule="xid_kept")
+        result = _empty_result()
+        _add_node_symptom(result, "node-b", "XID-31 (kept bad on node)", src)
+        # bad on my_bad_nodes, and no _add_job_symptom: absent from result.symptoms
+
+        default = AttributionResponseV2.from_lib_attribution(set(), result)
+        all_bad_nodes = AttributionResponseV2.from_lib_attribution(set(), result, include_all_bad_nodes=True)
+
+        sym = "XID-31 (kept bad on node)"
+        assert sym not in default.symptoms
+        sites = all_bad_nodes.symptoms[sym]
+        assert len(sites) == 1
+        assert isinstance(sites[0], NodeSource)
+        assert sites[0].node == "node-b"
+        assert sites[0].status == "bad"
+
+    def test_include_all_bad_nodes_adds_node_only_source_on_a_verdict_symptom(self):
+        """A verdict symptom kept via source A can carry a node-only source B (pruned from its
+        job-level source set). include_all_bad_nodes must surface B's node binding too, not only
+        A's, so the per-node map is complete for symptoms the verdict retained."""
+        src_a = _lib_source(rule="link_down", line_num=1)
+        src_b = _lib_source(rule="link_down", line_num=2)
+        result = _empty_result()
+        _add_job_symptom(result, "link down(east-west)", src_a)  # verdict via A only
+        _add_node_symptom(result, "node-a", "link down(east-west)", src_a, src_b)  # node has A and B
+
+        default = AttributionResponseV2.from_lib_attribution(set(), result)
+        all_bad_nodes = AttributionResponseV2.from_lib_attribution(set(), result, include_all_bad_nodes=True)
+
+        sym = "link down(east-west)"
+        default_positions = sorted(s.source.pos for s in default.symptoms[sym] if isinstance(s, NodeSource))
+        all_positions = sorted(s.source.pos for s in all_bad_nodes.symptoms[sym] if isinstance(s, NodeSource))
+        assert default_positions == [1]  # default omits the node-only source B
+        assert all_positions == [1, 2]  # include_all_bad_nodes adds B without duplicating A
+
     def test_partially_demoted_symptom_reports_its_surviving_and_demoted_sources_separately(self):
         """Demotion is per source, so one symptom can carry both bad and interesting sites."""
         kept = _lib_source(rule="link_down", line_num=10)

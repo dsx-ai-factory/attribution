@@ -64,6 +64,7 @@ class DefaultApi:
         _host_index: Annotated[StrictInt, Field(ge=0, le=0)] = 0,
         include_decision_graph: Annotated[Optional[StrictBool], Field(description="Include the runtime Decision DAG in the verdict.")] = None,
         include_interesting: Annotated[Optional[StrictBool], Field(description="Include symptoms and node bindings that were demoted to supporting evidence.")] = None,
+        include_all_bad_nodes: Annotated[Optional[StrictBool], Field(description="Also surface node attributions from my_bad_nodes that the job-level verdict omits (a symptom pruned from the verdict, or a node-only source on a kept symptom), each with its node-level status. Independent of include_interesting; with both flags false the response is unchanged.")] = None,
     ) -> AttributionResponseV2:
         """Attribute
 
@@ -75,6 +76,8 @@ class DefaultApi:
         :type include_decision_graph: bool
         :param include_interesting: Include symptoms and node bindings that were demoted to supporting evidence.
         :type include_interesting: bool
+        :param include_all_bad_nodes: Also surface node attributions from my_bad_nodes that the job-level verdict omits (a symptom pruned from the verdict, or a node-only source on a kept symptom), each with its node-level status. Independent of include_interesting; with both flags false the response is unchanged.
+        :type include_all_bad_nodes: bool
         :param _request_timeout: timeout setting for this request. If one
                                  number provided, it will be total request
                                  timeout. It can also be a pair (tuple) of
@@ -101,6 +104,7 @@ class DefaultApi:
             att_id=att_id,
             include_decision_graph=include_decision_graph,
             include_interesting=include_interesting,
+            include_all_bad_nodes=include_all_bad_nodes,
             _request_auth=_request_auth,
             _content_type=_content_type,
             _headers=_headers,
@@ -142,6 +146,7 @@ class DefaultApi:
         _host_index: Annotated[StrictInt, Field(ge=0, le=0)] = 0,
         include_decision_graph: Annotated[Optional[StrictBool], Field(description="Include the runtime Decision DAG in the verdict.")] = None,
         include_interesting: Annotated[Optional[StrictBool], Field(description="Include symptoms and node bindings that were demoted to supporting evidence.")] = None,
+        include_all_bad_nodes: Annotated[Optional[StrictBool], Field(description="Also surface node attributions from my_bad_nodes that the job-level verdict omits (a symptom pruned from the verdict, or a node-only source on a kept symptom), each with its node-level status. Independent of include_interesting; with both flags false the response is unchanged.")] = None,
     ) -> ApiResponse[AttributionResponseV2]:
         """Attribute
 
@@ -153,6 +158,8 @@ class DefaultApi:
         :type include_decision_graph: bool
         :param include_interesting: Include symptoms and node bindings that were demoted to supporting evidence.
         :type include_interesting: bool
+        :param include_all_bad_nodes: Also surface node attributions from my_bad_nodes that the job-level verdict omits (a symptom pruned from the verdict, or a node-only source on a kept symptom), each with its node-level status. Independent of include_interesting; with both flags false the response is unchanged.
+        :type include_all_bad_nodes: bool
         :param _request_timeout: timeout setting for this request. If one
                                  number provided, it will be total request
                                  timeout. It can also be a pair (tuple) of
@@ -179,6 +186,7 @@ class DefaultApi:
             att_id=att_id,
             include_decision_graph=include_decision_graph,
             include_interesting=include_interesting,
+            include_all_bad_nodes=include_all_bad_nodes,
             _request_auth=_request_auth,
             _content_type=_content_type,
             _headers=_headers,
@@ -220,6 +228,7 @@ class DefaultApi:
         _host_index: Annotated[StrictInt, Field(ge=0, le=0)] = 0,
         include_decision_graph: Annotated[Optional[StrictBool], Field(description="Include the runtime Decision DAG in the verdict.")] = None,
         include_interesting: Annotated[Optional[StrictBool], Field(description="Include symptoms and node bindings that were demoted to supporting evidence.")] = None,
+        include_all_bad_nodes: Annotated[Optional[StrictBool], Field(description="Also surface node attributions from my_bad_nodes that the job-level verdict omits (a symptom pruned from the verdict, or a node-only source on a kept symptom), each with its node-level status. Independent of include_interesting; with both flags false the response is unchanged.")] = None,
     ) -> RESTResponseType:
         """Attribute
 
@@ -231,6 +240,8 @@ class DefaultApi:
         :type include_decision_graph: bool
         :param include_interesting: Include symptoms and node bindings that were demoted to supporting evidence.
         :type include_interesting: bool
+        :param include_all_bad_nodes: Also surface node attributions from my_bad_nodes that the job-level verdict omits (a symptom pruned from the verdict, or a node-only source on a kept symptom), each with its node-level status. Independent of include_interesting; with both flags false the response is unchanged.
+        :type include_all_bad_nodes: bool
         :param _request_timeout: timeout setting for this request. If one
                                  number provided, it will be total request
                                  timeout. It can also be a pair (tuple) of
@@ -257,6 +268,7 @@ class DefaultApi:
             att_id=att_id,
             include_decision_graph=include_decision_graph,
             include_interesting=include_interesting,
+            include_all_bad_nodes=include_all_bad_nodes,
             _request_auth=_request_auth,
             _content_type=_content_type,
             _headers=_headers,
@@ -280,6 +292,7 @@ class DefaultApi:
         att_id,
         include_decision_graph,
         include_interesting,
+        include_all_bad_nodes,
         _request_auth,
         _content_type,
         _headers,
@@ -311,6 +324,10 @@ class DefaultApi:
         if include_interesting is not None:
             
             _query_params.append(('include_interesting', include_interesting))
+            
+        if include_all_bad_nodes is not None:
+            
+            _query_params.append(('include_all_bad_nodes', include_all_bad_nodes))
             
         # process the header parameters
         # process the form parameters
@@ -636,6 +653,7 @@ class DefaultApi:
         _host_index: Annotated[StrictInt, Field(ge=0, le=0)] = 0,
         include_decision_graph: Annotated[Optional[StrictBool], Field(description="Include the runtime Decision DAG in the verdict.")] = None,
         include_interesting: Annotated[Optional[StrictBool], Field(description="Include symptoms and node bindings that were demoted to supporting evidence.")] = None,
+        include_all_bad_nodes: Annotated[Optional[StrictBool], Field(description="Also surface node attributions from my_bad_nodes that the job-level verdict omits (a symptom pruned from the verdict, or a node-only source on a kept symptom), each with its node-level status. Independent of include_interesting; with both flags false the response is unchanged.")] = None,
     ) -> AttributionResponseV2:
         """Attribute
 
@@ -647,6 +665,8 @@ class DefaultApi:
         :type include_decision_graph: bool
         :param include_interesting: Include symptoms and node bindings that were demoted to supporting evidence.
         :type include_interesting: bool
+        :param include_all_bad_nodes: Also surface node attributions from my_bad_nodes that the job-level verdict omits (a symptom pruned from the verdict, or a node-only source on a kept symptom), each with its node-level status. Independent of include_interesting; with both flags false the response is unchanged.
+        :type include_all_bad_nodes: bool
         :param _request_timeout: timeout setting for this request. If one
                                  number provided, it will be total request
                                  timeout. It can also be a pair (tuple) of
@@ -673,6 +693,7 @@ class DefaultApi:
             att_id=att_id,
             include_decision_graph=include_decision_graph,
             include_interesting=include_interesting,
+            include_all_bad_nodes=include_all_bad_nodes,
             _request_auth=_request_auth,
             _content_type=_content_type,
             _headers=_headers,
@@ -714,6 +735,7 @@ class DefaultApi:
         _host_index: Annotated[StrictInt, Field(ge=0, le=0)] = 0,
         include_decision_graph: Annotated[Optional[StrictBool], Field(description="Include the runtime Decision DAG in the verdict.")] = None,
         include_interesting: Annotated[Optional[StrictBool], Field(description="Include symptoms and node bindings that were demoted to supporting evidence.")] = None,
+        include_all_bad_nodes: Annotated[Optional[StrictBool], Field(description="Also surface node attributions from my_bad_nodes that the job-level verdict omits (a symptom pruned from the verdict, or a node-only source on a kept symptom), each with its node-level status. Independent of include_interesting; with both flags false the response is unchanged.")] = None,
     ) -> ApiResponse[AttributionResponseV2]:
         """Attribute
 
@@ -725,6 +747,8 @@ class DefaultApi:
         :type include_decision_graph: bool
         :param include_interesting: Include symptoms and node bindings that were demoted to supporting evidence.
         :type include_interesting: bool
+        :param include_all_bad_nodes: Also surface node attributions from my_bad_nodes that the job-level verdict omits (a symptom pruned from the verdict, or a node-only source on a kept symptom), each with its node-level status. Independent of include_interesting; with both flags false the response is unchanged.
+        :type include_all_bad_nodes: bool
         :param _request_timeout: timeout setting for this request. If one
                                  number provided, it will be total request
                                  timeout. It can also be a pair (tuple) of
@@ -751,6 +775,7 @@ class DefaultApi:
             att_id=att_id,
             include_decision_graph=include_decision_graph,
             include_interesting=include_interesting,
+            include_all_bad_nodes=include_all_bad_nodes,
             _request_auth=_request_auth,
             _content_type=_content_type,
             _headers=_headers,
@@ -792,6 +817,7 @@ class DefaultApi:
         _host_index: Annotated[StrictInt, Field(ge=0, le=0)] = 0,
         include_decision_graph: Annotated[Optional[StrictBool], Field(description="Include the runtime Decision DAG in the verdict.")] = None,
         include_interesting: Annotated[Optional[StrictBool], Field(description="Include symptoms and node bindings that were demoted to supporting evidence.")] = None,
+        include_all_bad_nodes: Annotated[Optional[StrictBool], Field(description="Also surface node attributions from my_bad_nodes that the job-level verdict omits (a symptom pruned from the verdict, or a node-only source on a kept symptom), each with its node-level status. Independent of include_interesting; with both flags false the response is unchanged.")] = None,
     ) -> RESTResponseType:
         """Attribute
 
@@ -803,6 +829,8 @@ class DefaultApi:
         :type include_decision_graph: bool
         :param include_interesting: Include symptoms and node bindings that were demoted to supporting evidence.
         :type include_interesting: bool
+        :param include_all_bad_nodes: Also surface node attributions from my_bad_nodes that the job-level verdict omits (a symptom pruned from the verdict, or a node-only source on a kept symptom), each with its node-level status. Independent of include_interesting; with both flags false the response is unchanged.
+        :type include_all_bad_nodes: bool
         :param _request_timeout: timeout setting for this request. If one
                                  number provided, it will be total request
                                  timeout. It can also be a pair (tuple) of
@@ -829,6 +857,7 @@ class DefaultApi:
             att_id=att_id,
             include_decision_graph=include_decision_graph,
             include_interesting=include_interesting,
+            include_all_bad_nodes=include_all_bad_nodes,
             _request_auth=_request_auth,
             _content_type=_content_type,
             _headers=_headers,
@@ -852,6 +881,7 @@ class DefaultApi:
         att_id,
         include_decision_graph,
         include_interesting,
+        include_all_bad_nodes,
         _request_auth,
         _content_type,
         _headers,
@@ -883,6 +913,10 @@ class DefaultApi:
         if include_interesting is not None:
             
             _query_params.append(('include_interesting', include_interesting))
+            
+        if include_all_bad_nodes is not None:
+            
+            _query_params.append(('include_all_bad_nodes', include_all_bad_nodes))
             
         # process the header parameters
         # process the form parameters

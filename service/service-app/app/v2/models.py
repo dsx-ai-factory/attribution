@@ -410,6 +410,27 @@ def _sites_for_symptom(
     return sites
 
 
+def _node_sites_for_symptom(
+    symptom: Symptom,
+    nodes_by_key: Mapping[tuple[Symptom, LibSource], list[tuple[str, SymptomStatus]]],
+) -> list[SymptomSite]:
+    """One NodeSource per (node, source) binding of a symptom in the given index.
+
+    Emits no ResourcelessSource; callers merge these with any job-level sites the
+    verdict loop already produced. Ordering mirrors _sites_for_symptom (source
+    sort, then node)."""
+    sources = sorted(
+        (lib_source for sym, lib_source in nodes_by_key if sym == symptom),
+        key=_source_sort_key,
+    )
+    sites: list[SymptomSite] = []
+    for lib_source in sources:
+        attr_source = AttributionSource.from_lib(lib_source)
+        for node, node_status in sorted(nodes_by_key[(symptom, lib_source)]):
+            sites.append(NodeSource(node=node, status=node_status, source=attr_source))
+    return sites
+
+
 _LIB_TYPES_ENCODER: dict[type, Any] = {
     LibSource: lambda v: AttributionSource.from_lib(v).model_dump(mode="json"),
 }
@@ -431,11 +452,12 @@ class AttributionResponseV2(ResponseModel):
         decision_graph: Optional[LibDecisionDAG] = None,
         decision_graph_requested: bool = False,
         include_interesting: bool = False,
+        include_all_bad_nodes: bool = False,
     ) -> "AttributionResponseV2":
         """Build a V2 response from the lib's AttributionResult."""
         return cls(
             verdict=cls._build_verdict(result, decision_graph, decision_graph_requested),
-            symptoms=cls._build_symptoms(result, include_interesting),
+            symptoms=cls._build_symptoms(result, include_interesting, include_all_bad_nodes),
             observation_context=sorted(ingested_observations),
             collectors=jsonable_encoder(result.collectors, custom_encoder=_LIB_TYPES_ENCODER),
         )
@@ -477,6 +499,7 @@ class AttributionResponseV2(ResponseModel):
     def _build_symptoms(
         result: AttributionResult,
         include_interesting: bool = False,
+        include_all_bad_nodes: bool = False,
     ) -> dict[Symptom, list[SymptomSite]]:
         """Construct the symptoms map from the lib's AttributionResult."""
         nodes_by_key = _index_nodes_by_source(result.bad_nodes_attr.my_bad_nodes, include_interesting)
@@ -486,4 +509,26 @@ class AttributionResponseV2(ResponseModel):
             sites = _sites_for_symptom(symptom, source_set, nodes_by_key, include_interesting)
             if len(sites) > 0:
                 out[symptom] = sites
+        # The verdict loop above is keyed on the job-level source set, so it never emits a
+        # my_bad_nodes binding whose symptom or source is absent from the verdict: a symptom
+        # pruned from the verdict entirely, or a node-only source on a symptom the verdict
+        # kept via a different source. Index the full my_bad_nodes (bad + demoted) and merge
+        # any NodeSource the verdict loop did not already emit. Default response (both flags
+        # False) is unchanged.
+        if include_all_bad_nodes:
+            full_nodes_by_key = _index_nodes_by_source(result.bad_nodes_attr.my_bad_nodes, include_interesting=True)
+            for symptom in sorted({sym for sym, _source in full_nodes_by_key}):
+                existing = out.get(symptom, [])
+                seen = {
+                    (s.node, s.status, s.source.observation_id, s.source.pos, s.source.rule)
+                    for s in existing
+                    if isinstance(s, NodeSource)
+                }
+                added = [
+                    ns
+                    for ns in _node_sites_for_symptom(symptom, full_nodes_by_key)
+                    if (ns.node, ns.status, ns.source.observation_id, ns.source.pos, ns.source.rule) not in seen
+                ]
+                if added:
+                    out[symptom] = existing + added
         return out

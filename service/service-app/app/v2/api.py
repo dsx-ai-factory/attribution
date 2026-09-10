@@ -88,6 +88,17 @@ def attribute(
         bool,
         Query(description="Include symptoms and node bindings that were demoted to supporting evidence."),
     ] = False,
+    include_all_bad_nodes: Annotated[
+        bool,
+        Query(
+            description=(
+                "Also surface node attributions from my_bad_nodes that the job-level verdict omits "
+                "(a symptom pruned from the verdict, or a node-only source on a kept symptom), each "
+                "with its node-level status. Independent of include_interesting; with both flags "
+                "false the response is unchanged."
+            )
+        ),
+    ] = False,
 ) -> AttributionResponseV2:
     """Perform attribution on specified attributor based on all previous observation ingested on this attributor."""
     ctx: AttributionContext = request.app.state.aim.get_attributor(att_id).attribute(
@@ -100,6 +111,7 @@ def attribute(
         ctx.decision_graph,
         ctx.decision_graph_requested,
         include_interesting,
+        include_all_bad_nodes,
     )
 
 

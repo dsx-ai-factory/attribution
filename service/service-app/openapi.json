@@ -493,6 +493,18 @@
               "title": "Include Interesting"
             },
             "description": "Include symptoms and node bindings that were demoted to supporting evidence."
+          },
+          {
+            "name": "include_all_bad_nodes",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "description": "Also surface node attributions from my_bad_nodes that the job-level verdict omits (a symptom pruned from the verdict, or a node-only source on a kept symptom), each with its node-level status. Independent of include_interesting; with both flags false the response is unchanged.",
+              "default": false,
+              "title": "Include All Bad Nodes"
+            },
+            "description": "Also surface node attributions from my_bad_nodes that the job-level verdict omits (a symptom pruned from the verdict, or a node-only source on a kept symptom), each with its node-level status. Independent of include_interesting; with both flags false the response is unchanged."
           }
         ],
         "responses": {
@@ -807,6 +819,18 @@
               "title": "Include Interesting"
             },
             "description": "Include symptoms and node bindings that were demoted to supporting evidence."
+          },
+          {
+            "name": "include_all_bad_nodes",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "description": "Also surface node attributions from my_bad_nodes that the job-level verdict omits (a symptom pruned from the verdict, or a node-only source on a kept symptom), each with its node-level status. Independent of include_interesting; with both flags false the response is unchanged.",
+              "default": false,
+              "title": "Include All Bad Nodes"
+            },
+            "description": "Also surface node attributions from my_bad_nodes that the job-level verdict omits (a symptom pruned from the verdict, or a node-only source on a kept symptom), each with its node-level status. Independent of include_interesting; with both flags false the response is unchanged."
           }
         ],
         "responses": {
