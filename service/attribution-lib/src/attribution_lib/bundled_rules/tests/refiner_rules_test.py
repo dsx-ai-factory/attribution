@@ -1100,6 +1100,8 @@ class TestSlurmStateSymptoms:
         assert "Cancelled by root" not in symptoms
         if cancelled_by == "site-automation-account":
             assert "Cancelled by user" not in symptoms
+        else:
+            assert "Cancelled by cluster operators" not in symptoms
 
     def test_failed_state_no_cancelled_symptom(self, stream, obs_ctx):
         ji = _job_info_with(state="FAILED")
