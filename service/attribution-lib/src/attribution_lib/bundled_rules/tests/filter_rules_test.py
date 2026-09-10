@@ -18,6 +18,7 @@ import attribution_lib
 from attribution_lib.attr_types import JobNodeAttributions
 from attribution_lib.core import get_bundled_rules_path
 from attribution_lib.events import DemotionTypes, EventManager
+from attribution_lib.exceptions import UndeclaredRuleError
 from attribution_lib.bundled_rules.common.megatron import get_pytorch_timeout_minutes
 from attribution_lib.filter import filter_events
 from attribution_lib.bundled_rules.tests._shared import default_job_info
@@ -51,7 +52,9 @@ def rules_engine():
 @pytest.fixture
 def mgr(rules_engine):
     m = EventManager(rules_engine=rules_engine)
-    m.preload_rule_names({"some_rule", "fm-lost-connection-to-gpu", "NcclWatchdog"})
+    m.preload_rule_names(
+        {"some_rule", "fm-lost-connection-to-gpu", "NcclWatchdog", "test_demote", "discard", "no-symptom-demotion"}
+    )
     m.preload_event_types(
         {
             "Attribution.node.bad",
@@ -171,6 +174,23 @@ def test_demote_tflops_symptoms(stream, obs_ctx, job_info):
     # Event at 200 is after MFU. Should remain bad.
     rows_200 = stream.query_raw("SELECT status FROM events WHERE event_type=? AND line_num=200", [bad_id])
     assert rows_200[0][0] == 1
+
+
+def test_demote_with_undeclared_rule_name_raises(stream, obs_ctx, job_info):
+    """Demotion rule names embedded in event payloads must already be known
+    (declared up front via `declare_rule_names()`). Discovering a new one
+    from live event data at demotion time is a bug in whichever rule stamped
+    it, not something to silently register.
+    """
+    t1 = datetime(2024, 1, 1, 10, 5, 0, tzinfo=ZoneInfo("UTC"))
+    payload = {"node": "node01", "symptom": "some error", DemotionTypes.AFTER_MFU_DEMOTION: "never_declared_rule"}
+    create_event(stream, obs_ctx, "Attribution.node.bad", payload, t1, 100)
+
+    t_mfu = datetime(2024, 1, 1, 10, 10, 0, tzinfo=ZoneInfo("UTC"))
+    create_event(stream, obs_ctx, "Application.mfu", {"tflops": 100}, t_mfu, 150)
+
+    with pytest.raises(UndeclaredRuleError, match="never_declared_rule"):
+        filter_events(stream, job_info)
 
 
 def test_demote_tflops_symptoms_edge_cases(stream, obs_ctx, job_info):

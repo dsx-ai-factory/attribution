@@ -11,6 +11,7 @@ import json
 import re
 from abc import ABC, abstractmethod
 from collections.abc import Callable, Generator, Iterable, Iterator
+from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import (
     Any,
@@ -95,6 +96,19 @@ E = TypeVar("E")
 T_co = TypeVar("T_co", bound=EntryBase, covariant=True)
 
 
+@dataclass(frozen=True)
+class BodyFallbacks:
+    """What an `entry_timeseries` entry may parse out of its body when the producer left it out.
+
+    `year_fallback` only matters for year-less formats (`[E1231 23:57:09 ...]`): its year is used,
+    and a parsed date after it rolls back a year. None (job end unknown) means current year.
+    """
+
+    parse_node: bool = False
+    parse_timestamp: bool = False
+    year_fallback: Optional[datetime] = None
+
+
 class EntrySourceBase(ABC, Generic[E, T_co]):
     """Abstract base for observation sources that yield typed entries.
 
@@ -110,8 +124,15 @@ class EntrySourceBase(ABC, Generic[E, T_co]):
     count: int
 
     @staticmethod
-    def from_observation(observation: Observation[Any]) -> "EntrySourceBase[Any, EntryBase]":
-        """Factory that dispatches to the correct concrete subclass by format."""
+    def from_observation(
+        observation: Observation[Any], *, body_fallbacks: BodyFallbacks = BodyFallbacks()
+    ) -> "EntrySourceBase[Any, EntryBase]":
+        """Factory that dispatches to the correct concrete subclass by format.
+
+        Args:
+            observation: The observation to convert to an entry source.
+            body_fallbacks: What `entry_timeseries` may parse out of the body; other formats ignore it.
+        """
         match observation.context.format:
             case Format.STRING_LIST:
                 return JobKeywordEntrySource(observation)
@@ -130,7 +151,7 @@ class EntrySourceBase(ABC, Generic[E, T_co]):
             case Format.CSP_EVENT_LIST:
                 return CspEventEntrySource(observation)
             case Format.ENTRY_TIMESERIES:
-                return TimeseriesEntrySource(observation)
+                return TimeseriesEntrySource(observation, body_fallbacks)
             case _:
                 raise UnknownObservationFormatError(observation.context.format)
 
@@ -852,7 +873,9 @@ class PrometheusMetricsEntrySource(EntrySourceBase[dict[str, Any], MetricEntry])
 class TimeseriesEntryObj(EntryBase):
     """Entry for the `entry_timeseries` format.
 
-    Nothing is parsed back out of the body. The producer declares the timestamp and the resources.
+    The producer declares the timestamp and the resources. The body is parsed only for what the
+    producer left out, and only where `BodyFallbacks` allows it: a missing `ts` falls back to the
+    timestamp parsing `raw_log` does, missing `resources` to its node prefix parsing.
     """
 
     _context: Context
@@ -860,17 +883,30 @@ class TimeseriesEntryObj(EntryBase):
     _ts: Optional[int]
     _body: RawLogLine
     _resources: Optional[ResourceSet]
+    _body_fallbacks: BodyFallbacks
 
-    def __init__(self, context: Context, pos: int, entry: TimeseriesEntry):
+    def __init__(
+        self,
+        context: Context,
+        pos: int,
+        entry: TimeseriesEntry,
+        body_fallbacks: BodyFallbacks = BodyFallbacks(),
+    ):
         self._context = context
         self._pos = pos
         self._ts = entry.get("ts")  # nanoseconds
         self._body = entry["body"]
         declared = entry.get("resources")
         self._resources = validate_resource_set(declared) if declared is not None else None
+        self._body_fallbacks = body_fallbacks
 
+    @method_cache
     def time(self) -> Optional[datetime]:
         if self._ts is None:
+            if self._body_fallbacks.parse_timestamp:
+                return _extract_timestamp_from_log_line(
+                    self._body, timezone=self._context.timezone, job_end_time=self._body_fallbacks.year_fallback
+                )
             return None
         # `ts` represents "entry occurred no later than this time". A datetime holds microseconds
         # (see https://docs.python.org/3/library/datetime.html), so leftover nanoseconds round up.
@@ -881,21 +917,30 @@ class TimeseriesEntryObj(EntryBase):
     def _verified_resources(self, job_info: JobInfo) -> ResourceSet:
         """The declared resources, with the declared node checked against the job.
 
-        ANY only when nothing or `AllJobResources` was declared. Replicas ride along unread.
+        ANY when `AllJobResources` was declared, or nothing was and `parse_node` is off. Replicas ride
+        along unread.
 
-        Raises UnidentifiableNodeError unless exactly one node is declared.
+        Raises UnidentifiableNodeError unless exactly one node is declared (or, with `parse_node`,
+        found in the body), UnknownNodeError when that node is not in the job.
         """
-        if self._resources is None or self._resources == ResourceSetClass.ANY:
+        if self._resources == ResourceSetClass.ANY:
+            return ResourceSetClass.ANY
+
+        if self._resources is None and not self._body_fallbacks.parse_node:
             return ResourceSetClass.ANY
 
         verified: list[ResourceBase] = []
         node_count = 0
-        for resource in self._resources:
+        for resource in self._resources or ():
             if isinstance(resource, NodeResource):
                 node_count += 1
                 verified.append(NodeResource(hostname=job_info.verify_node(resource.hostname)))
             else:
                 verified.append(resource)
+
+        if node_count == 0 and self._body_fallbacks.parse_node:
+            verified.append(NodeResource(hostname=job_info.extract_node(self._body, self._context.source)))
+            node_count = 1
 
         # Potentially relaxable later; for now this matches every other format's one node per entry.
         if node_count != 1:
@@ -928,9 +973,13 @@ class TimeseriesEntryObj(EntryBase):
 class TimeseriesEntrySource(EntrySourceBase[TimeseriesEntry, TimeseriesEntryObj]):
     """Process `entry_timeseries` entries."""
 
+    def __init__(self, observation: Observation[Any], body_fallbacks: BodyFallbacks = BodyFallbacks()) -> None:
+        super().__init__(observation)
+        self._body_fallbacks = body_fallbacks
+
     @classmethod
     def make_line_iter(cls, lines: Any) -> Iterator[TimeseriesEntry]:
         return iter(lines)
 
     def make_line_base(self, pos: int, line: TimeseriesEntry) -> TimeseriesEntryObj:
-        return TimeseriesEntryObj(context=self.context, pos=pos, entry=line)
+        return TimeseriesEntryObj(context=self.context, pos=pos, entry=line, body_fallbacks=self._body_fallbacks)

@@ -22,7 +22,13 @@ from loguru import logger
 from attribution_lib.attr_types import EventHelper
 from attribution_lib.event_helpers import query_events_with_source
 from attribution_lib.events import DemotionTypes, EventStream, sql_placeholders
-from attribution_lib.rules import FilterContext, FilterPriority, declare_event_types, filter_def
+from attribution_lib.rules import (
+    FilterContext,
+    FilterPriority,
+    declare_event_types,
+    declare_rule_names,
+    filter_def,
+)
 from attribution_lib.sources import Source
 from attribution_lib.symptoms import INFORMATIONAL_XIDS, RegisteredSymptoms
 
@@ -33,6 +39,12 @@ _BAD_TYPES = ["Attribution.node.bad", "Attribution.node.bad_peers"]
 _INTERESTING_TYPES = ["Attribution.node.interesting", "Attribution.node.interesting_peers"]
 
 declare_event_types(*_BAD_TYPES, *_INTERESTING_TYPES, "XID_parser.info", "XID_parser.burst")
+
+# Demotion provenance rule names recorded on replacement events by
+# `_sql_demote_events()` below. Not registered rules, just names, so they
+# need declaring here rather than being discovered via `preload_rule_names()`
+# the first time a demotion actually runs.
+declare_rule_names("xid-outside-of-job-execution", "xid-event-outside-of-job-execution")
 
 
 def _build_bad_to_interesting_type_map(event_stream: EventStream) -> dict[int, int]:
@@ -103,12 +115,12 @@ def _sql_demote_events(
     demote_path = f"$.{demote_key}"
     bad_type_ids = list(type_id_map)
 
-    # Demotion rules become the replacement events' provenance. Resolve every
-    # distinct rule through the mgr's rules lookup rather than writing to the
-    # `rules` table directly: ids are computed by _stable_id(), not a DEFAULT
-    # column expression, so a bare INSERT omitting id would violate the NOT
-    # NULL/PRIMARY KEY constraint. preload_rule_names() does the batched
-    # insert-if-missing + cache warm.
+    # Demotion rules become the replacement events' provenance. These names
+    # must already be known (declared via `declare_rule_names()` alongside
+    # the rule that stamps them into a payload) rather than discovered from
+    # live event data and silently registered here. A name surfacing only
+    # now means some rule forgot to declare it; `get_ids()` raises
+    # `UndeclaredRuleError` rather than let that go unnoticed.
     demote_rule_rows = event_stream.query_raw(
         f"""
         SELECT DISTINCT json_extract_string(e.payload, ?) AS demote_rule
@@ -119,7 +131,7 @@ def _sql_demote_events(
     )
     demote_rule_names = {row[0] for row in demote_rule_rows if row[0]}
     if demote_rule_names:
-        event_stream.mgr.preload_rule_names(demote_rule_names)
+        event_stream.mgr.rules.get_ids(list(demote_rule_names))
 
     if bad_type_ids:
         type_case_sql = " ".join(

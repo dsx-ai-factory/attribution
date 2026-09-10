@@ -12,6 +12,7 @@ import json
 from datetime import datetime, timedelta
 from pathlib import Path
 from unittest.mock import Mock
+from zoneinfo import ZoneInfo
 
 import pytest
 from pydantic_core import PydanticCustomError
@@ -40,6 +41,7 @@ from attribution_lib.observation.inbound import (
     TimeInterval,
 )
 from attribution_lib.observation.processing import (
+    BodyFallbacks,
     EntrySourceBase,
     LokiDictEntry,
     LokiDictEntrySource,
@@ -52,6 +54,7 @@ from attribution_lib.observation.processing import (
     _extract_timestamp_from_log_line,
     _extract_timestamp_from_pytorch_format,
     extract_body_and_node,
+    raw_loki_result_helper,
     raw_loki_unpack,
 )
 from attribution_lib.resources import Node, Replica
@@ -716,7 +719,11 @@ class TestTimeseriesEntry:
                 ts=1744734437347712782,
                 resources=[{"kind": "node", "hostname": JOB_NODE.upper()}, {"kind": "replica", "name": "worker-0"}],
             ),
-            entry("undeclared"),
+            entry(
+                f"{JOB_NODE}: [E0105 06:59:25.800744155 ProcessGroupNCCL.cpp:1923] undeclared",
+                ts=None,
+                resources=None,
+            ),
         ]
 
         declared, undeclared = TimeseriesEntrySource(Observation(timeseries_context, entries))
@@ -728,8 +735,10 @@ class TestTimeseriesEntry:
         assert declared.resources(syslog_job_info) == ResourceSetClass(
             [Node(hostname=JOB_NODE), Replica(name="worker-0")]
         )
-        assert undeclared.body() == "undeclared"
+        # Without BodyFallbacks the scrapable prefix and dated body stay unread.
+        assert undeclared.body().endswith("undeclared")
         assert undeclared.resources(syslog_job_info) is ResourceSetClass.ANY
+        assert undeclared.time() is None
 
     def test_an_absent_null_or_zero_timestamp(self, timeseries_context, timezone):
         entries = [{"body": "no ts key"}, {"body": "explicit null", "ts": None}, {"body": "epoch", "ts": 0}]
@@ -756,6 +765,54 @@ class TestTimeseriesEntry:
 
         with pytest.raises(UnknownResourceError):
             entry_obj.node(syslog_job_info)
+
+    # Syslog-shaped for the context's source, with a yearless framework timestamp for the body parser.
+    UNDECLARED = f"Jan  5 06:59:25 {JOB_NODE} torchrun: [E0105 06:59:25.800744155 ProcessGroupNCCL.cpp:1923] undeclared"
+    REPLICA = [{"kind": "replica", "name": "worker-0"}]
+    OTHER_NODE = [{"kind": "node", "hostname": OTHER_JOB_NODE}]
+
+    @pytest.mark.parametrize(
+        ("fallbacks", "wire", "expected_resources", "expected_time"),
+        [
+            pytest.param(
+                {"parse_node": True},
+                entry(UNDECLARED),
+                ResourceSetClass([Node(hostname=JOB_NODE)]),
+                None,
+                id="node",
+            ),
+            pytest.param(
+                {"parse_timestamp": True},
+                entry(UNDECLARED),
+                ResourceSetClass.ANY,
+                datetime(2024, 1, 5, 6, 59, 25, tzinfo=ZoneInfo("America/Los_Angeles")),
+                id="timestamp",
+            ),
+            pytest.param(
+                {"parse_node": True},
+                entry(UNDECLARED, resources=REPLICA),
+                ResourceSetClass([Node(hostname=JOB_NODE), Replica(name="worker-0")]),
+                None,
+                id="replica_without_a_node",
+            ),
+            pytest.param(
+                {"parse_node": True, "parse_timestamp": True},
+                entry(UNDECLARED, ts=10**9, resources=OTHER_NODE),
+                ResourceSetClass([Node(hostname=OTHER_JOB_NODE)]),
+                datetime.fromtimestamp(1, ZoneInfo("America/Los_Angeles")),
+                id="declared_fields_win",
+            ),
+        ],
+    )
+    def test_body_fallbacks_decide_what_is_parsed_out_of_the_body(
+        self, timeseries_context, syslog_job_info, timezone, fallbacks, wire, expected_resources, expected_time
+    ):
+        body_fallbacks = BodyFallbacks(**fallbacks, year_fallback=datetime(2024, 1, 6, tzinfo=timezone))
+
+        (made,) = TimeseriesEntrySource(Observation(timeseries_context, [wire]), body_fallbacks)
+
+        assert made.resources(syslog_job_info) == expected_resources
+        assert made.time() == expected_time
 
 
 class TestTimeseriesExtraction:
@@ -788,6 +845,78 @@ class TestTimeseriesExtraction:
         assert surviving(TimeInterval(None, None)) == [in_declared, in_job_window, untimed]
         # A half-null interval still filters on the bound it has, which two nulls would never exercise.
         assert surviving(TimeInterval(syslog_job_info.job_start_time, None)) == [in_job_window, untimed]
+
+
+# TODO: Legacy tests should be removed once validated in production.
+class TestLegacyBehaviorIsPreserved:
+    """The registered applog fallbacks resolve exactly what the legacy applog formats did; retire with them."""
+
+    @pytest.fixture
+    def applog_job(self, simple_job_factory):
+        """Two nodes, two ranks each, ending 2024-01-06 so a December line without a year is 2023."""
+        return simple_job_factory(
+            nodes=[JOB_NODE, OTHER_JOB_NODE], ranks_per_node=2, start_timestamp=1704000000, end_timestamp=1704560000
+        )
+
+    @pytest.mark.parametrize(
+        "line",
+        [
+            "[rank3]: NCCL watchdog timed out",
+            "terminate called after throwing an instance of 'c10::DistBackendError'",
+            f"{OTHER_JOB_NODE}: a direct node name",
+            "[E1231 23:57:09.800744155 ProcessGroupNCCL.cpp:1923] dated the year before the job ended",
+            "[E0105 06:59:25.800744155 ProcessGroupNCCL.cpp:1923] dated the year the job ended",
+        ],
+    )
+    def test_applog_x_rawlog_is_preserved(self, applog_job, timezone, line):
+        def applog(fmt, lines, **kwargs):
+            return observation_base(applog_job, timezone, ObservationSource.APPLOG, fmt, lines, **kwargs)
+
+        # raw_log_lines reads its year off the interval end, so it keeps the job window it always had.
+        (legacy,) = applog(ObservationFormat.RAW_LOG_LINES, [line])
+        (undeclared,) = applog(
+            ObservationFormat.ENTRY_TIMESERIES, [entry(line)], time_interval=TimeInterval(None, None)
+        )
+
+        assert undeclared.node(applog_job) == legacy.node(applog_job)
+        assert undeclared.time() == legacy.time()
+
+    LOKI_STREAMS = [
+        {"stream": {"node_name": JOB_NODE, "pod": "worker-0"}, "values": [["1704000001000000001", "from labels"]]},
+        {"stream": {"pod": "worker-1"}, "values": [["1704000003000000000", "[rank3]: pod label, node from body"]]},
+        {
+            "stream": {},
+            "values": [
+                ["1704000004000000000", json.dumps({"body": "payload", "attributes": {"hostname": OTHER_JOB_NODE}})],
+                ["1704000005000000000", json.dumps({"data": {"message": "cloud event", "hostname": JOB_NODE}})],
+                ["1704000006000000000", "not json, kept verbatim"],
+            ],
+        },
+    ]
+
+    def test_applog_x_rawlokistreams_is_preserved(self, applog_job, timezone):
+        def applog(fmt, lines):
+            return observation_base(
+                applog_job, timezone, ObservationSource.APPLOG, fmt, lines, time_interval=TimeInterval(None, None)
+            )
+
+        def as_entry(record):
+            """One decoded record as an entry: the stream's node and pod labels, ts, body."""
+            resources = []
+            if record["node"] is not None:
+                resources.append({"kind": "node", "hostname": record["node"]})
+            if record["replica"] is not None:
+                resources.append({"kind": "replica", "name": record["replica"]})
+            return entry(record["body"], ts=record["timestamp"], resources=resources or None)
+
+        legacy = list(applog(ObservationFormat.RAW_LOKI_STREAMS, self.LOKI_STREAMS))
+        records = raw_loki_result_helper(iter(self.LOKI_STREAMS))
+        new = list(applog(ObservationFormat.ENTRY_TIMESERIES, [as_entry(r) for r in records]))
+
+        for made, old in zip(new, legacy, strict=True):
+            assert (made.body(), made.resources(applog_job)) == (old.body(), old.resources(applog_job))
+            # entry_timeseries rounds ns up to the microsecond; the legacy float path rounded to nearest.
+            assert abs(made.time() - old.time()) <= timedelta(microseconds=1)
 
 
 class TestTimestampExtraction:

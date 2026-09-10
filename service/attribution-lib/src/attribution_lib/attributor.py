@@ -49,7 +49,7 @@ from attribution_lib.observation.inbound import (
 )
 from attribution_lib.observation.processing import EntrySourceBase
 from attribution_lib.rule_types.definitions import RuleId, RuleParameters
-from attribution_lib.rules_engine import SOURCE_CONFIGS, process_observation_source
+from attribution_lib.rules_engine import SOURCE_CONFIGS, body_fallbacks_for, process_observation_source
 
 
 class ConsumedObservation:
@@ -82,7 +82,9 @@ class ConsumedObservation:
         result = CalcBadNodesAttributionResult()
 
         if context.source != ObservationSource.JOB_KEYWORDS:
-            entry_source = EntrySourceBase.from_observation(observation)
+            entry_source = EntrySourceBase.from_observation(
+                observation, body_fallbacks=body_fallbacks_for(context.source, job_info)
+            )
             config = SOURCE_CONFIGS.get(entry_source.context.source)
             if config is not None and config.requires_nodes and not job_info.nodes:
                 pass
@@ -188,7 +190,11 @@ class Attributor:
         if new_observation.context.source == ObservationSource.JOB_KEYWORDS:
             self._raw_keywords_observation = new_observation
         else:
-            fingerprint = compute_data_fingerprint(observation.lines, extraction_context=observation.context)
+            fingerprint = compute_data_fingerprint(
+                observation.lines,
+                extraction_context=observation.context,
+                body_fallbacks=body_fallbacks_for(observation.context.source, self.job_info),
+            )
             if fingerprint is not None:
                 self._source_fingerprints[new_observation.context.source.value] = fingerprint
 
@@ -286,7 +292,11 @@ class Attributor:
         observations_by_source: dict[str, InboundObservation] = {}
         for observation in extraction_observations:
             source_name = observation.context.source.value
-            fingerprint = compute_data_fingerprint(observation.lines, extraction_context=observation.context)
+            fingerprint = compute_data_fingerprint(
+                observation.lines,
+                extraction_context=observation.context,
+                body_fallbacks=body_fallbacks_for(observation.context.source, self.job_info),
+            )
             if fingerprint is not None:
                 current_fingerprints[source_name] = fingerprint
             observations_by_source[source_name] = observation
@@ -443,7 +453,9 @@ def _extract_observations(
     for inbound_observation in observations_to_extract:
         observation = Observation.from_inbound_observation(inbound_observation)
         event_stream.register_observation_context(observation.context)
-        entry_source = EntrySourceBase.from_observation(observation)
+        entry_source = EntrySourceBase.from_observation(
+            observation, body_fallbacks=body_fallbacks_for(observation.context.source, job_info)
+        )
 
         source_type = entry_source.context.source
         config = SOURCE_CONFIGS.get(source_type)
@@ -473,6 +485,7 @@ def _validate_source_format(context: ObservationContext) -> None:
                 ObservationFormat.RAW_LOG_LINES,
                 ObservationFormat.LOKI_DICT_LIST,
                 ObservationFormat.RAW_LOKI_STREAMS,
+                ObservationFormat.ENTRY_TIMESERIES,
             ]:
                 raise MismatchedSourceAndFormatError(context.source, context.format)
         case ObservationSource.SYSLOG:

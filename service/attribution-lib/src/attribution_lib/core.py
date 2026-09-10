@@ -26,7 +26,7 @@ from attribution_lib.events import EventStream
 from attribution_lib.filter import run_post_outcome_refiners, run_pre_outcome_refiners, run_scrub_phase_refiners
 from attribution_lib.job_info import JobInfo
 from attribution_lib.observation.inbound import Source as ObservationSource
-from attribution_lib.observation.processing import EntrySourceBase
+from attribution_lib.observation.processing import BodyFallbacks, EntrySourceBase
 from attribution_lib.outcome import (
     OutcomeAttribution,
     calculate_outcome,
@@ -58,7 +58,13 @@ def _epilog_time_start(job_info: JobInfo):
 
 
 # Register source-type processing configs
-register_source_config(ObservationSource.APPLOG, SourceProcessingConfig(fallback_unknown_nodes=True))
+register_source_config(
+    ObservationSource.APPLOG,
+    SourceProcessingConfig(
+        body_fallbacks=BodyFallbacks(parse_node=True, parse_timestamp=True),
+        fallback_unknown_nodes=True,
+    ),
+)
 register_source_config(
     ObservationSource.HEALTH_CHECK,
     SourceProcessingConfig(

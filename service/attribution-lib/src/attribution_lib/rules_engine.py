@@ -14,9 +14,7 @@ import importlib.util
 import sys
 from collections.abc import Callable, Generator, Iterable, Mapping
 from contextlib import AbstractContextManager, contextmanager
-from dataclasses import (
-    dataclass,
-)
+from dataclasses import dataclass, replace
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Optional, cast
@@ -37,7 +35,7 @@ from attribution_lib.observation.inbound import (
     Format as ObservationFormat,
     Source as ObservationSource,
 )
-from attribution_lib.observation.processing import EntryProtocol, EntrySourceBase
+from attribution_lib.observation.processing import BodyFallbacks, EntryProtocol, EntrySourceBase
 from attribution_lib.prefilters import MetricSpec, PreFilterCallable, PreFilterSpec
 from attribution_lib.rule_types.bases import (
     _RULE_TYPE_REGISTRY,
@@ -438,8 +436,12 @@ class SourceProcessingConfig:
 
     time_start: Optional[Callable[[JobInfo], Optional[datetime]]] = None
     time_end: Optional[Callable[[JobInfo], Optional[datetime]]] = None
+    body_fallbacks: BodyFallbacks = BodyFallbacks()
+    """Per line: what an `entry_timeseries` entry may parse out of its body; `year_fallback` is filled per job."""
     fallback_unknown_nodes: bool = False
+    """Per line: a node that fails to resolve against the job keeps the line as resource ANY instead of dropping it."""
     requires_nodes: bool = False
+    """Per job: skip the whole source when `job_info.nodes` is empty."""
 
 
 # Populated by core.py via register_source_config(); keeps rules_engine
@@ -450,6 +452,16 @@ SOURCE_CONFIGS: dict[ObservationSource, SourceProcessingConfig] = {}
 def register_source_config(source: ObservationSource, config: SourceProcessingConfig) -> None:
     """Register processing configuration for an observation source type."""
     SOURCE_CONFIGS[source] = config
+
+
+def body_fallbacks_for(source: ObservationSource, job_info: JobInfo) -> BodyFallbacks:
+    """The source's `body_fallbacks`, with the year reference resolved against this job."""
+    config = SOURCE_CONFIGS.get(source)
+    fallbacks = config.body_fallbacks if config is not None else BodyFallbacks()
+    if not fallbacks.parse_timestamp:
+        return fallbacks
+    # job_info.job_end_time, not the interval end: entry_timeseries intervals may be unbounded.
+    return replace(fallbacks, year_fallback=job_info.job_end_time)
 
 
 def _apply_pre_filter(

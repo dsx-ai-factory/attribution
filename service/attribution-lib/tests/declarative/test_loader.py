@@ -42,6 +42,41 @@ untested = "coverage exercised in test_cases_coverage"
     assert loader.rules["SyslogGspFailure"] is rule
 
 
+def test_demotion_dict_rule_names_are_declared(tmp_path):
+    """A `demotion = {...}` dict's values are rule names event data will
+    reference (see `_bad`/`_interesting` and `filter_rules._sql_demote_events`).
+    They must be declared like any other `derived_rule`, not left for
+    `preload_rule_names()` to silently discover at demotion time.
+    """
+    toml = """
+sources = ["SYSLOG"]
+[[extractor]]
+name = "SyslogGspFailure"
+match_re = "GspRmAlloc failed"
+emit = { type = "bad_node", symptom = "GspRmAlloc failed", demotion = { AFTER_MFU_DEMOTION = "gsp-non-fatal" } }
+untested = "validation"
+"""
+    loader = RuleLoader()
+    load_toml_rules(loader, _write(tmp_path, toml))
+    assert "gsp-non-fatal" in loader.declared_rule_names
+
+
+def test_demotion_string_shorthand_rule_name_is_declared(tmp_path):
+    """`demotion = "name"` is shorthand for {AFTER_MFU_DEMOTION: "name"} (see
+    `_bad`/`_interesting`). It is still a rule name, still needs declaring."""
+    toml = """
+sources = ["SYSLOG"]
+[[extractor]]
+name = "SyslogGspFailure"
+match_re = "GspRmAlloc failed"
+emit = { type = "bad_node", symptom = "GspRmAlloc failed", demotion = "gsp-non-fatal" }
+untested = "validation"
+"""
+    loader = RuleLoader()
+    load_toml_rules(loader, _write(tmp_path, toml))
+    assert "gsp-non-fatal" in loader.declared_rule_names
+
+
 def test_file_level_tags_land_on_the_registered_rule(tmp_path):
     toml = """
 sources = ["SYSLOG"]

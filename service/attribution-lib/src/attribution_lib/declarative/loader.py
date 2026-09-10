@@ -218,7 +218,9 @@ def _collect_declarations(
 
     Mirrors the Python decorators' ``derived_rules``/``derived_event_types``: a
     leaf ``derived_rule`` credits a finding under a name other than the stanza's,
-    and a ``generic_event`` emits an ``event_type``; both must be declared so the
+    a ``demotion`` dict/string names the rule(s) demoted events get attributed
+    to (see ``_bad``/``_interesting`` and ``_sql_demote_events``), and a
+    ``generic_event`` emits an ``event_type``; all must be declared so the
     event store's rule/type lookups resolve them. Recurses combinator arms
     (``pick_one`` branches + dict ``default``; ``try_all`` events).
 
@@ -230,6 +232,11 @@ def _collect_declarations(
     """
     if (derived := emit.get("derived_rule")) is not None:
         rules.add(derived)
+    demotion = emit.get("demotion")
+    if isinstance(demotion, dict):
+        rules.update(demotion.values())
+    elif isinstance(demotion, str):
+        rules.add(demotion)
     if emit.get("type") == "generic_event" and emit.get("event_type") is not None:
         event_types.add(emit["event_type"])
     for br in emit.get("branches", []):
