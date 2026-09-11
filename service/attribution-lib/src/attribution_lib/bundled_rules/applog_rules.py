@@ -98,6 +98,9 @@ def _load_cuda_errors():
     if "out of memory" in _CUDA_ERRORS:
         _CUDA_ERRORS["out of memory"]["nice_name"] = "cudaError out of memory"
 
+    # Both the CUDA family and NCCL processors use this lookup table.
+    _CUDA_ERRORS["cudaErrorIllegalAddress"] = _CUDA_ERRORS["an illegal memory access was encountered"]
+
     # Sort by length descending for better matching (longer patterns first)
     sorted_errors = dict(sorted(_CUDA_ERRORS.items(), key=lambda x: len(x[0]), reverse=True))
     _CUDA_ERRORS = sorted_errors

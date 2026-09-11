@@ -72,6 +72,19 @@ def test_cuda_not_ready_and_not_supported_classify_as_multicategory():
         assert match.outcome == "Fail MultiCategory", f"{symptom} -> {match.outcome}"
 
 
+def test_cuda_illegal_address_resolves_its_own_guidance():
+    """Keep CUDA illegal-address guidance separate from NCCL guidance."""
+    registry = _load_committed_registry()
+    match = registry.outcome_for(["cudaErrorIllegalAddress"])
+    assert match is not None
+    assert match.outcome == "Fail User"
+    assert match.doc == "cudaerrorillegaladdress"
+
+    nccl_match = registry.outcome_for(["ncclUnhandledCudaError"])
+    assert nccl_match is not None
+    assert nccl_match.doc == "ncclunhandledcudaerror"
+
+
 def test_nv_err_busy_retry_maps_to_infrasw():
     """Classify NV_ERR_BUSY_RETRY driver failures as infrastructure software."""
     registry = _load_committed_registry()

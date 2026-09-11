@@ -1502,6 +1502,14 @@ outcome_symptom(
 )
 
 outcome_symptom(
+    "cudaErrorIllegalAddress",
+    outcome="Fail User",
+    priority=OutcomePriority.LOW_GENERIC,
+    doc="cudaerrorillegaladdress",
+    dag_discard=DagDiscardBehavior.KEEP,
+)
+
+outcome_symptom(
     "cudaError",
     outcome="Fail User",
     priority=OutcomePriority.LOW_GENERIC,
@@ -2549,8 +2557,6 @@ known_symptom("alias else")
 known_symptom("bad kernel stack frame pointer in python")
 
 known_symptom("cudaErrorContained")
-
-known_symptom("cudaErrorIllegalAddress", dag_discard=DagDiscardBehavior.KEEP)
 
 known_symptom("effective_ber_high")
 

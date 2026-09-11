@@ -339,6 +339,10 @@ sub_error = "an illegal memory access was encountered"
 symptom = "cudaErrorIllegalAddress"
 
 [[cases.sub_cases]]
+sub_error = "cudaErrorIllegalAddress"
+symptom = "cudaErrorIllegalAddress"
+
+[[cases.sub_cases]]
 sub_error = "too many resources requested for launch"
 symptom = "cudaErrorLaunchOutOfResources"
 
