@@ -21,6 +21,10 @@ class AttributionError(Exception):
     pass
 
 
+class SnapshotSchemaVersionError(AttributionError, ValueError):
+    """Raised when a snapshot uses a different event schema version."""
+
+
 class DecisionGraphError(AttributionError):
     """Raised when invalid decision-trace data prevents graph assembly."""
 
