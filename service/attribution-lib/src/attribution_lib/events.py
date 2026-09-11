@@ -17,6 +17,7 @@ from typing import TYPE_CHECKING, Any, Optional, TypeAlias
 import duckdb
 
 from attribution_lib.exceptions import (
+    SnapshotSchemaVersionError,
     StableIdCollisionError,
     UndeclaredEventTypeError,
     UndeclaredRuleError,
@@ -570,7 +571,7 @@ class EventManager:
             if version_file.exists():
                 stored_version = int(version_file.read_text().strip())
                 if stored_version != cls._SNAPSHOT_SCHEMA_VERSION:
-                    raise ValueError(
+                    raise SnapshotSchemaVersionError(
                         f"Snapshot schema version mismatch: stored={stored_version}, "
                         f"current={cls._SNAPSHOT_SCHEMA_VERSION}"
                     )

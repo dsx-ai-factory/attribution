@@ -508,6 +508,40 @@ def test_attribute_batch_applog_prefilter_keywords(request, event_manager, job_i
     assert "Python Exception" in result.symptoms
 
 
+def test_attribute_batch_recomputes_incompatible_snapshot(request, event_manager, job_info, tmp_path, monkeypatch):
+    """Recover a v1 snapshot with the same attribution as cold extraction.
+
+    Args:
+        request: Pytest request used to name the event stream.
+        event_manager: Event manager fixture.
+        job_info: Job information fixture.
+        tmp_path: Temporary snapshot directory.
+        monkeypatch: Replaces only the backend's snapshot storage read.
+    """
+    backend = MemoryCheckpointBackend()
+    observation = make_inbound_observation(
+        ObservationSource.APPLOG, ObservationFormat.RAW_LOG_LINES, lines=PYTHON_TRACEBACK_LINES
+    )
+    cold = Attributor.new(event_manager.create_stream(request.node.name), job_info)
+    cold.ingest_batch([observation], backend)
+    cold_result = cold.attribute(backend)
+    event_manager.export_snapshot(tmp_path)
+    (tmp_path / EventManager._SCHEMA_VERSION_FILE).write_text("1")
+    monkeypatch.setattr(
+        backend,
+        "load_event_manager",
+        lambda key: EventManager.from_snapshot(tmp_path, attribution_lib.get_rules_engine()),
+    )
+
+    recovered = Attributor.new(event_manager.create_stream(f"{request.node.name}_recovered"), job_info)
+    recovered.ingest_batch([observation], backend)
+    result = recovered.attribute(backend)
+
+    assert "Python Exception" in result.symptoms
+    assert set(result.symptoms.symptoms()) == set(cold_result.symptoms.symptoms())
+    assert result.outcome_attr.value() == cold_result.outcome_attr.value()
+
+
 def test_attribute_batch_restores_prefilter_keywords_from_cache(request, event_manager, job_info):
     """Restore raw keywords when batch extraction is skipped on a cache hit.
 

@@ -40,6 +40,7 @@ from attribution_lib.cache_metadata import (
 )
 from attribution_lib.checkpoint_backends import CheckpointBackend
 from attribution_lib.events import EventManager
+from attribution_lib.exceptions import SnapshotSchemaVersionError
 from attribution_lib.observation.inbound import (
     Context as ObservationContext,
     Format as ObservationFormat,
@@ -293,7 +294,11 @@ def load_extraction_cache(
         logger.info("Extraction cache lacks raw keywords; re-extraction needed")
         return None
 
-    event_manager = backend.load_event_manager(cache_key)
+    try:
+        event_manager = backend.load_event_manager(cache_key)
+    except SnapshotSchemaVersionError as error:
+        logger.info("Extraction cache incompatible (key={}): {}; full re-extraction needed", cache_key, error)
+        return None
     logger.info("Loaded extraction cache (key={}, extractor hash: {})", cache_key, metadata.extractor_hash[:12])
     return event_manager, metadata
 
@@ -345,7 +350,13 @@ def load_or_update_extraction_cache(
             event_manager=None, metadata=metadata, data_diffs=data_diffs, needs_full_reextraction=True
         )
 
-    event_manager = backend.load_event_manager(cache_key)
+    try:
+        event_manager = backend.load_event_manager(cache_key)
+    except SnapshotSchemaVersionError as error:
+        logger.info("Extraction cache incompatible (key={}): {}; full re-extraction needed", cache_key, error)
+        return CacheLoadResult(
+            event_manager=None, metadata=metadata, data_diffs=data_diffs, needs_full_reextraction=True
+        )
     all_unchanged = all(data_diff.result == DataDiffResult.UNCHANGED for data_diff in data_diffs.values())
     if all_unchanged and data_diffs:
         logger.info("Extraction cache hit (all sources unchanged, extractor hash: {})", metadata.extractor_hash[:12])
