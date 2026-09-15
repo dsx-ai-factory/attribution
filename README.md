@@ -30,6 +30,9 @@ Two short examples:
 
 A workload finishes. The engine looks back at what happened.
 
+For more detail, read [How Attribution Works](docs/attribution.md) or step
+through the [interactive attribution process walkthrough](https://dsx-ai-factory.github.io/attribution/walkthroughs/attribution-process/).
+
 1. **Scope.** The workload is identified either by its workload context IDs (for example scheduler job IDs), from which the Blueprint resolves the node list and execution time window, or directly by a time window paired with a node list. That scope selects which logs and metrics the engine reads.
 2. **Extract.** Log and metric sources are filtered to that window. Significant events are extracted (using the extractor ruleset) into structured events: XID codes, NCCL errors, scheduler transitions, DCGM metrics, each with a timestamp and source node.
 3. **Filter & Correlate.** Filter rules are run against the event set. These rules handle interactions between event types — an XID firing on one node while NCCL times out on another is a different pattern from either event alone. New symptoms may be added, others discarded. **Diagnose.** Symptoms are ranked and collapsed to a single verdict: a failure class, the nodes most associated with the failure, and the root symptom for that class.

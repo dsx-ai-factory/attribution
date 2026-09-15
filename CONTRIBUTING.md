@@ -22,3 +22,10 @@ pre-commit install
 ```
 
 The hook regenerates the service-app's OpenAPI client when a commit touches something the client is built from, blocking the commit until the regenerated files are staged. Skip with `git commit --no-verify`.
+
+## Review interactive documentation
+
+The attribution walkthrough is a Slidev application published through GitHub
+Pages. Start with the [editing tutorial](docs/attribution-tour/TUTORIAL.md); the
+[maintenance reference](docs/attribution-tour/MAINTAINING.md) and
+[publishing guide](docs/github-pages.md) cover ongoing work and deployment.

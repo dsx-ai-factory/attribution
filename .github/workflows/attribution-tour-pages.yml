@@ -1,0 +1,77 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: LicenseRef-NvidiaProprietary
+#
+# NVIDIA CORPORATION, its affiliates and licensors retain all intellectual
+# property and proprietary rights in and to this material, related
+# documentation and any modifications thereto. Any use, reproduction,
+# disclosure or distribution of this material and related documentation
+# without an express license agreement from NVIDIA CORPORATION or
+# its affiliates is strictly prohibited.
+
+name: Attribution Process Walkthrough Pages
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - .github/workflows/attribution-tour-pages.yml
+      - docs/attribution-tour/**
+  workflow_dispatch:
+
+# Production and preview deployments share gh-pages. Serialize their pushes so
+# one deployment cannot overwrite another deployment's branch update.
+concurrency:
+  group: attribution-tour-pages
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+
+      - name: Set up Node.js
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: 22
+
+      - name: Enable pnpm
+        run: |
+          corepack enable
+          corepack prepare pnpm@10.11.0 --activate
+
+      - name: Install dependencies
+        working-directory: docs/attribution-tour
+        run: pnpm install --frozen-lockfile
+
+      - name: Build relocatable walkthrough
+        working-directory: docs/attribution-tour
+        run: pnpm build --base /walkthroughs/attribution-process/ --out dist
+
+      - name: Stage Pages landing page
+        run: |
+          mkdir -p .pages-root
+          cp docs/attribution-tour/pages-landing.html .pages-root/index.html
+
+      - name: Publish Pages landing page
+        uses: peaceiris/actions-gh-pages@84c30a85c19949d7eee79c4ff27748b70285e453 # v4.1.0
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_branch: gh-pages
+          publish_dir: .pages-root
+          keep_files: true
+          full_commit_message: Publish documentation landing page from ${{ github.sha }}
+
+      - name: Publish production walkthrough
+        uses: peaceiris/actions-gh-pages@84c30a85c19949d7eee79c4ff27748b70285e453 # v4.1.0
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_branch: gh-pages
+          publish_dir: docs/attribution-tour/dist
+          destination_dir: walkthroughs/attribution-process
+          full_commit_message: Publish attribution process walkthrough from ${{ github.sha }}

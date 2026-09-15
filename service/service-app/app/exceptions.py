@@ -193,6 +193,28 @@ class IncompatibleObservationSourceFormatError(AttributionErrorModel):
         return self.msg.format(source=self.source, format=self.format)
 
 
+class EventStorageOverflowError(AttributionErrorModel):
+    """Error for when an attributor's event storage exceeds its memory budget.
+
+    Raised instead of a generic 500 when ATTRIBUTOR_ALLOW_DISK_SPILL=false
+    (the default for containerized deployments with no writable disk) and an
+    attributor's DuckDB connection exceeds ATTRIBUTOR_DUCKDB_MEMORY_LIMIT.
+    Isolated to the one attributor/request that triggered it.
+    """
+
+    model_type: Literal["EventStorageOverflowError"] = Field(frozen=True)
+    code: ClassVar[int] = 507
+    msg: ClassVar[str] = "Attributor {att_id} exceeded its memory budget."
+    att_id: str
+
+    @classmethod
+    def new(cls, att_id: str) -> Self:
+        return cls(model_type="EventStorageOverflowError", att_id=att_id)
+
+    def detail(self) -> str:
+        return self.msg.format(att_id=self.att_id)
+
+
 ObservationIngestionError = Annotated[
     UnknownObservationFormatError | InvalidObservationBodyError | IncompatibleObservationSourceFormatError,
     Field(discriminator="model_type"),

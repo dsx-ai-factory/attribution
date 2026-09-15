@@ -110,6 +110,7 @@ class DefaultApi:
         _response_types_map: Dict[str, Optional[str]] = {
             '200': "AttributionResponseV2",
             '404': "UnknownAttributorIdError",
+            '507': "EventStorageOverflowError",
             '422': "ValidationErrorResponse",
         }
         response_data = self.api_client.call_api(
@@ -188,6 +189,7 @@ class DefaultApi:
         _response_types_map: Dict[str, Optional[str]] = {
             '200': "AttributionResponseV2",
             '404': "UnknownAttributorIdError",
+            '507': "EventStorageOverflowError",
             '422': "ValidationErrorResponse",
         }
         response_data = self.api_client.call_api(
@@ -266,6 +268,7 @@ class DefaultApi:
         _response_types_map: Dict[str, Optional[str]] = {
             '200': "AttributionResponseV2",
             '404': "UnknownAttributorIdError",
+            '507': "EventStorageOverflowError",
             '422': "ValidationErrorResponse",
         }
         response_data = self.api_client.call_api(
@@ -405,6 +408,7 @@ class DefaultApi:
         _response_types_map: Dict[str, Optional[str]] = {
             '200': "AttributionResponseV1",
             '404': "UnknownAttributorIdError",
+            '507': "EventStorageOverflowError",
             '422': "HTTPValidationError",
         }
         response_data = self.api_client.call_api(
@@ -475,6 +479,7 @@ class DefaultApi:
         _response_types_map: Dict[str, Optional[str]] = {
             '200': "AttributionResponseV1",
             '404': "UnknownAttributorIdError",
+            '507': "EventStorageOverflowError",
             '422': "HTTPValidationError",
         }
         response_data = self.api_client.call_api(
@@ -545,6 +550,7 @@ class DefaultApi:
         _response_types_map: Dict[str, Optional[str]] = {
             '200': "AttributionResponseV1",
             '404': "UnknownAttributorIdError",
+            '507': "EventStorageOverflowError",
             '422': "HTTPValidationError",
         }
         response_data = self.api_client.call_api(
@@ -682,6 +688,7 @@ class DefaultApi:
         _response_types_map: Dict[str, Optional[str]] = {
             '200': "AttributionResponseV2",
             '404': "UnknownAttributorIdError",
+            '507': "EventStorageOverflowError",
             '422': "ValidationErrorResponse",
         }
         response_data = self.api_client.call_api(
@@ -760,6 +767,7 @@ class DefaultApi:
         _response_types_map: Dict[str, Optional[str]] = {
             '200': "AttributionResponseV2",
             '404': "UnknownAttributorIdError",
+            '507': "EventStorageOverflowError",
             '422': "ValidationErrorResponse",
         }
         response_data = self.api_client.call_api(
@@ -838,6 +846,7 @@ class DefaultApi:
         _response_types_map: Dict[str, Optional[str]] = {
             '200': "AttributionResponseV2",
             '404': "UnknownAttributorIdError",
+            '507': "EventStorageOverflowError",
             '422': "ValidationErrorResponse",
         }
         response_data = self.api_client.call_api(
@@ -2535,6 +2544,7 @@ class DefaultApi:
             '404': "UnknownAttributorIdError",
             '409': "DuplicateObservationError",
             '400': "ObservationIngestionErrorResponse",
+            '507': "EventStorageOverflowError",
             '422': "ValidationErrorResponse",
         }
         response_data = self.api_client.call_api(
@@ -2612,6 +2622,7 @@ class DefaultApi:
             '404': "UnknownAttributorIdError",
             '409': "DuplicateObservationError",
             '400': "ObservationIngestionErrorResponse",
+            '507': "EventStorageOverflowError",
             '422': "ValidationErrorResponse",
         }
         response_data = self.api_client.call_api(
@@ -2689,6 +2700,7 @@ class DefaultApi:
             '404': "UnknownAttributorIdError",
             '409': "DuplicateObservationError",
             '400': "ObservationIngestionErrorResponse",
+            '507': "EventStorageOverflowError",
             '422': "ValidationErrorResponse",
         }
         response_data = self.api_client.call_api(
@@ -2840,6 +2852,7 @@ class DefaultApi:
             '201': "ObservationResponseV1",
             '404': "UnknownAttributorIdError",
             '409': "DuplicateObservationError",
+            '507': "EventStorageOverflowError",
             '422': "HTTPValidationError",
         }
         response_data = self.api_client.call_api(
@@ -2916,6 +2929,7 @@ class DefaultApi:
             '201': "ObservationResponseV1",
             '404': "UnknownAttributorIdError",
             '409': "DuplicateObservationError",
+            '507': "EventStorageOverflowError",
             '422': "HTTPValidationError",
         }
         response_data = self.api_client.call_api(
@@ -2992,6 +3006,7 @@ class DefaultApi:
             '201': "ObservationResponseV1",
             '404': "UnknownAttributorIdError",
             '409': "DuplicateObservationError",
+            '507': "EventStorageOverflowError",
             '422': "HTTPValidationError",
         }
         response_data = self.api_client.call_api(
@@ -3144,6 +3159,7 @@ class DefaultApi:
             '404': "UnknownAttributorIdError",
             '409': "DuplicateObservationError",
             '400': "ObservationIngestionErrorResponse",
+            '507': "EventStorageOverflowError",
             '422': "ValidationErrorResponse",
         }
         response_data = self.api_client.call_api(
@@ -3221,6 +3237,7 @@ class DefaultApi:
             '404': "UnknownAttributorIdError",
             '409': "DuplicateObservationError",
             '400': "ObservationIngestionErrorResponse",
+            '507': "EventStorageOverflowError",
             '422': "ValidationErrorResponse",
         }
         response_data = self.api_client.call_api(
@@ -3298,6 +3315,7 @@ class DefaultApi:
             '404': "UnknownAttributorIdError",
             '409': "DuplicateObservationError",
             '400': "ObservationIngestionErrorResponse",
+            '507': "EventStorageOverflowError",
             '422': "ValidationErrorResponse",
         }
         response_data = self.api_client.call_api(

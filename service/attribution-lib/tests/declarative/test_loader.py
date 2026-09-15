@@ -46,19 +46,21 @@ def test_demotion_dict_rule_names_are_declared(tmp_path):
     """A `demotion = {...}` dict's values are rule names event data will
     reference (see `_bad`/`_interesting` and `filter_rules._sql_demote_events`).
     They must be declared like any other `derived_rule`, not left for
-    `preload_rule_names()` to silently discover at demotion time.
+    `preload_rule_names()` to silently discover at demotion time. Two distinct
+    values here so the test can't pass by only collecting the first one.
     """
     toml = """
 sources = ["SYSLOG"]
 [[extractor]]
 name = "SyslogGspFailure"
 match_re = "GspRmAlloc failed"
-emit = { type = "bad_node", symptom = "GspRmAlloc failed", demotion = { AFTER_MFU_DEMOTION = "gsp-non-fatal" } }
+emit = { type = "bad_node", symptom = "GspRmAlloc failed", demotion = { AFTER_MFU_DEMOTION = "gsp-non-fatal", NOT_NEAR_WATCHDOG_EVENT_DEMOTION = "gsp-watchdog-non-fatal" } }
 untested = "validation"
 """
     loader = RuleLoader()
     load_toml_rules(loader, _write(tmp_path, toml))
     assert "gsp-non-fatal" in loader.declared_rule_names
+    assert "gsp-watchdog-non-fatal" in loader.declared_rule_names
 
 
 def test_demotion_string_shorthand_rule_name_is_declared(tmp_path):

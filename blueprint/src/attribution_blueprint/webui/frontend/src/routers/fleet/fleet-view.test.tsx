@@ -157,7 +157,7 @@ describe('FleetView', () => {
     mocks.setSearchParams.mockClear()
     fireEvent.click(screen.getByRole('button', { name: 'Reapply current' }))
     expect(mocks.setSearchParams).toHaveBeenCalledWith(
-      new URLSearchParams('status=failed'),
+      new URLSearchParams('status=all'),
       { replace: false },
     )
 

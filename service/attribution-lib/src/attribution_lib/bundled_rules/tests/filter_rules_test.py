@@ -193,6 +193,36 @@ def test_demote_with_undeclared_rule_name_raises(stream, obs_ctx, job_info):
         filter_events(stream, job_info)
 
 
+def test_demote_with_multiple_undeclared_rule_names_reports_stable_name(stream, obs_ctx, job_info):
+    """When more than one undeclared demotion rule name surfaces in the same
+    batch, the reported name must be deterministic across runs, not whatever
+    order Python's (hash-seed randomized) set iteration happens to produce.
+    """
+    t1 = datetime(2024, 1, 1, 10, 5, 0, tzinfo=ZoneInfo("UTC"))
+    create_event(
+        stream,
+        obs_ctx,
+        "Attribution.node.bad",
+        {"node": "node01", "symptom": "err1", DemotionTypes.AFTER_MFU_DEMOTION: "zzz_never_declared"},
+        t1,
+        100,
+    )
+    create_event(
+        stream,
+        obs_ctx,
+        "Attribution.node.bad",
+        {"node": "node01", "symptom": "err2", DemotionTypes.AFTER_MFU_DEMOTION: "aaa_never_declared"},
+        t1,
+        101,
+    )
+
+    t_mfu = datetime(2024, 1, 1, 10, 10, 0, tzinfo=ZoneInfo("UTC"))
+    create_event(stream, obs_ctx, "Application.mfu", {"tflops": 100}, t_mfu, 150)
+
+    with pytest.raises(UndeclaredRuleError, match="aaa_never_declared"):
+        filter_events(stream, job_info)
+
+
 def test_demote_tflops_symptoms_edge_cases(stream, obs_ctx, job_info):
     before_mfu = datetime(2024, 1, 1, 10, 5, 0, tzinfo=ZoneInfo("UTC"))
     create_event(

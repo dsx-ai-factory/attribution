@@ -232,7 +232,7 @@ export function RunsSection({
     filter.outcome || filter.symptom || filter.node || filter.rule || filter.user || filter.q
       ? 'clear the active filter chips above'
       : null,
-    filter.status === 'failed' ? 'uncheck "Failed only" to include passing runs' : null,
+    filter.status === 'failed' ? 'uncheck "Hide passing runs"' : null,
     windowed ? 'widen the date range' : null,
   ].filter((hint) => hint !== null)
 

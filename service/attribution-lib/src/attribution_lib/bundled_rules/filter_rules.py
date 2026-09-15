@@ -131,7 +131,11 @@ def _sql_demote_events(
     )
     demote_rule_names = {row[0] for row in demote_rule_rows if row[0]}
     if demote_rule_names:
-        event_stream.mgr.rules.get_ids(list(demote_rule_names))
+        # `sorted()`, not `list()`: set iteration order is non-deterministic
+        # (hash-seed randomized), and `get_ids()` raises on the first unknown
+        # name it hits, so an unsorted list would report a different
+        # undeclared name on different runs for the same input.
+        event_stream.mgr.rules.get_ids(sorted(demote_rule_names))
 
     if bad_type_ids:
         type_case_sql = " ".join(

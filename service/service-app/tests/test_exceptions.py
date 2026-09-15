@@ -19,6 +19,7 @@ from app.exceptions import (
     DuplicateObservationError,
     AttributionErrorModel,
     AttributionHTTPException,
+    EventStorageOverflowError,
     ResponseModel,
     UnknownAttributorIdError,
     UnknownObservationFormatError,
@@ -115,6 +116,16 @@ def test_unknown_observation_format_error():
     assert error.code == 400
     assert error.format == format
     assert error.detail() == f"Unknown observation format {format}."
+
+
+def test_event_storage_overflow_error():
+    """Test EventStorageOverflowError functionality."""
+    att_id = "test_att_123"
+    error = EventStorageOverflowError.new(att_id)
+
+    assert error.code == 507
+    assert error.att_id == att_id
+    assert error.detail() == f"Attributor {att_id} exceeded its memory budget."
 
 
 def test_attribution_http_exception():

@@ -152,6 +152,16 @@
               }
             }
           },
+          "507": {
+            "description": "Attributor {att_id} exceeded its memory budget.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EventStorageOverflowError"
+                }
+              }
+            }
+          },
           "422": {
             "description": "Validation Error",
             "content": {
@@ -198,6 +208,16 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/UnknownAttributorIdError"
+                }
+              }
+            }
+          },
+          "507": {
+            "description": "Attributor {att_id} exceeded its memory budget.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EventStorageOverflowError"
                 }
               }
             }
@@ -442,6 +462,16 @@
               }
             }
           },
+          "507": {
+            "description": "Attributor {att_id} exceeded its memory budget.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EventStorageOverflowError"
+                }
+              }
+            }
+          },
           "422": {
             "description": "Validation failed.",
             "content": {
@@ -512,6 +542,16 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/UnknownAttributorIdError"
+                }
+              }
+            }
+          },
+          "507": {
+            "description": "Attributor {att_id} exceeded its memory budget.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EventStorageOverflowError"
                 }
               }
             }
@@ -756,6 +796,16 @@
               }
             }
           },
+          "507": {
+            "description": "Attributor {att_id} exceeded its memory budget.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EventStorageOverflowError"
+                }
+              }
+            }
+          },
           "422": {
             "description": "Validation failed.",
             "content": {
@@ -826,6 +876,16 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/UnknownAttributorIdError"
+                }
+              }
+            }
+          },
+          "507": {
+            "description": "Attributor {att_id} exceeded its memory budget.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EventStorageOverflowError"
                 }
               }
             }
@@ -1780,6 +1840,26 @@
         ],
         "title": "DuplicateObservationError",
         "description": "Error for the case where repeated Observations are fed to an attributor."
+      },
+      "EventStorageOverflowError": {
+        "properties": {
+          "model_type": {
+            "type": "string",
+            "const": "EventStorageOverflowError",
+            "title": "Model Type"
+          },
+          "att_id": {
+            "type": "string",
+            "title": "Att Id"
+          }
+        },
+        "type": "object",
+        "required": [
+          "model_type",
+          "att_id"
+        ],
+        "title": "EventStorageOverflowError",
+        "description": "Error for when an attributor's event storage exceeds its memory budget.\n\nRaised instead of a generic 500 when ATTRIBUTOR_ALLOW_DISK_SPILL=false\n(the default for containerized deployments with no writable disk) and an\nattributor's DuckDB connection exceeds ATTRIBUTOR_DUCKDB_MEMORY_LIMIT.\nIsolated to the one attributor/request that triggered it."
       },
       "Format": {
         "type": "string",

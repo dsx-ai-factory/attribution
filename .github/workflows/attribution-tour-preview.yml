@@ -1,0 +1,146 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: LicenseRef-NvidiaProprietary
+#
+# NVIDIA CORPORATION, its affiliates and licensors retain all intellectual
+# property and proprietary rights in and to this material, related
+# documentation and any modifications thereto. Any use, reproduction,
+# disclosure or distribution of this material and related documentation
+# without an express license agreement from NVIDIA CORPORATION or
+# its affiliates is strictly prohibited.
+
+name: Attribution Process Walkthrough PR Preview
+
+on:
+  pull_request:
+    types:
+      - opened
+      - reopened
+      - synchronize
+      - closed
+    paths:
+      - .github/workflows/attribution-tour-pages.yml
+      - .github/workflows/attribution-tour-preview.yml
+      - docs/attribution-tour/**
+
+# Production and preview deployments share gh-pages. Serialize their pushes so
+# one deployment cannot overwrite another deployment's branch update.
+concurrency:
+  group: attribution-tour-pages
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    # Only same-repository pull requests receive published previews. Keep this
+    # job read-only because it checks out and executes pull-request code.
+    if: >-
+      github.event.action != 'closed' &&
+      github.event.pull_request.head.repo.full_name == github.repository
+    permissions:
+      contents: read
+    # Pull-request workflows cannot run on NVIDIA's self-hosted runners.
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+
+      - name: Set up Node.js
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: 22
+
+      - name: Enable pnpm
+        run: |
+          corepack enable
+          corepack prepare pnpm@10.11.0 --activate
+
+      - name: Install dependencies
+        working-directory: docs/attribution-tour
+        run: pnpm install --frozen-lockfile
+
+      - name: Build relocatable preview
+        working-directory: docs/attribution-tour
+        run: pnpm build --base /pr-preview/pr-${{ github.event.number }}/ --out dist
+
+      # Pages requires an entry file at the publishing root. The production
+      # workflow normally creates it after merge, so bootstrap it for the first
+      # PR preview as well.
+      - name: Stage Pages landing page
+        run: |
+          mkdir -p pages-root
+          cp docs/attribution-tour/pages-landing.html pages-root/index.html
+
+      - name: Upload preview artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: attribution-walkthrough-preview
+          path: |
+            docs/attribution-tour/dist
+            pages-root
+          if-no-files-found: error
+          retention-days: 1
+
+  publish:
+    # This job checks out only the trusted base revision and receives the static
+    # artifact; it never checks out or runs pull-request code with its token.
+    needs: build
+    if: >-
+      always() &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      (github.event.action == 'closed' || needs.build.result == 'success')
+    permissions:
+      actions: read
+      contents: write
+      pages: read
+      pull-requests: write
+    runs-on: ubuntu-latest
+    steps:
+      # The deployment actions require a Git worktree for their own commits.
+      - name: Check out trusted base revision
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          persist-credentials: false
+
+      - name: Download preview artifact
+        if: github.event.action != 'closed'
+        uses: actions/download-artifact@v4
+        with:
+          name: attribution-walkthrough-preview
+          path: .preview-artifact
+
+      - name: Publish Pages landing page
+        if: github.event.action != 'closed'
+        uses: peaceiris/actions-gh-pages@84c30a85c19949d7eee79c4ff27748b70285e453 # v4.1.0
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_branch: gh-pages
+          publish_dir: .preview-artifact/pages-root
+          keep_files: true
+          full_commit_message: Ensure Pages landing page exists for PR ${{ github.event.number }}
+
+      - name: Read GitHub Pages address
+        id: pages
+        continue-on-error: true
+        uses: actions/configure-pages@45bfe0192ca1faeb007ade9deae92b16b8254a0d # v6
+
+      - name: Normalize GitHub Pages address
+        id: pages_base
+        env:
+          PAGES_BASE_URL: ${{ steps.pages.outputs.base_url }}
+        run: |
+          normalized_url="${PAGES_BASE_URL#*://}"
+          printf 'value=%s\n' "${normalized_url%/}" >> "$GITHUB_OUTPUT"
+
+      - name: Publish PR preview
+        uses: rossjrw/pr-preview-action@ffa7509e91a3ec8dfc2e5536c4d5c1acdf7a6de9 # v1.8.1
+        with:
+          action: ${{ github.event.action == 'closed' && 'remove' || 'deploy' }}
+          source-dir: .preview-artifact/docs/attribution-tour/dist
+          preview-branch: gh-pages
+          # The preview action prepends https://, so pass the scheme-free host.
+          pages-base-url: ${{ steps.pages_base.outputs.value }}
+          wait-for-pages-deployment: ${{ steps.pages.outcome == 'success' }}
+          qr-code: false

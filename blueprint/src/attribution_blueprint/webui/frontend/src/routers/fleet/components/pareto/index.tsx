@@ -429,7 +429,7 @@ function OutcomeDonut({
   const centerLbl = sel
     ? sel.full
     : metric === 'count'
-      ? 'total attempts'
+      ? 'failed attempts'
       : 'GPU-hours'
   const centerPct = sel ? `${fmtPercent(new Decimal(sel.pct).times(100))}% of total` : ''
 
