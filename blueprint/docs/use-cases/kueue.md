@@ -32,9 +32,9 @@ deleted pod. Event recovery is a heuristic, not a guaranteed API contract: it
 parses Kubernetes' human-readable Event messages, which have no versioned
 schema.
 
-The included configuration uses mTLS for Loki. The client certificate and
-private key must exist on the blueprint host and be readable by the account
-running the CLI.
+Loki configuration requires an auth block. The included configuration uses
+mTLS, so its client certificate and private key must exist on the blueprint
+host and be readable by the account running the CLI.
 
 ## Identify the Kueue Workload
 
@@ -98,7 +98,8 @@ must provide `host_name` values that exactly match Kubernetes node names.
 Set `workload.gpus_per_node` to the workload's actual per-node GPU allocation.
 The blueprint assumes one training rank per GPU and uses this value to build the
 rank-to-node mapping sent to the Attribution Service. Omitting it silently uses
-the default of four GPUs per node.
+the default of four GPUs per node. The adapter's separately derived `gpu_count`
+is persisted for reporting; it does not replace `gpus_per_node` in rank mapping.
 
 If node syslogs are unavailable, remove the complete `[log.syslog]`,
 `[log.syslog.loki]`, and `[log.syslog.loki.auth]` sections. Pod-log attribution
@@ -180,6 +181,9 @@ uv run --project blueprint --frozen nvidia-attribution-blueprint \
 Missing Workload names are skipped. If no supplied names resolve, the CLI
 reports `0 execution contexts discovered`.
 
+For time-range discovery with optional node filtering, see
+[the Kueue configuration reference](../CONFIGURATION.md#ecakueue).
+
 ## Interpret the Result
 
 See [Kueue sample output](./kueue-sample-output.md) for complete, annotated
@@ -199,9 +203,9 @@ Kueue derives `FINISHED_SUCCEEDED` from a `Finished=True` condition with reason
 and preserves the original value as `kueue_state` in `raw_scheduler_json`. For
 `FINISHED_FAILED`, the adapter uses the direct Job or JobSet child Job reason
 to normalize the service-facing state to `TIMEOUT` or `FAILED`. Legacy
-`NodeLost` pod status and the Kubernetes 1.37 `DisruptionTarget=True`,
-`DeletionByPodGC` condition normalize the state to `NODE_FAIL`, even if Kueue
-remains `ADMITTED`. The adapter also normalizes `EVICTED_PREEMPTED` and
+`NodeLost` pod status and `DisruptionTarget=True` with
+`DeletionByPodGC` normalize the state to `NODE_FAIL`, even if Kueue remains
+`ADMITTED`. The adapter also normalizes `EVICTED_PREEMPTED` and
 `PREEMPTED` to the service-facing state `PREEMPTED`, and
 `EVICTED_NODEFAILURES` to `NODE_FAIL`. A native `Requeued=True` condition uses
 the existing service state `REQUEUED`. Other eviction reasons (queue

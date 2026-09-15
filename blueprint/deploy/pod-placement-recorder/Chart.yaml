@@ -1,0 +1,6 @@
+apiVersion: v2
+name: pod-placement-recorder
+description: Records durable Kueue Pod placement for NVIDIA Attribution Blueprint
+type: application
+version: 0.1.0
+appVersion: "0.1.0"

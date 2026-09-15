@@ -516,14 +516,7 @@ def test_disruption_target_pod_normalizes_admitted_workload_to_node_fail(mocker)
     assert ctx["failed_node"] == "node020"
 
 
-def test_taint_manager_disruption_target_normalizes_admitted_workload_to_node_fail(mocker):
-    """A node that goes unreachable without its Node API object ever being
-    deleted (crash, network partition) never gets a DeletionByPodGC
-    DisruptionTarget — only DeletionByTaintManager, once the NoExecute
-    toleration window expires. Verified empirically on a kind cluster
-    (2026-09-09): DeletionByPodGC requires an explicit Node deletion and is
-    never reached on this path even after 7.5 minutes.
-    """
+def test_taint_manager_disruption_target_does_not_imply_node_failure(mocker):
     workloads = deepcopy(WORKLOADS)
     workload = next(item for item in workloads["items"] if item["metadata"]["name"] == "job-still-running-qq01")
     workload["status"]["conditions"] = [
@@ -551,9 +544,9 @@ def test_taint_manager_disruption_target_normalizes_admitted_workload_to_node_fa
 
     ctx = KueueExecutionContextAdapter().discover_by_ids(["team-alpha/job-still-running-qq01"])[0]
 
-    assert ctx["state"] == "NODE_FAIL"
+    assert ctx["state"] == "ADMITTED"
     assert ctx["kueue_state"] == "ADMITTED"
-    assert ctx["failed_node"] == "node020"
+    assert "failed_node" not in ctx
 
 
 def test_evicted_workload_state_and_end_time(mocker):
@@ -1064,9 +1057,7 @@ def test_missing_live_pods_are_recovered_from_uid_matched_events(mocker):
 
 
 def test_missing_pod_and_node_lists_are_reported_when_events_cannot_recover_them(mocker):
-    warning = mocker.patch(
-        "attribution_blueprint.connectors.execution_contexts.kueue.connector.logger.warning"
-    )
+    warning = mocker.patch("attribution_blueprint.connectors.execution_contexts.kueue.connector.logger.warning")
     _wire_kubectl(mocker, pods_payload={"items": []}, events_payload={"items": []})
 
     ctx = KueueExecutionContextAdapter().discover_by_ids(["team-alpha/job-train-mnist-abc12"])[0]
@@ -1323,3 +1314,156 @@ def test_discover_by_time_range_intersects_csv_nodelist(mocker):
     contexts = eca.discover_by_time_range(start, end, nodelist=["node002, node005"])
     names = {c["name"] for c in contexts}
     assert names == {"job-llama-7b-pretrain-xyz77", "job-train-mnist-abc12"}
+
+
+class TestMergePlacementRecordsFailedNode:
+    """`_merge_placement_records` is the only merge source that can recover
+    `failed_node` after Pod GC — node-loss/exit-code evidence lives only on
+    the Pod object, so neither the PromQL placement route nor the Kubernetes
+    Events fallback can reconstruct it."""
+
+    def _record(self, *, node_name, node_failure_reason=None, pod_uid="pod-uid-1", pod_name="pod-a"):
+        from attribution_blueprint.connectors.execution_contexts.kueue.pod_placement.models import (
+            OwnerIdentity,
+            PlacementRecord,
+            WorkloadIdentity,
+        )
+
+        return PlacementRecord(
+            namespace="team-a",
+            workload=WorkloadIdentity(name="wl-a", uid="workload-uid-1"),
+            owner=OwnerIdentity(api_version="batch/v1", kind="Job", name="job-a", uid="job-uid-1"),
+            pod_name=pod_name,
+            pod_uid=pod_uid,
+            node_name=node_name,
+            observed_at="2026-05-01T00:00:00Z",
+            resolver_source="owner-uid",
+            node_failure_reason=node_failure_reason,
+        )
+
+    def _context(self, **overrides):
+        ctx = {
+            "namespace": "team-a",
+            "workload_uid": "workload-uid-1",
+            "nodes": [],
+            "state": "FAILED",
+        }
+        ctx.update(overrides)
+        return ctx
+
+    def test_record_with_failure_reason_sets_failed_node(self, mocker):
+        eca = KueueExecutionContextAdapter()
+        mocker.patch.object(
+            eca,
+            "_fetch_placement_records",
+            return_value=[self._record(node_name="node-a", node_failure_reason="NodeLost")],
+        )
+        ctx = self._context()
+
+        eca._merge_placement_records(ctx)
+
+        assert ctx["failed_node"] == "node-a"
+        assert ctx["state"] == "NODE_FAIL"
+
+    def test_record_without_failure_reason_does_not_set_failed_node(self, mocker):
+        eca = KueueExecutionContextAdapter()
+        mocker.patch.object(eca, "_fetch_placement_records", return_value=[self._record(node_name="node-a")])
+        ctx = self._context()
+
+        eca._merge_placement_records(ctx)
+
+        assert "failed_node" not in ctx
+        assert ctx["state"] == "FAILED"
+
+    @pytest.mark.parametrize("state", ["COMPLETED", "PREEMPTED", "NODE_FAIL"])
+    def test_higher_precedence_or_existing_node_fail_state_is_preserved(self, mocker, state):
+        eca = KueueExecutionContextAdapter()
+        mocker.patch.object(
+            eca,
+            "_fetch_placement_records",
+            return_value=[self._record(node_name="node-a", node_failure_reason="NodeLost")],
+        )
+        ctx = self._context(state=state)
+
+        eca._merge_placement_records(ctx)
+
+        assert ctx["state"] == state
+        assert ctx["failed_node"] == "node-a"
+
+    def test_retained_container_exit_does_not_reclassify_state(self, mocker):
+        eca = KueueExecutionContextAdapter()
+        mocker.patch.object(
+            eca,
+            "_fetch_placement_records",
+            return_value=[self._record(node_name="node-a", node_failure_reason="ExitCode:1")],
+        )
+        ctx = self._context(state="FAILED")
+
+        eca._merge_placement_records(ctx)
+
+        assert ctx["state"] == "FAILED"
+        assert ctx["failed_node"] == "node-a"
+
+    def test_live_pod_evidence_takes_precedence(self, mocker):
+        """Live-Pod-derived `failed_node` is read at the same moment `state`
+        was classified; a durably-recorded node must not override it."""
+        eca = KueueExecutionContextAdapter()
+        mocker.patch.object(
+            eca,
+            "_fetch_placement_records",
+            return_value=[self._record(node_name="node-b", node_failure_reason="NodeLost")],
+        )
+        ctx = self._context(failed_node="node-a")
+
+        eca._merge_placement_records(ctx)
+
+        assert ctx["failed_node"] == "node-a"
+
+    def test_lexicographically_smallest_node_wins_among_multiple_failures(self, mocker):
+        eca = KueueExecutionContextAdapter()
+        mocker.patch.object(
+            eca,
+            "_fetch_placement_records",
+            return_value=[
+                self._record(node_name="node-z", node_failure_reason="NodeLost", pod_uid="pod-uid-1", pod_name="pod-a"),
+                self._record(
+                    node_name="node-a", node_failure_reason="ExitCode:1", pod_uid="pod-uid-2", pod_name="pod-b"
+                ),
+            ],
+        )
+        ctx = self._context()
+
+        eca._merge_placement_records(ctx)
+
+        assert ctx["failed_node"] == "node-a"
+
+
+class TestPlacementReader:
+    def test_disabled_records_do_not_query_reader(self, mocker):
+        reader = mocker.Mock()
+        eca = KueueExecutionContextAdapter(placement_reader=reader)
+
+        assert eca._fetch_placement_records({"namespace": "ns", "workload_uid": "wl-uid"}) == []
+        reader.list_for_workload.assert_not_called()
+
+    def test_enabled_records_query_reader(self, mocker):
+        reader = mocker.Mock()
+        reader.list_for_workload.return_value = []
+        eca = KueueExecutionContextAdapter(placement_reader=reader, placement_records_enabled=True)
+
+        assert eca._fetch_placement_records({"namespace": "ns", "workload_uid": "wl-uid"}) == []
+        reader.list_for_workload.assert_called_once_with("ns", "wl-uid")
+
+    def test_enabled_records_propagate_reader_outage(self, mocker):
+        reader = mocker.Mock()
+        reader.list_for_workload.side_effect = OSError("unavailable")
+        eca = KueueExecutionContextAdapter(placement_reader=reader, placement_records_enabled=True)
+
+        with pytest.raises(RuntimeError, match="placement recorder lookup failed"):
+            eca._fetch_placement_records({"namespace": "ns", "workload_uid": "wl-uid"})
+
+    def test_enabled_records_require_reader(self):
+        eca = KueueExecutionContextAdapter(placement_records_enabled=True)
+
+        with pytest.raises(RuntimeError, match="no recorder client"):
+            eca._fetch_placement_records({"namespace": "ns", "workload_uid": "wl-uid"})

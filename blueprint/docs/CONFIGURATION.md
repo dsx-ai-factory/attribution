@@ -50,14 +50,18 @@ uv run --project blueprint --frozen nvidia-attribution-blueprint \
   --connector eca slurm ids "123456"
 ```
 
+
+
 ## CLI Flags
 
-| Flag | Repeatable | Meaning |
-|---|---:|---|
-| `--connector TOKEN...` | Yes | Configuration assignment. The last token is the value; earlier tokens form the path. `--connector eca slurm` selects a component, `--connector eca slurm ids "1,5"` sets a parameter. End a path with `help` to list valid keys at that level. |
-| `--config PATH` | Yes | TOML config file. When neither `--config` nor `--configs` is given, `./attribution-blueprint.toml` is used if it exists. |
-| `--configs DIR` | Yes | Directory of TOML configs. Runs every top-level `*.toml` file in sorted order, one attribution pass per file. Fails if the directory contains no top-level `.toml` files. |
-| `--dump-observations DIR` | No | Write collected observations to `DIR/<ctx-id>.<source>.json` before service-specific adaptation and submission. Multiple observations with the same context ID and source use the same path, so the last one replaces earlier dumps. |
+
+| Flag                      | Repeatable | Meaning                                                                                                                                                                                                                                        |
+| ------------------------- | ---------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `--connector TOKEN...`    | Yes        | Configuration assignment. The last token is the value; earlier tokens form the path. `--connector eca slurm` selects a component, `--connector eca slurm ids "1,5"` sets a parameter. End a path with `help` to list valid keys at that level. |
+| `--config PATH`           | Yes        | TOML config file. When neither `--config` nor `--configs` is given, `./attribution-blueprint.toml` is used if it exists.                                                                                                                       |
+| `--configs DIR`           | Yes        | Directory of TOML configs. Runs every top-level `*.toml` file in sorted order, one attribution pass per file. Fails if the directory contains no top-level `.toml` files.                                                                      |
+| `--dump-observations DIR` | No         | Write collected observations to `DIR/<ctx-id>.<source>.json` before service-specific adaptation and submission. Multiple observations with the same context ID and source use the same path, so the last one replaces earlier dumps.           |
+
 
 Notes:
 
@@ -65,16 +69,22 @@ Notes:
 - A component-qualified CLI or environment assignment also selects that component. `--connector eca kueue ids "team-a/wl-1"` sets `eca.kueue.ids` and implies `eca.component = "kueue"`. TOML does not imply selection; set `component` explicitly in TOML.
 - With `--configs`, environment variables and `--connector` assignments apply to every config file in the run.
 
+
+
 ## Required Sections
+
+
 
 ### `[attribution]`
 
 The blueprint uses this section to call the attribution service.
 
-| Field | Required | Default | Meaning |
-|---|---:|---|---|
-| `service_url` | Yes in practice | `http://localhost:8080` | Base URL for the attribution service. Set this explicitly because the service examples normally run on port `8000`. |
-| `timeout_seconds` | No | `60.0` | HTTP read timeout for service calls. |
+
+| Field             | Required        | Default                 | Meaning                                                                                                             |
+| ----------------- | --------------- | ----------------------- | ------------------------------------------------------------------------------------------------------------------- |
+| `service_url`     | Yes in practice | `http://localhost:8080` | Base URL for the attribution service. Set this explicitly because the service examples normally run on port `8000`. |
+| `timeout_seconds` | No              | `60.0`                  | HTTP read timeout for service calls.                                                                                |
+
 
 For the service v2 request lifecycle and wire schemas, see
 [Attribution Service REST API](./rest-api.md).
@@ -87,19 +97,23 @@ service_url = "http://127.0.0.1:8000"
 timeout_seconds = 60
 ```
 
+
+
 ### `[eca]` and `[eca.slurm]`
 
 `eca` means execution context adapter. For SLURM, it discovers jobs through `sacct`.
 
-| Field | Required | Default | Meaning |
-|---|---:|---|---|
-| `[eca].component` | No | `slurm` | Selects the execution context adapter: `slurm`, `kueue`, or `static`. Defaults to `slurm` when unset. |
-| `sacct_path` | No | `sacct` | Path to the `sacct` binary. Use an absolute path if `sacct` is not on `PATH`. |
-| `cluster_tz` | Strongly recommended | blueprint host fixed offset | IANA timezone for the SLURM controller, used to anchor naive `sacct` timestamps and preserve regional/DST identity. |
-| `ids` | Per run | none | Comma-separated job IDs. Usually pass this by CLI, not TOML. |
-| `start_time` | Per run | none | ISO-8601 time for time-range mode. |
-| `end_time` | Per run | none | ISO-8601 time for time-range mode. Required with `start_time`. |
-| `nodelist` | Per run | none | Optional node or SLURM node range filter for time-range mode. |
+
+| Field             | Required             | Default                     | Meaning                                                                                                             |
+| ----------------- | -------------------- | --------------------------- | ------------------------------------------------------------------------------------------------------------------- |
+| `[eca].component` | No                   | `slurm`                     | Selects the execution context adapter: `slurm`, `kueue`, or `static`. Defaults to `slurm` when unset.               |
+| `sacct_path`      | No                   | `sacct`                     | Path to the `sacct` binary. Use an absolute path if `sacct` is not on `PATH`.                                       |
+| `cluster_tz`      | Strongly recommended | blueprint host fixed offset | IANA timezone for the SLURM controller, used to anchor naive `sacct` timestamps and preserve regional/DST identity. |
+| `ids`             | Per run              | none                        | Comma-separated job IDs. Usually pass this by CLI, not TOML.                                                        |
+| `start_time`      | Per run              | none                        | ISO-8601 time for time-range mode.                                                                                  |
+| `end_time`        | Per run              | none                        | ISO-8601 time for time-range mode. Required with `start_time`.                                                      |
+| `nodelist`        | Per run              | none                        | Optional node or SLURM node range filter for time-range mode.                                                       |
+
 
 Example:
 
@@ -143,6 +157,8 @@ the Service.
 - Symptom: sacct timestamps are shifted by hours, causing attribution windows to miss the real job range.
 - How to find the right value: run `timedatectl` on the slurmctld host, or ask cluster ops for the canonical IANA timezone (for example, `America/Los_Angeles` or `UTC`).
 
+
+
 ### `[eca.kueue]`
 
 Use the Kueue adapter for Kubernetes batch workloads managed by Kueue. It shells
@@ -161,6 +177,7 @@ kubeconfig = "/path/to/kubeconfig"
 context = "prod-batch"
 namespace = "team-a"
 timeout_seconds = 60
+placement_records_enabled = false
 ```
 
 Runtime selector examples:
@@ -175,26 +192,111 @@ uv run --project blueprint --frozen nvidia-attribution-blueprint --config ./attr
   --connector eca kueue nodelist "gpu-node-a,gpu-node-b"
 ```
 
-| Field | Required | Default | Meaning |
-|---|---:|---|---|
-| `ids` | Per run | none | Comma-separated Workload refs. Use `<namespace>/<name>` unless `namespace` is configured. |
-| `start_time` | Per run | none | ISO-8601 time for time-range mode. |
-| `end_time` | Per run | none | ISO-8601 time for time-range mode. Required with `start_time`. |
-| `nodelist` | Per run | none | Optional comma-separated Kubernetes node names for time-range mode. |
-| `kubectl_path` | No | `kubectl` | Path to the `kubectl` binary. |
-| `kubeconfig` | No | kubectl default | Optional kubeconfig path. |
-| `context` | No | current context | Optional kubeconfig context name. |
-| `namespace` | No | all namespaces | Optional namespace scope. Also allows bare workload names in `ids` mode. |
-| `timeout_seconds` | No | `60` | Timeout for each `kubectl` command. |
 
-Kueue time-range filtering is client-side because the Workload API does not
-provide server-side time filtering. The adapter reads pod and node names from
-live owned pods first. When either list is unavailable, it makes a best-effort
-recovery from the owner Job's `SuccessfulCreate` Events and the pods'
-`Scheduled` Events, matched by owner UID and execution interval. Kubernetes
-Events are short-lived and may already be gone; if recovery fails, the adapter
-reports which list is unavailable. A deleted pod's recovered name does not
-make `kubectl logs` available again.
+| Field                    | Required | Default         | Meaning                                                                                                           |
+| ------------------------ | -------- | --------------- | ----------------------------------------------------------------------------------------------------------------- |
+| `ids`                    | Per run  | none            | Comma-separated Workload refs. Use `<namespace>/<name>` unless `namespace` is configured.                         |
+| `start_time`             | Per run  | none            | ISO-8601 time for time-range mode.                                                                                |
+| `end_time`               | Per run  | none            | ISO-8601 time for time-range mode. Required with `start_time`.                                                    |
+| `nodelist`               | Per run  | none            | Optional comma-separated Kubernetes node names for time-range mode.                                               |
+| `kubectl_path`           | No       | `kubectl`       | Path to the `kubectl` binary.                                                                                     |
+| `kubeconfig`             | No       | kubectl default | Optional kubeconfig path.                                                                                         |
+| `context`                | No       | current context | Optional kubeconfig context name.                                                                                 |
+| `namespace`              | No       | all namespaces  | Optional namespace scope. Also allows bare workload names in `ids` mode.                                          |
+| `timeout_seconds`        | No       | `60`            | Timeout for each `kubectl` command.                                                                               |
+| `placement_records_enabled` | No    | `false`         | Reads retained placement from the configured recorder; discovery fails if the recorder cannot be read.            |
+
+
+The baseline Kueue adapter does not require the placement recorder or Prometheus. It
+uses live Pods and a best-effort Kubernetes Events fallback. If Pods and their
+Events are cleaned up before attribution, the execution context can have
+missing `nodes` or `pod_names`; downstream node-scoped metrics and deleted Pod
+logs will then be incomplete.
+
+#### Pod placement recorder setup
+
+Install the recorder before the workloads whose placement must be retained. A
+single-replica StatefulSet writes PlacementRecord JSON to SQLite on a
+`ReadWriteOnce` PVC and serves it through a ClusterIP Service.
+See the
+[recorder architecture, usage, and troubleshooting reference](../src/attribution_blueprint/connectors/execution_contexts/kueue/pod_placement/recorder/docs/README.md).
+
+Build the image, then install the SQLite backend:
+
+```bash
+kubectl config current-context
+docker build \
+  -f blueprint/docker/pod-placement-recorder.Dockerfile \
+  -t registry.example/pod-placement-recorder:VERSION .
+docker push registry.example/pod-placement-recorder:VERSION
+
+YES=1 RELEASE_NAME=attribution \
+  ./blueprint/scripts/install-pod-placement-recorder.sh team-a \
+  --set image.repository=registry.example/pod-placement-recorder \
+  --set image.tag=VERSION \
+  --set image.pullPolicy=IfNotPresent
+```
+
+For kind, load the locally built image with
+`kind load docker-image pod-placement-recorder:local --name CLUSTER` and keep
+the chart's default image values. Place the recorder on a system node pool
+outside the failure domain it observes. The chart accepts `nodeSelector` and
+`tolerations` values for that purpose; a recorder that fails with the workload
+cannot retain the workload's final Pod update. SQLite PVC settings are
+`storage.sqlite.size`, `storage.sqlite.storageClassName`, and
+`storage.sqlite.accessModes`. Records are removed automatically after
+`retentionDays`, which defaults to `30`.
+
+After installation, wait for the StatefulSet and verify its read API:
+
+```bash
+kubectl -n team-a rollout status statefulset/attribution-pod-placement-recorder
+kubectl -n team-a port-forward service/attribution-pod-placement-recorder 18080:8080
+curl -fsS \
+  'http://127.0.0.1:18080/v1/placements?namespace=team-a&workload_uid=WORKLOAD_UID'
+```
+
+Point an in-cluster Blueprint at the Service:
+
+```toml
+[eca.kueue]
+placement_records_enabled = true
+
+[eca.kueue.placement_recorder]
+endpoint = "http://attribution-pod-placement-recorder.team-a.svc:8080"
+timeout_seconds = 10
+```
+
+`endpoint` is required when this section is present; `timeout_seconds`
+defaults to `10`. Optional `auth` supports `token` (`token_env`, optional
+`org_id`) or `mtls` (`cert_path`, `key_path`, optional `ca_cert_path` and
+`org_id`).
+
+When enabled, recorder lookup is fail-closed. After deleting a completed Pod,
+a validation run should retain the
+same Pod UID and node with `pod_placements[].source = "placement_record"`.
+For node-loss validation, `nodeFailureReason` must be present before the
+Pod disappears; post-hoc attribution should then return `NODE_FAIL` and the
+recorded `failed_node`. If Blueprint runs outside the cluster, use an
+authenticated proxy or port-forward and set the endpoint to that reachable
+URL. Optional `placement_recorder.auth` supports the same `token` and `mtls`
+fields as the Prometheus source. The recorder itself does not terminate
+authentication, so keep its Service private or place an authenticated proxy
+in front of it.
+
+For durable pod-to-node placement, install one pod-placement-recorder release per namespace:
+
+```bash
+YES=1 blueprint/scripts/install-pod-placement-recorder.sh team-a
+```
+
+The preview supports Job and JobSet owners and stores node names without
+reading Node objects; JobSet support does not require its API on Jobs-only
+clusters. Recorder `queueSize` and `workers` must be positive. Runtime API
+defaults are Kueue Workload `v1beta1` and JobSet `v1alpha2`; override
+`workloadVersion` or `jobsetVersion` to match the installed controllers.
+SQLite records older than `retentionDays` are removed automatically; the
+default is 30 days.
 
 The adapter derives `kueue_state` from Kueue conditions, using finished
 conditions before evicted, preempted, admitted, quota-reserved, and pending
@@ -204,8 +306,11 @@ becomes `FINISHED_SUCCEEDED`. It also exposes a service-facing `state`.
 normalized to `TIMEOUT` when its direct Job or a JobSet child Job failed with
 reason `DeadlineExceeded`, and otherwise to `FAILED`. A selected pod carrying
 either the legacy reason `NodeLost` or a `DisruptionTarget=True` condition with
-reason `DeletionByPodGC` normalizes the service-facing state to `NODE_FAIL`,
-even when Kueue still reports the workload as admitted. Both
+reason `DeletionByPodGC` normalizes the
+service-facing state to `NODE_FAIL`, even when Kueue still reports the workload
+as admitted. The same retained PlacementRecord evidence restores `NODE_FAIL`
+after Pod deletion, without changing the existing `EVICTED_NODEFAILURES`
+mapping. Both
 `EVICTED_PREEMPTED` and `PREEMPTED` are normalized to `PREEMPTED`, while
 `EVICTED_NODEFAILURES` becomes `NODE_FAIL`. A native `Requeued=True` condition
 becomes the existing service state `REQUEUED`. Other eviction reasons (queue
@@ -263,23 +368,25 @@ component = "static"
 contexts_path = "path/to/static-contexts.json"
 ```
 
-| Field | Required | Default | Meaning |
-|---|---:|---|---|
-| `contexts_path` | Alternative to inline fields | none | JSON file containing either a context list or an object with a `contexts` list. Each context requires `id`, `start_time`, `end_time` (timezone-aware), and `nodes`; duplicate `id` values are rejected. Optional `timezone` values are validated as IANA names. |
-| `id` | No for inline mode | `static-<hash>` | Execution context ID. The default hash is derived from `start_time`, `end_time`, and `nodes`. |
-| `start_time` | Yes for inline mode | none | Timezone-aware ISO-8601 start time. |
-| `end_time` | Yes for inline mode | none | Timezone-aware ISO-8601 end time. |
-| `timezone` | No | inferred when safe | IANA timezone used to interpret offsetless evidence. Set it when timestamps use a non-hour numeric offset or the workload uses a regional timezone, such as `Asia/Kolkata` or `America/Los_Angeles`. |
-| `nodes` | Yes for inline mode | none | Node list. Accepts a TOML list or a comma-separated string. |
-| `state` | No | `UNKNOWN` | Scheduler state sent unchanged as the service workload `status`. This is not the attribution verdict. |
-| `name` | No | none | Workload name. |
-| `user_name` | No | none | Workload owner. |
-| `std_out` | No | none | Path used by local file APPLOG placeholders. |
-| `std_err` | No | none | Path used by local file APPLOG placeholders. |
-| `workload_type` | No | empty string | Workload type sent unchanged to service v2. The v2 schema accepts any string. Examples include `slurm`, `runai`, and `kueue`; the empty string means unspecified. |
-| `workload_framework` | No | none | Optional framework label, such as `pytorch`. |
-| `attempt_id` | No | `0` | Attempt key used by outputs. |
-| `gpu_count` | No | none | Optional allocated GPU count used by outputs and the web UI. |
+
+| Field                | Required                     | Default            | Meaning                                                                                                                                                                                                                                                         |
+| -------------------- | ---------------------------- | ------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `contexts_path`      | Alternative to inline fields | none               | JSON file containing either a context list or an object with a `contexts` list. Each context requires `id`, `start_time`, `end_time` (timezone-aware), and `nodes`; duplicate `id` values are rejected. Optional `timezone` values are validated as IANA names. |
+| `id`                 | No for inline mode           | `static-<hash>`    | Execution context ID. The default hash is derived from `start_time`, `end_time`, and `nodes`.                                                                                                                                                                   |
+| `start_time`         | Yes for inline mode          | none               | Timezone-aware ISO-8601 start time.                                                                                                                                                                                                                             |
+| `end_time`           | Yes for inline mode          | none               | Timezone-aware ISO-8601 end time.                                                                                                                                                                                                                               |
+| `timezone`           | No                           | inferred when safe | IANA timezone used to interpret offsetless evidence. Set it when timestamps use a non-hour numeric offset or the workload uses a regional timezone, such as `Asia/Kolkata` or `America/Los_Angeles`.                                                            |
+| `nodes`              | Yes for inline mode          | none               | Node list. Accepts a TOML list or a comma-separated string.                                                                                                                                                                                                     |
+| `state`              | No                           | `UNKNOWN`          | Scheduler state sent unchanged as the service workload `status`. This is not the attribution verdict.                                                                                                                                                           |
+| `name`               | No                           | none               | Workload name.                                                                                                                                                                                                                                                  |
+| `user_name`          | No                           | none               | Workload owner.                                                                                                                                                                                                                                                 |
+| `std_out`            | No                           | none               | Path used by local file APPLOG placeholders.                                                                                                                                                                                                                    |
+| `std_err`            | No                           | none               | Path used by local file APPLOG placeholders.                                                                                                                                                                                                                    |
+| `workload_type`      | No                           | empty string       | Workload type sent unchanged to service v2. The v2 schema accepts any string. Examples include `slurm`, `runai`, and `kueue`; the empty string means unspecified.                                                                                               |
+| `workload_framework` | No                           | none               | Optional framework label, such as `pytorch`.                                                                                                                                                                                                                    |
+| `attempt_id`         | No                           | `0`                | Attempt key used by outputs.                                                                                                                                                                                                                                    |
+| `gpu_count`          | No                           | none               | Optional allocated GPU count used by outputs and the web UI.                                                                                                                                                                                                    |
+
 
 `state` is an open scheduler string, not a closed enum. Its value can affect
 fallback attribution when no stronger log or metric symptom exists. The
@@ -301,9 +408,11 @@ ranks-per-node value. In the supported training model, one rank runs on one GPU,
 so GPUs per node and ranks per node are the same number. Review this for your
 cluster before deploying; mismatches silently break rank-to-node attribution.
 
-| Field | Required | Default | Meaning |
-|---|---:|---|---|
-| `gpus_per_node` | No | `4` | GPUs per node (ranks per node). The blueprint uses this to build the service v2 node-to-ranks payload. Default: `4`, applied when this key is unset. **You should review and override this for your cluster.** Clusters with a different GPU count per node will produce incorrect rank-to-node attribution if this is left at the default. |
+
+| Field           | Required | Default | Meaning                                                                                                                                                                                                                                                                                                                                     |
+| --------------- | -------- | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `gpus_per_node` | No       | `4`     | GPUs per node (ranks per node). The blueprint uses this to build the service v2 node-to-ranks payload. Default: `4`, applied when this key is unset. **You should review and override this for your cluster.** Clusters with a different GPU count per node will produce incorrect rank-to-node attribution if this is left at the default. |
+
 
 Example:
 
@@ -331,9 +440,11 @@ component = "sqlite"
 path = "./attributions.db"
 ```
 
-| Field | Required | Meaning |
-|---|---:|---|
-| `path` | Yes | SQLite database file path. Example: `./attributions.db`. Build fails with `MCAError` if absent. |
+
+| Field  | Required | Meaning                                                                                         |
+| ------ | -------- | ----------------------------------------------------------------------------------------------- |
+| `path` | Yes      | SQLite database file path. Example: `./attributions.db`. Build fails with `MCAError` if absent. |
+
 
 Stdout output:
 
@@ -355,6 +466,8 @@ component = "sqlite"
 path = "./attributions.db"
 ```
 
+
+
 ## Log Collection
 
 Log evidence is required for attribution. Logs must either be sent directly to
@@ -374,14 +487,18 @@ The supported log components are:
 - `loki`, query Loki over HTTP
 - `kubectl_logs`, collect Kubernetes pod logs for Kueue workloads
 
+
+
 ### Evidence Coverage
 
-| Logs available to the Attribution Service | Expected coverage | Main limitation |
-|---|---|---|
-| APPLOG and SYSLOG | Recommended for the highest accuracy. SYSLOG provides node and GPU evidence, while APPLOG adds process and framework context plus more visibility into network and communication failures. | Coverage still depends on the events present in the collected logs. |
-| SYSLOG only | Supports most GPU-related attributions from kernel, driver, and node events. | Application context is absent, and network visibility is reduced. |
-| APPLOG only | Supports application and framework evidence, including network or communication failures reported in workload output. | GPU and hardware attributions may be missed when the relevant evidence exists only in node logs. |
-| No logs | Insufficient evidence for attribution. | Send logs directly to the Attribution Service or configure Attribution Blueprint to collect them. |
+
+| Logs available to the Attribution Service | Expected coverage                                                                                                                                                                          | Main limitation                                                                                   |
+| ----------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------- |
+| APPLOG and SYSLOG                         | Recommended for the highest accuracy. SYSLOG provides node and GPU evidence, while APPLOG adds process and framework context plus more visibility into network and communication failures. | Coverage still depends on the events present in the collected logs.                               |
+| SYSLOG only                               | Supports most GPU-related attributions from kernel, driver, and node events.                                                                                                               | Application context is absent, and network visibility is reduced.                                 |
+| APPLOG only                               | Supports application and framework evidence, including network or communication failures reported in workload output.                                                                      | GPU and hardware attributions may be missed when the relevant evidence exists only in node logs.  |
+| No logs                                   | Insufficient evidence for attribution.                                                                                                                                                     | Send logs directly to the Attribution Service or configure Attribution Blueprint to collect them. |
+
 
 If logs are available for only some workload nodes, attribution has reduced
 evidence coverage for the missing nodes and may be unable to assign node
@@ -399,22 +516,26 @@ component = "local_file"
 paths = ["{std_out}", "{std_err}"]
 ```
 
-| Field | Required | Default | Meaning |
-|---|---:|---|---|
-| `paths` | Yes | none | Path templates to read. Accepts a list or a single string. |
-| `max_bytes` | No | `2GB` | Per-file cap. Accepts an integer byte count or a size string such as `500MB` or `2G` (binary multiples, suffixes through `TB`). |
+
+| Field       | Required | Default | Meaning                                                                                                                         |
+| ----------- | -------- | ------- | ------------------------------------------------------------------------------------------------------------------------------- |
+| `paths`     | Yes      | none    | Path templates to read. Accepts a list or a single string.                                                                      |
+| `max_bytes` | No       | `2GB`   | Per-file cap. Accepts an integer byte count or a size string such as `500MB` or `2G` (binary multiples, suffixes through `TB`). |
+
 
 Supported placeholders include:
 
-| Placeholder | Meaning |
-|---|---|
-| `{std_out}` | Resolved `StdOut` path from `sacct`. |
-| `{std_err}` | Resolved `StdErr` path from `sacct`. |
-| `{job_id}` | Job ID from the execution context. Falls back to the context ID when unset. |
-| `{name}` | SLURM job name. |
-| `{user_name}` | SLURM user. |
-| `{start_time_ns}` | Execution context start time in nanoseconds. |
-| `{end_time_ns}` | Execution context end time in nanoseconds. |
+
+| Placeholder       | Meaning                                                                     |
+| ----------------- | --------------------------------------------------------------------------- |
+| `{std_out}`       | Resolved `StdOut` path from `sacct`.                                        |
+| `{std_err}`       | Resolved `StdErr` path from `sacct`.                                        |
+| `{job_id}`        | Job ID from the execution context. Falls back to the context ID when unset. |
+| `{name}`          | SLURM job name.                                                             |
+| `{user_name}`     | SLURM user.                                                                 |
+| `{start_time_ns}` | Execution context start time in nanoseconds.                                |
+| `{end_time_ns}`   | Execution context end time in nanoseconds.                                  |
+
 
 Scheduler-specific placeholders such as `{array_id}` and `{attempt_index}` are not supported by the local file connector. Use `{std_out}` and `{std_err}` for SLURM output files; the SLURM execution context adapter resolves scheduler filename tokens before the local file connector sees them.
 
@@ -486,20 +607,22 @@ ca_cert_path = "/etc/attribution/ca.crt"
 
 Fields:
 
-| Field | Required | Meaning |
-|---|---:|---|
-| `endpoint` | Yes | Loki base URL. |
-| `auth.type` | Yes | `token` or `mtls`. |
-| `auth.token_env` | Yes for token | Environment variable that contains the bearer token. |
-| `auth.cert_path` | Yes for mTLS | Client certificate path. |
-| `auth.key_path` | Yes for mTLS | Client private key path. |
-| `auth.ca_cert_path` | No | CA bundle path. |
-| `auth.org_id` | No | Optional `X-Scope-OrgID` value. |
-| `query_kwargs` | Usually | Label values used by bundled LogQL templates. |
-| `query` | No | Single custom LogQL template. Replaces the bundled templates for this source. |
-| `queries` | No | List of custom LogQL templates. Replaces the bundled templates for this source. Takes precedence over `query` when both are set. |
-| `node_label` | No | Loki stream label used as the node name, and spliced into each query to scope it to the context's nodes. Defaults to `host_name`. |
-| `timeout_seconds` | No | HTTP timeout. Defaults to `60.0`. |
+
+| Field               | Required      | Meaning                                                                                                                           |
+| ------------------- | ------------- | --------------------------------------------------------------------------------------------------------------------------------- |
+| `endpoint`          | Yes           | Loki base URL.                                                                                                                    |
+| `auth.type`         | Yes           | `token` or `mtls`.                                                                                                                |
+| `auth.token_env`    | Yes for token | Environment variable that contains the bearer token.                                                                              |
+| `auth.cert_path`    | Yes for mTLS  | Client certificate path.                                                                                                          |
+| `auth.key_path`     | Yes for mTLS  | Client private key path.                                                                                                          |
+| `auth.ca_cert_path` | No            | CA bundle path.                                                                                                                   |
+| `auth.org_id`       | No            | Optional `X-Scope-OrgID` value.                                                                                                   |
+| `query_kwargs`      | Usually       | Label values used by bundled LogQL templates.                                                                                     |
+| `query`             | No            | Single custom LogQL template. Replaces the bundled templates for this source.                                                     |
+| `queries`           | No            | List of custom LogQL templates. Replaces the bundled templates for this source. Takes precedence over `query` when both are set.  |
+| `node_label`        | No            | Loki stream label used as the node name, and spliced into each query to scope it to the context's nodes. Defaults to `host_name`. |
+| `timeout_seconds`   | No            | HTTP timeout. Defaults to `60.0`.                                                                                                 |
+
 
 The bundled Loki templates are examples. If your labels are not `service_name`, `app`, or `host_name`, set `query`, `queries`, `query_kwargs`, and `node_label` for your environment.
 
@@ -528,17 +651,19 @@ timeout_seconds = 60
 
 Fields:
 
-| Field | Required | Default | Meaning |
-|---|---:|---|---|
-| `kubectl_path` | No | `kubectl` | Path to the `kubectl` binary. |
-| `kubeconfig` | No | kubectl default | Optional kubeconfig path. |
-| `context` | No | current context | Optional kubeconfig context name. |
-| `container` | No | all containers | Container name. When omitted, logs are read with `--all-containers=true`. |
-| `timestamps` | No | `true` | Include timestamps in `kubectl logs` output. |
-| `previous` | No | `false` | Read logs from a previous container instance. |
-| `since_context_start` | No | `false` | Add `--since-time` using the execution context start time. |
-| `max_bytes_per_pod` | No | `16MB` | Tail cap applied to each pod log. Accepts an integer byte count or a size string such as `16MB`. |
-| `timeout_seconds` | No | `60` | Timeout for each `kubectl logs` command. |
+
+| Field                 | Required | Default         | Meaning                                                                                          |
+| --------------------- | -------- | --------------- | ------------------------------------------------------------------------------------------------ |
+| `kubectl_path`        | No       | `kubectl`       | Path to the `kubectl` binary.                                                                    |
+| `kubeconfig`          | No       | kubectl default | Optional kubeconfig path.                                                                        |
+| `context`             | No       | current context | Optional kubeconfig context name.                                                                |
+| `container`           | No       | all containers  | Container name. When omitted, logs are read with `--all-containers=true`.                        |
+| `timestamps`          | No       | `true`          | Include timestamps in `kubectl logs` output.                                                     |
+| `previous`            | No       | `false`         | Read logs from a previous container instance.                                                    |
+| `since_context_start` | No       | `false`         | Add `--since-time` using the execution context start time.                                       |
+| `max_bytes_per_pod`   | No       | `16MB`          | Tail cap applied to each pod log. Accepts an integer byte count or a size string such as `16MB`. |
+| `timeout_seconds`     | No       | `60`            | Timeout for each `kubectl logs` command.                                                         |
+
 
 `timestamps`, `previous`, and `since_context_start` accept TOML booleans, or
 the strings `true`/`false` (also `yes`/`no`/`1`/`0`) when set from the CLI or
@@ -582,14 +707,16 @@ token_env = "MIMIR_TOKEN"
 
 Fields:
 
-| Field | Required | Meaning |
-|---|---:|---|
-| `endpoint` | Yes | Prometheus-compatible HTTP API base URL. |
-| `cluster` | Yes | Cluster label value used by bundled PromQL templates. |
-| `auth.type` | No | Optional. If present, `token` or `mtls`; same auth fields as Loki. Omit the `auth` block for unauthenticated endpoints. |
-| `step_seconds` | No | Query step size. Defaults to `60`. |
-| `timeout_seconds` | No | HTTP timeout. Defaults to `60.0`. |
-| `queries` | No | Custom named PromQL templates. These extend the bundled templates and override bundled templates with the same name. |
+
+| Field             | Required | Meaning                                                                                                                 |
+| ----------------- | -------- | ----------------------------------------------------------------------------------------------------------------------- |
+| `endpoint`        | Yes      | Prometheus-compatible HTTP API base URL.                                                                                |
+| `cluster`         | Yes      | Cluster label value used by bundled PromQL templates.                                                                   |
+| `auth.type`       | No       | Optional. If present, `token` or `mtls`; same auth fields as Loki. Omit the `auth` block for unauthenticated endpoints. |
+| `step_seconds`    | No       | Query step size. Defaults to `60`.                                                                                      |
+| `timeout_seconds` | No       | HTTP timeout. Defaults to `60.0`.                                                                                       |
+| `queries`         | No       | Custom named PromQL templates. These extend the bundled templates and override bundled templates with the same name.    |
+
 
 The bundled PromQL templates expect labels such as `s_cluster` and `net_host_name`. If your metrics use different labels, override the relevant query templates.
 
@@ -609,7 +736,7 @@ export NVAB_OUTPUT_DB_SQLITE_PATH="./attributions.db"
 
 CLI values still win over environment variables.
 
-**Warning:** Env vars override TOML, and CLI flags override env vars. A stale `NVAB_*` in your shell will silently win against your config file. Run `env | grep NVAB_` before debugging unexpected config behavior.
+**Warning:** Env vars override TOML, and CLI flags override env vars. A stale `NVAB_`* in your shell will silently win against your config file. Run `env | grep NVAB_` before debugging unexpected config behavior.
 
 Unknown `NVAB_`-prefixed variables are logged as warnings and ignored, so unrelated `NVAB_` variables from other tooling do not abort a run.
 
@@ -641,11 +768,13 @@ This builds the configured connectors and exits with zero verdicts. It does not 
 
 The read-side dashboard, `nvidia-attribution-blueprint-web`, is a separate binary that reads the SQLite database written by the `sqlite` output. It takes no TOML or `NVAB_` configuration.
 
-| Flag | Required | Default | Meaning |
-|---|---:|---|---|
-| `--db` | Yes | none | Path to the attribution SQLite database. |
-| `--host` | No | `127.0.0.1` | Listen address. |
-| `--port` | No | `8080` | Listen port. |
+
+| Flag     | Required | Default     | Meaning                                  |
+| -------- | -------- | ----------- | ---------------------------------------- |
+| `--db`   | Yes      | none        | Path to the attribution SQLite database. |
+| `--host` | No       | `127.0.0.1` | Listen address.                          |
+| `--port` | No       | `8080`      | Listen port.                             |
+
 
 The web binary needs the optional `web` extra (FastAPI and uvicorn) and a built
 front-end bundle. The helper script `blueprint/scripts/webui.sh` builds the
