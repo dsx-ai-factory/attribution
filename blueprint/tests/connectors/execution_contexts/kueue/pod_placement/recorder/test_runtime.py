@@ -9,10 +9,13 @@
 # its affiliates is strictly prohibited.
 
 import pytest
+from kubernetes.client.exceptions import ApiException
 
 from attribution_blueprint.connectors.execution_contexts.kueue.helpers import OwnerIdentity, WorkloadIdentity
 from attribution_blueprint.connectors.execution_contexts.kueue.pod_placement.recorder.runtime import (
+    KubernetesIdentityResolver,
     PodPlacementRecorder,
+    ResolutionPending,
 )
 from attribution_blueprint.connectors.execution_contexts.kueue.pod_placement.store import CreateResult
 
@@ -40,6 +43,37 @@ def _resolved():
     )
 
 
+def _owned_pod(*, annotation=True):
+    pod = _pod()
+    pod["metadata"]["ownerReferences"] = [
+        {"apiVersion": "batch/v1", "kind": "Job", "name": "job-a", "uid": "job-uid-1", "controller": True}
+    ]
+    if annotation:
+        pod["metadata"]["annotations"] = {"kueue.x-k8s.io/workload": "wl-a"}
+    return pod
+
+
+def _workload(owner_kind="Job", owner_name="job-a", owner_uid="job-uid-1"):
+    return {
+        "apiVersion": "kueue.x-k8s.io/v1beta1",
+        "kind": "Workload",
+        "metadata": {
+            "namespace": "ns",
+            "name": "wl-a",
+            "uid": "wl-uid-1",
+            "ownerReferences": [
+                {
+                    "apiVersion": "batch/v1" if owner_kind == "Job" else "jobset.x-k8s.io/v1alpha2",
+                    "kind": owner_kind,
+                    "name": owner_name,
+                    "uid": owner_uid,
+                    "controller": True,
+                }
+            ],
+        },
+    }
+
+
 @pytest.mark.parametrize(("field", "kwargs"), [("queue_size", {"queue_size": 0}), ("workers", {"workers": 0})])
 def test_recorder_rejects_non_positive_capacity(mocker, field, kwargs):
     with pytest.raises(ValueError, match=field):
@@ -50,6 +84,102 @@ def test_recorder_rejects_non_positive_capacity(mocker, field, kwargs):
             namespace="ns",
             **kwargs,
         )
+
+
+class TestKubernetesIdentityResolver:
+    def test_resolves_annotated_job(self, mocker):
+        batch_api = mocker.Mock()
+        batch_api.read_namespaced_job.return_value.to_dict.return_value = {
+            "metadata": {"namespace": "ns", "name": "job-a", "uid": "job-uid-1"}
+        }
+        custom_api = mocker.Mock()
+        custom_api.get_namespaced_custom_object.return_value = _workload()
+
+        result = KubernetesIdentityResolver(batch_api, custom_api).resolve(_owned_pod())
+
+        assert result == (*_resolved()[:2], "kueue-workload-annotation")
+        custom_api.get_namespaced_custom_object.assert_called_once_with(
+            "kueue.x-k8s.io", "v1beta1", "ns", "workloads", "wl-a"
+        )
+
+    def test_resolves_jobset_by_owner_uid(self, mocker):
+        batch_api = mocker.Mock()
+        batch_api.read_namespaced_job.return_value.to_dict.return_value = {
+            "metadata": {
+                "namespace": "ns",
+                "name": "job-a",
+                "uid": "job-uid-1",
+                "owner_references": [
+                    {
+                        "api_version": "jobset.x-k8s.io/v1alpha2",
+                        "kind": "JobSet",
+                        "name": "set-a",
+                        "uid": "set-uid-1",
+                        "controller": True,
+                    }
+                ],
+            }
+        }
+        jobset = {
+            "apiVersion": "jobset.x-k8s.io/v1alpha2",
+            "kind": "JobSet",
+            "metadata": {"namespace": "ns", "name": "set-a", "uid": "set-uid-1"},
+        }
+        custom_api = mocker.Mock()
+        custom_api.get_namespaced_custom_object.return_value = jobset
+        custom_api.list_namespaced_custom_object.return_value = {
+            "items": [_workload("JobSet", "set-a", "set-uid-1")]
+        }
+
+        workload, owner, source = KubernetesIdentityResolver(batch_api, custom_api).resolve(
+            _owned_pod(annotation=False)
+        )
+
+        assert workload == WorkloadIdentity(name="wl-a", uid="wl-uid-1")
+        assert owner == OwnerIdentity("jobset.x-k8s.io/v1alpha2", "JobSet", "set-a", "set-uid-1")
+        assert source == "owner-uid"
+        custom_api.list_namespaced_custom_object.assert_called_once_with(
+            "kueue.x-k8s.io",
+            "v1beta1",
+            "ns",
+            "workloads",
+            label_selector="kueue.x-k8s.io/job-uid=set-uid-1",
+        )
+
+    def test_treats_eventual_consistency_404_as_pending(self, mocker):
+        batch_api = mocker.Mock()
+        batch_api.read_namespaced_job.side_effect = ApiException(status=404)
+
+        with pytest.raises(ResolutionPending, match="not visible yet"):
+            KubernetesIdentityResolver(batch_api, mocker.Mock()).resolve(_owned_pod())
+
+
+def test_run_relists_after_expired_watch_and_processes_events(mocker):
+    recorder, _ = _make_recorder(mocker, _resolved())
+    listed_pod = _pod(name="listed")
+    watched_pod = _pod(name="watched")
+    listing = mocker.Mock()
+    listing.metadata.resource_version = "rv-1"
+    listing.items = [listed_pod]
+    recorder.core_api.list_namespaced_pod.return_value = listing
+    enqueue = mocker.patch.object(recorder, "_enqueue")
+    mocker.patch(
+        "attribution_blueprint.connectors.execution_contexts.kueue.pod_placement.recorder.runtime.threading.Thread"
+    )
+    watcher = mocker.Mock()
+
+    def final_watch():
+        yield {"object": watched_pod}
+        recorder.stop()
+
+    watcher.stream.side_effect = [ApiException(status=410), final_watch()]
+    mocker.patch("kubernetes.watch.Watch", return_value=watcher)
+
+    recorder.run()
+
+    assert recorder.core_api.list_namespaced_pod.call_count == 2
+    assert enqueue.call_args_list == [mocker.call(listed_pod), mocker.call(listed_pod), mocker.call(watched_pod)]
+    assert recorder.health.ready()
 
 
 class TestRecordCapturesFailureEvidence:
