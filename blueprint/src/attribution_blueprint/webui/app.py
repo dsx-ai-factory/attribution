@@ -117,7 +117,7 @@ def create_app(db_path: str) -> FastAPI:
         from attribution_blueprint.webui import bootstrap
 
         return {
-            "runs": [bootstrap.run_to_react(row) for row in rows],
+            "runs": [bootstrap.run_summary_to_react(row) for row in rows],
             "total": total,
             "page": page if page >= 0 else 0,
             "pageSize": min(max(page_size, db.PAGE_SIZE_MIN), db.PAGE_SIZE_MAX),

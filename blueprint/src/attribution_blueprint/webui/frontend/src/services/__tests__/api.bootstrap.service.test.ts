@@ -1,23 +1,32 @@
 // @vitest-environment jsdom
 import { describe, it, expect, beforeEach } from 'vitest'
+import type { BootstrapPayload } from '@/interfaces/meta'
 import { ApiBootstrapService } from '@/services/api.bootstrap.service'
 
-const blob = {
+const blob: BootstrapPayload = {
   runs: [
     { id: 'a', jobId: 'a', workload: '—', attempt: 1, attemptUid: 'a', user: 'u', status: 'FAILED',
       nodes: 1, nodeIds: ['n1'], elapsedH: 1, gpusPerNode: 8, gpuCount: 8, endTime: '2026-05-02T00:00:00Z',
       startTime: '2026-05-01T23:00:00Z', outcome: 'hardware', verdictLabel: '', detail: '',
       rootSymptom: { symptom: 'GpuFell', rule: 'r', time: '', line: '' }, symptoms: [],
-      responsibleNodes: ['n1'], pipeline: '', service: '', log: [] },
+      responsibleNodes: ['n1'], pipeline: '', service: '', log: [], attribution: {
+        rootSymptom: { state: 'absent', data: null },
+        symptomSites: { state: 'absent', data: null },
+        decisionGraph: { state: 'absent', data: null },
+      } },
     { id: 'b', jobId: 'b', workload: '—', attempt: 1, attemptUid: 'b', user: 'u', status: 'COMPLETED',
       nodes: 1, nodeIds: ['n2'], elapsedH: 1, gpusPerNode: 8, gpuCount: 8, endTime: '2026-05-02T00:00:00Z',
       startTime: '2026-05-01T23:00:00Z', outcome: 'pass', verdictLabel: '', detail: '',
       rootSymptom: { symptom: 'Clean', rule: 'r', time: '', line: '' }, symptoms: [],
-      responsibleNodes: [], pipeline: '', service: '', log: [] },
+      responsibleNodes: [], pipeline: '', service: '', log: [], attribution: {
+        rootSymptom: { state: 'null', data: null },
+        symptomSites: { state: 'empty', data: {} },
+        decisionGraph: { state: 'absent', data: null },
+      } },
   ],
   meta: { versions: { schema: '1', pipeline: null, service: null },
           dateBounds: { min: '2026-05-02', max: '2026-05-02' }, windowedRuns: 2, dbTotalRuns: 2,
-          returnedRuns: 2 },
+          returnedRuns: 2, database: null },
 }
 
 describe('ApiBootstrapService', () => {
@@ -44,7 +53,7 @@ describe('ApiBootstrapService', () => {
 
   it('resolves a single run and meta', async () => {
     const ds = new ApiBootstrapService()
-    expect((await ds.getRun('a'))?.id).toBe('a')
+    expect(await ds.getRun('a')).toEqual(blob.runs[0])
     expect((await ds.getMeta()).windowedRuns).toBe(2)
   })
 })

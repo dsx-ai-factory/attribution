@@ -8,7 +8,6 @@
 # without an express license agreement from NVIDIA CORPORATION or
 # its affiliates is strictly prohibited.
 
-import json
 from http import HTTPStatus
 
 from nvidia_attribution_client import (
@@ -20,6 +19,7 @@ from nvidia_attribution_client import (
     DuplicateAttributorError,
     Observation as ServiceObservation,
 )
+from nvidia_attribution_client.rest import RESTResponse
 
 # Set to "slightly larger than a multiple of 3" as per
 # https://requests.readthedocs.io/en/latest/user/advanced/#timeouts
@@ -69,11 +69,29 @@ class AttributionConnector:
 
     def get_attribution(self, attributor_id: str) -> dict:
         """GET /v2/attributor/{attributor_id}/attribution. Returns response JSON."""
-        response = self._api.attribute_v2_attributor_att_id_attribution_get(
+        response = self._api.attribute_v2_attributor_att_id_attribution_get_without_preload_content(
             attributor_id, _request_timeout=self._request_timeout
         )
-        # to_dict() would leave datetimes, which aren't JSON-serializable.
-        return json.loads(response.to_json())
+        try:
+            response_data = RESTResponse(response)
+            response_data.read()
+            # Preserve the wire JSON: model serialization inserts missing fields,
+            # drops unknown ones, and rejects otherwise usable partial evidence.
+            result = self._api.api_client.response_deserialize(
+                response_data=response_data,
+                response_types_map={
+                    "200": "object",
+                    "404": "UnknownAttributorIdError",
+                    "507": "EventStorageOverflowError",
+                    "422": "ValidationErrorResponse",
+                },
+            ).data
+            if not isinstance(result, dict):
+                raise ValueError("Attribution response must be a JSON object")
+            return result
+        finally:
+            response.close()
+            response.release_conn()
 
     def delete_attributor(self, attributor_id: str) -> None:
         """DELETE /v2/attributor/{attributor_id}. 404 is silently tolerated: the

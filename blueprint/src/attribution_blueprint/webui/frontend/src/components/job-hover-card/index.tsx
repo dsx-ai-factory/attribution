@@ -1,6 +1,6 @@
 import dayjs from 'dayjs'
 import utc from 'dayjs/plugin/utc'
-import type { Run } from '@/interfaces/attribution'
+import type { RunSummary } from '@/interfaces/attribution'
 import { HoverCard, HoverCardContent, HoverCardTrigger } from '@/components/ui/hover-card'
 import { VerdictPill } from '@/components/chip'
 import { useNav } from '@/hooks/use-nav'
@@ -12,7 +12,7 @@ export function JobHoverCard({
   linkable,
   children,
 }: {
-  run: Run
+  run: RunSummary
   /** When set, the card is interactive and opens the run's verdict on click/Enter. */
   linkable?: boolean
   children: React.ReactNode

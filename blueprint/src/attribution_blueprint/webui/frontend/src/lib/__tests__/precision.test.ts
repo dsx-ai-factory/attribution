@@ -2,16 +2,16 @@ import { describe, it, expect } from 'vitest'
 import { fmtGpuHours, fmtNum, fmtPercent } from '@/lib/format'
 import { gpuHours, elapsedHours } from '@/lib/metric'
 import { nodeExportData, runsToCSV, verdictExportData } from '@/lib/export'
-import type { Run } from '@/interfaces/attribution'
+import type { RunSummary } from '@/interfaces/attribution'
 
-function run(over: Partial<Run>): Run {
+function run(over: Partial<RunSummary>): RunSummary {
   return {
     id: 'r', jobId: 'team/x', workload: 'team/x', attempt: 1, attemptUid: 'u', user: 'u',
     status: 'FAILED', nodes: 1, nodeIds: ['n1'], elapsedH: 0.1, gpusPerNode: 8, gpuCount: 8,
     endTime: '2026-05-01T01:00:00Z', startTime: '2026-05-01T00:00:00Z',
     outcome: 'hardware', verdictLabel: '', detail: '',
     rootSymptom: { symptom: 'S', rule: 'r', time: '', line: '' },
-    symptoms: [], responsibleNodes: ['n1'], pipeline: '', service: '', log: [],
+    symptoms: [], responsibleNodes: ['n1'], pipeline: '', service: '',
     ...over,
   }
 }

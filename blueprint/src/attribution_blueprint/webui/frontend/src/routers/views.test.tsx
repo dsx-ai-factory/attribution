@@ -2,7 +2,7 @@
 import type { ReactNode } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen, within } from '@testing-library/react'
-import type { Run } from '@/interfaces/attribution'
+import type { RunDetail } from '@/interfaces/attribution'
 import { NodeView } from '@/routers/node'
 import { VerdictView } from '@/routers/verdict'
 
@@ -58,10 +58,10 @@ vi.mock('@/components/ui/hover-card', () => ({
   HoverCardContent: ({ children }: { children: ReactNode }) => <div>{children}</div>,
 }))
 vi.mock('@/routers/verdict/components/log-hero', () => ({
-  LogHero: ({ run }: { run: Run }) => <div>Log for {run.id}</div>,
+  LogHero: ({ run }: { run: RunDetail }) => <div>Log for {run.id}</div>,
 }))
 
-const run = (overrides: Partial<Run> = {}): Run => ({
+const run = (overrides: Partial<RunDetail> = {}): RunDetail => ({
   id: 'run-1',
   jobId: 'team/job',
   workload: 'team/job',
@@ -107,6 +107,11 @@ const run = (overrides: Partial<Run> = {}): Run => ({
     action: 'Drain the node.',
     supportDetails: ['run ID', 'node ID'],
     catalogId: 'xid-79',
+  },
+  attribution: {
+    rootSymptom: { state: 'absent', data: null },
+    symptomSites: { state: 'absent', data: null },
+    decisionGraph: { state: 'absent', data: null },
   },
   ...overrides,
 })

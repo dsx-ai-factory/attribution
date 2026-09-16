@@ -1,5 +1,5 @@
 import { Search, X } from 'lucide-react'
-import type { OutcomeKey, Run } from '@/interfaces/attribution'
+import type { OutcomeKey, RunSummary } from '@/interfaces/attribution'
 import { OUTCOMES } from '@/lib/attribution-data'
 import type { FleetFilter } from '@/interfaces/filter'
 import { withDimension } from '@/lib/filter-state'
@@ -58,7 +58,7 @@ export function RunsToolbar({
   setFilter,
 }: {
   runs: number
-  filteredRuns: Run[]
+  filteredRuns: RunSummary[]
   filter: FleetFilter
   setFilter: (next: FleetFilter) => void
 }) {

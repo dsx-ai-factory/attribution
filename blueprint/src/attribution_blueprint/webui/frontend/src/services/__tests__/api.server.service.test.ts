@@ -1,12 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import type { Run } from '@/interfaces/attribution'
+import type { RunDetail, RunSummary } from '@/interfaces/attribution'
 import { ApiServerService } from '@/services/api.server.service'
 
 const { httpGetMock } = vi.hoisted(() => ({ httpGetMock: vi.fn() }))
 
 vi.mock('@/services/http-client.service', () => ({ httpGet: httpGetMock }))
 
-const run = (id: string): Run => ({
+const run = (id: string): RunSummary => ({
   id,
   jobId: id,
   workload: id,
@@ -29,7 +29,6 @@ const run = (id: string): Run => ({
   responsibleNodes: ['node-a'],
   pipeline: '1',
   service: '2',
-  log: [],
 })
 
 beforeEach(() => {
@@ -98,10 +97,19 @@ describe('ApiServerService', () => {
   })
 
   it('encodes run IDs and exposes metadata', async () => {
-    httpGetMock.mockResolvedValueOnce(run('a/b')).mockResolvedValueOnce({ windowedRuns: 1 })
+    const detail: RunDetail = {
+      ...run('a/b'),
+      log: [],
+      attribution: {
+        rootSymptom: { state: 'absent', data: null },
+        symptomSites: { state: 'empty', data: {} },
+        decisionGraph: { state: 'null', data: null },
+      },
+    }
+    httpGetMock.mockResolvedValueOnce(detail).mockResolvedValueOnce({ windowedRuns: 1 })
     const api = new ApiServerService()
 
-    await expect(api.getRun('a/b')).resolves.toEqual(run('a/b'))
+    await expect(api.getRun('a/b')).resolves.toEqual(detail)
     await expect(api.getMeta()).resolves.toEqual({ windowedRuns: 1 })
     expect(httpGetMock).toHaveBeenNthCalledWith(1, '/runs/a%2Fb')
     expect(httpGetMock).toHaveBeenNthCalledWith(2, '/meta')

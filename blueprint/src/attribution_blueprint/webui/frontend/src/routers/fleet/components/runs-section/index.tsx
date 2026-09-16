@@ -1,6 +1,6 @@
 import { Fragment, useMemo, useState } from 'react'
 import { ChevronLeft, ChevronRight } from 'lucide-react'
-import type { OutcomeKey, Run } from '@/interfaces/attribution'
+import type { OutcomeKey, RunSummary } from '@/interfaces/attribution'
 import type { FleetFilter } from '@/interfaces/filter'
 import type { PageByOutcome, RunsTableGroup } from '@/hooks/use-runs-table'
 import { Badge } from '@/components/ui/badge'
@@ -63,7 +63,7 @@ function RunColumnHeaders({ className = '' }: { className?: string }) {
   )
 }
 
-function RunRow({ r }: { r: Run }) {
+function RunRow({ r }: { r: RunSummary }) {
   const nav = useNav()
   const visibleResponsibleNodes = r.responsibleNodes.slice(0, RESPONSIBLE_NODE_INLINE_LIMIT)
   const hasMoreResponsibleNodes = r.responsibleNodes.length > visibleResponsibleNodes.length
@@ -205,7 +205,7 @@ export function RunsSection({
 }: {
   groups: RunsTableGroup[]
   matchingRuns: number
-  visibleRuns: Run[]
+  visibleRuns: RunSummary[]
   filter: FleetFilter
   setFilter: (next: FleetFilter) => void
   pageByOutcome: PageByOutcome

@@ -1,13 +1,13 @@
 import type { FleetFilter } from '@/interfaces/filter'
-import type { Run } from '@/interfaces/attribution'
+import type { RunDetail, RunSummary } from '@/interfaces/attribution'
 import type { Meta, RunsPagePayload } from '@/interfaces/meta'
 import { ApiService } from '@/services/api.service'
 import { httpGet } from '@/services/http-client.service'
 
 /** HTTP source: /api/v1/*. */
 export class ApiServerService implements ApiService {
-  async getAllRuns(): Promise<Run[]> {
-    const runs: Run[] = []
+  async getAllRuns(): Promise<RunSummary[]> {
+    const runs: RunSummary[] = []
     let page = 0
     let total: number | null = null
     while (total === null || runs.length < total) {
@@ -19,7 +19,7 @@ export class ApiServerService implements ApiService {
     }
     return runs
   }
-  async getRuns(filter: FleetFilter): Promise<Run[]> {
+  async getRuns(filter: FleetFilter): Promise<RunSummary[]> {
     const res = await httpGet<RunsPagePayload>('/runs', {
       from: filter.from,
       to: filter.to,
@@ -34,8 +34,8 @@ export class ApiServerService implements ApiService {
     })
     return res.runs
   }
-  async getRun(id: string): Promise<Run | undefined> {
-    return httpGet<Run>(`/runs/${encodeURIComponent(id)}`)
+  async getRun(id: string): Promise<RunDetail | undefined> {
+    return httpGet<RunDetail>(`/runs/${encodeURIComponent(id)}`)
   }
   async getMeta(): Promise<Meta> {
     return httpGet<Meta>('/meta')

@@ -1,17 +1,17 @@
 import { describe, it, expect } from 'vitest'
 import { buildMovers, bucketCount, movementScore, dominantOutcome } from '@/lib/attribution-data'
-import type { Run, OutcomeKey } from '@/interfaces/attribution'
+import type { RunSummary, OutcomeKey } from '@/interfaces/attribution'
 
-const base: Run = {
+const base: RunSummary = {
   id: '1', jobId: 'team/x', workload: 'team/x', attempt: 1, attemptUid: 'u', user: 'alice',
   status: 'FAILED', nodes: 1, nodeIds: ['n1'], elapsedH: 1.5, gpusPerNode: 8, gpuCount: 8,
   endTime: '2026-05-26T00:00:00Z', startTime: '2026-05-26T00:00:00Z',
   outcome: 'hardware', verdictLabel: 'Hardware', detail: '',
   rootSymptom: { symptom: 'GpuFell', rule: 'gpu_fell_off_bus', time: 'T', line: 'x' },
-  symptoms: [], responsibleNodes: [], pipeline: '0.1.0', service: 'v2', log: [],
+  symptoms: [], responsibleNodes: [], pipeline: '0.1.0', service: 'v2',
 }
 
-function mk(symptom: string, outcome: OutcomeKey, endTime: string): Run {
+function mk(symptom: string, outcome: OutcomeKey, endTime: string): RunSummary {
   return { ...base, outcome, endTime, rootSymptom: { ...base.rootSymptom, symptom } }
 }
 
@@ -72,7 +72,7 @@ describe('buildMovers', () => {
   const to = new Date('2026-06-02T00:00:00Z') // 7d -> 7 daily buckets
 
   it('surfaces movers by |movement|, excludes flat-but-frequent and pass runs', () => {
-    const runs: Run[] = [
+    const runs: RunSummary[] = [
       mk('Flat', 'software', '2026-05-26T01:00:00Z'),
       mk('Flat', 'software', '2026-05-27T01:00:00Z'),
       mk('Flat', 'software', '2026-05-29T01:00:00Z'),
@@ -95,7 +95,7 @@ describe('buildMovers', () => {
     expect(buildMovers([mk('Flat', 'software', '2026-05-27T01:00:00Z')], from, to)).toEqual([])
   })
   it('surfaces a NEW symptom that appears at low count (0 -> 2)', () => {
-    const runs: Run[] = [
+    const runs: RunSummary[] = [
       mk('NewSym', 'software', '2026-06-01T01:00:00Z'),
       mk('NewSym', 'software', '2026-06-01T05:00:00Z'),
     ]

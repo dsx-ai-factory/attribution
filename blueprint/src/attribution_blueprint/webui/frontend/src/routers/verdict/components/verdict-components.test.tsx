@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, render, screen } from '@testing-library/react'
-import type { Run } from '@/interfaces/attribution'
+import type { RunDetail } from '@/interfaces/attribution'
 import { LogHero } from '@/routers/verdict/components/log-hero'
 import { NodeBubble } from '@/routers/verdict/components/node-bubble'
 
@@ -45,7 +45,7 @@ vi.mock('monaco-editor', () => ({
   },
 }))
 
-const run = (overrides: Partial<Run> = {}): Run => ({
+const run = (overrides: Partial<RunDetail> = {}): RunDetail => ({
   id: 'run-1',
   jobId: 'team/job',
   workload: 'team/job',
@@ -79,6 +79,11 @@ const run = (overrides: Partial<Run> = {}): Run => ({
     { t: '2026-05-01T00:03:00Z', level: 'symptom', text: 'Xid 79' },
     { t: '2026-05-01T00:04:00Z', level: 'error', text: 'stopped' },
   ],
+  attribution: {
+    rootSymptom: { state: 'absent', data: null },
+    symptomSites: { state: 'absent', data: null },
+    decisionGraph: { state: 'absent', data: null },
+  },
   ...overrides,
 })
 

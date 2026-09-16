@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { useParams } from 'react-router-dom'
 import useSWR from 'swr'
 import { ChevronRight } from 'lucide-react'
-import type { Run } from '@/interfaces/attribution'
+import type { RunDetail } from '@/interfaces/attribution'
 import { useApi } from '@/services/api-context'
 import { buildVerdictMarkdown } from '@/lib/evidence'
 import {
@@ -50,7 +50,7 @@ import { LogHero } from '@/routers/verdict/components/log-hero'
 const SECTION_LABEL =
   'font-mono text-xs font-semibold tracking-widest uppercase text-foreground-muted my-5 mb-2.5 flex items-center gap-2.5'
 
-function Actions({ run }: { run: Run }) {
+function Actions({ run }: { run: RunDetail }) {
   const nav = useNav()
   const [copied, setCopied] = useState('')
   const flash = (label: string) => {
@@ -188,7 +188,7 @@ function GuidanceLine({ label, children }: { label: string; children: React.Reac
   )
 }
 
-function CloudOperatorGuidance({ run }: { run: Run }) {
+function CloudOperatorGuidance({ run }: { run: RunDetail }) {
   const card = run.operatorDiagnose
   if (card?.hasPersona !== true) return null
 
@@ -214,7 +214,7 @@ function CloudOperatorGuidance({ run }: { run: Run }) {
   )
 }
 
-function EvidenceList({ run }: { run: Run }) {
+function EvidenceList({ run }: { run: RunDetail }) {
   return (
     <Card size="sm">
       <CardHead title="Verdict" />
@@ -267,7 +267,7 @@ function EvidenceList({ run }: { run: Run }) {
   )
 }
 
-function SymptomsCard({ run }: { run: Run }) {
+function SymptomsCard({ run }: { run: RunDetail }) {
   return (
     <Card size="sm">
       <CardHead title="Symptoms" sub={`${run.symptoms.length} distinct`} />
@@ -289,7 +289,7 @@ function SymptomsCard({ run }: { run: Run }) {
   )
 }
 
-function NodesCard({ run }: { run: Run }) {
+function NodesCard({ run }: { run: RunDetail }) {
   const nav = useNav()
   return (
     <Card size="sm">
@@ -311,7 +311,7 @@ function NodesCard({ run }: { run: Run }) {
   )
 }
 
-function ResponsibleNodesCard({ run }: { run: Run }) {
+function ResponsibleNodesCard({ run }: { run: RunDetail }) {
   const nav = useNav()
   if (run.responsibleNodes.length === 0) return null
 
@@ -394,7 +394,7 @@ function RawPayload({ label, payload }: { label: string; payload: object }) {
   )
 }
 
-function RawPayloads({ run }: { run: Run }) {
+function RawPayloads({ run }: { run: RunDetail }) {
   return (
     <div>
       <div className={SECTION_LABEL}>
@@ -437,7 +437,7 @@ export function VerdictView() {
   const { id: verdictId = '' } = useParams<{ id: string }>()
   const nav = useNav()
   const api = useApi()
-  const { data: fetchedRun, isLoading } = useSWR<Run | undefined, Error>(
+  const { data: fetchedRun, isLoading } = useSWR<RunDetail | undefined, Error>(
     verdictId !== '' ? ['run', verdictId] : null,
     () => api.getRun(verdictId),
   )

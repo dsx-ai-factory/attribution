@@ -1,14 +1,14 @@
 import { describe, it, expect } from 'vitest'
 import { buildVerdictMarkdown } from '@/lib/evidence'
-import type { Run } from '@/interfaces/attribution'
+import type { RunSummary } from '@/interfaces/attribution'
 
-const base: Run = {
+const base: RunSummary = {
   id: '1', jobId: 'team/x', workload: 'team/x', attempt: 1, attemptUid: 'u', user: 'alice',
   status: 'FAILED', nodes: 1, nodeIds: ['n1'], elapsedH: 1.5, gpusPerNode: 8, gpuCount: 8,
   endTime: '2026-05-01T01:00:00Z',
   startTime: '2026-05-01T00:00:00Z', outcome: 'hardware', verdictLabel: 'Hardware',
   detail: 'GPU off bus', rootSymptom: { symptom: 'GpuFell', rule: 'gpu_fell_off_bus', time: 'T', line: 'Xid 79' },
-  symptoms: [{ name: 'GpuFell', sites: 1 }], responsibleNodes: ['n1'], pipeline: '0.1.0', service: 'v2', log: [],
+  symptoms: [{ name: 'GpuFell', sites: 1 }], responsibleNodes: ['n1'], pipeline: '0.1.0', service: 'v2',
 }
 
 describe('buildVerdictMarkdown', () => {
