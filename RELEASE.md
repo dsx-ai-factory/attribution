@@ -28,8 +28,10 @@ artifacts unless the release notes explicitly list them.
 
 For each release:
 
-1. Select the semantic version and update the bundle and component version
-   metadata.
+1. Select the semantic version. Set `project.version` in
+   `service/attribution-lib/pyproject.toml` and `attribution_lib_version` in
+   `bundle-manifest.json` to the same semantic version, then update the
+   remaining bundle and component version metadata.
 2. Run the complete test gate with `bash .ci/run-tests.sh all`.
 3. Prepare release notes that summarize user-visible changes, compatibility or
    migration requirements, known limitations, and the supported artifacts.
