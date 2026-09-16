@@ -1,8 +1,34 @@
 # Contributing
 
-Contributions open at GA.
+Early Access contributions are welcome. Start with a GitHub issue before you
+begin implementation. The issue records the problem, the proposed change, and
+the discussion that reviewers use during review.
 
-During Early Access the rule schema, cascade-pattern syntax, and test framework are published so you can author and validate rules against your own Service instance. The rule catalog is curated by NVIDIA. The contribution workflow, reviewer register, and CLA publish at GA.
+## Before you start
+
+- Open a [bug report](https://github.com/dsx-ai-factory/attribution/issues/new?template=bug.yml) or a
+  [feature request](https://github.com/dsx-ai-factory/attribution/issues/new?template=feature.yml). Do not include
+  security vulnerabilities in a public issue; follow the
+  [security policy](SECURITY.md).
+- Follow the [Code of Conduct](https://github.com/dsx-ai-factory/attribution/blob/c6be17b9a01143eeaa765f961d1ef9fc539f8dcd/CODE_OF_CONDUCT.md).
+- Keep the issue and pull request free of confidential, proprietary, personal,
+  security-sensitive, and other non-public information.
+
+## Submit a pull request
+
+Create a branch for an accepted issue, make the change, and open a pull
+request that links the issue. Include the test commands and results in the
+pull request description. A maintainer reviews the pull request and must
+approve it before it can merge.
+
+Sign each commit with the Developer Certificate of Origin (DCO):
+
+```bash
+git commit -s
+```
+
+The `-s` option adds the required `Signed-off-by` trailer. By signing off, you
+certify the [Developer Certificate of Origin](https://developercertificate.org/).
 
 ## Run the test gate
 

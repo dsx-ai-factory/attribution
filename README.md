@@ -170,12 +170,16 @@ If you are running from a source checkout rather than the release bundle, use th
 
 ## Contributing
 
-Contributions open at GA.
+Early Access contributions are welcome. Read [CONTRIBUTING.md](CONTRIBUTING.md)
+before you begin. Open a public issue before implementation, link it from your
+pull request, include test evidence, and sign each commit with the DCO.
 
 ## Reporting issues
 
-* Bug reports and feature requests: get in touch with your NVIDIA account team during EA.
-* Security issues: report through your NVIDIA AI Enterprise security contact. Do not file security issues in any public channel.
+* [Bug reports](https://github.com/dsx-ai-factory/attribution/issues/new?template=bug.yml) and
+  [feature requests](https://github.com/dsx-ai-factory/attribution/issues/new?template=feature.yml): use the public issue forms.
+* [Security issues](SECURITY.md): follow the security policy. Do not report
+  security vulnerabilities in a public issue.
 
 ## License
 

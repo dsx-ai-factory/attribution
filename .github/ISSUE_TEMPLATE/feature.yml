@@ -1,0 +1,32 @@
+name: Feature request
+description: Propose an improvement to NVIDIA Attribution.
+title: "[Feature]: "
+labels:
+  - enhancement
+body:
+  - type: checkboxes
+    id: security
+    attributes:
+      label: Security check
+      options:
+        - label: I read the security policy and this request does not disclose a security vulnerability.
+          required: true
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem to solve
+      description: Describe the user problem or use case.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed change
+      description: Describe the result that you want.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Describe other approaches or workarounds, if any.
