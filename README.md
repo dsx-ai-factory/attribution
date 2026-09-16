@@ -176,10 +176,11 @@ If you are running from a source checkout rather than the release bundle, use th
 
 Contributions open at GA.
 
-## Reporting issues
+## Support and releases
 
-* Bug reports and feature requests: get in touch with your NVIDIA account team during EA.
-* Security issues: report through your NVIDIA AI Enterprise security contact. Do not file security issues in any public channel.
+* Bugs and questions: see the [support policy](SUPPORT.md).
+* Security vulnerabilities: follow the [security policy](SECURITY.md).
+* Versions and release process: see the [release policy](RELEASE.md).
 
 ## License
 
