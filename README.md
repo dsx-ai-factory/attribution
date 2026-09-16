@@ -6,7 +6,7 @@ NVIDIA Attribution is a service-plus-orchestrator that turns the raw symptoms of
 
 Modern AI training and inference workloads fail in dozens of ways. A multi-rank workload at 10k-GPU scale typically produces hundreds to tens of thousands of log lines across application logs, host syslogs, scheduler database entries, GPU driver dmesg, fabric manager logs, and metric backends. Application logs in particular scale with rank count, so volume grows with the size of the workload. Triaging them by hand breaks down at production-cluster volume. NVIDIA Attribution automates the cross-correlation. Each failed workload becomes one structured diagnosis, with the cascade rendered as the symptom chain that produced it.
 
-**Status.** Currently in private preview. The V1 public surface is the Attribution Service HTTP API and the Blueprint reference orchestrator. External rule-catalog contributions and additional scheduler connectors land at V1 GA.
+**Status.** Currently in private preview. The V1 public surface is the Attribution Service HTTP API and the Blueprint reference orchestrator. During private preview, bug fixes, documentation corrections, and focused changes for maintainer-accepted issues are welcome. Broader improvements, external rule-catalog contributions, and additional scheduler connectors can be submitted after V1 GA.
 
 ## Two deployable forms
 
@@ -15,7 +15,7 @@ NVIDIA Attribution ships in two components that share one rules engine. Pick the
 * **Attribution Blueprint.** A Python reference orchestrator that discovers workloads from your scheduler, collects log and metric evidence from your telemetry stack, calls the Attribution Service, and persists the diagnosis. The Blueprint owns the connector contracts (scheduler, logs, metrics, output) and is the fastest path to a running system. Use when you want a working deployment fast, for a proof-of-concept, an early-access deployment, or as the starting point for your own production topology. Ships with a read-side dashboard that renders the per-workload diagnosis and its symptom chain.
 * **Attribution Service.** A self-hosted HTTP REST service that owns the rules engine and returns one diagnosis per workload. Use when you want a shared attribution endpoint across many workloads and a single deployment to operate.
 
-Both are distributed under the NVIDIA AI Enterprise Early Access agreement during private preview. The Blueprint is the orchestrator that wires the Service into a real cluster. It implements a modular connector architecture designed to be extended and customized for your production environment. Run it as-is or adapt it to your topology, and contribute improvements back once the project reaches GA.
+Both are distributed under the NVIDIA AI Enterprise Early Access agreement during private preview. The Blueprint is the orchestrator that wires the Service into a real cluster. It implements a modular connector architecture designed to be extended and customized for your production environment. Run it as-is or adapt it to your topology. Submit broader improvements after V1 GA.
 
 ## What NVIDIA Attribution does
 
@@ -170,9 +170,12 @@ If you are running from a source checkout rather than the release bundle, use th
 
 ## Contributing
 
-Early Access contributions are welcome. Read [CONTRIBUTING.md](CONTRIBUTING.md)
-before you begin. Open a public issue before implementation, link it from your
-pull request, include test evidence, and sign each commit with the DCO.
+During private preview, bug fixes, documentation corrections, and focused
+changes for maintainer-accepted issues are welcome. Broader improvements,
+external rule-catalog contributions, and additional scheduler connectors can
+be submitted after V1 GA. Read [CONTRIBUTING.md](CONTRIBUTING.md) before you
+begin. Open a public issue before implementation, link it from your pull
+request, include test evidence, and sign each commit with the DCO.
 
 ## Reporting issues
 

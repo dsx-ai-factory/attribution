@@ -1,8 +1,11 @@
 # Contributing
 
-Early Access contributions are welcome. Start with a GitHub issue before you
-begin implementation. The issue records the problem, the proposed change, and
-the discussion that reviewers use during review.
+During private preview, bug fixes, documentation corrections, and focused
+changes for maintainer-accepted issues are welcome. Broader improvements,
+external rule-catalog contributions, and additional scheduler connectors can
+be submitted after V1 GA. Start with a GitHub issue before you begin
+implementation. The issue records the problem, the proposed change, and the
+discussion that reviewers use during review.
 
 ## Before you start
 
