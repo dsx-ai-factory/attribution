@@ -1,12 +1,12 @@
 # syntax=docker/dockerfile:1.7
 # Stage 1: build the React SPA
-FROM node:22-bookworm-slim AS web-build
+FROM docker.io/library/node:22-bookworm-slim AS web-build
 WORKDIR /frontend
 COPY blueprint/src/attribution_blueprint/webui/frontend/ ./
 RUN corepack enable && pnpm install --frozen-lockfile && pnpm exec tsc -b && pnpm exec vite build --outDir dist
 
 # Stage 2: python app
-FROM python:3.14.6-slim-trixie
+FROM docker.io/library/python:3.14.6-slim-trixie
 COPY --from=ghcr.io/astral-sh/uv:0.10.12 /uv /uvx /bin/
 
 ENV UV_COMPILE_BYTECODE=1

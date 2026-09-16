@@ -10,10 +10,10 @@
 # its affiliates is strictly prohibited.
 
 # Runtime base image. Override with an air-gapped mirror via --build-arg.
-ARG BASE_IMAGE=python:3.14.6-slim-trixie
+ARG BASE_IMAGE=docker.io/library/python:3.14.6-slim-trixie
 
 # Install uv
-FROM python:3.14.6-slim-trixie AS builder
+FROM docker.io/library/python:3.14.6-slim-trixie AS builder
 COPY --from=ghcr.io/astral-sh/uv:0.10.12 /uv /uvx /bin/
 ENV UV_COMPILE_BYTECODE=1
 
