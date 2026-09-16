@@ -82,6 +82,25 @@ def test_root_filters_match_exact_identifiers_before_pagination(tmp_path, field,
     assert [run.job_id for run in runs] == ["J0"]
 
 
+def test_root_filters_combine_and_clear(tmp_path):
+    p = tmp_path / "combined-roots.db"
+    out = SQLiteOutput(str(p))
+    for index, (symptom, rule) in enumerate([("XID-79", "r"), ("XID-79", "other"), ("other", "r")]):
+        out.write(
+            _ctx(f"J{index}", f"s{index}", datetime(2026, 5, index + 1, tzinfo=timezone.utc)),
+            _attr("Fail InfraHW", symptom=symptom, rule=rule),
+        )
+    out.close()
+
+    runs, total = dbmod.list_runs_page(str(p), symptom="XID-79", rule="r")
+    assert total == 1
+    assert [run.job_id for run in runs] == ["J0"]
+
+    runs, total = dbmod.list_runs_page(str(p), symptom="", rule="")
+    assert total == 3
+    assert [run.job_id for run in runs] == ["J2", "J1", "J0"]
+
+
 @pytest.mark.parametrize("field", ["symptom", "rule"])
 def test_root_filters_ignore_invalid_json_and_non_string_fields(tmp_path, field):
     p = tmp_path / "invalid-roots.db"

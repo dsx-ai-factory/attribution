@@ -66,6 +66,7 @@ def test_enrich_attribution_result_adds_contract_fields():
         {"symptoms": "invalid"},
         {"symptoms": {"XID-79": None}},
         {"symptoms": {"XID-79": "invalid"}},
+        {"symptoms": {"XID-79": []}},
         {"symptoms": {"XID-79": [None, 0, "invalid", {"source": None}]}},
     ],
 )

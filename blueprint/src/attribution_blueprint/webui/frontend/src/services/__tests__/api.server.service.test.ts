@@ -1,10 +1,14 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { RunDetail, RunSummary } from '@/interfaces/attribution'
 import { ApiServerService } from '@/services/api.server.service'
+import { HttpError } from '@/services/http-client.service'
 
 const { httpGetMock } = vi.hoisted(() => ({ httpGetMock: vi.fn() }))
 
-vi.mock('@/services/http-client.service', () => ({ httpGet: httpGetMock }))
+vi.mock('@/services/http-client.service', async (importOriginal) => ({
+  ...await importOriginal<typeof import('@/services/http-client.service')>(),
+  httpGet: httpGetMock,
+}))
 
 const run = (id: string): RunSummary => ({
   id,
@@ -114,4 +118,19 @@ describe('ApiServerService', () => {
     expect(httpGetMock).toHaveBeenNthCalledWith(1, '/runs/a%2Fb')
     expect(httpGetMock).toHaveBeenNthCalledWith(2, '/meta')
   })
+
+  it('returns undefined when the requested run does not exist', async () => {
+    httpGetMock.mockRejectedValue(new HttpError(404, 'Run not found'))
+
+    await expect(new ApiServerService().getRun('missing')).resolves.toBeUndefined()
+  })
+
+  it.each([new HttpError(500, 'Service unavailable'), new TypeError('Failed to fetch')])(
+    'preserves other request failures: %s',
+    async (error) => {
+      httpGetMock.mockRejectedValue(error)
+
+      await expect(new ApiServerService().getRun('run')).rejects.toBe(error)
+    },
+  )
 })

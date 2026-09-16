@@ -2,7 +2,7 @@ import type { FleetFilter } from '@/interfaces/filter'
 import type { RunDetail, RunSummary } from '@/interfaces/attribution'
 import type { Meta, RunsPagePayload } from '@/interfaces/meta'
 import { ApiService } from '@/services/api.service'
-import { httpGet } from '@/services/http-client.service'
+import { HttpError, httpGet } from '@/services/http-client.service'
 
 /** HTTP source: /api/v1/*. */
 export class ApiServerService implements ApiService {
@@ -35,7 +35,12 @@ export class ApiServerService implements ApiService {
     return res.runs
   }
   async getRun(id: string): Promise<RunDetail | undefined> {
-    return httpGet<RunDetail>(`/runs/${encodeURIComponent(id)}`)
+    try {
+      return await httpGet<RunDetail>(`/runs/${encodeURIComponent(id)}`)
+    } catch (error) {
+      if (error instanceof HttpError && error.status === 404) return undefined
+      throw error
+    }
   }
   async getMeta(): Promise<Meta> {
     return httpGet<Meta>('/meta')
