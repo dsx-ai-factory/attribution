@@ -125,6 +125,39 @@ def test_node_not_responding_preserves_hardware_policy():
     assert not registry.contains("Not responding")
 
 
+def test_corroborated_node_failure_maps_to_infra_hw_and_discards_component_signals():
+    """Classify the composite as hardware and keep its inputs as supporting evidence."""
+    registry = _load_committed_registry()
+
+    match = registry.outcome_for(["Corroborated node failure"])
+
+    assert match is not None
+    assert match.matched_prefix == "Corroborated node failure"
+    assert match.outcome == "Fail InfraHW"
+    assert match.hw_cause == "Known HW Cause - Node"
+    assert match.tier_index == OUTCOME_PRIORITIES.index(OutcomePriority.HIGH_HW)
+    assert registry.cascade_discards_for("Corroborated node failure") == [
+        "Node failure reported by slurm",
+        "Node not responding",
+    ]
+
+
+@pytest.mark.parametrize(
+    "stronger_symptom",
+    (
+        "NMI watchdog hard LOCKUP",
+        "XID-",
+        "general protection fault",
+        "Fabric manager lost connection to all GPUs",
+    ),
+)
+def test_specific_node_failures_discard_corroborated_node_failure(stronger_symptom):
+    """Keep the composite subordinate to independently identified causes."""
+    registry = _load_committed_registry()
+
+    assert "Corroborated node failure" in registry.cascade_discards_for(stronger_symptom)
+
+
 def test_slurm_node_failure_yields_to_node_not_responding_in_any_order():
     """Prefer node non-response hardware evidence over the scheduler state."""
     registry = _load_committed_registry()
@@ -403,6 +436,85 @@ def test_substring_aliases_reject_empty_substring():
         substring_aliases_from_declarations(declarations)
 
 
+def test_resolution_precedence_preserves_contains_exact_and_longest_fallback_order():
+    """Lock the compatibility resolution order for the selector migration."""
+    registry = registry_from_declarations(
+        [
+            SymptomDeclaration(prefix="alias", resolve_contains="[alias]"),
+            SymptomDeclaration(prefix="exact [alias]"),
+            SymptomDeclaration(prefix="family-", fallback_prefix=True),
+            SymptomDeclaration(prefix="family-special-", fallback_prefix=True),
+            SymptomDeclaration(prefix="family-exact"),
+        ]
+    )
+
+    # Contains aliases intentionally run before both exact and fallback lookup.
+    assert registry.resolve_symptom("exact [alias]") == "alias"
+    assert registry.resolve_symptom("family-dynamic [alias]") == "alias"
+    # Without an alias, exact lookup precedes fallback lookup.
+    assert registry.resolve_symptom("family-exact") == "family-exact"
+    # Overlapping fallbacks choose the longest, most-specific prefix.
+    assert registry.resolve_symptom("family-special-dynamic") == "family-special-"
+
+
+@pytest.mark.parametrize(
+    ("prefixes", "expected_prefix"),
+    [
+        (("fault", "fault-specific"), "fault"),
+        (("fault-specific", "fault"), "fault-specific"),
+    ],
+)
+def test_outcome_selection_preserves_declaration_order_within_a_tier(prefixes, expected_prefix):
+    """Lock first-declared prefix selection when one symptom matches both."""
+    declarations = [
+        SymptomDeclaration(
+            prefix=prefix,
+            outcome=f"outcome:{prefix}",
+            priority=OutcomePriority.LOW,
+        )
+        for prefix in prefixes
+    ]
+    registry = registry_from_declarations(declarations)
+
+    match = registry.outcome_for(["fault-specific detail"])
+
+    assert match is not None
+    assert match.matched_prefix == expected_prefix
+    assert match.outcome == f"outcome:{expected_prefix}"
+
+
+@pytest.mark.parametrize(
+    "symptoms",
+    [
+        ("fault-specific", "fault-z"),
+        ("fault-z", "fault-specific"),
+    ],
+)
+def test_outcome_selection_preserves_broader_same_tier_override(symptoms):
+    """Lock the broader-prefix override across distinct symptoms."""
+    registry = registry_from_declarations(
+        [
+            SymptomDeclaration(
+                prefix="fault-specific",
+                outcome="specific outcome",
+                priority=OutcomePriority.LOW,
+            ),
+            SymptomDeclaration(
+                prefix="fault-",
+                outcome="family outcome",
+                priority=OutcomePriority.LOW,
+            ),
+        ]
+    )
+
+    match = registry.outcome_for(symptoms)
+
+    assert match is not None
+    assert match.symptom == "fault-z"
+    assert match.matched_prefix == "fault-"
+    assert match.outcome == "family outcome"
+
+
 def test_outcome_generation_rejects_missing_hw_cause():
     declarations = [
         SymptomDeclaration(
@@ -486,6 +598,8 @@ def test_generated_registry_facade_exposes_cascade_metadata():
 
     assert metadata is not None
     assert "Connection reset by peer" in metadata.cascade_discards
+    for strerror in ("Connection timed out", "Broken pipe"):
+        assert registry.resolve_symptom(strerror) in metadata.cascade_discards
     assert registry.cascade_discards_for("Call to ibv_set_ece failed") == list(metadata.cascade_discards)
 
 

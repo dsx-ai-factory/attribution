@@ -20,7 +20,6 @@ eliminating the need for applog_to_symptom.py and the dynamic dictionary buildin
 
 import json
 import re
-import socket
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Literal, Optional
@@ -50,7 +49,7 @@ from attribution_lib.rules import (
     rule_processor,
 )
 from attribution_lib.sources import Source, SourceSet
-from attribution_lib.utils import get_hostname
+from attribution_lib.utils import get_hostname, matches_ignored_hostname_prefix
 
 # User should not overwrite these NCCL parameters
 NCCL_PARAMS_OVERWRITE_FORBIDDEN = [
@@ -98,6 +97,9 @@ def _load_cuda_errors():
     # Customize nice_name of "out of memory" to be compatible with NVIDIA Attribution history
     if "out of memory" in _CUDA_ERRORS:
         _CUDA_ERRORS["out of memory"]["nice_name"] = "cudaError out of memory"
+
+    # Both the CUDA family and NCCL processors use this lookup table.
+    _CUDA_ERRORS["cudaErrorIllegalAddress"] = _CUDA_ERRORS["an illegal memory access was encountered"]
 
     # Sort by length descending for better matching (longer patterns first)
     sorted_errors = dict(sorted(_CUDA_ERRORS.items(), key=lambda x: len(x[0]), reverse=True))
@@ -278,11 +280,7 @@ def client_socket_timeout_event(
 def got_completion_from_peer_new_event(
     groups: Dict[str, str], node: str, source: Source, ctx: RuleContext
 ) -> List[EventTriple]:
-    try:
-        peer_node = get_hostname(groups["peer_ip"])
-    except (socket.gaierror, socket.herror, socket.timeout, OSError) as e:
-        _logger.warning(f"Failed to get hostname for {groups['peer_ip']}: {e}")
-        peer_node = groups["peer_ip"]
+    peer_node = get_hostname(groups["peer_ip"])
 
     msg = _format_ib_error_message(int(groups["error_code"]), int(groups["vendor_err"]))
 
@@ -330,11 +328,7 @@ def got_completion_from_peer_new_event(
 def got_completion_from_peer_old_event(
     groups: Dict[str, str], node: str, source: Source, ctx: RuleContext
 ) -> List[EventTriple]:
-    try:
-        peer_node = get_hostname(groups["peer_ip"])
-    except (socket.gaierror, socket.herror, socket.timeout, OSError) as e:
-        _logger.warning(f"Failed to get hostname for {groups['peer_ip']}: {e}")
-        peer_node = groups["peer_ip"]
+    peer_node = get_hostname(groups["peer_ip"])
 
     msg = _format_ib_error_message(int(groups["error_code"]), int(groups["vendor_err"]))
 
@@ -382,11 +376,7 @@ def irrecoverable_net_ib_communicator_error_event(
     if local_node is None or local_node == "":
         local_node = node
 
-    try:
-        peer_node = get_hostname(groups["peer_ip"])
-    except (socket.gaierror, socket.herror, socket.timeout, OSError) as e:
-        _logger.warning(f"Failed to get hostname for {groups['peer_ip']}: {e}")
-        peer_node = groups["peer_ip"]
+    peer_node = get_hostname(groups["peer_ip"])
     msg = _format_ib_error_message(int(groups["error_code"]), int(groups["vendor_err"]))
     rule_name = "Irrecoverable NET/IB communicator error"
 
@@ -439,11 +429,7 @@ def ibv_modify_qp_failed_event(
     local_gid, remote_gid = groups["local_gid"], groups["remote_gid"]
     remote_ip = remote_gid[7:] if remote_gid.startswith("::ffff:") else remote_gid
 
-    try:
-        peer_node = get_hostname(remote_ip)
-    except (socket.gaierror, socket.herror, socket.timeout, OSError) as e:
-        _logger.warning(f"Failed to get hostname for {remote_ip}: {e}")
-        peer_node = remote_ip
+    peer_node = get_hostname(remote_ip)
 
     msg = f"Call to ibv_modify_qp failed: eno {error_code}"
     if error_code == 11:
@@ -498,11 +484,12 @@ def ibv_modify_qp_failed_event(
 def connection_closed_by_remote_peer_event(
     groups: Dict[str, str], node: str, source: Source, ctx: RuleContext
 ) -> List[EventTriple]:
-    peer_node = get_hostname(groups["hostname"])
-    short_peer = peer_node.split(".")[0]
-    if attribution_lib.ignored_hostname_prefixes:
-        if any(short_peer.startswith(p) for p in attribution_lib.ignored_hostname_prefixes):
-            return []
+    raw_peer = groups["hostname"]
+    peer_node = get_hostname(raw_peer)
+    # Match the resolved identity and the raw log peer. Do not split IPs on
+    # dots: that is a hostname FQDN strip, and it turns 192.0.2.1 into "192".
+    if matches_ignored_hostname_prefix(peer_node) or matches_ignored_hostname_prefix(raw_peer):
+        return []
     return [_bad(peer_node, "Connection closed", source, demotion="Connection closed by remote peer")]
 
 

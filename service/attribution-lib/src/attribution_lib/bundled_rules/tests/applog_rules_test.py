@@ -9,7 +9,6 @@
 # its affiliates is strictly prohibited.
 
 import json
-import socket
 from datetime import datetime
 from unittest.mock import patch
 
@@ -307,16 +306,15 @@ class TestIBPairRules:
         assert len(events) >= 1
         assert events[0]["payload"]["symptom"] == "IB Error-12 Vendor-129 (IBV_WC_RETRY_EXC_ERR)"
 
-    def test_hostname_resolution_failure_uses_ip(self, app_tst_bldr, big_jobinfo):
+    def test_unmapped_peer_uses_ip(self, app_tst_bldr, big_jobinfo):
         data = [
             "transport/net_ib.cc:2359 NCCL WARN NET/IB: Got completion from peer 192.0.2.1<10904> with status=12 opcode=129 len=374784 vendor err 0 (Recv) localGid ::ffff:192.0.2.20 remoteGids::ffff:192.0.2.1 hca rocep206s0"
         ]
-        with patch("socket.gethostbyaddr", side_effect=socket.herror):
-            result = app_tst_bldr(big_jobinfo, data)
+        result = app_tst_bldr(big_jobinfo, data)
 
         events = self._get_events_by_type(result.event_stream, "Attribution.node.bad_peers")
         assert len(events) >= 1
-        assert "192.0.2.1" in events[0]["payload"]["peer"]
+        assert events[0]["payload"]["peer"] == "192.0.2.1"
 
 
 def test_multicast_skip_marker_logs_from_applog(app_tst_bldr, big_jobinfo):

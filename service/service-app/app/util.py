@@ -11,6 +11,7 @@
 import hashlib
 import json
 from datetime import datetime
+from typing import Optional
 from zoneinfo import ZoneInfo
 
 from fastapi.encoders import jsonable_encoder
@@ -57,5 +58,11 @@ class HashableModel(BaseModel):
 
 
 class TimeInterval(HashableModel):
-    start: AwareDatetime
-    end: AwareDatetime
+    """The window an observation declares it covers.
+
+    Both keys are required, so a payload that omits one is a validation error rather than unbounded.
+    A null bound means unbounded on that side, and only the `entry_timeseries` format accepts one.
+    """
+
+    start: Optional[AwareDatetime]
+    end: Optional[AwareDatetime]

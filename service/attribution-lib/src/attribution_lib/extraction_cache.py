@@ -40,7 +40,12 @@ from attribution_lib.cache_metadata import (
 )
 from attribution_lib.checkpoint_backends import CheckpointBackend
 from attribution_lib.events import EventManager
-from attribution_lib.observation.inbound import Context as ObservationContext
+from attribution_lib.exceptions import SnapshotSchemaVersionError
+from attribution_lib.observation.inbound import (
+    Context as ObservationContext,
+    Format as ObservationFormat,
+)
+from attribution_lib.observation.processing import BodyFallbacks
 from attribution_lib.resources.resource_set import serialize_resource_set
 
 # Re-export types so existing callers that import from here keep working
@@ -89,7 +94,9 @@ def _sample_indices(count: int, num_samples: int = _NUM_SAMPLE_POINTS) -> list[i
 
 
 def compute_data_fingerprint(
-    entries: list[Any], extraction_context: Optional[ObservationContext] = None
+    entries: list[Any],
+    extraction_context: Optional[ObservationContext] = None,
+    body_fallbacks: Optional[BodyFallbacks] = None,
 ) -> Optional[DataFingerprint]:
     """Compute a fingerprint for observation entries and extraction context.
 
@@ -97,6 +104,8 @@ def compute_data_fingerprint(
         entries: Observation entries to sample.
         extraction_context: Context that controls parsing, filtering, and
             attribution provenance. Omit for a data-only fingerprint.
+        body_fallbacks: What `entry_timeseries` bodies may be parsed for; its
+            `year_fallback` is hashed when it decides how year-less timestamps resolve.
 
     Returns:
         A context-bound fingerprint, or ``None`` when entries is empty.
@@ -112,17 +121,27 @@ def compute_data_fingerprint(
             resources = serialized_resources
         else:
             resources = [resource.model_dump(mode="json") for resource in serialized_resources]
-        context_hash = _hash_entry(
-            {
-                "format": extraction_context.format.value,
-                "pre_filtered": extraction_context.pre_filtered,
-                "resources": resources,
-                "source": extraction_context.source.value,
-                "time_end": extraction_context.time_interval.end.isoformat(),
-                "time_start": extraction_context.time_interval.start.isoformat(),
-                "timezone": extraction_context.timezone.key,
-            }
-        )
+        time_start = extraction_context.time_interval.start
+        time_end = extraction_context.time_interval.end
+        context_fields: dict[str, Any] = {
+            "format": extraction_context.format.value,
+            "pre_filtered": extraction_context.pre_filtered,
+            "resources": resources,
+            "source": extraction_context.source.value,
+            "time_end": time_end.isoformat() if time_end is not None else None,
+            "time_start": time_start.isoformat() if time_start is not None else None,
+            "timezone": extraction_context.timezone.key,
+        }
+        # Only `entry_timeseries` reads the year off `year_fallback`; every other format reads it off
+        # `time_end`, hashed above. Keyed only here so their fingerprints stay byte-identical.
+        if (
+            extraction_context.format == ObservationFormat.ENTRY_TIMESERIES
+            and body_fallbacks is not None
+            and body_fallbacks.parse_timestamp
+        ):
+            year_fallback = body_fallbacks.year_fallback
+            context_fields["year_fallback"] = year_fallback.isoformat() if year_fallback is not None else None
+        context_hash = _hash_entry(context_fields)
         sample_hashes = tuple(
             _hash_entry({"context_hash": context_hash, "entry_hash": sample_hash}) for sample_hash in sample_hashes
         )
@@ -275,7 +294,11 @@ def load_extraction_cache(
         logger.info("Extraction cache lacks raw keywords; re-extraction needed")
         return None
 
-    event_manager = backend.load_event_manager(cache_key)
+    try:
+        event_manager = backend.load_event_manager(cache_key)
+    except SnapshotSchemaVersionError as error:
+        logger.info("Extraction cache incompatible (key={}): {}; full re-extraction needed", cache_key, error)
+        return None
     logger.info("Loaded extraction cache (key={}, extractor hash: {})", cache_key, metadata.extractor_hash[:12])
     return event_manager, metadata
 
@@ -327,7 +350,13 @@ def load_or_update_extraction_cache(
             event_manager=None, metadata=metadata, data_diffs=data_diffs, needs_full_reextraction=True
         )
 
-    event_manager = backend.load_event_manager(cache_key)
+    try:
+        event_manager = backend.load_event_manager(cache_key)
+    except SnapshotSchemaVersionError as error:
+        logger.info("Extraction cache incompatible (key={}): {}; full re-extraction needed", cache_key, error)
+        return CacheLoadResult(
+            event_manager=None, metadata=metadata, data_diffs=data_diffs, needs_full_reextraction=True
+        )
     all_unchanged = all(data_diff.result == DataDiffResult.UNCHANGED for data_diff in data_diffs.values())
     if all_unchanged and data_diffs:
         logger.info("Extraction cache hit (all sources unchanged, extractor hash: {})", metadata.extractor_hash[:12])

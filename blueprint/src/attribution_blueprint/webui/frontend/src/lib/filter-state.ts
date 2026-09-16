@@ -6,7 +6,7 @@ const AXIS_LIST: ParetoAxis[] = ['symptom', 'node', 'user', 'rule']
 const METRIC_LIST: ParetoMetric[] = ['count', 'nodeHours']
 
 export const DEFAULT_FILTER: FleetFilter = {
-  status: 'failed',
+  status: 'all',
   axis: 'symptom',
   metric: 'count',
 }
@@ -49,7 +49,7 @@ export function parseFilter(params: URLSearchParams): FleetFilter {
     node:    params.get('node')    || undefined,
     rule:    params.get('rule')    || undefined,
     user:    params.get('user')    || undefined,
-    status:  status === 'all' ? 'all' : 'failed',
+    status:  status === 'failed' ? 'failed' : DEFAULT_FILTER.status,
     q:       params.get('q')       || undefined,
     axis:    axis && AXIS_LIST.includes(axis as ParetoAxis)
       ? (axis as ParetoAxis) : 'symptom',

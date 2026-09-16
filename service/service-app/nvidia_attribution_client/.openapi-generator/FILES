@@ -27,6 +27,7 @@ nvidia_attribution_client/models/decision_node_type.py
 nvidia_attribution_client/models/duplicate_attributor_error.py
 nvidia_attribution_client/models/duplicate_observation_error.py
 nvidia_attribution_client/models/errors.py
+nvidia_attribution_client/models/event_storage_overflow_error.py
 nvidia_attribution_client/models/format.py
 nvidia_attribution_client/models/global_attribution.py
 nvidia_attribution_client/models/http_validation_error.py

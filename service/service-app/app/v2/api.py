@@ -16,6 +16,7 @@ from app.attributor import AttributionContext, AttributorId
 from app.exceptions import (
     DuplicateAttributorError,
     DuplicateObservationError,
+    EventStorageOverflowError,
     ObservationIngestionErrorResponse,
     UnknownAttributorIdError,
     ValidationErrorResponse,
@@ -58,6 +59,7 @@ def new_attribution(att: AttributorInfoV2, request: Request, response: Response)
         **UnknownAttributorIdError.response(),
         **DuplicateObservationError.response(),
         **ObservationIngestionErrorResponse.response(),
+        **EventStorageOverflowError.response(),
         **ValidationErrorResponse.response(),
     },
 )
@@ -73,6 +75,7 @@ def ingest(att_id: AttributorId, obs_data: Observation, request: Request, respon
     responses={
         200: {"model": AttributionResponseV2},
         **UnknownAttributorIdError.response(),
+        **EventStorageOverflowError.response(),
         **ValidationErrorResponse.response(),
     },
 )

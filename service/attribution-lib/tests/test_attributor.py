@@ -235,6 +235,7 @@ def test_source_format_applog_mismatch(request, event_manager, job_info):
             ObservationFormat.RAW_LOG_LINES,
             ObservationFormat.LOKI_DICT_LIST,
             ObservationFormat.RAW_LOKI_STREAMS,
+            ObservationFormat.ENTRY_TIMESERIES,
         ]
     )
 
@@ -507,6 +508,40 @@ def test_attribute_batch_applog_prefilter_keywords(request, event_manager, job_i
     assert "Python Exception" in result.symptoms
 
 
+def test_attribute_batch_recomputes_incompatible_snapshot(request, event_manager, job_info, tmp_path, monkeypatch):
+    """Recover a v1 snapshot with the same attribution as cold extraction.
+
+    Args:
+        request: Pytest request used to name the event stream.
+        event_manager: Event manager fixture.
+        job_info: Job information fixture.
+        tmp_path: Temporary snapshot directory.
+        monkeypatch: Replaces only the backend's snapshot storage read.
+    """
+    backend = MemoryCheckpointBackend()
+    observation = make_inbound_observation(
+        ObservationSource.APPLOG, ObservationFormat.RAW_LOG_LINES, lines=PYTHON_TRACEBACK_LINES
+    )
+    cold = Attributor.new(event_manager.create_stream(request.node.name), job_info)
+    cold.ingest_batch([observation], backend)
+    cold_result = cold.attribute(backend)
+    event_manager.export_snapshot(tmp_path)
+    (tmp_path / EventManager._SCHEMA_VERSION_FILE).write_text("1")
+    monkeypatch.setattr(
+        backend,
+        "load_event_manager",
+        lambda key: EventManager.from_snapshot(tmp_path, attribution_lib.get_rules_engine()),
+    )
+
+    recovered = Attributor.new(event_manager.create_stream(f"{request.node.name}_recovered"), job_info)
+    recovered.ingest_batch([observation], backend)
+    result = recovered.attribute(backend)
+
+    assert "Python Exception" in result.symptoms
+    assert set(result.symptoms.symptoms()) == set(cold_result.symptoms.symptoms())
+    assert result.outcome_attr.value() == cold_result.outcome_attr.value()
+
+
 def test_attribute_batch_restores_prefilter_keywords_from_cache(request, event_manager, job_info):
     """Restore raw keywords when batch extraction is skipped on a cache hit.
 
@@ -607,6 +642,31 @@ def test_saved_fingerprint_includes_extraction_context(request, event_manager, j
         metadata = backend.load_metadata(cache_key)
         assert metadata is not None
         assert metadata.data_fingerprints[ObservationSource.APPLOG.value] != baseline_fingerprint
+
+
+def test_batch_fingerprint_tracks_job_end_for_undated_timeseries_entries(request, event_manager, job_info):
+    """Undated applog entries take their year from job end, so a later job end must not hit the cache."""
+    observation = make_inbound_observation(
+        ObservationSource.APPLOG,
+        ObservationFormat.ENTRY_TIMESERIES,
+        lines=[
+            {"body": f"[E1231 23:57:09.800744155 ProcessGroupNCCL.cpp:1923] {line}"} for line in PYTHON_TRACEBACK_LINES
+        ],
+    )
+    backend = MemoryCheckpointBackend()
+    Attributor.new(event_manager.create_stream(request.node.name), job_info).ingest_batch([observation], backend)
+    cache_key = Attributor.get_cache_key(job_info)
+    baseline_metadata = backend.load_metadata(cache_key)
+    assert baseline_metadata is not None
+    baseline_fingerprint = baseline_metadata.data_fingerprints[ObservationSource.APPLOG.value]
+
+    ended_a_year_later = job_info._replace(job_end_time=job_info.job_end_time + timedelta(days=366))
+    Attributor.new(event_manager.create_stream(f"{request.node.name}_later"), ended_a_year_later).ingest_batch(
+        [observation], backend
+    )
+    metadata = backend.load_metadata(cache_key)
+    assert metadata is not None
+    assert metadata.data_fingerprints[ObservationSource.APPLOG.value] != baseline_fingerprint
 
 
 def test_attribute_batch_restores_prefilter_keywords_saved_by_ingest(request, event_manager, job_info):

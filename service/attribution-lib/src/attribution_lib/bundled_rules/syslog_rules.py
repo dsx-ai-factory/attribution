@@ -39,6 +39,7 @@ from attribution_lib.rules import (
     RuleContext,
     collector_def,
     declare_event_types,
+    declare_rule_names,
     expr_helper,
     rows,
     rule_processor,
@@ -58,6 +59,11 @@ declare_event_types(
     "XID_parser.actions",
     "FM_parser.lost_gpu_connection",
 )
+
+# Demotion provenance rule name used via `DemotionTypes.AFTER_MFU_DEMOTION`
+# below. Not a registered rule, just a name recorded on the replacement
+# event; see `attribution_lib.bundled_rules.filter_rules._sql_demote_events`.
+declare_rule_names("xid-outside-of-job-execution")
 
 
 @rows("xid")

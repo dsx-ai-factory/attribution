@@ -19,7 +19,23 @@ repos:
         # Every input the client is generated from:
         # - routes and schemas
         # - openapi/ holding the templates and extras copied into the package
-        # - pyproject.toml pinning the generator
+        # - pyproject.toml pinning the generator, .python-version the interpreter
         # - app/__init__.py supplying packageVersion
-        # - attribution-lib types embedded in the API models
-        files: ^service/(attribution-lib/|service-app/(app/|openapi/|openapi\.json$|nvidia_attribution_client/|pyproject\.toml$|uv\.lock$))
+        # - attribution-lib source and packaging, whose types the API models embed
+        files: "^service/(\
+          attribution-lib/(\
+            src/attribution_lib/\
+            |pyproject\\.toml$\
+            |MANIFEST\\.in$\
+          )|service-app/(\
+            app/\
+            |openapi/\
+            |openapi\\.json$\
+            |nvidia_attribution_client/\
+            |pyproject\\.toml$\
+            |uv\\.lock$\
+            |\\.python-version$\
+          )\
+        )"
+        # Exclude rule changes: the API is intentionally agnostic to specific rules.
+        exclude: ^service/attribution-lib/src/attribution_lib/bundled_rules/

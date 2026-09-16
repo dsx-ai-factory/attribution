@@ -31,6 +31,7 @@ from attribution_lib.observation.inbound import (
 )
 from attribution_lib.observation.processing import EntrySourceBase
 from attribution_lib.resources.resource_set import AllJobResources, ResourceSet
+from attribution_lib.rules_engine import body_fallbacks_for
 from attribution_lib.sources import Source, SourceSet
 
 xfail = pytest.mark.xfail
@@ -113,7 +114,7 @@ def observation_base(jobinfo, timezone, source, format, data, *, time_interval=N
         timezone=timezone,
     )
     observation = Observation.from_inbound(context=context, lines=data)
-    return EntrySourceBase.from_observation(observation)
+    return EntrySourceBase.from_observation(observation, body_fallbacks=body_fallbacks_for(source, jobinfo))
 
 
 def match_bad_peers(node_attr, nodes, symptom, rule):

@@ -268,17 +268,19 @@ class TestFiltering:
 class TestIgnoredHostnamePatterns:
     """Test cases for ignored hostname patterns configuration."""
 
-    def test_ignored_hostname_connection_closed(self, simple_job_factory, app_tst_bldr):
-        """Test that hostnames matching ignored patterns are skipped during 'Connection closed' attribution."""
-        attribution_lib.ignored_hostname_prefixes = ["scanner-"]
-
-        job_info = simple_job_factory(
+    @pytest.fixture
+    def closed_peer_job(self, simple_job_factory):
+        return simple_job_factory(
             state="FAILED",
             framework="pytorch",
             start_timestamp=1700000000,
             end_timestamp=1700010000,
             nodes=["test-node"],
         )
+
+    def test_ignored_hostname_connection_closed(self, closed_peer_job, app_tst_bldr, monkeypatch):
+        """Hostnames matching ignored patterns are skipped during 'Connection closed' attribution."""
+        monkeypatch.setattr(attribution_lib, "ignored_hostname_prefixes", ["scanner-"])
 
         test_applog_data = [
             make_applog_entry(
@@ -295,15 +297,74 @@ class TestIgnoredHostnamePatterns:
             ),
         ]
 
-        result = app_tst_bldr(job_info, test_applog_data, format=ObservationFormat.RAW_LOKI_STREAMS)
-        node_attr = JobNodeAttributions.from_event_stream(result.event_stream, job_info)
+        result = app_tst_bldr(closed_peer_job, test_applog_data, format=ObservationFormat.RAW_LOKI_STREAMS)
+        node_attr = JobNodeAttributions.from_event_stream(result.event_stream, closed_peer_job)
 
-        # The ignored hostname should not appear in attributions
         assert "scanner-001" not in node_attr.attributions
-
-        # The normal connection closed should be attributed
         assert "compute-node-003" in node_attr.attributions
         assert "Connection closed" in node_attr.attributions["compute-node-003"].attributions
+
+    def test_ignored_fqdn_connection_closed(self, closed_peer_job, app_tst_bldr, monkeypatch):
+        """FQDN peers still match the short-hostname prefix after DNS removal."""
+        monkeypatch.setattr(attribution_lib, "ignored_hostname_prefixes", ["scanner-"])
+
+        test_applog_data = [
+            make_applog_entry(
+                body="NCCL WARN Net : Connection closed by remote peer scanner-001.example.com<37046>",
+                timestamp_ns=1700005000000000000,
+                severity="warn",
+                hostname="test-node",
+            ),
+        ]
+
+        result = app_tst_bldr(closed_peer_job, test_applog_data, format=ObservationFormat.RAW_LOKI_STREAMS)
+        node_attr = JobNodeAttributions.from_event_stream(result.event_stream, closed_peer_job)
+        assert "scanner-001" not in node_attr.attributions
+        assert "scanner-001.example.com" not in node_attr.attributions
+
+    def test_ignored_unmapped_ip_connection_closed(self, closed_peer_job, app_tst_bldr, monkeypatch):
+        """Unmapped IPs match the ignore list as addresses, not as the first dotted octet."""
+        monkeypatch.setattr(attribution_lib, "ignored_hostname_prefixes", ["scanner-", "192.0.2.1"])
+
+        test_applog_data = [
+            make_applog_entry(
+                body="NCCL WARN Net : Connection closed by remote peer 192.0.2.1<37046>",
+                timestamp_ns=1700005000000000000,
+                severity="warn",
+                hostname="test-node",
+            ),
+            make_applog_entry(
+                body="NCCL WARN Net : Connection closed by remote peer compute-node-003<37046>",
+                timestamp_ns=1700005100000000000,
+                severity="warn",
+                hostname="test-node",
+            ),
+        ]
+
+        result = app_tst_bldr(closed_peer_job, test_applog_data, format=ObservationFormat.RAW_LOKI_STREAMS)
+        node_attr = JobNodeAttributions.from_event_stream(result.event_stream, closed_peer_job)
+
+        assert "192.0.2.1" not in node_attr.attributions
+        assert "compute-node-003" in node_attr.attributions
+        assert "Connection closed" in node_attr.attributions["compute-node-003"].attributions
+
+    def test_unmapped_ip_is_attributed_without_ip_prefix(self, closed_peer_job, app_tst_bldr, monkeypatch):
+        """Hostname prefixes alone do not ignore an unmapped IP after DNS removal."""
+        monkeypatch.setattr(attribution_lib, "ignored_hostname_prefixes", ["scanner-"])
+
+        test_applog_data = [
+            make_applog_entry(
+                body="NCCL WARN Net : Connection closed by remote peer 192.0.2.1<37046>",
+                timestamp_ns=1700005000000000000,
+                severity="warn",
+                hostname="test-node",
+            ),
+        ]
+
+        result = app_tst_bldr(closed_peer_job, test_applog_data, format=ObservationFormat.RAW_LOKI_STREAMS)
+        node_attr = JobNodeAttributions.from_event_stream(result.event_stream, closed_peer_job)
+        assert "192.0.2.1" in node_attr.attributions
+        assert "Connection closed" in node_attr.attributions["192.0.2.1"].attributions
 
 
 class TestRawLokiIllFormed:

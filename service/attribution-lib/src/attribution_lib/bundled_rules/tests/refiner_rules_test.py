@@ -24,7 +24,9 @@ from attribution_lib.core import (
     calculate_symptoms,
     get_bundled_rules_path,
 )
+from attribution_lib.decision_trace_recorder import Action, DecisionRecorder, NodeType
 from attribution_lib.events import EventManager
+from attribution_lib.failed_node_provenance import FailedNodeResolution
 from attribution_lib.filter import run_post_outcome_refiners, run_pre_outcome_refiners, run_scrub_phase_refiners
 from attribution_lib.hooks import singlehooks
 from attribution_lib.bundled_rules.tests._shared import default_job_info
@@ -94,7 +96,7 @@ def _register_ctx(stream, obs_ctx):
     stream.register_observation_context(obs_ctx)
 
 
-def _make_source(obs_ctx, source_time=None, *, datum="test", line_num=1) -> Source:
+def _make_source(obs_ctx, source_time=None, *, datum="test", line_num=1, rule="test") -> Source:
     """Create a minimal Source for building SymptomSets."""
     return Source(
         source_context=obs_ctx,
@@ -102,7 +104,7 @@ def _make_source(obs_ctx, source_time=None, *, datum="test", line_num=1) -> Sour
         datum=datum,
         time=source_time or datetime(2024, 1, 1, 10, 30, 0, tzinfo=ZoneInfo("UTC")),
         resources=AllJobResources,
-        rule="test",
+        rule=rule,
     )
 
 
@@ -149,6 +151,31 @@ def _run_ib_cleanup(stream, job_info, symptoms, bad_nodes):
     run_pre_outcome_refiners(stream, job_info, symptoms=symptoms, my_bad_nodes=bad_nodes)
 
 
+def _attribute_outcome(stream, job_info, obs_ctx) -> str:
+    """Run the pre-outcome -> outcome -> post-outcome chain and return the outcome.
+
+    Mirrors core.attribute for tests that need the final outcome for a job with no
+    node/log evidence, e.g. a cancellation resolved purely from SLURM state.
+    """
+    symptoms = _make_symptoms(obs_ctx)
+    bad_nodes = JobNodeAttributions()
+    run_pre_outcome_refiners(stream, job_info, symptoms=symptoms, my_bad_nodes=bad_nodes)
+
+    result = AttributionResult(event_stream=stream, bad_nodes_attr=CalcBadNodesAttributionResult())
+    result.symptoms.update(symptoms)
+    result.outcome_attr = calculate_outcome(result.symptoms)
+    run_post_outcome_refiners(
+        stream,
+        job_info,
+        symptoms=result.symptoms,
+        my_bad_nodes=bad_nodes,
+        outcome=result.outcome_attr,
+        cancelled_by=job_info.cancelled_by,
+        attribution_result=result,
+    )
+    return result.outcome_attr.value().outcome
+
+
 _DEFAULT_START = datetime(2024, 1, 1, 10, 0, 0, tzinfo=ZoneInfo("UTC"))
 _DEFAULT_END = _DEFAULT_START + timedelta(hours=1)
 
@@ -158,13 +185,15 @@ def _job_info_with(**overrides) -> JobInfo:
     return default_job_info(job_end_time=_DEFAULT_END, **overrides)
 
 
-def _run_scrub(stream, job_info, bad_nodes):
+def _run_scrub(stream, job_info, bad_nodes, recorder=None):
     """Run only SCRUB-phase refiners on my_bad_nodes."""
-    run_scrub_phase_refiners(stream, job_info, my_bad_nodes=bad_nodes)
+    run_scrub_phase_refiners(stream, job_info, my_bad_nodes=bad_nodes, recorder=recorder)
 
 
 class TestScrubBadNodes:
     """Tests for the ScrubBadNodes refiner (SCRUB phase, pre-aggregation)."""
+
+    _CORROBORATED_FAILURE = "Corroborated node failure"
 
     def test_scheduler_raw_not_responding_reason_emits_renamed_symptom(self, stream, obs_ctx, job_info):
         job_info = job_info._replace(slurm_node_infos={"node01": {"reason": "Health check: Not responding"}})
@@ -176,6 +205,114 @@ class TestScrubBadNodes:
         assert "Not responding" not in bad_nodes["node01"]
         source = bad_nodes["node01"].attributions["Node not responding"].one_source()
         assert source.rule == NodeNotRespondingProvenance.SLURM_NODE_REASON.value
+
+    def test_slurm_failure_with_epilog_non_response_emits_corroborated_node_failure(self, stream, obs_ctx):
+        job_info = _job_info_with(state="NODE_FAIL")._replace(failed_node="node01")
+        epilog_source = _make_source(
+            obs_ctx,
+            datum="Health check failed: Not responding",
+            rule=NodeNotRespondingProvenance.EPILOG_HEALTH_CHECK.value,
+        )
+        bad_nodes = JobNodeAttributions()
+        bad_nodes.add(
+            ["node01"],
+            SourceSet.new_one(RegisteredSymptoms.NODE_NOT_RESPONDING.value, epilog_source),
+        )
+        recorder = DecisionRecorder(job_info.id)
+
+        _run_scrub(stream, job_info, bad_nodes, recorder=recorder)
+
+        corroborated_failure = self._CORROBORATED_FAILURE
+        assert corroborated_failure in bad_nodes["node01"]
+        source_rules = {source.rule for source in bad_nodes["node01"].attributions[corroborated_failure]}
+        assert source_rules == {
+            NodeNotRespondingProvenance.EPILOG_HEALTH_CHECK.value,
+            FailedNodeResolution.SLURM_FAILED_NODE_FIELD.value,
+        }
+        created = [
+            event
+            for event in recorder.events
+            if event.node_type is NodeType.SCRUB
+            and event.rule_name == "CorroboratedNodeFailure"
+            and event.action is Action.CREATED
+            and event.symptom == corroborated_failure
+        ]
+        assert len(created) == 1
+        assert created[0].hostname == "node01"
+        assert created[0].evidence is not None
+        assert {source["rule_name"] for source in created[0].evidence["sources"]} == source_rules
+
+    def test_corroborated_node_failure_is_the_pruned_infra_hw_root_cause(self, stream, obs_ctx):
+        job_info = _job_info_with(state="NODE_FAIL")._replace(failed_node="node01")
+        epilog_source = _make_source(
+            obs_ctx,
+            datum="Health check failed: Not responding",
+            rule=NodeNotRespondingProvenance.EPILOG_HEALTH_CHECK.value,
+        )
+        bad_nodes = JobNodeAttributions()
+        bad_nodes.add(
+            ["node01"],
+            SourceSet.new_one(RegisteredSymptoms.NODE_NOT_RESPONDING.value, epilog_source),
+        )
+
+        symptoms = calculate_symptoms(event_stream=stream, job_info=job_info, my_bad_nodes=bad_nodes)
+        outcome = calculate_outcome(symptoms).value()
+
+        corroborated_failure = self._CORROBORATED_FAILURE
+        assert corroborated_failure in symptoms
+        assert RegisteredSymptoms.NODE_FAILURE_REPORTED_BY_SLURM.value not in symptoms
+        assert RegisteredSymptoms.NODE_NOT_RESPONDING.value not in symptoms
+        assert outcome.outcome == "Fail InfraHW"
+        assert outcome.root_cause_symptom == corroborated_failure
+
+    def test_slurm_derived_non_response_does_not_emit_corroborated_node_failure(self, stream, obs_ctx):
+        job_info = _job_info_with(state="NODE_FAIL")._replace(failed_node="node01")
+        slurm_reason_source = _make_source(
+            obs_ctx,
+            rule=NodeNotRespondingProvenance.SLURM_NODE_REASON.value,
+        )
+        bad_nodes = JobNodeAttributions()
+        bad_nodes.add(
+            ["node01"],
+            SourceSet.new_one(RegisteredSymptoms.NODE_NOT_RESPONDING.value, slurm_reason_source),
+        )
+
+        _run_scrub(stream, job_info, bad_nodes)
+
+        assert self._CORROBORATED_FAILURE not in bad_nodes["node01"]
+
+    def test_failure_and_epilog_non_response_on_different_nodes_do_not_combine(self, stream, obs_ctx):
+        job_info = _job_info_with(nodes=["node01", "node02"], state="NODE_FAIL")._replace(failed_node="node01")
+        epilog_source = _make_source(
+            obs_ctx,
+            rule=NodeNotRespondingProvenance.EPILOG_HEALTH_CHECK.value,
+        )
+        bad_nodes = JobNodeAttributions()
+        bad_nodes.add(
+            ["node02"],
+            SourceSet.new_one(RegisteredSymptoms.NODE_NOT_RESPONDING.value, epilog_source),
+        )
+
+        _run_scrub(stream, job_info, bad_nodes)
+
+        corroborated_failure = self._CORROBORATED_FAILURE
+        assert all(corroborated_failure not in bad_nodes[node] for node in bad_nodes)
+
+    def test_specific_node_failure_evidence_prevents_hardware_composite(self, stream, obs_ctx):
+        job_info = _job_info_with(state="NODE_FAIL")._replace(failed_node="node01")
+        epilog_source = _make_source(
+            obs_ctx,
+            rule=NodeNotRespondingProvenance.EPILOG_HEALTH_CHECK.value,
+        )
+        bad_nodes = _make_bad_nodes(obs_ctx, {"node01": ["XID-94-CONTAINED_ERROR"]})
+        bad_nodes.add(
+            ["node01"],
+            SourceSet.new_one(RegisteredSymptoms.NODE_NOT_RESPONDING.value, epilog_source),
+        )
+
+        _run_scrub(stream, job_info, bad_nodes)
+
+        assert self._CORROBORATED_FAILURE not in bad_nodes["node01"]
 
     def test_node_not_responding_discards_node_rebooted(self, stream, obs_ctx, job_info):
         bad_nodes = _make_bad_nodes(obs_ctx, {"node01": ["Node not responding", "Node unexpectedly rebooted"]})
@@ -940,12 +1077,80 @@ class TestSlurmStateSymptoms:
         assert "Cancelled by cluster operators" in symptoms
         assert "Cancelled by user" not in symptoms
 
+    @pytest.mark.parametrize(
+        ("cancelled_by", "expected_symptom"),
+        [
+            ("site-automation-account", "Cancelled by cluster operators"),
+            ("alice", "Cancelled by user"),
+        ],
+    )
+    def test_uid0_cancel_respects_resolved_canceller(self, stream, obs_ctx, cancelled_by, expected_symptom):
+        """Resolved identities override UID 0 throughout the pre-outcome rules.
+
+        Args:
+            stream: Event stream for the job.
+            obs_ctx: Observation context for symptom sources.
+            cancelled_by: Resolved non-root canceller identity.
+            expected_symptom: Cancellation symptom expected for that identity.
+        """
+        ji = _job_info_with(state="CANCELLED by 0", cancelled_by=cancelled_by, exit_code_signal=None)
+        symptoms = _make_symptoms(obs_ctx)
+        _run(stream, ji, symptoms)
+        assert expected_symptom in symptoms
+        assert "Cancelled by root" not in symptoms
+        if cancelled_by == "site-automation-account":
+            assert "Cancelled by user" not in symptoms
+        else:
+            assert "Cancelled by cluster operators" not in symptoms
+
     def test_failed_state_no_cancelled_symptom(self, stream, obs_ctx):
         ji = _job_info_with(state="FAILED")
         symptoms = _make_symptoms(obs_ctx)
         _run(stream, ji, symptoms)
         assert "Cancelled by user" not in symptoms
         assert "Job requeued" not in symptoms
+
+    def test_uid0_cancel_genuine_root_still_root(self, stream, obs_ctx):
+        """A real admin scancel (uid 0, no automation canceller) stays 'Cancelled by root'."""
+        ji = _job_info_with(state="CANCELLED by 0", exit_code_signal=None)
+        symptoms = _make_symptoms(obs_ctx)
+        _run(stream, ji, symptoms)
+        assert "Cancelled by root" in symptoms
+        assert "Cancelled by user" not in symptoms
+
+    def test_root_canceller_without_uid_decoration_is_root(self, stream, obs_ctx):
+        """When the projection normalizes the state to a bare 'CANCELLED', root is
+        still detected from the resolved canceller identity."""
+        ji = _job_info_with(state="CANCELLED", cancelled_by="root", exit_code_signal=None)
+        symptoms = _make_symptoms(obs_ctx)
+        _run(stream, ji, symptoms)
+        assert "Cancelled by root" in symptoms
+        assert "Cancelled by user" not in symptoms
+
+    def test_uid0_cancel_with_timeout_canceller_not_root(self, stream, obs_ctx):
+        """slurmctld cancels a job's steps as uid 0 when the job hits its time limit.
+        When the resolved canceller is Timeout, the step is automation, not a human
+        root scancel, so it must route to the timeout path, not 'Cancelled by root'."""
+        ji = _job_info_with(state="CANCELLED by 0", cancelled_by="Timeout", exit_code_signal=None)
+        symptoms = _make_symptoms(obs_ctx)
+        _run(stream, ji, symptoms)
+        assert "Cancelled by root" not in symptoms
+        assert "Cancelled by user" not in symptoms
+        assert "Cancelled by Timeout" in symptoms
+
+    def test_uid0_timeout_step_reaches_pass_end_to_end(self, stream, obs_ctx):
+        """Full pipeline: a uid-0 step cancel whose job hit its time limit must reach
+        Pass, matching a state=TIMEOUT job. The old 'CANCELLED by 0' -> 'Cancelled by
+        root' mapping made it Fail User and blocked the timeout reclassification."""
+        ji = _job_info_with(state="CANCELLED by 0", cancelled_by="Timeout", time_limit=3600, exit_code_signal=None)
+        outcome = _attribute_outcome(stream, ji, obs_ctx)
+        assert outcome == "Pass"
+
+    def test_uid0_genuine_root_reaches_fail_user_end_to_end(self, stream, obs_ctx):
+        """Full pipeline: a genuine admin scancel (uid 0, canceller root) stays Fail User."""
+        ji = _job_info_with(state="CANCELLED by 0", cancelled_by="root", time_limit=3600, exit_code_signal=None)
+        outcome = _attribute_outcome(stream, ji, obs_ctx)
+        assert outcome == "Fail User"
 
 
 class TestProcessCompletesCleanup:

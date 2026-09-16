@@ -22,9 +22,15 @@ from loguru import logger
 from attribution_lib.attr_types import EventHelper
 from attribution_lib.event_helpers import query_events_with_source
 from attribution_lib.events import DemotionTypes, EventStream, sql_placeholders
-from attribution_lib.rules import FilterContext, FilterPriority, declare_event_types, filter_def
+from attribution_lib.rules import (
+    FilterContext,
+    FilterPriority,
+    declare_event_types,
+    declare_rule_names,
+    filter_def,
+)
 from attribution_lib.sources import Source
-from attribution_lib.symptoms import INFORMATIONAL_XIDS
+from attribution_lib.symptoms import INFORMATIONAL_XIDS, RegisteredSymptoms
 
 _DEMOTION_KEYS = frozenset(e.value for e in DemotionTypes)
 
@@ -33,6 +39,12 @@ _BAD_TYPES = ["Attribution.node.bad", "Attribution.node.bad_peers"]
 _INTERESTING_TYPES = ["Attribution.node.interesting", "Attribution.node.interesting_peers"]
 
 declare_event_types(*_BAD_TYPES, *_INTERESTING_TYPES, "XID_parser.info", "XID_parser.burst")
+
+# Demotion provenance rule names recorded on replacement events by
+# `_sql_demote_events()` below. Not registered rules, just names, so they
+# need declaring here rather than being discovered via `preload_rule_names()`
+# the first time a demotion actually runs.
+declare_rule_names("xid-outside-of-job-execution", "xid-event-outside-of-job-execution")
 
 
 def _build_bad_to_interesting_type_map(event_stream: EventStream) -> dict[int, int]:
@@ -86,9 +98,9 @@ def _sql_demote_events(
     demote_key: str,
     where_clause: str,
     params: list,
-    type_id_map: dict,
-):
-    """Demote events using SQL with minimal Python for JSON transformation.
+    type_id_map: dict[int, int],
+) -> None:
+    """Demote selected events without materializing them in Python.
 
     Args:
         event_stream: Event stream
@@ -97,134 +109,97 @@ def _sql_demote_events(
         params: Parameters for WHERE clause
         type_id_map: Map of 'bad' type IDs to 'interesting' type IDs
     """
-    # Build CASE statement for event type transformation
-    type_cases = []
-    for bad_id, interesting_id in type_id_map.items():
-        type_cases.append(f"WHEN event_type={bad_id} THEN {interesting_id}")
-    type_case_sql = " ".join(type_cases) if type_cases else "WHEN 1=0 THEN event_type"
+    # Queries below must see every event and every preloaded rule/type ID.
+    event_stream.flush()
 
-    # Build IN clause for needs_transform check
-    if type_id_map:
-        in_clause = f"event_type IN ({','.join(map(str, type_id_map.keys()))})"
-    else:
-        in_clause = "1=0"
+    demote_path = f"$.{demote_key}"
+    bad_type_ids = list(type_id_map)
 
-    # Flush interners and pending events to ensure all IDs exist
-    event_stream._flush()
-
-    # Get events to demote with type transformations done in SQL
-    rows = event_stream.query_raw(
+    # Demotion rules become the replacement events' provenance. These names
+    # must already be known (declared via `declare_rule_names()` alongside
+    # the rule that stamps them into a payload) rather than discovered from
+    # live event data and silently registered here. A name surfacing only
+    # now means some rule forgot to declare it; `get_ids()` raises
+    # `UndeclaredRuleError` rather than let that go unnoticed.
+    demote_rule_rows = event_stream.query_raw(
         f"""
-        SELECT
-            e.id,
-            e.context_id,
-            CASE {type_case_sql} ELSE e.event_type END as new_event_type,
-            e.timestamp,
-            e.line_num,
-            e.source_datum,
-            e.resources,
-            e.obs_context_id,
-            e.payload,
-            json_extract_string(e.payload, '$.{demote_key}') as demote_rule,
-            CASE WHEN {in_clause} THEN 1 ELSE 0 END as needs_transform
+        SELECT DISTINCT json_extract_string(e.payload, ?) AS demote_rule
         FROM events e
         WHERE {where_clause}
         """,
-        params,
+        [demote_path] + params,
     )
+    demote_rule_names = {row[0] for row in demote_rule_rows if row[0]}
+    if demote_rule_names:
+        # `sorted()`, not `list()`: set iteration order is non-deterministic
+        # (hash-seed randomized), and `get_ids()` raises on the first unknown
+        # name it hits, so an unsorted list would report a different
+        # undeclared name on different runs for the same input.
+        event_stream.mgr.rules.get_ids(sorted(demote_rule_names))
 
-    if not rows:
-        return
-
-    # Step 1: Collect all unique rule values and batch insert/fetch them
-    unique_rules = {row[9] for row in rows if row[9]}  # demote_rule_value is at index 9
-    rule_id_map = {}
-
-    if unique_rules:
-        rule_list = list(unique_rules)
-        # Batch insert new rules using flat tuple insert
-        values_clause = ",".join(["(?)"] * len(rule_list))
-        event_stream._conn.execute(
-            f"INSERT INTO rules (name) VALUES {values_clause} ON CONFLICT (name) DO NOTHING",
-            rule_list,
+    if bad_type_ids:
+        type_case_sql = " ".join(
+            f"WHEN e.event_type={bad_id} THEN {interesting_id}" for bad_id, interesting_id in type_id_map.items()
         )
-        # Batch fetch all IDs in single query
-        placeholders = sql_placeholders(len(rule_list))
-        results = event_stream._conn.execute(
-            f"SELECT name, id FROM rules WHERE name IN ({placeholders})",
-            rule_list,
-        ).fetchall()
-        rule_id_map = {name: id for name, id in results}
+        bad_type_placeholders = sql_placeholders(len(bad_type_ids))
 
-    # Step 2: Process rows using the pre-fetched rule IDs
-    insert_data = []
-    event_ids_to_deactivate = []
-
-    for row in rows:
-        (
-            orig_id,
-            context_id,
-            new_event_type,
-            timestamp,
-            line_num,
-            source_datum,
-            resources,
-            obs_context_id,
-            payload_json,
-            demote_rule_value,
-            needs_transform,
-        ) = row
-
-        # Skip events without a demote rule
-        if not demote_rule_value:
-            continue
-
-        event_ids_to_deactivate.append(orig_id)
-
-        # Look up pre-fetched rule ID (no query here!)
-        source_rule = rule_id_map.get(demote_rule_value)
-
-        # Only create a new event if this event type needs transformation
-        if needs_transform:
-            # Transform payload
-            if payload_json:
-                payload = json.loads(payload_json)
-                new_payload = {k: v for k, v in payload.items() if k != demote_key}
-                if "symptom" in new_payload:
-                    new_payload["symptom"] = f"(non-fatal) {new_payload['symptom']}"
-                payload_json = json.dumps(new_payload)
-
-            # ID will be auto-generated by SQL
-            insert_data.append(
-                (
-                    context_id,
-                    new_event_type,
-                    timestamp,
-                    line_num,
-                    source_datum,
-                    source_rule,
-                    resources,
-                    obs_context_id,
-                    payload_json,
-                )
-            )
-
-    # Bulk insert - single executemany (IDs are auto-generated by SQL)
-    if insert_data:
-        event_stream._conn.executemany(
-            """INSERT INTO events (context_id, event_type, timestamp, status, line_num, source_datum, source_rule,
-                                    resources, obs_context_id, payload)
-               VALUES (?, ?, ?, 1, ?, ?, ?, ?, ?, ?)""",
-            insert_data,
-        )
-
-    # Bulk deactivate - single UPDATE
-    if event_ids_to_deactivate:
-        id_ph = sql_placeholders(len(event_ids_to_deactivate))
+        # Transform bad events into interesting events in one set operation.
+        # json_merge_patch removes the demotion key when its patch value is
+        # NULL, while preserving every other payload field.
         event_stream.execute(
-            f"UPDATE events SET status=0 WHERE context_id=? AND id IN ({id_ph})",
-            [event_stream.ctx_id] + event_ids_to_deactivate,
+            f"""
+            WITH selected AS (
+                SELECT
+                    e.*,
+                    json_extract_string(e.payload, ?) AS demote_rule
+                FROM events e
+                WHERE {where_clause}
+            )
+            INSERT INTO events (
+                context_id, event_type, timestamp, status, line_num,
+                source_datum, source_rule, resources, obs_context_id, payload
+            )
+            SELECT
+                e.context_id,
+                CASE {type_case_sql} ELSE e.event_type END,
+                e.timestamp,
+                1,
+                e.line_num,
+                e.source_datum,
+                r.id,
+                e.resources,
+                e.obs_context_id,
+                json_merge_patch(
+                    e.payload,
+                    CASE
+                        WHEN NOT json_exists(e.payload, '$.symptom')
+                            THEN json_object(?, NULL)
+                        ELSE json_object(
+                            ?, NULL,
+                            'symptom',
+                            '(non-fatal) ' || json_extract_string(e.payload, '$.symptom')
+                        )
+                    END
+                )
+            FROM selected e
+            JOIN rules r ON r.name = e.demote_rule
+            WHERE COALESCE(e.demote_rule, '') <> ''
+              AND e.event_type IN ({bad_type_placeholders})
+            """,
+            [demote_path] + params + [demote_key, demote_key] + bad_type_ids,
         )
+
+    # Original bad events and selected non-transformable events are inactive.
+    # Replacement events do not match because their demotion key was removed.
+    event_stream.execute(
+        f"""
+        UPDATE events
+        SET status=0
+        WHERE {where_clause}
+          AND COALESCE(json_extract_string(payload, ?), '') <> ''
+        """,
+        params + [demote_path],
+    )
 
 
 def _demote_bad_by_symptom(event_stream: EventStream, symptoms: frozenset[str], rule_name: str):
@@ -678,6 +653,20 @@ def clean_informational_xids(context: FilterContext):
     _demote_bad_by_symptom(context.event_stream, INFORMATIONAL_XIDS, "CleanInformationalXids")
 
 
+@filter_def(name="DemoteNonFatalRowRemap", author="NVIDIA Attribution team", priority=FilterPriority.LATE)
+def demote_nonfatal_row_remap(context: FilterContext):
+    """Demote non-fatal row-remap telemetry to interesting.
+
+    Args:
+        context: Filter context containing the event stream.
+    """
+    _demote_bad_by_symptom(
+        context.event_stream,
+        frozenset((RegisteredSymptoms.ROW_REMAP.value,)),
+        "DemoteNonFatalRowRemap",
+    )
+
+
 @filter_def(name="DemoteInsufficientPermissions", author="NVIDIA Attribution team", priority=FilterPriority.LATE)
 def demote_insufficient_permissions(context: FilterContext):
     """Demote insufficient-permissions telemetry from bad to interesting.
@@ -691,6 +680,44 @@ def demote_insufficient_permissions(context: FilterContext):
         context.event_stream,
         [f"{symptom} "],
         "DemoteInsufficientPermissions",
+    )
+
+
+@filter_def(name="DemoteBufferTooSmallJournal", author="NVIDIA Attribution team", priority=FilterPriority.LATE)
+def demote_buffer_too_small_journal(context: FilterContext):
+    """Demote RM journal-dump BUFFER_TOO_SMALL from bad to interesting.
+
+    ``NV_ERR_BUFFER_TOO_SMALL`` at ``journal.c`` is ``rcdbDumpSystemInfo`` /
+    ``prbEncNestedStart`` failing to encode a debug dump during CUDA process
+    teardown. It is not a live GPU or driver fault. It appears on every node
+    after SIGUSR1, scancel, or a rank crash and would otherwise outrank
+    Cancelled by user (FALLBACK) because BUFFER_TOO_SMALL is MEDIUM_SW.
+
+    Other ``NV_ERR_BUFFER_TOO_SMALL`` files are left as bad.
+
+    Args:
+        context: Filter context containing the event stream.
+    """
+    # Extractor emits "{error_code} {file}" without the line number, e.g.
+    # "NV_ERR_BUFFER_TOO_SMALL journal.c". starts_with keeps any accidental suffix.
+    _demote_bad_by_symptom_prefix(
+        context.event_stream,
+        ["NV_ERR_BUFFER_TOO_SMALL journal.c"],
+        "DemoteBufferTooSmallJournal",
+    )
+
+
+@filter_def(name="DemoteNonFatalInvalidState", author="NVIDIA Attribution team", priority=FilterPriority.LATE)
+def demote_nonfatal_invalid_state(context: FilterContext):
+    """Demote the non-fatal osapi invalid-state symptom to interesting.
+
+    Args:
+        context: Filter context containing the event stream.
+    """
+    _demote_bad_by_symptom(
+        context.event_stream,
+        frozenset(("NV_ERR_INVALID_STATE osapi.c",)),
+        "DemoteNonFatalInvalidState",
     )
 
 

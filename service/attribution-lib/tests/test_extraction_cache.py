@@ -288,6 +288,56 @@ class TestExtractionCacheMetadata:
 
 
 class TestMemoryCheckpointBackend:
+    @pytest.mark.parametrize("load_path", ["simple", "fingerprints"])
+    @pytest.mark.parametrize("stored_version", ["1", "2", "invalid"])
+    def test_snapshot_schema_recovery(self, tmp_path, dummy_ctx, monkeypatch, load_path, stored_version):
+        """Recompute incompatible snapshots without hiding corrupt versions.
+
+        Args:
+            tmp_path: Temporary snapshot directory.
+            dummy_ctx: Observation context used to populate events.
+            monkeypatch: Replaces only the backend's snapshot storage read.
+            load_path: Cache coordinator entry point to exercise.
+            stored_version: Version recorded in the persisted snapshot.
+        """
+        backend = MemoryCheckpointBackend()
+        fingerprints = {"applog": DataFingerprint(count=10, sample_hashes=("aaa", "bbb"))}
+        event_manager = EventManager(rules_engine=attribution_lib.get_rules_engine())
+        _populate(event_manager, dummy_ctx, count=4)
+        save_extraction_cache(backend, "schema_key", event_manager, "job_42", data_fingerprints=fingerprints)
+        event_manager.export_snapshot(tmp_path)
+        event_manager.close()
+        (tmp_path / EventManager._SCHEMA_VERSION_FILE).write_text(stored_version)
+        monkeypatch.setattr(
+            backend,
+            "load_event_manager",
+            lambda key: EventManager.from_snapshot(tmp_path, attribution_lib.get_rules_engine()),
+        )
+        loader = (
+            (lambda: load_extraction_cache(backend, "schema_key"))
+            if load_path == "simple"
+            else lambda: load_or_update_extraction_cache(backend, "schema_key", fingerprints)
+        )
+
+        if stored_version == "invalid":
+            with pytest.raises(ValueError, match="invalid literal"):
+                loader()
+            return
+
+        result = loader()
+        if stored_version == "1":
+            if load_path == "simple":
+                assert result is None
+            else:
+                assert result.needs_full_reextraction is True
+                assert result.event_manager is None
+                assert result.metadata.job_id == "job_42"
+            assert (tmp_path / EventManager._SCHEMA_VERSION_FILE).read_text() == "1"
+        else:
+            restored = result[0] if load_path == "simple" else result.event_manager
+            assert restored._conn.execute("SELECT COUNT(*) FROM events").fetchone() == (4,)
+            restored.close()
+
     def test_cache_without_raw_keywords_requires_reextraction(self, dummy_ctx):
         """Invalidate legacy metadata that cannot restore raw keywords.
 

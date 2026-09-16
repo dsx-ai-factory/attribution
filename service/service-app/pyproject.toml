@@ -42,6 +42,7 @@ dev = [
     "pyzstd>=0.16.2",
     "hatchling>=1.27.0",
     "schemathesis>=4.0.0",
+    "psutil>=7.2.2",
 ]
 
 [tool.uv]

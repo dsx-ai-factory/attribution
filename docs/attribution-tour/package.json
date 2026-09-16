@@ -1,0 +1,15 @@
+{
+  "name": "attribution-tour",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "packageManager": "pnpm@10.11.0",
+  "scripts": {
+    "dev": "slidev slides.md",
+    "build": "slidev build slides.md --without-notes"
+  },
+  "devDependencies": {
+    "@slidev/cli": "52.19.1",
+    "@slidev/theme-default": "0.25.0"
+  }
+}

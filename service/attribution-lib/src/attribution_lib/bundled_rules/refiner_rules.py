@@ -80,6 +80,9 @@ _SCRUB_ORDER = [
     "SchedulerNodeFailure",
     "SchedulerNotResponding",
     "ScrubBadNodes",
+    # Combine only the scheduler failure and surviving independent epilog
+    # non-response evidence after more specific per-node causes are scrubbed.
+    "CorroboratedNodeFailure",
 ]
 
 _SCRUB_BASE = FilterPriority.SCRUB
@@ -281,10 +284,12 @@ _PYXIS_NVIDIA_SPECIFIC_CLI_SYMPTOMS = frozenset(
 
 # Symptoms that mean the node became unusable mid-job. Used by cascade-scrub
 # rules whose root cause is "the node went away."
+_CORROBORATED_NODE_FAILURE = "Corroborated node failure"
 _NODE_FAILURE_SYMPTOMS = frozenset(
     {
         "Node failure reported by slurm",
         "Node not responding",
+        _CORROBORATED_NODE_FAILURE,
         "Node unexpectedly rebooted",
     }
 )
@@ -353,6 +358,7 @@ _NON_IB_ROOT_CAUSE_PATTERNS = [
     "%CE deadlock DETECTED%",
     "%JSONDecodeError%",
     "%Node failure reported by slurm%",
+    "%Corroborated node failure%",
     "%Power Supply Unit failure%",
     "%System is powering down%",
     "%EOFError: Ran out of input%",
@@ -674,6 +680,45 @@ def scrub_bad_nodes_refiner(context: RefinerContext):
             my_bad_nodes[k].discard("Unexpected error from cudaGetDeviceCount()")
 
 
+@refiner_def(
+    name="CorroboratedNodeFailure",
+    author="NVIDIA Attribution team",
+    priority=_priority("CorroboratedNodeFailure"),
+)
+def corroborated_node_failure_refiner(context: RefinerContext):
+    """Combine independent scheduler and epilog failure evidence on one node.
+
+    A SLURM ``NODE_FAIL`` alone is scheduler evidence and remains InfraSW. When
+    the epilog health check independently reports that the same node did not
+    respond, emit the stronger ``Corroborated node failure`` symptom. A
+    scheduler-derived node reason is not independent evidence and must not
+    trigger this composite.
+    """
+    my_bad_nodes = context.my_bad_nodes
+    if my_bad_nodes is None:
+        return
+
+    slurm_failure = RegisteredSymptoms.NODE_FAILURE_REPORTED_BY_SLURM.value
+    node_not_responding = RegisteredSymptoms.NODE_NOT_RESPONDING.value
+    epilog_rule = NodeNotRespondingProvenance.EPILOG_HEALTH_CHECK.value
+
+    for _node, node_group in my_bad_nodes.items():
+        node_attributions = node_group.attributions
+        if slurm_failure not in node_attributions or node_not_responding not in node_attributions:
+            continue
+
+        epilog_sources = [source for source in node_attributions[node_not_responding] if source.rule == epilog_rule]
+        if not epilog_sources:
+            continue
+
+        combined_sources = SourceSet(_CORROBORATED_NODE_FAILURE)
+        for source in node_attributions[slurm_failure]:
+            combined_sources.add(source)
+        for source in epilog_sources:
+            combined_sources.add(source)
+        node_group.add(combined_sources)
+
+
 # Raw-keyword promotion rules
 
 
@@ -837,6 +882,23 @@ def empty_symptoms_fallback(context: RefinerContext):
 # Symptom cleanup and resolution rules
 
 
+def _is_root_cancellation(job_info: JobInfo) -> bool:
+    """Whether a cancellation is a genuine human root scancel, not automation.
+
+    slurmctld cancels a job's steps as uid 0 (root) when the job hits its time
+    limit, so a raw ``CANCELLED by 0`` step state is ambiguous. Treat it as a
+    root scancel only when the resolved canceller is root; when the job-level
+    canceller is ``Timeout`` the cancellation is Slurm enforcing the limit and
+    must flow to the timeout handling instead. Keys on the resolved
+    ``cancelled_by`` identity so it stays correct once the projection normalizes
+    the state to a bare ``CANCELLED``; the raw-string check remains a fallback
+    for feeds that emit the decoration without resolving the canceller.
+    """
+    if job_info.cancelled_by is not None:
+        return job_info.cancelled_by == "root"
+    return job_info.state == "CANCELLED by 0"
+
+
 @refiner_def(name="SlurmStateSymptoms", author="NVIDIA Attribution team", priority=_priority("SlurmStateSymptoms"))
 def slurm_state_symptoms(context: RefinerContext):
     """Add symptoms based on SLURM job state (CANCELLED, REQUEUED)."""
@@ -845,11 +907,13 @@ def slurm_state_symptoms(context: RefinerContext):
     if symptoms is None or job_info is None:
         return
 
-    if job_info.state == "CANCELLED by 0":
+    if _is_root_cancellation(job_info):
         symptoms.add(job_info.source_value("Cancelled by root", job_info.state, "state cancelled by root"))
     elif job_info.state.startswith("CANCELLED"):
         if job_info.cancelled_by == "site-automation-account":
             symptoms.add(job_info.source_value("Cancelled by cluster operators", job_info.state, "state cancelled"))
+        elif job_info.cancelled_by == "Timeout":
+            symptoms.add(job_info.source_value("Cancelled by Timeout", job_info.state, "state cancelled by timeout"))
         else:
             symptoms.add(job_info.source_value("Cancelled by user", job_info.state, "state cancelled"))
     elif job_info.state == "REQUEUED":
@@ -1716,7 +1780,7 @@ def last_resort_symptoms(context: RefinerContext):
     if not symptoms or (len(symptoms) == 1 and ("Cancelled by user" in symptoms or "FalsePositive-XID-64" in symptoms)):
         if job_info.state == "COMPLETED":
             symptoms.add(job_info.source_value("the process completes", job_info.state, "last resort; slurm status"))
-        elif job_info.state == "CANCELLED by 0":
+        elif _is_root_cancellation(job_info):
             symptoms.add(job_info.source_value("Cancelled by root", job_info.state, "last resort; slurm status"))
         elif job_info.state.startswith("CANCELLED"):
             symptoms.add(job_info.source_value("Cancelled by user", job_info.state, "last resort; slurm status"))

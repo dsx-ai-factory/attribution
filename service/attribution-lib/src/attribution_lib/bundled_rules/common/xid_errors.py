@@ -20,8 +20,6 @@ from attribution_lib.job_info import JobInfo
 from attribution_lib.xid_analyzer import nvidia_xid_analyzer
 from attribution_lib.sources import Source
 
-INIT_ONCE = True
-
 nvidia_xid_analyzer.setup_rules()
 
 xpa_xid_catalog: dict[str, Any] = nvidia_xid_analyzer.XID_CATALOG
@@ -586,25 +584,12 @@ def get_entry(xid):
     return None
 
 
-def init_xid_rules():
-    """Initialize XID rules (legacy; rules are now initialized at module level)."""
-    global xpa_xid_catalog, xpa_nvl5_xid_decoding_rules, xpa_sticky_xids, xpa_xid_policies, INIT_ONCE
-    if INIT_ONCE:
-        nvidia_xid_analyzer.setup_rules()
-        xpa_xid_catalog = nvidia_xid_analyzer.XID_CATALOG
-        xpa_nvl5_xid_decoding_rules = nvidia_xid_analyzer.NVL5_XID_DECODING_RULES
-        xpa_sticky_xids = nvidia_xid_analyzer.STICKY_XIDS
-        xpa_xid_policies = nvidia_xid_analyzer.XID_POLICY
-        INIT_ONCE = False
-
-
 def parse_syslog_events(
     syslog_records: Iterable[tuple[Source, str]],
     job_info: JobInfo,
     driver_version: str = "525.105.17",
     verbose: bool = True,
 ):
-    # init_xid_rules()
     fleet_data = nvidia_xid_analyzer.FleetData()
 
     nodes_with_interruption = []

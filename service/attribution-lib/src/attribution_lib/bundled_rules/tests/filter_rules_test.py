@@ -18,6 +18,7 @@ import attribution_lib
 from attribution_lib.attr_types import JobNodeAttributions
 from attribution_lib.core import get_bundled_rules_path
 from attribution_lib.events import DemotionTypes, EventManager
+from attribution_lib.exceptions import UndeclaredRuleError
 from attribution_lib.bundled_rules.common.megatron import get_pytorch_timeout_minutes
 from attribution_lib.filter import filter_events
 from attribution_lib.bundled_rules.tests._shared import default_job_info
@@ -51,7 +52,9 @@ def rules_engine():
 @pytest.fixture
 def mgr(rules_engine):
     m = EventManager(rules_engine=rules_engine)
-    m.preload_rule_names({"some_rule", "fm-lost-connection-to-gpu", "NcclWatchdog"})
+    m.preload_rule_names(
+        {"some_rule", "fm-lost-connection-to-gpu", "NcclWatchdog", "test_demote", "discard", "no-symptom-demotion"}
+    )
     m.preload_event_types(
         {
             "Attribution.node.bad",
@@ -132,13 +135,160 @@ def test_demote_tflops_symptoms(stream, obs_ctx, job_info):
     rows_100 = stream.query_raw("SELECT status FROM events WHERE event_type=? AND line_num=100", [bad_id])
     assert rows_100[0][0] == 0
 
-    # New interesting event should be created for 100
-    rows_int = stream.query_raw("SELECT status FROM events WHERE event_type=? AND line_num=100", [int_id])
-    assert rows_int[0][0] == 1
+    # New interesting event should preserve source data and use the demotion
+    # rule as provenance, while removing the marker from its payload.
+    rows_int = stream.query_raw(
+        """
+        SELECT
+            e.status,
+            e.timestamp,
+            e.line_num,
+            e.source_datum,
+            e.resources,
+            e.obs_context_id,
+            json_extract_string(e.payload, '$.node'),
+            json_extract_string(e.payload, '$.symptom'),
+            json_exists(e.payload, '$.AFTER_MFU_DEMOTION'),
+            r.name
+        FROM events e
+        LEFT JOIN rules r ON r.id=e.source_rule
+        WHERE e.event_type=? AND e.line_num=100
+        """,
+        [int_id],
+    )
+    assert rows_int == [
+        (
+            1,
+            t1,
+            100,
+            "dummy line",
+            '"AllJobResources"',
+            obs_ctx.id,
+            "node01",
+            "(non-fatal) some error",
+            False,
+            "test_demote",
+        )
+    ]
 
     # Event at 200 is after MFU. Should remain bad.
     rows_200 = stream.query_raw("SELECT status FROM events WHERE event_type=? AND line_num=200", [bad_id])
     assert rows_200[0][0] == 1
+
+
+def test_demote_with_undeclared_rule_name_raises(stream, obs_ctx, job_info):
+    """Demotion rule names embedded in event payloads must already be known
+    (declared up front via `declare_rule_names()`). Discovering a new one
+    from live event data at demotion time is a bug in whichever rule stamped
+    it, not something to silently register.
+    """
+    t1 = datetime(2024, 1, 1, 10, 5, 0, tzinfo=ZoneInfo("UTC"))
+    payload = {"node": "node01", "symptom": "some error", DemotionTypes.AFTER_MFU_DEMOTION: "never_declared_rule"}
+    create_event(stream, obs_ctx, "Attribution.node.bad", payload, t1, 100)
+
+    t_mfu = datetime(2024, 1, 1, 10, 10, 0, tzinfo=ZoneInfo("UTC"))
+    create_event(stream, obs_ctx, "Application.mfu", {"tflops": 100}, t_mfu, 150)
+
+    with pytest.raises(UndeclaredRuleError, match="never_declared_rule"):
+        filter_events(stream, job_info)
+
+
+def test_demote_with_multiple_undeclared_rule_names_reports_stable_name(stream, obs_ctx, job_info):
+    """When more than one undeclared demotion rule name surfaces in the same
+    batch, the reported name must be deterministic across runs, not whatever
+    order Python's (hash-seed randomized) set iteration happens to produce.
+    """
+    t1 = datetime(2024, 1, 1, 10, 5, 0, tzinfo=ZoneInfo("UTC"))
+    create_event(
+        stream,
+        obs_ctx,
+        "Attribution.node.bad",
+        {"node": "node01", "symptom": "err1", DemotionTypes.AFTER_MFU_DEMOTION: "zzz_never_declared"},
+        t1,
+        100,
+    )
+    create_event(
+        stream,
+        obs_ctx,
+        "Attribution.node.bad",
+        {"node": "node01", "symptom": "err2", DemotionTypes.AFTER_MFU_DEMOTION: "aaa_never_declared"},
+        t1,
+        101,
+    )
+
+    t_mfu = datetime(2024, 1, 1, 10, 10, 0, tzinfo=ZoneInfo("UTC"))
+    create_event(stream, obs_ctx, "Application.mfu", {"tflops": 100}, t_mfu, 150)
+
+    with pytest.raises(UndeclaredRuleError, match="aaa_never_declared"):
+        filter_events(stream, job_info)
+
+
+def test_demote_tflops_symptoms_edge_cases(stream, obs_ctx, job_info):
+    before_mfu = datetime(2024, 1, 1, 10, 5, 0, tzinfo=ZoneInfo("UTC"))
+    create_event(
+        stream,
+        obs_ctx,
+        "Attribution.node.bad",
+        {"node": "node01", DemotionTypes.AFTER_MFU_DEMOTION: "no-symptom-demotion"},
+        before_mfu,
+        80,
+    )
+    create_event(
+        stream,
+        obs_ctx,
+        "Attribution.node.bad",
+        {"node": "node01", "symptom": "keep active", DemotionTypes.AFTER_MFU_DEMOTION: ""},
+        before_mfu,
+        90,
+    )
+    create_event(
+        stream,
+        obs_ctx,
+        "Attribution.node.interesting",
+        {"node": "node01", "symptom": "already interesting", DemotionTypes.AFTER_MFU_DEMOTION: "discard"},
+        before_mfu,
+        100,
+    )
+    create_event(
+        stream,
+        obs_ctx,
+        "Application.mfu",
+        {"tflops": 100},
+        datetime(2024, 1, 1, 10, 10, 0, tzinfo=ZoneInfo("UTC")),
+        150,
+    )
+
+    filter_events(stream, job_info)
+    stream.flush()
+
+    bad_id = stream.mgr.types.get_id("Attribution.node.bad")
+    interesting_id = stream.mgr.types.get_id("Attribution.node.interesting")
+
+    # A replacement without a symptom still drops the demotion marker.
+    replacement = stream.query_raw(
+        """
+        SELECT e.status,
+               json_exists(e.payload, '$.symptom'),
+               json_exists(e.payload, '$.AFTER_MFU_DEMOTION'),
+               r.name
+        FROM events e
+        LEFT JOIN rules r ON r.id=e.source_rule
+        WHERE e.event_type=? AND e.line_num=80
+        """,
+        [interesting_id],
+    )
+    assert replacement == [(1, False, False, "no-symptom-demotion")]
+    assert stream.query_raw("SELECT status FROM events WHERE event_type=? AND line_num=80", [bad_id]) == [(0,)]
+
+    # An empty demotion value is not actionable and leaves the event untouched.
+    assert stream.query_raw("SELECT status FROM events WHERE event_type=? AND line_num=90", [bad_id]) == [(1,)]
+    assert stream.query_raw("SELECT count(*) FROM events WHERE event_type=? AND line_num=90", [interesting_id]) == [
+        (0,)
+    ]
+
+    # Preserve the established behavior for selected types that have no
+    # bad-to-interesting mapping: deactivate them without making a replacement.
+    assert stream.query_raw("SELECT status FROM events WHERE event_type=? AND line_num=100", [interesting_id]) == [(0,)]
 
 
 def test_demote_watchdog_errors(stream, obs_ctx, job_info):
@@ -379,6 +529,58 @@ def test_clean_informational_xids_demoted(stream, obs_ctx, job_info):
         assert xid in rows[0][1], f"{xid} should appear in interesting payload"
 
 
+def test_row_remap_demoted_without_affecting_other_symptoms(stream, obs_ctx, job_info):
+    """Keep row-remap telemetry as context and preserve other failures.
+
+    Args:
+        stream: Event stream fixture.
+        obs_ctx: Observation context fixture.
+        job_info: Job information fixture.
+    """
+    symptom = "Row Remap"
+    other_symptom = "XID-94 (Containment error)"
+    timestamp = datetime(2024, 1, 1, 10, 5, 0, tzinfo=ZoneInfo("UTC"))
+    create_event(
+        stream,
+        obs_ctx,
+        "Attribution.node.bad",
+        {"node": "node01", "symptom": symptom},
+        timestamp,
+        100,
+    )
+    create_event(
+        stream,
+        obs_ctx,
+        "Attribution.node.bad",
+        {"node": "node01", "symptom": other_symptom},
+        timestamp,
+        200,
+    )
+
+    filter_events(stream, job_info)
+    stream.flush()
+
+    bad_id = stream.mgr.types.get_id("Attribution.node.bad")
+    interesting_id = stream.mgr.types.get_id("Attribution.node.interesting")
+
+    bad_rows = stream.query_raw("SELECT status FROM events WHERE event_type=? AND line_num=100", [bad_id])
+    assert bad_rows[0][0] == 0
+
+    interesting_rows = stream.query_raw(
+        "SELECT status, payload FROM events WHERE event_type=? AND line_num=100",
+        [interesting_id],
+    )
+    assert interesting_rows[0][0] == 1
+    assert symptom in interesting_rows[0][1]
+
+    other_bad_rows = stream.query_raw(
+        "SELECT status, payload FROM events WHERE event_type=? AND line_num=200",
+        [bad_id],
+    )
+    assert other_bad_rows[0][0] == 1
+    assert other_symptom in other_bad_rows[0][1]
+
+
 @pytest.mark.parametrize(
     "symptom",
     [
@@ -425,8 +627,52 @@ def test_nv_err_insufficient_permissions_demoted_to_interesting(stream, obs_ctx,
 @pytest.mark.parametrize(
     "symptom",
     [
+        "NV_ERR_BUFFER_TOO_SMALL journal.c",
+        "NV_ERR_BUFFER_TOO_SMALL journal.c:1184",
+    ],
+)
+def test_nv_err_buffer_too_small_journal_demoted_to_interesting(stream, obs_ctx, job_info, symptom):
+    """Keep journal.c BUFFER_TOO_SMALL as context without treating it as a failure.
+
+    Args:
+        stream: Event stream fixture.
+        obs_ctx: Observation context fixture.
+        job_info: Job information fixture.
+        symptom: journal.c BUFFER_TOO_SMALL symptom to demote.
+    """
+    timestamp = datetime(2024, 1, 1, 10, 5, 0, tzinfo=ZoneInfo("UTC"))
+    create_event(
+        stream,
+        obs_ctx,
+        "Attribution.node.bad",
+        {"node": "node01", "symptom": symptom},
+        timestamp,
+        100,
+    )
+
+    filter_events(stream, job_info)
+    stream.flush()
+
+    bad_id = stream.mgr.types.get_id("Attribution.node.bad")
+    interesting_id = stream.mgr.types.get_id("Attribution.node.interesting")
+
+    bad_rows = stream.query_raw("SELECT status FROM events WHERE event_type=? AND line_num=100", [bad_id])
+    assert bad_rows[0][0] == 0
+
+    interesting_rows = stream.query_raw(
+        "SELECT status, payload FROM events WHERE event_type=? AND line_num=100",
+        [interesting_id],
+    )
+    assert interesting_rows[0][0] == 1
+    assert symptom in interesting_rows[0][1]
+
+
+@pytest.mark.parametrize(
+    "symptom",
+    [
         "NV_ERR_INSUFFICIENT_PERMISSIONS_FATAL kern_profiler_v2_ctrl.c",
         "NV_ERR_INSUFFICIENT_RESOURCES mem_multicast_fabric.c",
+        "NV_ERR_BUFFER_TOO_SMALL mem_multicast_fabric.c",
     ],
 )
 def test_nv_err_insufficient_permissions_demotion_preserves_other_nv_errs(stream, obs_ctx, job_info, symptom):
@@ -437,6 +683,77 @@ def test_nv_err_insufficient_permissions_demotion_preserves_other_nv_errs(stream
         obs_ctx: Observation context fixture.
         job_info: Job information fixture.
         symptom: NV_ERR symptom that must remain bad.
+    """
+    timestamp = datetime(2024, 1, 1, 10, 5, 0, tzinfo=ZoneInfo("UTC"))
+    create_event(
+        stream,
+        obs_ctx,
+        "Attribution.node.bad",
+        {"node": "node01", "symptom": symptom},
+        timestamp,
+        100,
+    )
+
+    filter_events(stream, job_info)
+    stream.flush()
+
+    bad_id = stream.mgr.types.get_id("Attribution.node.bad")
+    bad_rows = stream.query_raw("SELECT status FROM events WHERE event_type=? AND line_num=100", [bad_id])
+    assert bad_rows[0][0] == 1
+
+
+def test_nv_err_invalid_state_osapi_demoted_to_interesting(stream, obs_ctx, job_info):
+    """Keep non-fatal osapi telemetry without treating it as a failure.
+
+    Args:
+        stream: Event stream fixture.
+        obs_ctx: Observation context fixture.
+        job_info: Job information fixture.
+    """
+    symptom = "NV_ERR_INVALID_STATE osapi.c"
+    timestamp = datetime(2024, 1, 1, 10, 5, 0, tzinfo=ZoneInfo("UTC"))
+    create_event(
+        stream,
+        obs_ctx,
+        "Attribution.node.bad",
+        {"node": "node01", "symptom": symptom},
+        timestamp,
+        100,
+    )
+
+    filter_events(stream, job_info)
+    stream.flush()
+
+    bad_id = stream.mgr.types.get_id("Attribution.node.bad")
+    interesting_id = stream.mgr.types.get_id("Attribution.node.interesting")
+
+    bad_rows = stream.query_raw("SELECT status FROM events WHERE event_type=? AND line_num=100", [bad_id])
+    assert bad_rows[0][0] == 0
+
+    interesting_rows = stream.query_raw(
+        "SELECT status, payload FROM events WHERE event_type=? AND line_num=100",
+        [interesting_id],
+    )
+    assert interesting_rows[0][0] == 1
+    assert symptom in interesting_rows[0][1]
+
+
+@pytest.mark.parametrize(
+    "symptom",
+    [
+        "NV_ERR_INVALID_STATE nv_gpu_ops.c",
+        "NV_ERR_INVALID_STATE kern_bus_ctrl.c",
+        "NV_ERR_INVALID_STATE gpu_fabric_probe.c",
+    ],
+)
+def test_nv_err_invalid_state_osapi_demotion_preserves_other_sources(stream, obs_ctx, job_info, symptom):
+    """Keep other invalid-state source files classified as bad.
+
+    Args:
+        stream: Event stream fixture.
+        obs_ctx: Observation context fixture.
+        job_info: Job information fixture.
+        symptom: Invalid-state symptom that must remain bad.
     """
     timestamp = datetime(2024, 1, 1, 10, 5, 0, tzinfo=ZoneInfo("UTC"))
     create_event(

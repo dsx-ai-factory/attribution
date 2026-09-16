@@ -47,6 +47,7 @@ __all__ = [
     "DuplicateAttributorError",
     "DuplicateObservationError",
     "Errors",
+    "EventStorageOverflowError",
     "Format",
     "GlobalAttribution",
     "HTTPValidationError",
@@ -118,6 +119,7 @@ from nvidia_attribution_client.models.decision_node_type import DecisionNodeType
 from nvidia_attribution_client.models.duplicate_attributor_error import DuplicateAttributorError as DuplicateAttributorError
 from nvidia_attribution_client.models.duplicate_observation_error import DuplicateObservationError as DuplicateObservationError
 from nvidia_attribution_client.models.errors import Errors as Errors
+from nvidia_attribution_client.models.event_storage_overflow_error import EventStorageOverflowError as EventStorageOverflowError
 from nvidia_attribution_client.models.format import Format as Format
 from nvidia_attribution_client.models.global_attribution import GlobalAttribution as GlobalAttribution
 from nvidia_attribution_client.models.http_validation_error import HTTPValidationError as HTTPValidationError

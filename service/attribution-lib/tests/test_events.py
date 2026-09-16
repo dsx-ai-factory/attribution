@@ -15,7 +15,7 @@ import pytest
 from pydantic import AwareDatetime, BaseModel
 
 from attribution_lib.event_helpers import query_events_with_source
-from attribution_lib.events import EventManager
+from attribution_lib.events import EventManager, _stable_id
 from attribution_lib.observation import Context as ObservationContext
 from attribution_lib.observation.inbound import (
     Format as ObsFormat,
@@ -44,6 +44,440 @@ def sample_source(dummy_ctx):
         resources=AllJobResources,
         rule="thermal_monitor_rule",
     )
+
+
+class TestContentAddressedLookupIds:
+    """event_types/rules/obs_sources/obs_formats ids must depend only on the
+    name's own bytes, not on insertion order or what other names are present
+    in the same build -- otherwise two independently-built EventManagers
+    (e.g. across process restarts, where Python's hash-seed randomization
+    makes set iteration order differ) can silently disagree on a name's id.
+    This matters for from_snapshot(): a snapshot's ids must remain valid
+    against a freshly built EventManager, not just the one that exported it.
+    """
+
+    def test_same_name_gets_same_id_regardless_of_insertion_order(self):
+        class EngineA:
+            all_rule_names = {"rule_x", "rule_y", "rule_z"}
+            all_event_types: set[str] = set()
+
+        class EngineB:
+            all_rule_names = {"rule_z", "rule_y", "rule_x", "rule_extra"}
+            all_event_types: set[str] = set()
+
+        mgr_a = EventManager(EngineA())
+        mgr_b = EventManager(EngineB())
+        try:
+            for name in ("rule_x", "rule_y", "rule_z"):
+                assert mgr_a.rules.get_id(name) == mgr_b.rules.get_id(name), (
+                    f"{name} got different ids in two independently-built EventManagers"
+                )
+        finally:
+            mgr_a.close()
+            mgr_b.close()
+
+    def test_id_is_stable_across_separate_processes(self):
+        """Same guarantee as above, but forcing an actual separate Python
+        process (a fresh, randomized PYTHONHASHSEED) rather than relying on
+        two in-process builds to exercise the same non-determinism."""
+        import os
+        import subprocess
+        import sys
+
+        script = (
+            "from attribution_lib.events import EventManager\n"
+            "class E:\n"
+            "    all_rule_names = {'rule_x', 'rule_y', 'rule_z'}\n"
+            "    all_event_types = set()\n"
+            "mgr = EventManager(E())\n"
+            "print(mgr.rules.get_id('rule_x'), mgr.rules.get_id('rule_y'), mgr.rules.get_id('rule_z'))\n"
+            "mgr.close()\n"
+        )
+        env = {k: v for k, v in os.environ.items() if k != "PYTHONHASHSEED"}
+        outputs = set()
+        for _ in range(3):
+            result = subprocess.run(
+                [sys.executable, "-c", script], capture_output=True, text=True, check=True, env=env
+            )
+            outputs.add(result.stdout.strip())
+        assert len(outputs) == 1, f"id assignment differed across process runs: {outputs}"
+
+        expected = " ".join(str(_stable_id(n)) for n in ("rule_x", "rule_y", "rule_z"))
+        assert outputs == {expected}, f"subprocess ids {outputs} disagree with in-process ids {expected!r}"
+
+
+class TestStableIdCollisionDetection:
+    """_stable_id() is a 31-bit hash of the name, so two distinct names can in
+    principle collide. preload() must detect this rather than silently
+    letting the second name's cache entry point at the first name's row.
+    """
+
+    def test_colliding_name_raises_instead_of_silently_aliasing(self, monkeypatch):
+        import attribution_lib.events as events_module
+
+        class Engine:
+            all_rule_names: set[str] = set()
+            all_event_types: set[str] = set()
+
+        mgr = EventManager(Engine())
+        try:
+            mgr.preload_rule_names({"rule_a"})
+            colliding_id = mgr.rules.get_id("rule_a")
+
+            monkeypatch.setattr(events_module, "_stable_id", lambda name: colliding_id)
+
+            with pytest.raises(events_module.StableIdCollisionError):
+                mgr.preload_rule_names({"rule_b"})
+
+            # The cache must not have been polluted by the failed preload.
+            with pytest.raises(events_module.UndeclaredRuleError):
+                mgr.rules.get_id("rule_b")
+        finally:
+            mgr.close()
+
+    def test_collision_within_same_batch_raises(self, monkeypatch):
+        """Same guarantee, but both colliding names are new and preloaded in
+        one preload_rule_names() call -- INSERT OR IGNORE only persists one
+        of the two rows, so the other must be detected via the readback too.
+        """
+        import attribution_lib.events as events_module
+
+        class Engine:
+            all_rule_names: set[str] = set()
+            all_event_types: set[str] = set()
+
+        mgr = EventManager(Engine())
+        try:
+            monkeypatch.setattr(events_module, "_stable_id", lambda name: 999)
+
+            with pytest.raises(events_module.StableIdCollisionError):
+                mgr.preload_rule_names({"rule_c", "rule_d"})
+
+            with pytest.raises(events_module.UndeclaredRuleError):
+                mgr.rules.get_id("rule_c")
+            with pytest.raises(events_module.UndeclaredRuleError):
+                mgr.rules.get_id("rule_d")
+        finally:
+            mgr.close()
+
+    def test_collision_among_rules_engine_names_raises_at_construction(self, monkeypatch):
+        """The same collision hazard exists when `EventManager.__init__` bulk-seeds
+        the shared lookup db from `rules_engine.all_rule_names`, not just when
+        `preload_rule_names()` later adds to the local overlay. Without a check
+        here, two colliding names would instead surface as an opaque DuckDB
+        primary-key constraint violation.
+        """
+        import attribution_lib.events as events_module
+
+        class Engine:
+            all_rule_names: set[str] = {"rule_e", "rule_f"}
+            all_event_types: set[str] = set()
+
+        # Only rule_e/rule_f collide. A blanket stub would also collide the
+        # obs_sources/obs_formats enum values bulk-seeded before "rules" (see
+        # _build_shared_lookup_db), so the raised error would report table
+        # "obs_sources" instead of exercising the rules collision this test
+        # is actually about.
+        real_stable_id = events_module._stable_id
+        monkeypatch.setattr(
+            events_module, "_stable_id", lambda name: 999 if name in ("rule_e", "rule_f") else real_stable_id(name)
+        )
+
+        with pytest.raises(events_module.StableIdCollisionError) as exc_info:
+            EventManager(Engine())
+        assert exc_info.value.table == "rules"
+
+    def test_preload_detects_collision_against_existing_shared_tier_name(self, monkeypatch):
+        """`preload()`'s collision check previously only compared the
+        requested name's own persisted row, via a dict comprehension that
+        silently dropped one side whenever two different names (one already
+        in the shared tier, one newly preloaded) shared the same id. Which
+        row won the dict overwrite depended on SQL row return order, so the
+        same collision could raise or silently alias depending on it.
+        """
+        import attribution_lib.events as events_module
+
+        class Engine:
+            all_rule_names: set[str] = {"shared_rule"}
+            all_event_types: set[str] = set()
+
+        mgr = EventManager(Engine())
+        try:
+            shared_id = mgr.rules.get_id("shared_rule")
+
+            real_stable_id = events_module._stable_id
+            monkeypatch.setattr(
+                events_module,
+                "_stable_id",
+                lambda name: shared_id if name == "new_local_rule" else real_stable_id(name),
+            )
+
+            with pytest.raises(events_module.StableIdCollisionError) as exc_info:
+                mgr.preload_rule_names({"new_local_rule"})
+            assert exc_info.value.table == "rules"
+
+            # Must not have aliased new_local_rule to shared_rule's id.
+            with pytest.raises(events_module.UndeclaredRuleError):
+                mgr.rules.get_id("new_local_rule")
+            assert mgr.rules.get_id("shared_rule") == shared_id
+        finally:
+            mgr.close()
+
+    def test_message_when_persisted_name_is_missing(self):
+        """persisted_name is None when the id wasn't found under any name at
+        all after insertion -- an unexpected state distinct from a genuine
+        collision, so it gets its own diagnostic message.
+        """
+        from attribution_lib.exceptions import StableIdCollisionError
+
+        error = StableIdCollisionError("rules", 999, "rule_e", None)
+
+        assert "not found under any name" in str(error)
+        assert "rule_e" in str(error)
+
+
+class TestConnectionTuning:
+    """`EventManager` creates its own private DuckDB connection per instance. DuckDB
+    defaults threads to the host's full CPU count and memory_limit to ~80% of system
+    RAM. Callers that create many short-lived `EventManagers` (one per unit of work)
+    need a way to cap that per-connection overhead."""
+
+    def test_defaults_are_unchanged_when_not_specified(self):
+        """No threads/memory_limit args -> today's DuckDB host-sized defaults, unchanged."""
+        import os
+
+        mgr = EventManager(RuleLoader().build())
+        (threads,) = mgr._conn.execute("SELECT current_setting('threads')").fetchone()
+        assert threads == os.cpu_count()
+        mgr.close()
+
+    def test_threads_can_be_capped(self):
+        mgr = EventManager(RuleLoader().build(), threads=1)
+        (threads,) = mgr._conn.execute("SELECT current_setting('threads')").fetchone()
+        assert threads == 1
+        mgr.close()
+
+    def test_memory_limit_can_be_capped(self):
+        mgr = EventManager(RuleLoader().build(), memory_limit="128MB")
+        (memory_limit,) = mgr._conn.execute("SELECT current_setting('memory_limit')").fetchone()
+        # DuckDB reports this as a normalized "<value> <unit>" string (e.g.
+        # "122.0 MiB" for a 128MB request). "GiB" not in memory_limit alone
+        # would pass for any non-GiB-scale value, including a wrong one, so
+        # parse it and check it's actually ~128MB.
+        value, unit = memory_limit.split()
+        assert unit == "MiB", f"expected a MiB-scale memory_limit, got {memory_limit!r}"
+        assert float(value) == pytest.approx(128_000_000 / 1024**2, rel=0.01)
+        mgr.close()
+
+    def test_disk_spill_enabled_by_default(self):
+        """Unchanged from today's DuckDB default: deployments with disk to
+        spare (e.g. bare metal) get graceful degradation instead of a hard
+        failure when memory_limit is exceeded."""
+        mgr = EventManager(RuleLoader().build())
+        (temp_dir,) = mgr._conn.execute("SELECT current_setting('temp_directory')").fetchone()
+        assert temp_dir != ""
+        mgr.close()
+
+    def test_disk_spill_can_be_disabled(self):
+        """Deployments with no writable disk (e.g. read-only containers) need
+        to opt out of DuckDB's default spill-to-disk-on-overflow behavior."""
+        mgr = EventManager(RuleLoader().build(), allow_disk_spill=False)
+        (temp_dir,) = mgr._conn.execute("SELECT current_setting('temp_directory')").fetchone()
+        assert temp_dir == ""
+        mgr.close()
+
+
+class TestOutOfMemoryHandling:
+    """With disk spill disabled, exceeding memory_limit must surface as a
+    catchable, stable library exception. It should not force every caller
+    to know about (and catch) duckdb's own exception hierarchy."""
+
+    def test_overflow_raises_library_exception_not_raw_duckdb_exception(self):
+        from attribution_lib.exceptions import EventStorageOutOfMemoryError
+
+        mgr = EventManager(RuleLoader().build(), memory_limit="16MB", allow_disk_spill=False)
+        stream = mgr.create_stream("job_1")
+        try:
+            with pytest.raises(EventStorageOutOfMemoryError):
+                stream.execute("CREATE TABLE big AS SELECT repeat('x', 1000000) FROM range(50)")
+        finally:
+            mgr.close()
+
+    def test_overflow_with_disk_spill_enabled_does_not_raise(self):
+        """Same oversized write, but with disk spill allowed (the default).
+        It should succeed by spilling to disk instead of erroring."""
+        mgr = EventManager(RuleLoader().build(), memory_limit="16MB")
+        stream = mgr.create_stream("job_1")
+        try:
+            stream.execute("CREATE TABLE big AS SELECT repeat('x', 1000000) FROM range(50)")
+        finally:
+            mgr.close()
+
+
+class TestCloseRetryability:
+    """`close()` is documented as idempotent (`if self._closed: return`), but
+    a `stream.flush()` failure -- e.g. `EventStorageOutOfMemoryError`, which
+    this exact memory-limit-enforcement branch can trigger -- must not mark
+    the manager closed anyway. Otherwise the idempotency guard makes a retry
+    silently no-op instead of finishing the interrupted cleanup (remaining
+    streams unflushed, `self._conn` never closed)."""
+
+    def test_flush_failure_leaves_manager_retryable(self, monkeypatch):
+        mgr = EventManager(RuleLoader().build())
+        stream = mgr.create_stream("job_1")
+
+        calls = {"n": 0}
+        real_flush = stream.flush
+
+        def flaky_flush():
+            calls["n"] += 1
+            if calls["n"] == 1:
+                raise RuntimeError("simulated flush failure")
+            real_flush()
+
+        monkeypatch.setattr(stream, "flush", flaky_flush)
+
+        with pytest.raises(RuntimeError, match="simulated flush failure"):
+            mgr.close()
+        assert not mgr._closed, "close() must not mark the manager closed when flush() fails"
+
+        # Retry: flush succeeds this time, and cleanup should actually finish.
+        mgr.close()
+        assert mgr._closed
+        with pytest.raises(Exception):
+            mgr._conn.execute("SELECT 1")
+
+
+class TestCheckpointRestoreAtomicity:
+    """`checkpoint()`/`restore()` each run a paired DROP/CREATE or
+    DELETE/INSERT. DuckDB auto-commits each statement independently unless
+    wrapped in an explicit transaction, so if the second statement fails,
+    the first one's effect (dropping the prior checkpoint, or deleting all
+    events) would otherwise already be permanently committed.
+    """
+
+    @staticmethod
+    def _insert_event(stream, line_num):
+        stream.mgr.preload_event_types({"Test.checkpoint_event"})
+        type_id = stream.mgr.types.get_id("Test.checkpoint_event")
+        stream.execute(
+            "INSERT INTO events (context_id, event_type, status, line_num, payload) VALUES (?, ?, 1, ?, '{}')",
+            [stream.ctx_id, type_id, line_num],
+        )
+
+    def test_checkpoint_failure_rolls_back_without_destroying_prior_checkpoint(self, monkeypatch):
+        import duckdb as duckdb_module
+
+        mgr = EventManager(RuleLoader().build())
+        try:
+            stream = mgr.create_stream("job_1")
+            self._insert_event(stream, 1)
+            mgr.checkpoint("v1")
+            (count_before,) = mgr._conn.execute('SELECT COUNT(*) FROM "_ckpt_v1"').fetchone()
+            assert count_before == 1
+
+            self._insert_event(stream, 2)
+
+            real_execute = duckdb_module.DuckDBPyConnection.execute
+
+            def flaky_execute(self, sql, *args, **kwargs):
+                if 'CREATE TABLE "_ckpt_v1"' in sql:
+                    raise RuntimeError("synthetic failure")
+                return real_execute(self, sql, *args, **kwargs)
+
+            monkeypatch.setattr(duckdb_module.DuckDBPyConnection, "execute", flaky_execute)
+            with pytest.raises(RuntimeError):
+                mgr.checkpoint("v1")
+
+            # The prior checkpoint must survive: the DROP TABLE that ran
+            # before the failing CREATE TABLE must have been rolled back too.
+            (count_after,) = mgr._conn.execute('SELECT COUNT(*) FROM "_ckpt_v1"').fetchone()
+            assert count_after == 1
+        finally:
+            mgr.close()
+
+    def test_restore_failure_rolls_back_without_emptying_events_table(self, monkeypatch):
+        import duckdb as duckdb_module
+
+        mgr = EventManager(RuleLoader().build())
+        try:
+            stream = mgr.create_stream("job_1")
+            self._insert_event(stream, 1)
+            mgr.checkpoint("v1")
+            self._insert_event(stream, 2)
+
+            (count_before,) = mgr._conn.execute("SELECT COUNT(*) FROM events").fetchone()
+            assert count_before == 2
+
+            real_execute = duckdb_module.DuckDBPyConnection.execute
+
+            def flaky_execute(self, sql, *args, **kwargs):
+                if sql.strip().startswith("INSERT INTO events SELECT"):
+                    raise RuntimeError("synthetic failure")
+                return real_execute(self, sql, *args, **kwargs)
+
+            monkeypatch.setattr(duckdb_module.DuckDBPyConnection, "execute", flaky_execute)
+            with pytest.raises(RuntimeError):
+                mgr.restore("v1")
+
+            # The DELETE FROM events that ran before the failing INSERT must
+            # have been rolled back too, not left with an emptied table.
+            (count_after,) = mgr._conn.execute("SELECT COUNT(*) FROM events").fetchone()
+            assert count_after == 2
+        finally:
+            mgr.close()
+
+    def test_commit_failure_also_rolls_back(self, monkeypatch):
+        """`conn.commit()` itself can fail. `_atomic()` must roll back in
+        that case too, not just when a statement inside the block fails.
+        """
+        import duckdb as duckdb_module
+
+        mgr = EventManager(RuleLoader().build())
+        try:
+            stream = mgr.create_stream("job_1")
+            self._insert_event(stream, 1)
+            mgr.checkpoint("v1")
+            self._insert_event(stream, 2)
+
+            (count_before,) = mgr._conn.execute("SELECT COUNT(*) FROM events").fetchone()
+            assert count_before == 2
+
+            def flaky_commit(self):
+                raise RuntimeError("synthetic commit failure")
+
+            monkeypatch.setattr(duckdb_module.DuckDBPyConnection, "commit", flaky_commit)
+            with pytest.raises(RuntimeError):
+                mgr.restore("v1")
+
+            (count_after,) = mgr._conn.execute("SELECT COUNT(*) FROM events").fetchone()
+            assert count_after == 2
+        finally:
+            mgr.close()
+
+    def test_commit_time_out_of_memory_is_translated(self, monkeypatch):
+        """A `duckdb.OutOfMemoryException` raised by `conn.commit()` itself
+        (not just by a statement inside the transaction) must still surface
+        as `EventStorageOutOfMemoryError`, matching every other DuckDB
+        write path in this class.
+        """
+        import duckdb as duckdb_module
+
+        from attribution_lib.exceptions import EventStorageOutOfMemoryError
+
+        mgr = EventManager(RuleLoader().build())
+        try:
+            stream = mgr.create_stream("job_1")
+            self._insert_event(stream, 1)
+
+            def flaky_commit(self):
+                raise duckdb_module.OutOfMemoryException("synthetic commit OOM")
+
+            monkeypatch.setattr(duckdb_module.DuckDBPyConnection, "commit", flaky_commit)
+            with pytest.raises(EventStorageOutOfMemoryError):
+                mgr.checkpoint("v1")
+        finally:
+            mgr.close()
 
 
 class TestEnumPopulation:

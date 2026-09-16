@@ -26,7 +26,7 @@ from attribution_lib.events import EventStream
 from attribution_lib.filter import run_post_outcome_refiners, run_pre_outcome_refiners, run_scrub_phase_refiners
 from attribution_lib.job_info import JobInfo
 from attribution_lib.observation.inbound import Source as ObservationSource
-from attribution_lib.observation.processing import EntrySourceBase
+from attribution_lib.observation.processing import BodyFallbacks, EntrySourceBase
 from attribution_lib.outcome import (
     OutcomeAttribution,
     calculate_outcome,
@@ -58,7 +58,13 @@ def _epilog_time_start(job_info: JobInfo):
 
 
 # Register source-type processing configs
-register_source_config(ObservationSource.APPLOG, SourceProcessingConfig(fallback_unknown_nodes=True))
+register_source_config(
+    ObservationSource.APPLOG,
+    SourceProcessingConfig(
+        body_fallbacks=BodyFallbacks(parse_node=True, parse_timestamp=True),
+        fallback_unknown_nodes=True,
+    ),
+)
 register_source_config(
     ObservationSource.HEALTH_CHECK,
     SourceProcessingConfig(
@@ -172,10 +178,9 @@ def setup_rules(
     attribution_lib.initialized = True
     attribution_lib.node_domain_resolver = node_domain_resolver
 
-    if node_mapping_file:
-        # Configure node name mapping file if provided
-        nodename_utils.configure_node_mapping_file(node_mapping_file)
-        attribution_lib.ip_to_nodenames = nodename_utils.get_ip_to_node_name_mapping()
+    # Reconfiguration must also clear a mapping from an earlier attribution run.
+    nodename_utils.configure_node_mapping_file(node_mapping_file)
+    attribution_lib.ip_to_nodenames = nodename_utils.get_ip_to_node_name_mapping() if node_mapping_file else {}
 
     if ignored_hostname_prefixes:
         attribution_lib.ignored_hostname_prefixes = ignored_hostname_prefixes

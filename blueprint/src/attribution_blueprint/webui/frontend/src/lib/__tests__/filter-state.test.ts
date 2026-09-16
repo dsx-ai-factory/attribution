@@ -24,6 +24,16 @@ describe('filter date window mode', () => {
   })
 })
 
+describe('status default', () => {
+  it('shows every run when the URL carries no status', () => {
+    expect(parseFilter(new URLSearchParams('')).status).toBe('all')
+  })
+
+  it('still restricts to failures for a bookmarked status=failed URL', () => {
+    expect(parseFilter(new URLSearchParams('status=failed')).status).toBe('failed')
+  })
+})
+
 describe('date range validation', () => {
   it('keeps a well-formed ordered pair', () => {
     const filter = parseFilter(new URLSearchParams('from=2026-05-01&to=2026-05-31'))

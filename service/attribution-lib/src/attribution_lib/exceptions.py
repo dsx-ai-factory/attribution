@@ -10,7 +10,7 @@
 
 """Exception hierarchy for the attribution library."""
 
-from typing import Any
+from typing import Any, Optional
 
 from pydantic import ValidationError
 
@@ -19,6 +19,10 @@ class AttributionError(Exception):
     """Base class for all attribution library exceptions."""
 
     pass
+
+
+class SnapshotSchemaVersionError(AttributionError, ValueError):
+    """Raised when a snapshot uses a different event schema version."""
 
 
 class DecisionGraphError(AttributionError):
@@ -297,6 +301,51 @@ class UnexpectedEmptyQueryResultError(DatabaseError):
     def __init__(self, query: str, params: Any) -> None:
         self.query = query
         self.params = params
+
+
+class EventStorageOutOfMemoryError(DatabaseError):
+    """Raised when a DuckDB operation exceeds memory_limit with disk spill disabled."""
+
+    def __init__(self, message: str) -> None:
+        self.message = message
+        super().__init__(message)
+
+
+class StableIdCollisionError(DatabaseError):
+    """Raised when two distinct names hash to the same content-addressed id."""
+
+    def __init__(self, table: str, id_val: int, requested_name: str, persisted_name: Optional[str]) -> None:
+        self.table = table
+        self.id_val = id_val
+        self.requested_name = requested_name
+        self.persisted_name = persisted_name
+        if persisted_name is None:
+            message = (
+                f"Stable id collision in {table}: id {id_val} for {requested_name!r} "
+                f"was not found under any name after insertion (unexpected)"
+            )
+        else:
+            message = (
+                f"Stable id collision in {table}: id {id_val} is registered to "
+                f"{persisted_name!r}, but {requested_name!r} hashes to the same id"
+            )
+        super().__init__(message)
+
+
+class InvalidSnapshotError(DatabaseError):
+    """Raised when a snapshot's `events`/`observation_contexts` rows reference
+    a lookup id (`event_type`/`source_rule`/`source`/`format`) that doesn't
+    resolve to any name in the restored `event_types`/`rules`/`obs_sources`/
+    `obs_formats` tables, e.g. a corrupted or hand-edited snapshot."""
+
+    def __init__(self, table: str, column: str, invalid_ids: list[int]) -> None:
+        self.table = table
+        self.column = column
+        self.invalid_ids = invalid_ids
+        super().__init__(
+            f"Snapshot table {table!r} has {len(invalid_ids)} row(s) with an unresolvable "
+            f"{column!r} id: {sorted(invalid_ids)}"
+        )
 
 
 class RuleEngineError(AttributeError):

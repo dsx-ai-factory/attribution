@@ -167,6 +167,9 @@ def create_app() -> FastAPI:
 async def _cleanup_expired_attributors(aim: attributor_manager.AttributorManager):
     """Background task to periodically clean up expired attributors."""
     while True:
-        aim.cleanup_expired_attributors()
+        try:
+            aim.cleanup_expired_attributors()
+        except Exception:
+            logger.exception("Cleanup pass failed; will retry on next interval")
         # Run cleanup every 1 hour
         await asyncio.sleep(60 * 60 * 1)

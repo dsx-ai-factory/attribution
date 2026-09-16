@@ -76,12 +76,6 @@ def get_metric_spec(source: "ObservationSource") -> "MetricSpec":
     return get_rules_engine().get_metric_spec(source)
 
 
-def _identity(x: str) -> str:
-    return x
-
-
-hostname_mechanism: Callable[[str], str] = _identity
-
 NodeDomainResolver = Callable[[str], Optional[str]]
 node_domain_resolver: Optional[NodeDomainResolver] = None
 

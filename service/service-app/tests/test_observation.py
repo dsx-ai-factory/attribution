@@ -16,6 +16,7 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 import pytest
+from pydantic import ValidationError
 
 from app.attributor import (
     AttributorMetadata,
@@ -35,6 +36,11 @@ from app.v1.models import (
     GlobalAttribution,
     NodeAttribution,
 )
+from tests.conftest import make_up_attributor_info, post_attributor
+
+
+JOB_NODE = "node0"
+UNBOUNDED = {"start": None, "end": None}
 
 
 @pytest.fixture
@@ -252,3 +258,77 @@ def test_request_body_with_is_prefiltered_true_reaches_lib_context():
     observation = Observation.model_validate_json(body)
 
     assert observation.to_lib_observation(ZoneInfo("UTC")).context.pre_filtered is True
+
+
+def test_a_well_formed_body_decodes_to_the_entries_the_library_receives():
+    entries = [
+        {"ts": 1744734437830498000, "resources": [{"kind": "node", "hostname": JOB_NODE}], "body": "first"},
+        {"body": "only a body"},
+        {"body": "third", "resources": "AllJobResources"},
+        {"body": "explicit nulls", "ts": None, "resources": None},
+        {"body": "empty resources", "resources": []},
+        {
+            "body": "node beside a replica",
+            "resources": [{"kind": "node", "hostname": JOB_NODE}, {"kind": "replica", "name": "worker0"}],
+        },
+    ]
+    observation = Observation(
+        context=ObservationContext(
+            time_interval=TimeInterval(start=None, end=None),
+            source=ObservationSource.SYSLOG,
+            format=ObservationFormat.ENTRY_TIMESERIES,
+        ),
+        body=json.dumps(entries),
+    )
+
+    lines = observation.to_lib_observation(ZoneInfo("UTC")).lines
+
+    assert lines[0] == {
+        "body": "first",
+        "ts": 1744734437830498000,
+        "resources": [{"kind": "node", "key": JOB_NODE, "hostname": JOB_NODE}],
+    }
+    # Absent optional keys decode as nulls rather than going missing.
+    assert lines[1] == {"body": "only a body", "ts": None, "resources": None}
+    assert lines[2]["resources"] == "AllJobResources"
+    # An explicit null is indistinguishable from an absent key once decoded.
+    assert lines[3] == lines[1] | {"body": "explicit nulls"}
+    # An empty array stays empty; it does not collapse to null or to AllJobResources.
+    assert lines[4]["resources"] == []
+    # A replica rides along beside the node, each keyed by its own identifying field.
+    assert lines[5]["resources"] == [
+        {"kind": "node", "key": JOB_NODE, "hostname": JOB_NODE},
+        {"kind": "replica", "key": "worker0", "name": "worker0"},
+    ]
+
+
+@pytest.mark.parametrize(
+    "body,reason",
+    [
+        ("not json at all", "unparseable"),
+        ('[{"body": "x", "resources": [{"kind": "planet", "name": "mars"}]}]', "unknown resource kind"),
+        ('[{"body": "x", "timestamp": 1744734437830498000}]', "misspelled ts would be silently dropped"),
+        ('[{"body": "x", "ts": 1744734437830498000000}]', "timestamp out of datetime range"),
+    ],
+)
+def test_a_malformed_body_is_rejected_with_a_client_error(client, body, reason):
+    """A malformed body fails here, with the other structured-body failures, not deep inside extraction."""
+    att_id = post_attributor(client, make_up_attributor_info("v2"))
+
+    response = client.post(
+        f"/v2/attributor/{att_id}/observation",
+        content=json.dumps(
+            {
+                "context": {
+                    "time_interval": UNBOUNDED,
+                    "source": ObservationSource.SYSLOG.value,
+                    "format": ObservationFormat.ENTRY_TIMESERIES.value,
+                },
+                "body": body,
+            }
+        ),
+    )
+
+    assert response.status_code == 400, reason
+    assert response.json()["model_type"] == "InvalidObservationBodyError", reason
+

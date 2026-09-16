@@ -8,57 +8,40 @@
 # without an express license agreement from NVIDIA CORPORATION or
 # its affiliates is strictly prohibited.
 
-import socket
+from concurrent.futures import ThreadPoolExecutor
+from threading import Barrier
 from unittest.mock import patch
 
 import pytest
+
+import attribution_lib
 from attribution_lib.attr_types import JobNodeAttributions, _normalize_node
 from attribution_lib.sources import SourceSet
 from attribution_lib.utils import (
     applog_extract_node_rank,
     convert_hostname_to_short_format,
     get_hostname,
+    hostname_mapping,
+    matches_ignored_hostname_prefix,
     syslog_extract_node,
 )
-
-
-@pytest.fixture(autouse=True)
-def clear_get_hostname_cache():
-    """Automatically clear the get_hostname cache before each test."""
-    get_hostname.cache_clear()
-    yield
-    get_hostname.cache_clear()
 
 
 class TestGetHostname:
     """Test cases for the get_hostname function."""
 
-    def test_nvidia_com_hostname_with_failed_reverse_lookup(self):
-        """Test nvidia.com hostname when reverse lookup fails."""
-        with patch("socket.gethostbyname", return_value="192.168.1.1"):
-            with patch("socket.gethostbyaddr", side_effect=socket.herror):
-                assert get_hostname("dhcp-192-168-2-75.example.com") == "192.168.1.1"
-
-    def test_nvidia_com_hostname_with_successful_reverse_lookup(self):
-        """Test nvidia.com hostname when reverse lookup succeeds."""
-        with patch("socket.gethostbyname", return_value="192.168.1.5"):
-            with patch("socket.gethostbyaddr", return_value=("yard95.example.com", [], ["192.168.1.5"])):
-                assert get_hostname("yard95.example.com") == "yard95"
-
-    def test_hostname_resolved_to_ip_with_known_mapping(self):
-        """Test hostname that resolves to IP with known mapping in ip_to_nodenames."""
-        with patch("socket.gethostbyname", return_value="192.168.1.10"):
-            with patch.dict("attribution_lib.ip_to_nodenames", {"192.168.1.10": "node10"}):
-                assert get_hostname("yard95.example.com") == "node10"
+    def test_hostname_is_shortened_without_dns(self):
+        """A hostname is already an identifier and does not require DNS."""
+        assert get_hostname("yard95.example.com") == "yard95"
 
     def test_known_ip_mapping(self):
         """Test IP to hostname mapping from known dictionary."""
         with patch.dict("attribution_lib.ip_to_nodenames", {"192.168.1.1": "node1"}):
             assert get_hostname("192.168.1.1") == "node1"
 
-    def test_failed_lookup_returns_ip(self):
-        """Test that failed lookup returns the original IP."""
-        with patch("socket.gethostbyaddr", side_effect=socket.herror):
+    def test_unmapped_ip_is_returned_without_dns(self):
+        """An unmapped IP remains unresolved without querying DNS."""
+        with patch.dict("attribution_lib.ip_to_nodenames", {}, clear=True):
             assert get_hostname("192.168.1.1") == "192.168.1.1"
 
     def test_invalid_hostname_with_non_printable_char_returns_input(self):
@@ -66,33 +49,67 @@ class TestGetHostname:
         invalid_hostname = "node\x90invalid"
         assert get_hostname(invalid_hostname) == invalid_hostname
 
-    def test_regular_hostname_lookup(self):
-        """Test regular hostname lookup."""
-        with patch("socket.gethostbyaddr", return_value=("node1", [], ["192.168.1.1"])):
-            assert get_hostname("192.168.1.1") == "node1"
-
-    def test_long_hostname_format_conversion(self):
-        """Test that long hostname format is converted to short format."""
-        with patch(
-            "socket.gethostbyaddr",
-            return_value=("test-node-001.us-east4-b.c.test-infra-20241015.internal", [], ["192.168.1.2"]),
-        ):
-            assert get_hostname("192.168.1.2") == "test-node-001"
+    def test_mapping_changes_are_visible_immediately(self):
+        """Resolution must not retain stale results when the mapping changes."""
+        with patch.dict("attribution_lib.ip_to_nodenames", {}, clear=True):
+            assert get_hostname("192.168.1.2") == "192.168.1.2"
+            with patch.dict("attribution_lib.ip_to_nodenames", {"192.168.1.2": "node2"}):
+                assert get_hostname("192.168.1.2") == "node2"
 
     def test_ipv6_known_mapping(self):
         """Test IPv6 to hostname mapping from known dictionary."""
         with patch.dict("attribution_lib.ip_to_nodenames", {"2001:db8::1": "node1"}):
             assert get_hostname("2001:db8::1") == "node1"
 
-    def test_ipv6_failed_lookup_returns_ip(self):
-        """Test that failed lookup returns the original IPv6."""
-        with patch("socket.gethostbyaddr", side_effect=socket.herror):
-            assert get_hostname("2001:db8::1") == "2001:db8::1"
+    def test_ipv6_unmapped_returns_ip(self):
+        """An unmapped IPv6 address remains unresolved."""
+        with patch.dict("attribution_lib.ip_to_nodenames", {}, clear=True):
+            assert get_hostname("2001:db8::2") == "2001:db8::2"
 
-    def test_ipv6_regular_hostname_lookup(self):
-        """Test regular hostname lookup for IPv6."""
-        with patch("socket.gethostbyaddr", return_value=("node2", [], ["2001:db8::2"])):
-            assert get_hostname("2001:db8::2") == "node2"
+    def test_context_mapping_wins_is_copied_and_restores_after_exception(self):
+        mapping = {"192.0.2.1": "job-node"}
+        configured_mapping = {
+            "192.0.2.1": "configured-node",
+            "192.0.2.2": "configured-only-node",
+        }
+        with patch.dict("attribution_lib.ip_to_nodenames", configured_mapping, clear=True):
+            with pytest.raises(RuntimeError, match="stop"):
+                with hostname_mapping(mapping):
+                    mapping["192.0.2.1"] = "mutated-node"
+                    assert get_hostname("192.0.2.1") == "job-node"
+                    assert get_hostname("192.0.2.2") == "configured-only-node"
+                    raise RuntimeError("stop")
+            assert get_hostname("192.0.2.1") == "configured-node"
+
+    def test_nested_context_replaces_instead_of_merging_outer_mapping(self):
+        with patch.dict("attribution_lib.ip_to_nodenames", {}, clear=True):
+            with hostname_mapping({"192.0.2.1": "outer-node"}):
+                assert get_hostname("192.0.2.1") == "outer-node"
+                with hostname_mapping({"192.0.2.2": "inner-node"}):
+                    assert get_hostname("192.0.2.1") == "192.0.2.1"
+                    assert get_hostname("192.0.2.2") == "inner-node"
+                assert get_hostname("192.0.2.1") == "outer-node"
+
+    def test_empty_context_uses_configured_mapping(self):
+        with patch.dict("attribution_lib.ip_to_nodenames", {"192.0.2.1": "configured-node"}, clear=True):
+            with hostname_mapping({}):
+                assert get_hostname("192.0.2.1") == "configured-node"
+
+    def test_context_mapping_is_isolated_between_threads(self):
+        barrier = Barrier(2)
+
+        def resolve(node: str) -> str:
+            with hostname_mapping({"192.0.2.1": node}):
+                barrier.wait(timeout=2)
+                return get_hostname("192.0.2.1")
+
+        with (
+            patch.dict("attribution_lib.ip_to_nodenames", {}, clear=True),
+            ThreadPoolExecutor(max_workers=2) as executor,
+        ):
+            results = list(executor.map(resolve, ["node-001", "node-002"]))
+
+        assert results == ["node-001", "node-002"]
 
 
 class TestConvertHostnameToShortFormat:
@@ -144,6 +161,36 @@ class TestConvertHostnameToShortFormat:
     def test_regular_hostnames(self, input_hostname, expected):
         """Test regular hostname handling."""
         assert convert_hostname_to_short_format(input_hostname) == expected
+
+
+class TestMatchesIgnoredHostnamePrefix:
+    """Ignored prefixes match short hostnames and full IPs, not IPv4 first octets."""
+
+    def test_hostname_prefix_matches_short_and_fqdn(self):
+        prefixes = ["scanner-"]
+        assert matches_ignored_hostname_prefix("scanner-001", prefixes)
+        assert matches_ignored_hostname_prefix("scanner-001.example.com", prefixes)
+        assert not matches_ignored_hostname_prefix("compute-node-003", prefixes)
+
+    def test_unmapped_ipv4_matches_full_address_not_first_octet(self):
+        """Splitting 192.0.2.1 on dots yields '192' and never matches the address."""
+        prefixes = ["192.0.2.1"]
+        assert matches_ignored_hostname_prefix("192.0.2.1", prefixes)
+        assert not matches_ignored_hostname_prefix("192.0.2.1", ["scanner-"])
+        assert "192.0.2.1".split(".")[0] == "192"
+        assert not "192".startswith("192.0.2.1")
+
+    def test_unmapped_ipv6_matches_full_address(self):
+        prefixes = ["2001:db8::1"]
+        assert matches_ignored_hostname_prefix("2001:db8::1", prefixes)
+        assert not matches_ignored_hostname_prefix("2001:db8::2", prefixes)
+
+    def test_defaults_to_library_prefix_list(self):
+        with patch.object(attribution_lib, "ignored_hostname_prefixes", ["scanner-"]):
+            assert matches_ignored_hostname_prefix("scanner-001")
+            assert not matches_ignored_hostname_prefix("compute-node-003")
+        with patch.object(attribution_lib, "ignored_hostname_prefixes", []):
+            assert not matches_ignored_hostname_prefix("scanner-001")
 
 
 class TestApplogExtractNodeRank:
