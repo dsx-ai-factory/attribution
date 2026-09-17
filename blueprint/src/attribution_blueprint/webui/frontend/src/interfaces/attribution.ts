@@ -154,6 +154,7 @@ export interface RunDetail extends RunSummary {
   attribution: {
     rootSymptom: AttributionSection<SourcedSymptom>
     symptomSites: AttributionSection<Record<string, SymptomSite[]>>
+    // Missing and null graphs both mean no graph is available to display.
     decisionGraph: AttributionSection<DecisionGraph>
   }
 }

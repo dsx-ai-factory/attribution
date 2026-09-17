@@ -182,8 +182,11 @@ describe('VerdictView', () => {
     expect(screen.getByText('Execution context not found')).toBeTruthy()
   })
 
-  it('renders verdict evidence and executes actions', () => {
+  it.each(['absent', 'null'] as const)('renders verdict evidence and actions with a %s graph', (state) => {
     mocks.useParams.mockReturnValue({ id: 'run-1' })
+    const detail = run()
+    detail.attribution.decisionGraph = { state, data: null }
+    mocks.useSWR.mockReturnValue({ data: detail, isLoading: false, error: undefined })
     render(<VerdictView />)
 
     expect(screen.getByRole('heading', { name: 'Attempt 2 · team/job' })).toBeTruthy()

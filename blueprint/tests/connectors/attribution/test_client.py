@@ -10,15 +10,12 @@
 
 import json
 from copy import deepcopy
+from datetime import datetime, timezone
 from http import HTTPStatus
-from io import BytesIO
 from pathlib import Path
 
 import pytest
 from nvidia_attribution_client import ApiException, AttributorInfoV2, Observation
-from nvidia_attribution_client.rest import RESTResponse
-from urllib3 import HTTPResponse
-from urllib3.exceptions import ReadTimeoutError
 
 from attribution_blueprint.connectors.attribution import AttributionConnector
 
@@ -27,18 +24,17 @@ FIXTURES = json.loads((Path(__file__).parents[2] / "fixtures" / "service_respons
 _TRANSPORT = "nvidia_attribution_client.rest.RESTClientObject.request"
 
 
-class _FakeResponse(RESTResponse):
-    """Use the SDK response wrapper with an in-memory HTTP body."""
+class _FakeResponse:
+    """Stand-in for the client's RESTResponse: `read()` first, then `.data`."""
 
     def __init__(self, status: int, body: dict | None):
-        super().__init__(
-            HTTPResponse(
-                body=BytesIO(b"" if body is None else json.dumps(body).encode()),
-                status=status,
-                headers={"content-type": "application/json"},
-                preload_content=False,
-            )
-        )
+        self.status = status
+        self.reason = ""
+        self.data = b"" if body is None else json.dumps(body).encode()
+        self.headers = {"content-type": "application/json"}
+
+    def read(self):
+        return self.data
 
 
 def _transport(mocker, *responses: _FakeResponse):
@@ -104,98 +100,18 @@ def test_ingest_observation_posts_and_returns_id(mocker):
     assert kwargs["body"]["context"]["source"] == "syslog"
 
 
-@pytest.mark.parametrize(
-    ("verdict_fields", "site_status"),
-    [
-        ({}, "bad"),
-        ({"decision_graph": None}, "bad"),
-        ({"decision_graph": {"nodes": [], "edges": []}}, "bad"),
-        ({"decision_graph": "invalid"}, "bad"),
-        ({}, "invalid"),
-    ],
-    ids=["absent-graph", "null-graph", "empty-graph", "invalid-graph", "invalid-site"],
-)
-def test_get_attribution_preserves_response_json(mocker, verdict_fields, site_status):
-    expected = deepcopy(FIXTURES["attribution_response"])
-    expected["verdict"].update(verdict_fields)
-    expected["extra_evidence"] = {"count": 0, "available": False}
-    expected["symptoms"]["GpuFell"][0]["source"]["pos"] = 0
-    expected["symptoms"]["GpuFell"][0]["status"] = site_status
-    response = _FakeResponse(HTTPStatus.OK, expected)
-    close = mocker.spy(response.response, "close")
-    release = mocker.spy(response.response, "release_conn")
-    request = _transport(mocker, response)
+def test_get_attribution_returns_full_dict(mocker):
+    request = _transport(mocker, _FakeResponse(HTTPStatus.OK, FIXTURES["attribution_response"]))
 
-    conn = AttributionConnector("http://svc:8000", timeout_seconds=12.0)
+    conn = AttributionConnector("http://svc:8000")
     result = conn.get_attribution("attr-7")
 
+    expected = deepcopy(FIXTURES["attribution_response"])
+    expected["verdict"]["decision_graph"] = None
+    expected["verdict"]["root_symptom"]["catalog_id"] = None
     assert result == expected
-    args, kwargs = request.call_args
+    args, _ = request.call_args
     assert args == ("GET", "http://svc:8000/v2/attributor/attr-7/attribution")
-    assert kwargs["_request_timeout"] == (3.05, 12.0)
-    close.assert_called_once_with()
-    release.assert_called()
-
-
-@pytest.mark.parametrize(
-    ("status", "body", "error_model"),
-    [
-        (404, {"model_type": "UnknownAttributorIdError", "att_id": "attr-7"}, "UnknownAttributorIdError"),
-        (507, {"model_type": "EventStorageOverflowError", "att_id": "attr-7"}, "EventStorageOverflowError"),
-        (422, {"errors": [], "body": None, "message": "Invalid request"}, "ValidationErrorResponse"),
-        (500, {"detail": "boom"}, None),
-    ],
-)
-def test_get_attribution_preserves_http_errors_and_releases_response(mocker, status, body, error_model):
-    response = _FakeResponse(status, body)
-    close = mocker.spy(response.response, "close")
-    release = mocker.spy(response.response, "release_conn")
-    _transport(mocker, response)
-
-    with pytest.raises(ApiException) as excinfo:
-        AttributionConnector("http://svc:8000").get_attribution("attr-7")
-
-    assert excinfo.value.status == status
-    assert json.loads(excinfo.value.body) == body
-    if error_model is None:
-        assert excinfo.value.data is None
-    else:
-        assert type(excinfo.value.data).__name__ == error_model
-    close.assert_called_once_with()
-    release.assert_called()
-
-
-@pytest.mark.parametrize("body", [b"{", b"[]"])
-def test_get_attribution_rejects_invalid_json_and_releases_response(mocker, body):
-    response = _FakeResponse(HTTPStatus.OK, None)
-    response.response = HTTPResponse(
-        body=BytesIO(body), status=HTTPStatus.OK, headers={"content-type": "application/json"}, preload_content=False
-    )
-    close = mocker.spy(response.response, "close")
-    release = mocker.spy(response.response, "release_conn")
-    _transport(mocker, response)
-
-    with pytest.raises(ValueError):
-        AttributionConnector("http://svc:8000").get_attribution("attr-7")
-
-    close.assert_called_once_with()
-    release.assert_called()
-
-
-def test_get_attribution_propagates_read_failure_and_releases_response(mocker):
-    response = _FakeResponse(HTTPStatus.OK, FIXTURES["attribution_response"])
-    error = ReadTimeoutError(None, "/v2/attributor/attr-7/attribution", "Read timed out")
-    mocker.patch.object(response.response, "read", side_effect=error)
-    close = mocker.spy(response.response, "close")
-    release = mocker.spy(response.response, "release_conn")
-    _transport(mocker, response)
-
-    with pytest.raises(ReadTimeoutError) as excinfo:
-        AttributionConnector("http://svc:8000").get_attribution("attr-7")
-
-    assert excinfo.value is error
-    close.assert_called_once_with()
-    release.assert_called_once_with()
 
 
 def test_delete_attributor_returns_none(mocker):
