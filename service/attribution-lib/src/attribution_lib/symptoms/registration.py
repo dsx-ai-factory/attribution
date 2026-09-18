@@ -22,6 +22,7 @@ from attribution_lib.symptoms.declarations import (
     SymptomCategory,
     SymptomDeclaration,
 )
+from attribution_lib.symptoms.family import SymptomFamily
 from attribution_lib.symptoms.predicate_registry import SymptomPredicate
 
 
@@ -48,6 +49,7 @@ def outcome_symptom(
     category: Optional[SymptomCategory] = None,
     fallback_prefix: bool = False,
     dag_discard: DagDiscardBehavior = DagDiscardBehavior.DEMOTE,
+    family: Optional[SymptomFamily] = None,
 ) -> None:
     """Declare a symptom that can drive final outcome selection.
 
@@ -65,6 +67,7 @@ def outcome_symptom(
         fallback_prefix: Mark this prefix as a generic fallback used to resolve
             dynamic symptom variants (such as "XID-" and "NV_ERR_").
         dag_discard: Projection behavior when the DAG discards this symptom.
+        family: Optional structured family schema or member identity.
     """
     if doc == "":
         raise RuleIngestionError(f"outcome_symptom({prefix!r}) requires a non-empty doc anchor")
@@ -83,6 +86,7 @@ def outcome_symptom(
             fallback_prefix=fallback_prefix,
             dag_discard=dag_discard,
             location=_get_caller_location(skip_files=frozenset([_THIS_FILE])),
+            family=family,
         )
     )
 
@@ -112,6 +116,7 @@ def known_symptom(
     category: Optional[SymptomCategory] = None,
     fallback_prefix: bool = False,
     dag_discard: DagDiscardBehavior = DagDiscardBehavior.DEMOTE,
+    family: Optional[SymptomFamily] = None,
 ) -> None:
     """Declare a symptom that belongs to the vocabulary only.
 
@@ -121,6 +126,7 @@ def known_symptom(
         fallback_prefix: Mark this prefix as a generic fallback used to resolve
             dynamic symptom variants (such as "RuntimeError").
         dag_discard: Projection behavior when the DAG discards this symptom.
+        family: Optional structured family schema or member identity.
     """
     loader = _require_rule_loader("declaring known symptom")
     loader.register_symptom_declaration(
@@ -130,6 +136,7 @@ def known_symptom(
             fallback_prefix=fallback_prefix,
             dag_discard=dag_discard,
             location=_get_caller_location(skip_files=frozenset([_THIS_FILE])),
+            family=family,
         )
     )
 
@@ -143,6 +150,7 @@ def cascade_symptom(
     category: Optional[SymptomCategory] = None,
     dag_discard: DagDiscardBehavior = DagDiscardBehavior.DEMOTE,
     resolve_contains: Optional[str] = None,
+    family: Optional[SymptomFamily] = None,
 ) -> None:
     """Declare a cascade-only symptom used for pruning, not outcome selection.
 
@@ -155,6 +163,7 @@ def cascade_symptom(
         dag_discard: Projection behavior when the DAG discards this symptom.
         resolve_contains: Any raw symptom id containing this substring resolves to
             this prefix.
+        family: Optional structured family schema or member identity.
     """
     loader = _require_rule_loader("declaring cascade symptom")
     loader.register_symptom_declaration(
@@ -167,5 +176,6 @@ def cascade_symptom(
             dag_discard=dag_discard,
             resolve_contains=resolve_contains,
             location=_get_caller_location(skip_files=frozenset([_THIS_FILE])),
+            family=family,
         )
     )

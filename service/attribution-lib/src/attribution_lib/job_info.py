@@ -156,12 +156,22 @@ class JobInfo(NamedTuple):
         raise UnidentifiableNodeError(line)
 
     def applog_extract_node(self, line: str) -> str:
-        """Try to get a valid node out of this applog line, or raise an error."""
+        """Try to get a valid node out of this applog line, or raise an error.
+
+        NCCL lines often carry both a hostname and an srun rank. Prefer the
+        hostname when it belongs to this job. If it does not (shared cycle
+        logs, fixtures with synthetic hostnames), fall back to the rank so
+        in-job rank prefixes still map.
+        """
         node, rank = utils.applog_extract_node_rank(line)
-        if (actual_node := node) is not None:
-            return self.verify_node(actual_node)
-        if (actual_rank := rank) is not None:
-            return self.get_name_from_rank(actual_rank)
+        if node is not None:
+            try:
+                return self.verify_node(node)
+            except UnknownNodeError:
+                if rank is None:
+                    raise
+        if rank is not None:
+            return self.get_name_from_rank(rank)
         raise UnidentifiableNodeError(line)
 
     def syslog_extract_node(self, line: str) -> str:

@@ -77,7 +77,7 @@ register_source_config(
     SourceProcessingConfig(
         time_start=lambda ji: ji.interest_start_time,
         time_end=lambda ji: ji.interest_end_time,
-        requires_nodes=True,
+        requires_job_nodes=True,
     ),
 )
 register_source_config(
@@ -85,7 +85,10 @@ register_source_config(
     SourceProcessingConfig(
         time_start=lambda ji: ji.job_start_time,
         time_end=lambda ji: ji.job_end_time,
-        requires_nodes=True,
+        # The job node is named inside the line; the producer's own node is the fabric manager host.
+        # Therefore, attempt to parse the node, but drop it if it's not found.
+        body_fallbacks=BodyFallbacks(parse_node=True, require_node=True),
+        requires_job_nodes=True,
     ),
 )
 register_source_config(
@@ -93,7 +96,9 @@ register_source_config(
     SourceProcessingConfig(
         time_start=lambda ji: ji.job_start_time,
         time_end=lambda ji: ji.job_end_time,
-        requires_nodes=True,
+        # A sample is about one node; one that names none must not count against the whole job.
+        body_fallbacks=BodyFallbacks(require_node=True),
+        requires_job_nodes=True,
     ),
 )
 register_source_config(
@@ -101,14 +106,14 @@ register_source_config(
     SourceProcessingConfig(
         time_start=lambda ji: ji.interest_start_time,
         time_end=lambda ji: ji.interest_end_time,
-        requires_nodes=True,
+        requires_job_nodes=True,
     ),
 )
 register_source_config(
     ObservationSource.CSP_EVENT,
     SourceProcessingConfig(
         time_start=lambda ji: ji.job_start_time,
-        requires_nodes=True,
+        requires_job_nodes=True,
     ),
 )
 
@@ -257,7 +262,7 @@ def calculate_bad_nodes(
             continue
         source_type = obs_source.context.source
         config = SOURCE_CONFIGS.get(source_type)
-        if config is not None and config.requires_nodes and not job_info.nodes:
+        if config is not None and config.requires_job_nodes and not job_info.nodes:
             continue
         source_raw_keywords = process_observation_source(
             event_stream=event_stream,

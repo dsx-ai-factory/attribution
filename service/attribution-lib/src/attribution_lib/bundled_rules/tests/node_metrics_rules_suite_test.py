@@ -192,8 +192,8 @@ class TestCalculateBadNodesIntegration:
         source_lines = inspect.getsourcelines(calculate_bad_nodes)[0]
         source_text = "".join(source_lines)
 
-        # Verify the conditional pattern exists (requires_nodes config + job_info.nodes check)
-        assert "requires_nodes" in source_text
+        # Verify the conditional pattern exists (requires_job_nodes config + job_info.nodes check)
+        assert "requires_job_nodes" in source_text
         assert "job_info.nodes" in source_text
         assert "node_metrics_in" in source_text
 

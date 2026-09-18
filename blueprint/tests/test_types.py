@@ -61,6 +61,7 @@ def test_format_enum_matches_attribution_service_contract_values():
         "ufmlog",
         "prometheus_metrics",
         "csp_event_list",
+        "entry_timeseries",
     }
 
 
@@ -76,6 +77,7 @@ def test_format_enum_matches_attribution_service_contract_names():
         "UFMLOG",
         "PROMETHEUS_METRICS",
         "CSP_EVENT_LIST",
+        "ENTRY_TIMESERIES",
     }
 
 

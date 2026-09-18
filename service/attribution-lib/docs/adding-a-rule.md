@@ -224,6 +224,40 @@ These values change the final diagnosis and require evidence or an accepted doma
 An undeclared symptom is preserved as evidence with an `unknown-symptom-` prefix and does not produce the intended classification.
 Outcome selection matches declaration prefixes with `startswith`, so verify that a new prefix does not unintentionally shadow another declaration.
 
+### Document the Symptom
+
+For a new outcome-bearing symptom, complete this checklist alongside the declaration:
+
+1. Set `doc` to an existing documentation ID or create the corresponding page in the documentation source.
+2. Make the declaration's exact `prefix` appear in that page's ID, title, or aliases.
+   Matching preserves case, punctuation, whitespace, and Unicode characters; it does not convert names into URL slugs.
+   For example, `XID-48-` does not match `xid-48` or `XID 48` unless `XID-48-` is explicitly declared as an alias.
+3. Check that the page actually explains the symptom's evidence, classification, and limitations.
+   An alias means the page covers that name, not that symptoms share an outcome or are deduplicated at runtime.
+   If an existing page cannot accurately cover the new symptom, create a separate page.
+4. Regenerate the documentation manifest using the documentation project's generator; do not hand-edit generated output.
+   Redirect IDs resolve to the target page's declared names and their own exact ID.
+5. Run the documentation integration check against the intended manifest and the proposed declarations.
+   Do not add new symptoms to the historical baseline. Baseline entries are exact `(prefix, doc)` pairs;
+   remove an entry when that declaration disappears or its documentation resolves.
+
+For example, a declaration with `prefix="XID-48-"` and `doc="xid-48"` can use this manifest entry:
+
+```json
+{
+  "id": "xid-48",
+  "title": "XID 48",
+  "aliases": ["XID-48-"],
+  "redirect_ids": []
+}
+```
+
+The pure checks live in [`symptoms/doc_validation.py`](../src/attribution_lib/symptoms/doc_validation.py).
+The integration layer supplies the live declarations, generated manifest, and historical baseline;
+library unit tests alone do not validate a documentation deployment.
+Cascade-only declarations, generic fallback prefixes, and declarations without an outcome are exempt from this check.
+Passing the name check verifies an explicit mapping, not the technical correctness of the page, which still requires review.
+
 ## Verify the Rule
 
 For an ordinary declarative extractor, load the catalog to execute its co-located cases.

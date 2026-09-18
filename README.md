@@ -8,6 +8,10 @@ Modern AI training and inference workloads fail in dozens of ways. A multi-rank 
 
 **Status.** Currently in private preview. The V1 public surface is the Attribution Service HTTP API and the Blueprint reference orchestrator. External rule-catalog contributions and additional scheduler connectors land at V1 GA.
 
+<p align="center">
+  <img src="docs/media/attribution-demo.gif" alt="NVIDIA Attribution web UI showing a diagnosed workload and its symptom chain" width="640">
+</p>
+
 ## Two deployable forms
 
 NVIDIA Attribution ships in two components that share one rules engine. Pick the form that matches how you want to integrate.

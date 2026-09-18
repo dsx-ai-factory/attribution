@@ -56,6 +56,7 @@ from attribution_lib.observation.processing import (
     extract_body_and_node,
     raw_loki_result_helper,
     raw_loki_unpack,
+    render_metric_body,
 )
 from attribution_lib.resources import Node, Replica
 from attribution_lib.resources.resource_set import ResourceSetClass
@@ -706,6 +707,87 @@ class TestMetricEntry:
         assert entry.component == "mlx5_2"  # Should get value from labels["device"]
         assert entry.cluster == "test-cluster"  # Should get value from labels["s_cluster"]
 
+    @pytest.mark.parametrize(
+        ("metric", "expected_body"),
+        [
+            pytest.param(
+                {
+                    "timestamp": 1744734450,
+                    "value": 0,
+                    "metric": "up",
+                    "labels": {},
+                    "node": "n1",
+                    "component": "",
+                    "cluster": "",
+                },
+                "time: 1744734450, metric_name: up, metric_value: 0, threshold: None, cluster: , node: n1, component: ",
+                id="int_value_and_empty_strings_kept",
+            ),
+            pytest.param(
+                {
+                    "timestamp": 1744734450,
+                    "value": "60",
+                    "metric": "ib_roce_adp_retrans",
+                    "labels": {"device": "mlx5_0"},
+                    "node": "n1",
+                },
+                "time: 1744734450, metric_name: ib_roce_adp_retrans, metric_value: 60, threshold: None, cluster: None, node: n1, component: mlx5_0",
+                id="str_int_value_component_from_labels",
+            ),
+            pytest.param(
+                {
+                    "timestamp": 1744734450,
+                    "value": "60.5",
+                    "metric": "ib_roce_adp_retrans",
+                    "labels": {"s_cluster": "c1"},
+                    "node": "n1",
+                    "component": "mlx5_1",
+                },
+                "time: 1744734450, metric_name: ib_roce_adp_retrans, metric_value: 60.5, threshold: None, cluster: c1, node: n1, component: mlx5_1",
+                id="str_float_value_cluster_from_labels",
+            ),
+            pytest.param(
+                {
+                    "timestamp": 1744734450,
+                    "value": "1",
+                    "metric": "node_infiniband_link_downed_total",
+                    "labels": {"device": "mlx5_9", "s_cluster": "from-labels"},
+                    "node": "n1",
+                    "component": "mlx5_0",
+                    "cluster": "direct",
+                },
+                "time: 1744734450, metric_name: node_infiniband_link_downed_total, metric_value: 1, threshold: None, cluster: direct, node: n1, component: mlx5_0",
+                id="direct_fields_win_over_labels",
+            ),
+            pytest.param(
+                {
+                    "timestamp": 1744734450,
+                    "value": "1",
+                    "metric": "node_infiniband_link_downed_total",
+                    "labels": {"device": "mlx5_2", "s_cluster": "c2"},
+                    "node": "n1",
+                    "component": None,
+                    "cluster": None,
+                },
+                "time: 1744734450, metric_name: node_infiniband_link_downed_total, metric_value: 1, threshold: None, cluster: c2, node: n1, component: mlx5_2",
+                id="explicit_none_falls_back_to_labels",
+            ),
+            pytest.param(
+                {"timestamp": 1744734450, "value": 6253.417646976346, "metric": "ib_roce_adp_retrans", "node": "n1"},
+                "time: 1744734450, metric_name: ib_roce_adp_retrans, metric_value: 6253.417646976346, threshold: None, cluster: None, node: n1, component: None",
+                id="float_value_no_labels",
+            ),
+        ],
+    )
+    def test_render_metric_body_is_the_line_prometheus_metrics_renders(
+        self, healthcheck_context, metric, expected_body
+    ):
+        """The metric rules match this text; the renderer and the legacy `MetricEntry.body()` must agree on it."""
+        legacy = PrometheusMetricsEntrySource(Observation(healthcheck_context, [metric])).make_line_base(0, metric)
+
+        assert render_metric_body(metric) == expected_body
+        assert legacy.body() == expected_body
+
 
 class TestTimeseriesEntry:
     """The entry_timeseries format: explicit timestamps, explicit resources, a declared filter window."""
@@ -796,6 +878,13 @@ class TestTimeseriesEntry:
                 id="replica_without_a_node",
             ),
             pytest.param(
+                {"parse_node": True},
+                entry("Jan  5 06:59:25 kernel: no hostname field on this line"),
+                ResourceSetClass.ANY,
+                None,
+                id="unparseable_body_without_require_node",
+            ),
+            pytest.param(
                 {"parse_node": True, "parse_timestamp": True},
                 entry(UNDECLARED, ts=10**9, resources=OTHER_NODE),
                 ResourceSetClass([Node(hostname=OTHER_JOB_NODE)]),
@@ -813,6 +902,57 @@ class TestTimeseriesEntry:
 
         assert made.resources(syslog_job_info) == expected_resources
         assert made.time() == expected_time
+
+    # The two line shapes the fabric log node parser understands, plus one it does not.
+    UFM_LINK_DOWN = (
+        "2025-06-18 17:47:26.839 [13406653] [329] WARNING Site [FAB1] [Fabric_Topology] Link went down: "
+        f"(Computer:{JOB_NODE} (0200000000000002)) 0200000000000001:1 - (Switch:SW1.1-DH1:7) 0200000000000003:7"
+    )
+    UFM_NODE_DOWN = f"Site configuration changes: 1234567890 ({OTHER_JOB_NODE}) node is Down"
+    UFM_UNPARSED = "2025-06-18 17:47:26.839 [13406653] [329] INFO Site [FAB1] something else"
+
+    def test_a_fabric_log_entry_declaring_no_resources_resolves_like_the_legacy_format(self, syslog_job_info, timezone):
+        """The producer's node is the fabric manager host, so the job node has to come out of the line."""
+        lines = [(self.UFM_LINK_DOWN, 1750268847276617503), (self.UFM_NODE_DOWN, 1750268879256741095)]
+        legacy = observation_base(
+            syslog_job_info,
+            timezone,
+            ObservationSource.UFMLOG,
+            ObservationFormat.UFMLOG,
+            [{"body": body, "timestamp": ts, "node": "fabric-manager-01"} for body, ts in lines],
+        )
+        new = observation_base(
+            syslog_job_info,
+            timezone,
+            ObservationSource.UFMLOG,
+            ObservationFormat.ENTRY_TIMESERIES,
+            [entry(body, ts=ts) for body, ts in lines] + [entry(self.UFM_UNPARSED, ts=lines[0][1])],
+        )
+
+        link_down, node_down, unparsed = new
+        assert [link_down.node(syslog_job_info), node_down.node(syslog_job_info)] == [JOB_NODE, OTHER_JOB_NODE]
+        assert [e.node(syslog_job_info) for e in legacy] == [JOB_NODE, OTHER_JOB_NODE]
+        # entry_timeseries rounds ns up to the microsecond; the legacy float path rounded to nearest.
+        assert all(abs(n.time() - o.time()) <= timedelta(microseconds=1) for n, o in zip(new, legacy))
+        with pytest.raises(UnknownResourceError):
+            unparsed.node(syslog_job_info)
+
+    def test_a_metric_entry_declaring_no_node_is_dropped_rather_than_charged_to_the_job(
+        self, syslog_job_info, timezone
+    ):
+        """Legacy `prometheus_metrics` rejected a node-less sample; the generic format would resolve it to ANY."""
+        body = "time: 1718452800, metric_name: up, metric_value: 0, threshold: None, cluster: c1, node: x, component: "
+        named, unnamed = observation_base(
+            syslog_job_info,
+            timezone,
+            ObservationSource.NODE_METRICS,
+            ObservationFormat.ENTRY_TIMESERIES,
+            [entry(body, ts=1718452800_000_000_000, resources=[{"kind": "node", "hostname": JOB_NODE}]), entry(body)],
+        )
+
+        assert named.node(syslog_job_info) == JOB_NODE
+        with pytest.raises(UnknownResourceError):
+            unnamed.node(syslog_job_info)
 
 
 class TestTimeseriesExtraction:

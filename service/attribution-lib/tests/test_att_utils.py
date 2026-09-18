@@ -230,6 +230,63 @@ class TestApplogExtractNodeRank:
         """Test empty string handling."""
         assert applog_extract_node_rank("") == ("", None)
 
+    def test_nccl_hostname_pid_tid_with_srun_rank(self):
+        """srun -l rank plus NCCL hostname:pid:tid must yield both fields.
+
+        Rank-only parsing of these lines maps out-of-range ranks onto the
+        wrong node (or drops the line) when a shared cycle log is attributed
+        against a subset of the allocation.
+        """
+        line = (
+            "814: [2026-01-02 03:04:05] node-12:1234567:1234568 [2] "
+            "transport/net_ib/p2p.cc:785 (ncclIbLogCompletionWithError) "
+            "NCCL WARN NET/IB: Got completion from peer 192.0.2.10<63270> "
+            "with status=IBV_WC_RETRY_EXC_ERR(12)"
+        )
+        assert applog_extract_node_rank(line) == ("node-12", 814)
+
+    def test_nccl_hostname_pid_tid_without_srun_rank(self):
+        """A timestamped NCCL hostname has no explicit rank prefix."""
+        line = (
+            "[2026-01-02 03:04:05] node-01:3298233:3301236 [0] ib_plugin.c:2033 "
+            "NCCL WARN NET/IB: Got completion from peer 192.0.2.11<31197>"
+        )
+        assert applog_extract_node_rank(line) == ("node-01", None)
+
+    def test_nccl_bracket_is_not_used_as_rank_when_srun_prefix_is_absent(self):
+        """NCCL ``[2]`` is cudaDev. A timestamp prefix must not become rank 0 or 2."""
+        line = (
+            "[2026-01-02 03:04:05] node-12:1234567:1234568 [2] "
+            "NCCL WARN NET/IB: Got completion from peer 192.0.2.10<63270>"
+        )
+        assert applog_extract_node_rank(line) == ("node-12", None)
+
+    def test_nccl_hostname_pid_tid_with_rank_prefix(self):
+        """Keep the explicit bracketed rank rather than NCCL's CUDA device index."""
+        line = "[rank2]: node-12:1234567:1234568 [0] NCCL WARN NET/IB: Got completion from peer 192.0.2.10<63270>"
+        assert applog_extract_node_rank(line) == ("node-12", 2)
+
+    def test_nccl_peer_ip_is_not_treated_as_hostname(self):
+        """A peer IP alone must not supply the local hostname."""
+        line = "302: NET/IB: Got completion from peer 192.0.2.10<63270> with status=12"
+        assert applog_extract_node_rank(line) == (None, 302)
+
+    @pytest.mark.parametrize("hostname", ["_node-12", ".node-12", "-node-12"])
+    def test_nccl_does_not_extract_a_suffix_of_a_hostname(self, hostname):
+        """Do not turn a hostname into a different node by dropping its first character."""
+        line = f"{hostname}:123:456 [2] NCCL WARN NET/IB error"
+        assert applog_extract_node_rank(line) == (hostname, None)
+
+    @pytest.mark.parametrize("prefix", ["0: INFO: ", "0: [2026-01-02 03:04:05] INFO: "])
+    def test_long_non_nccl_text_preserves_explicit_rank(self, prefix):
+        """Long nonmatching text remains attributable with or without timestamp brackets."""
+        assert applog_extract_node_rank(prefix + "a" * 8192) == (None, 0)
+
+    def test_nccl_hostname_after_long_nonmatching_text(self):
+        """Skipping a long nonmatching chunk must still find a later NCCL hostname."""
+        line = "[rank2]: " + "a" * 8192 + " node-12:123:456 [0] NCCL WARN NET/IB error"
+        assert applog_extract_node_rank(line) == ("node-12", 2)
+
 
 class TestNormalizeNode:
     """Test cases for _normalize_node in attr_types."""

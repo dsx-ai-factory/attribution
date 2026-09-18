@@ -288,7 +288,7 @@ outcome_symptom(
     "Corroborated node failure",
     outcome="Fail InfraHW",
     priority=OutcomePriority.HIGH_HW,
-    doc="not-responding",
+    doc="corroborated-node-failure",
     hw_cause="Known HW Cause - Node",
     cascade_discards=("Node failure reported by slurm", "Node not responding"),
 )
@@ -508,6 +508,14 @@ outcome_symptom(
     outcome="Fail InfraHW",
     priority=OutcomePriority.HIGH_HW,
     doc="xid-95",
+    hw_cause="Known HW Cause - Node",
+)
+
+outcome_symptom(
+    "poisoned gsp",
+    outcome="Fail InfraHW",
+    priority=OutcomePriority.HIGH_HW,
+    doc="ecc-error",
     hw_cause="Known HW Cause - Node",
 )
 
@@ -2452,6 +2460,9 @@ known_symptom("EFA Error-107")
 known_symptom("EFA Error-connection-reset")
 
 known_symptom("Fabric manager lost connection to GPU")
+
+# The fatal GSP marker needs XID-94 and NV_ERR_RESET_REQUIRED to diagnose ECC.
+known_symptom("NV_PGSP_FALCON_IRQSTAT_FATAL_ERROR")
 
 outcome_symptom(
     "Fabric manager lost connection to all GPUs",

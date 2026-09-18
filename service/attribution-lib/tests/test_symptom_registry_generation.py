@@ -21,12 +21,14 @@ from attribution_lib.exceptions import (
     UnknownSymptomError,
 )
 from attribution_lib.rules_engine import RuleLoader
+from attribution_lib.symptoms.base import BaseSymptom
 from attribution_lib.symptoms.declarations import (
     CascadeScope,
     OutcomePriority,
     SymptomCategory,
     SymptomDeclaration,
 )
+from attribution_lib.symptoms.family import SymptomFamily
 from attribution_lib.symptoms.registry_generation import (
     OUTCOME_PRIORITIES,
     GeneratedOutcomeMatch,
@@ -38,6 +40,7 @@ from attribution_lib.symptoms.registry_generation import (
     substring_aliases_from_declarations,
     symptom_docs_from_declarations,
 )
+from attribution_lib.symptoms.selector import SymptomSelector
 
 
 def _load_committed_symptom_defaults() -> list[SymptomDeclaration]:
@@ -641,6 +644,107 @@ def test_category_membership_deduplicates_scoped_declarations():
     )
 
     assert registry.symptoms_in_category(SymptomCategory.CSP_EVENT) == frozenset({"primary"})
+
+
+def test_registry_compiles_immutable_family_metadata():
+    xid_schema = SymptomFamily(name="xid", property_types={"code": int})
+    xid_149 = SymptomFamily(name="xid", properties={"code": 149})
+    registry = registry_from_declarations(
+        [
+            SymptomDeclaration(prefix="XID-149", family=xid_149),
+            SymptomDeclaration(prefix="XID-", fallback_prefix=True, family=xid_schema),
+        ]
+    )
+
+    assert registry.family_for("XID-149") == xid_149
+    assert registry.family_for("XID-43-SW_NOTIFY") == xid_schema
+    assert registry.family_for("not declared") is None
+    with pytest.raises(TypeError):
+        registry.families["XID-31"] = SymptomFamily(name="xid", properties={"code": 31})
+
+
+def test_registry_rejects_conflicting_families_for_one_prefix():
+    declarations = [
+        SymptomDeclaration(prefix="bus error", family=SymptomFamily(name="network")),
+        SymptomDeclaration(prefix="bus error", family=SymptomFamily(name="pcie")),
+    ]
+
+    with pytest.raises(SymptomValidationError, match="Conflicting families for 'bus error'"):
+        registry_from_declarations(declarations)
+
+
+@pytest.mark.parametrize(
+    ("declarations", "error"),
+    [
+        (
+            [SymptomDeclaration(prefix="bad", family=cast(SymptomFamily, "not-a-family"))],
+            "expected SymptomFamily, got str",
+        ),
+        (
+            [
+                SymptomDeclaration(prefix="XID-", family=SymptomFamily(name="xid", property_types={"code": int})),
+                SymptomDeclaration(prefix="XID_", family=SymptomFamily(name="xid", property_types={"code": str})),
+            ],
+            "Conflicting schemas for family 'xid'",
+        ),
+        (
+            [SymptomDeclaration(prefix="XID-149", family=SymptomFamily(name="xid", properties={"code": 149}))],
+            "declares properties without a schema",
+        ),
+        (
+            [
+                SymptomDeclaration(prefix="XID-", family=SymptomFamily(name="xid", property_types={"code": int})),
+                SymptomDeclaration(
+                    prefix="XID-149",
+                    family=SymptomFamily(name="xid", properties={"severity": "fatal"}),
+                ),
+            ],
+            "Unknown property 'severity'",
+        ),
+        (
+            [
+                SymptomDeclaration(prefix="XID-", family=SymptomFamily(name="xid", property_types={"code": int})),
+                SymptomDeclaration(prefix="XID-149", family=SymptomFamily(name="xid", properties={"code": "149"})),
+            ],
+            "Invalid value for family 'xid' property 'code'",
+        ),
+    ],
+)
+def test_registry_rejects_invalid_family_contracts(
+    declarations: list[SymptomDeclaration],
+    error: str,
+):
+    """Reject malformed family metadata before publishing the registry."""
+    with pytest.raises(SymptomValidationError, match=error):
+        registry_from_declarations(declarations)
+
+
+def test_registry_builds_selectors_from_resolved_declarations():
+    xid_schema = SymptomFamily(name="xid", property_types={"code": int})
+    xid_149 = SymptomFamily(name="xid", properties={"code": 149})
+    registry = registry_from_declarations(
+        [
+            SymptomDeclaration(prefix="bus error"),
+            SymptomDeclaration(prefix="RuntimeError", fallback_prefix=True),
+            SymptomDeclaration(prefix="XID-", fallback_prefix=True, family=xid_schema),
+            SymptomDeclaration(prefix="XID-149", family=xid_149),
+        ]
+    )
+
+    assert registry.selector_for("bus error") == SymptomSelector(symptom_id="bus error")
+    runtime_error = BaseSymptom(symptom_id="RuntimeError: dynamic detail")
+    assert registry.selector_for(runtime_error.symptom_id).member(runtime_error)
+    assert registry.selector_for("XID-43-SW_NOTIFY") == SymptomSelector(family_name="xid")
+    xid_149_selector = registry.selector_for("XID-149")
+    assert xid_149_selector == SymptomSelector(family_name="xid", family_properties={"code": 149})
+    assert xid_149_selector.member(BaseSymptom(symptom_id="raw", family=xid_149))
+
+
+def test_registry_rejects_selector_lookup_for_unknown_symptom():
+    registry = registry_from_declarations([])
+
+    with pytest.raises(UnknownSymptomError, match="not a known symptom id"):
+        registry.selector_for("not declared")
 
 
 def test_scoped_cascade_lookup_rejects_unknown_symptom():

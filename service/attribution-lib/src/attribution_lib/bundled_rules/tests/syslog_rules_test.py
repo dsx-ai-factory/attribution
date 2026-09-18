@@ -517,6 +517,168 @@ class TestKernelFailureCascade:
         assert "kernel oops" not in attribution.symptoms
 
 
+class TestPoisonedGspOutcome:
+    """Exercise the three-signal ECC diagnosis from syslog through attribution."""
+
+    _LINES = (
+        "NVRM: kgspServiceFatalHwError_GB100: NV_PGSP_FALCON_IRQSTAT_FATAL_ERROR FB Poison pending (mask: 0x1)",
+        "NVRM: Xid (PCI:0000:06:00): 94, Contained: GSP. RST: Yes, D-RST: No",
+        "NVRM: nvCheckOkFailedNoLog: Check failed: [NV_ERR_RESET_REQUIRED] (0x00000062) @ kernel_gsp.c:100",
+    )
+
+    @pytest.fixture(scope="class")
+    def job_info(self, simple_job_factory):
+        return simple_job_factory(
+            state="FAILED",
+            framework="pytorch",
+            ranks_per_node=4,
+            start_timestamp=1746000000,
+            end_timestamp=1746003600,
+            nodes=["test-node-001", "test-node-002"],
+        )
+
+    def _attribute(self, request, sys_tst_bldr, job_info, node_lines, offsets_ns=None):
+        base_ns = int(job_info.job_start_time.timestamp() * 1e9)
+        if offsets_ns is None:
+            offsets_ns = [1800 * 10**9 + i * 1_000_000 for i in range(len(node_lines))]
+        entries = [
+            make_syslog_entry(body=line, node=node, timestamp_ns=base_ns + offset_ns)
+            for (node, line), offset_ns in zip(node_lines, offsets_ns, strict=True)
+        ]
+        result = sys_tst_bldr(job_info, entries, stream_id=request.node.name)
+        bad_nodes = core.CalcBadNodesAttributionResult()
+        bad_nodes.my_bad_nodes = result.get_node_attributions()
+        return core.attribute(
+            event_stream=result.event_stream,
+            job_info=result.job_info,
+            bad_node_result=bad_nodes,
+            extract_job_metadata_from_logfile=False,
+        )
+
+    @pytest.mark.parametrize("reverse", [False, True])
+    def test_all_three_signals_resolve_to_ecc_infra_hw(self, request, sys_tst_bldr, job_info, reverse):
+        lines = self._LINES[::-1] if reverse else self._LINES
+        attribution = self._attribute(request, sys_tst_bldr, job_info, [("test-node-001", line) for line in lines])
+
+        assert set(attribution.symptoms.symptoms()) == {"poisoned gsp"}
+        outcome = attribution.outcome_attr.value()
+        assert outcome.outcome == "Fail InfraHW"
+        assert outcome.root_cause_symptom == "poisoned gsp"
+        sources = list(attribution.symptoms["poisoned gsp"])
+        assert {source.datum for source in sources} == set(self._LINES)
+        assert {source.rule for source in sources} == {"SyslogGspFatalError", "known-xid-event", "NV_ERR_"}
+        registry = attribution_lib.get_symptom_registry()
+        match = registry.outcome_for(["poisoned gsp"])
+        assert match.hw_cause == "Known HW Cause - Node"
+        assert match.doc == "ecc-error"
+
+    @pytest.mark.parametrize("suffix", ["", " (0x00000062) @ kernel_gsp.c:100"])
+    def test_unrelated_reset_code_stays_active_alongside_complete_combination(
+        self, request, sys_tst_bldr, job_info, suffix
+    ):
+        unrelated_line = "NVRM: [NV_ERR_RESET_REQUIRED_OTHER]" + suffix
+        attribution = self._attribute(
+            request,
+            sys_tst_bldr,
+            job_info,
+            [("test-node-001", line) for line in [*self._LINES, unrelated_line]],
+        )
+
+        node_symptoms = attribution.bad_nodes_attr.my_bad_nodes["test-node-001"].attributions
+        for symptoms in [attribution.symptoms, node_symptoms]:
+            unrelated = [symptom for symptom in symptoms.symptoms() if "NV_ERR_RESET_REQUIRED_OTHER" in symptom]
+            assert len(unrelated) == 1
+            assert {source.datum for source in symptoms[unrelated[0]]} == {unrelated_line}
+            assert {source.datum for source in symptoms["poisoned gsp"]} == set(self._LINES)
+        assert attribution.outcome_attr.value().root_cause_symptom == "poisoned gsp"
+
+    def test_repeated_signals_produce_one_composite_with_all_sources(self, request, sys_tst_bldr, job_info):
+        attribution = self._attribute(
+            request,
+            sys_tst_bldr,
+            job_info,
+            [("test-node-001", line) for line in self._LINES * 2],
+        )
+
+        assert list(attribution.symptoms.symptoms()) == ["poisoned gsp"]
+        sources = list(attribution.symptoms["poisoned gsp"])
+        assert len(sources) == 6
+        for line in self._LINES:
+            assert sum(source.datum == line for source in sources) == 2
+
+    def test_signals_correlate_across_the_node_job_evidence_window(self, request, sys_tst_bldr, job_info):
+        attribution = self._attribute(
+            request,
+            sys_tst_bldr,
+            job_info,
+            [("test-node-001", line) for line in self._LINES],
+            offsets_ns=[10**9, 1800 * 10**9, 3599 * 10**9],
+        )
+
+        assert set(attribution.symptoms.symptoms()) == {"poisoned gsp"}
+        assert {source.datum for source in attribution.symptoms["poisoned gsp"]} == set(self._LINES)
+        assert attribution.outcome_attr.value().outcome == "Fail InfraHW"
+
+    @pytest.mark.parametrize("xid", [171, 172])
+    def test_existing_memory_error_keeps_root_cause_precedence(self, request, sys_tst_bldr, job_info, xid):
+        memory_error = f"NVRM: Xid (PCI:0000:06:00): {xid}, Uncorrectable memory error"
+        attribution = self._attribute(
+            request,
+            sys_tst_bldr,
+            job_info,
+            [("test-node-001", line) for line in [*self._LINES, memory_error]],
+        )
+
+        outcome = attribution.outcome_attr.value()
+        assert outcome.outcome == "Fail InfraHW"
+        assert outcome.root_cause_symptom.startswith(f"XID-{xid}-")
+
+    @pytest.mark.parametrize("indices", [(0,), (1,), (2,), (0, 1), (0, 2), (1, 2)])
+    def test_incomplete_combination_does_not_promote_to_infra_hw(self, request, sys_tst_bldr, job_info, indices):
+        attribution = self._attribute(
+            request,
+            sys_tst_bldr,
+            job_info,
+            [("test-node-001", self._LINES[i]) for i in indices],
+        )
+
+        assert "poisoned gsp" not in attribution.symptoms
+        assert attribution.outcome_attr.value().outcome != "Fail InfraHW"
+
+    @pytest.mark.parametrize("other_node_index", [0, 1, 2])
+    def test_signals_on_different_nodes_do_not_combine(self, request, sys_tst_bldr, job_info, other_node_index):
+        attribution = self._attribute(
+            request,
+            sys_tst_bldr,
+            job_info,
+            [
+                ("test-node-002" if i == other_node_index else "test-node-001", line)
+                for i, line in enumerate(self._LINES)
+            ],
+        )
+
+        assert "poisoned gsp" not in attribution.symptoms
+        assert attribution.outcome_attr.value().outcome != "Fail InfraHW"
+
+    @pytest.mark.parametrize(
+        "replacement",
+        [
+            "NVRM: Xid (PCI:0000:06:00): 154, GPU recovery action changed from 0x0 (None) to 0x1 (GPU Reset Required)",
+            "NVRM: [NV_ERR_RESET_REQUIRED_OTHER]",
+        ],
+    )
+    def test_other_reset_messages_do_not_complete_combination(self, request, sys_tst_bldr, job_info, replacement):
+        attribution = self._attribute(
+            request,
+            sys_tst_bldr,
+            job_info,
+            [("test-node-001", line) for line in [*self._LINES[:2], replacement]],
+        )
+
+        assert "poisoned gsp" not in attribution.symptoms
+        assert attribution.outcome_attr.value().outcome != "Fail InfraHW"
+
+
 class TestFmLostAllGpusOutcome:
     """End-to-end: when all GPUs on a node lose fabric-manager connection, the
     aggregated 'Fabric manager lost connection to all GPUs' symptom resolves to

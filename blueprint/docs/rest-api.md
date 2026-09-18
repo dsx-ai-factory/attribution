@@ -79,10 +79,14 @@ retrying.
 
 ## 2. Submit an observation
 
-The outer observation is JSON, but `body` is always a string. For `raw_log`,
-that string contains newline-separated log lines. Application log lines should
-include a rank prefix so the service can associate evidence with a rank and
-node.
+The outer observation is JSON, but `body` is always a string. For
+`entry_timeseries`, that string is a JSON array with one object per log line:
+* `body` (required)
+* `ts` (unix nanoseconds, or omitted when the producer has no timestamp)
+* `resources` (omitted unless the producer knows the node; `[{"kind": "node", "hostname": ...}]`, optionally with `{"kind": "replica", "name": ...}` objects)
+
+If no `resources` are declared, application log lines can include a rank or node prefix so the service can associate evidence more specifically. A `null` bound in 
+`time_interval` is unbounded on that side; **entries outside the declared interval are dropped.**
 
 ```bash
 curl --fail-with-body --silent --show-error \
@@ -93,14 +97,14 @@ curl --fail-with-body --silent --show-error \
 {
   "context": {
     "time_interval": {
-      "start": "2026-07-14T10:00:00Z",
-      "end": "2026-07-14T10:30:00Z"
+      "start": null,
+      "end": null
     },
     "resources": "AllJobResources",
     "source": "applog",
-    "format": "raw_log"
+    "format": "entry_timeseries"
   },
-  "body": "[rank 0] Main process ended cleanly"
+  "body": "[{\"body\": \"[rank 0] Main process ended cleanly\"}]"
 }
 JSON
 ```
@@ -110,7 +114,7 @@ connectors are:
 
 | Source | Formats |
 |---|---|
-| `applog` | `raw_log`, `loki_dict_list`, `raw_loki_streams` |
+| `applog` | `entry_timeseries` |
 | `syslog` | `loki_dict_list`, `raw_loki_streams` |
 
 For the structured formats, `body` is a JSON-encoded string containing the

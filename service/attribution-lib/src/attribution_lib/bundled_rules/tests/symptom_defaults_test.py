@@ -26,6 +26,15 @@ def test_row_remap_does_not_drive_outcome():
     assert registry.outcome_for(["Row Remap"]) is None
 
 
+def test_corroborated_node_failure_has_dedicated_documentation():
+    """Keep the independently emitted composite on its canonical page."""
+    loader = RuleLoader()
+    loader.load(str(get_bundled_rules_path() / "symptom_defaults.py"))
+    registry = registry_from_declarations(loader.symptom_declarations)
+
+    assert registry.symptom_docs["Corroborated node failure"] == "corroborated-node-failure"
+
+
 def test_cuda_illegal_address_resolves_its_own_guidance():
     """Preserve CUDA outcome selection and KEEP behavior, including mixed NCCL evidence."""
     loader = RuleLoader()
