@@ -38,4 +38,16 @@ describe('App routing shell', () => {
 
     await waitFor(() => expect(screen.getByText('Fleet screen')).toBeTruthy())
   })
+
+  it('keeps the current route when a popup has handled Escape', () => {
+    window.history.replaceState({}, '', '/verdict/run-1')
+    render(<App />)
+
+    const event = new KeyboardEvent('keydown', { key: 'Escape', cancelable: true })
+    event.preventDefault()
+    fireEvent(window, event)
+
+    expect(screen.getByText('Verdict screen')).toBeTruthy()
+    expect(window.location.pathname).toBe('/verdict/run-1')
+  })
 })

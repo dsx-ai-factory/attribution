@@ -831,6 +831,7 @@ def test_run_detail_preserves_evidence_without_expanding_list_payload(tmp_path):
 
     summary = client.get("/api/v1/runs").json()["runs"][0]
     assert "attribution" not in summary and "log" not in summary
+    assert summary["decisionGraphState"] == "absent"
     detail = client.get(f"/api/v1/runs/{summary['id']}").json()
     assert {key: detail[key] for key in summary} == summary
     assert detail["errorPairs"] == "pair evidence"
@@ -850,6 +851,39 @@ def test_run_detail_preserves_evidence_without_expanding_list_payload(tmp_path):
         ({"nodes": [], "edges": []}, "empty"),
         ({"nodes": [], "edges": [{"parent_id": "missing", "child_id": "missing", "edge_type": "cause"}]}, "invalid"),
         ({"nodes": "broken", "edges": []}, "invalid"),
+        (
+            {
+                "nodes": [
+                    {
+                        "node_id": "0",
+                        "node_type": "EXTRACTION",
+                        "hostname": None,
+                        "symptom": "XID-79",
+                        "rule_name": None,
+                        "action": "CREATED",
+                    }
+                ]
+                * 2,
+                "edges": [],
+            },
+            "invalid",
+        ),
+        (
+            {
+                "nodes": [
+                    {
+                        "node_id": "0",
+                        "node_type": "EXTRACTION",
+                        "hostname": None,
+                        "symptom": "XID-79",
+                        "rule_name": None,
+                        "action": "CREATED",
+                    }
+                ],
+                "edges": [{"parent_id": "0", "child_id": "0", "edge_type": "cause"}],
+            },
+            "invalid",
+        ),
     ],
 )
 def test_decision_graph_state_does_not_invalidate_other_evidence(tmp_path, graph, state):
@@ -863,6 +897,8 @@ def test_decision_graph_state_does_not_invalidate_other_evidence(tmp_path, graph
     summary = client.get("/api/v1/runs").json()["runs"][0]
     detail = client.get(f"/api/v1/runs/{summary['id']}").json()
     sections = detail["attribution"]
+    assert summary["decisionGraphState"] == detail["decisionGraphState"] == state
+    assert "attribution" not in summary and "log" not in summary
     assert sections["decisionGraph"] == {"state": state, "data": graph if state == "empty" else None}
     assert sections["rootSymptom"]["state"] == "available"
     assert sections["symptomSites"]["state"] == "available"
@@ -906,6 +942,8 @@ def test_invalid_sites_do_not_break_list_or_valid_graph(tmp_path, symptoms, stat
     client = TestClient(create_app(str(p)))
     summary = client.get("/api/v1/runs").json()["runs"][0]
     detail = client.get(f"/api/v1/runs/{summary['id']}").json()
+    assert summary["decisionGraphState"] == detail["decisionGraphState"] == "available"
+    assert "attribution" not in summary and "log" not in summary
     assert detail["attribution"]["symptomSites"]["state"] == state
     assert detail["attribution"]["rootSymptom"]["state"] == "available"
     assert detail["attribution"]["decisionGraph"] == {"state": "available", "data": graph}

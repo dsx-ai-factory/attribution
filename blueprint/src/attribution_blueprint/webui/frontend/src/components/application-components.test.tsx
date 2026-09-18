@@ -53,6 +53,7 @@ const run = (overrides: Partial<RunSummary> = {}): RunSummary => ({
   outcome: 'hardware',
   verdictLabel: 'Hardware failure',
   detail: '',
+  decisionGraphState: 'absent',
   rootSymptom: { symptom: 'Xid79', rule: 'xid', time: '', line: '' },
   symptoms: [],
   responsibleNodes: ['node-a'],

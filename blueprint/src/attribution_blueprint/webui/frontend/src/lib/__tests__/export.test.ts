@@ -29,6 +29,7 @@ function run(overrides: Partial<RunDetail> = {}): RunDetail {
     outcome: 'hardware',
     verdictLabel: 'GPU failure',
     detail: 'A GPU failed.',
+    decisionGraphState: 'absent',
     rootSymptom: { symptom: 'GpuFell', rule: 'gpu_fell', time: '00:30', line: 'Xid 79' },
     symptoms: [{ name: 'GpuFell', sites: 1 }],
     responsibleNodes: ['node-a'],

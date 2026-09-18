@@ -10,6 +10,7 @@ function run(over: Partial<RunSummary>): RunSummary {
     status: 'FAILED', nodes: 1, nodeIds: ['n1'], elapsedH: 0.1, gpusPerNode: 8, gpuCount: 8,
     endTime: '2026-05-01T01:00:00Z', startTime: '2026-05-01T00:00:00Z',
     outcome: 'hardware', verdictLabel: '', detail: '',
+    decisionGraphState: 'absent',
     rootSymptom: { symptom: 'S', rule: 'r', time: '', line: '' },
     symptoms: [], responsibleNodes: ['n1'], pipeline: '', service: '',
     ...over,

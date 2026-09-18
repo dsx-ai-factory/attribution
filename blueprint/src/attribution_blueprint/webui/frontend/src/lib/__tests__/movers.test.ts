@@ -7,6 +7,7 @@ const base: RunSummary = {
   status: 'FAILED', nodes: 1, nodeIds: ['n1'], elapsedH: 1.5, gpusPerNode: 8, gpuCount: 8,
   endTime: '2026-05-26T00:00:00Z', startTime: '2026-05-26T00:00:00Z',
   outcome: 'hardware', verdictLabel: 'Hardware', detail: '',
+  decisionGraphState: 'absent',
   rootSymptom: { symptom: 'GpuFell', rule: 'gpu_fell_off_bus', time: 'T', line: 'x' },
   symptoms: [], responsibleNodes: [], pipeline: '0.1.0', service: 'v2',
 }

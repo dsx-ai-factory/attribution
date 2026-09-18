@@ -76,6 +76,12 @@ def _section(
     return {"state": "empty" if is_empty(value) else "available", "data": value}
 
 
+def decision_graph_section(raw_result: dict[str, Any]) -> dict[str, Any]:
+    """Return the same validated graph state for list entries and run details."""
+    verdict = raw_result.get("verdict", {}) if isinstance(raw_result, dict) else None
+    return _section(verdict, "decision_graph", _validate_graph, lambda value: not value["nodes"] and not value["edges"])
+
+
 def attribution_detail(raw_result: dict[str, Any]) -> dict[str, Any]:
     """Expose raw root, sites and graph with separate availability states.
 
@@ -90,7 +96,5 @@ def attribution_detail(raw_result: dict[str, Any]) -> dict[str, Any]:
             lambda value: SourcedSymptom.model_validate_json(json.dumps(value), strict=True),
         ),
         "symptomSites": _section(raw_result, "symptoms", _validate_sites, lambda value: not any(value.values())),
-        "decisionGraph": _section(
-            verdict, "decision_graph", _validate_graph, lambda value: not value["nodes"] and not value["edges"]
-        ),
+        "decisionGraph": decision_graph_section(raw_result),
     }

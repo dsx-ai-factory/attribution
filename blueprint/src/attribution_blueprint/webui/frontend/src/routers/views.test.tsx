@@ -79,6 +79,7 @@ const run = (overrides: Partial<RunDetail> = {}): RunDetail => ({
   outcome: 'hardware',
   verdictLabel: 'Hardware failure',
   detail: 'GPU fell off the bus.',
+  decisionGraphState: 'absent',
   rootSymptom: {
     symptom: 'Xid79',
     rule: 'xid',

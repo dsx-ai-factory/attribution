@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from attribution_blueprint.taxonomy import taxonomy_for_service_value
-from attribution_blueprint.webui.attribution_detail import attribution_detail
+from attribution_blueprint.webui.attribution_detail import attribution_detail, decision_graph_section
 from attribution_blueprint.webui.diagnose import diagnose_card, operator_diagnose_card
 
 # Raw lib outcome string -> React OutcomeKey. Unmapped values fall through to
@@ -337,8 +337,8 @@ def _display_run(run):
     )
 
 
-def run_summary_to_react(run) -> dict[str, Any]:
-    """Return list fields without loading log or validating structured detail."""
+def _run_summary_fields(run) -> dict[str, Any]:
+    """Map shared display fields without loading logs or validating evidence."""
     run = _display_run(run)
     verdict = (run.raw_result or {}).get("verdict") or {}
     collectors = (run.raw_result or {}).get("collectors")
@@ -386,12 +386,22 @@ def run_summary_to_react(run) -> dict[str, Any]:
     }
 
 
+def run_summary_to_react(run) -> dict[str, Any]:
+    """Return list fields and graph availability without graph data or logs."""
+    return {
+        **_run_summary_fields(run),
+        "decisionGraphState": decision_graph_section(run.raw_result)["state"],
+    }
+
+
 def run_to_react(run) -> dict[str, Any]:
     """Return a summary plus logs and independently validated V2 evidence."""
+    attribution = attribution_detail(run.raw_result)
     return {
-        **run_summary_to_react(run),
+        **_run_summary_fields(run),
+        "decisionGraphState": attribution["decisionGraph"]["state"],
         "log": _log_from_sites(_display_run(run)),
-        "attribution": attribution_detail(run.raw_result),
+        "attribution": attribution,
     }
 
 

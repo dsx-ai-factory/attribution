@@ -121,6 +121,7 @@ export interface DecisionGraph {
 }
 
 export interface RunSummary {
+  decisionGraphState: AttributionSection<DecisionGraph>['state']
   id: string
   jobId: string
   workload: string

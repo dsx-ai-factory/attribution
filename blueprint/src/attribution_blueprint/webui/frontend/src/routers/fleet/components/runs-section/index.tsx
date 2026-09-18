@@ -23,6 +23,7 @@ import { TimeHover } from '@/components/time-hover'
 import { attemptGpuHours } from '@/lib/metric'
 import { isWindowed } from '@/lib/date-window'
 import { useNav } from '@/hooks/use-nav'
+import { DecisionGraphAction } from '@/routers/verdict/components/decision-graph/dialog'
 
 const OUTCOME_ORDER: { key: OutcomeKey; label: string; dot: string }[] = [
   { key: 'hardware', label: 'Hardware Fault',        dot: 'bg-red-400' },
@@ -33,7 +34,7 @@ const OUTCOME_ORDER: { key: OutcomeKey; label: string; dot: string }[] = [
   { key: 'pass',     label: 'Pass',                  dot: 'bg-primary' },
 ]
 
-const COL_COUNT = 9
+const COL_COUNT = 10
 const PAGE_SIZE_OPTIONS = [10, 25, 50]
 const RESPONSIBLE_NODE_INLINE_LIMIT = 3
 
@@ -59,6 +60,7 @@ function RunColumnHeaders({ className = '' }: { className?: string }) {
       <TableHead>
         <DefHover term="responsible-nodes">Responsible nodes</DefHover>
       </TableHead>
+      <TableHead className="w-16 text-center font-sans">Actions</TableHead>
     </TableRow>
   )
 }
@@ -69,7 +71,10 @@ function RunRow({ r }: { r: RunSummary }) {
   const hasMoreResponsibleNodes = r.responsibleNodes.length > visibleResponsibleNodes.length
   return (
     <TableRow
-      onClick={() => nav('verdict', { id: r.id })}
+      onClick={(event) => {
+        // Portaled dialogs and tooltips are not part of the clickable row.
+        if (event.currentTarget.contains(event.target as Node)) nav('verdict', { id: r.id })
+      }}
       className="cursor-pointer group"
     >
       <TableCell className="font-mono text-xs text-foreground">
@@ -85,7 +90,9 @@ function RunRow({ r }: { r: RunSummary }) {
       </TableCell>
       <TableCell className="text-foreground-secondary">{r.user}</TableCell>
       <TableCell>
-        <OutcomeChip outcome={r.outcome} />
+        <div className="flex items-center">
+          <OutcomeChip outcome={r.outcome} />
+        </div>
       </TableCell>
       <TableCell className="font-mono text-foreground text-right">{r.gpuCount}</TableCell>
       <TableCell className="font-mono text-foreground text-right">
@@ -116,6 +123,11 @@ function RunRow({ r }: { r: RunSummary }) {
         ) : (
           <span aria-label="no responsible nodes" className="text-zinc-700 select-none">·</span>
         )}
+      </TableCell>
+      <TableCell className="py-1">
+        <div className="flex justify-center">
+          <DecisionGraphAction run={r} compact />
+        </div>
       </TableCell>
     </TableRow>
   )

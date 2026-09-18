@@ -3,6 +3,7 @@ import { buildVerdictMarkdown } from '@/lib/evidence'
 import type { RunSummary } from '@/interfaces/attribution'
 
 const base: RunSummary = {
+  decisionGraphState: 'absent',
   id: '1', jobId: 'team/x', workload: 'team/x', attempt: 1, attemptUid: 'u', user: 'alice',
   status: 'FAILED', nodes: 1, nodeIds: ['n1'], elapsedH: 1.5, gpusPerNode: 8, gpuCount: 8,
   endTime: '2026-05-01T01:00:00Z',

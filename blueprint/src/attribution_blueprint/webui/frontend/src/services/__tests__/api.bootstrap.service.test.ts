@@ -8,6 +8,7 @@ const blob: BootstrapPayload = {
     { id: 'a', jobId: 'a', workload: '—', attempt: 1, attemptUid: 'a', user: 'u', status: 'FAILED',
       nodes: 1, nodeIds: ['n1'], elapsedH: 1, gpusPerNode: 8, gpuCount: 8, endTime: '2026-05-02T00:00:00Z',
       startTime: '2026-05-01T23:00:00Z', outcome: 'hardware', verdictLabel: '', detail: '',
+      decisionGraphState: 'absent',
       rootSymptom: { symptom: 'GpuFell', rule: 'r', time: '', line: '' }, symptoms: [],
       responsibleNodes: ['n1'], pipeline: '', service: '', log: [], attribution: {
         rootSymptom: { state: 'absent', data: null },
@@ -17,6 +18,7 @@ const blob: BootstrapPayload = {
     { id: 'b', jobId: 'b', workload: '—', attempt: 1, attemptUid: 'b', user: 'u', status: 'COMPLETED',
       nodes: 1, nodeIds: ['n2'], elapsedH: 1, gpusPerNode: 8, gpuCount: 8, endTime: '2026-05-02T00:00:00Z',
       startTime: '2026-05-01T23:00:00Z', outcome: 'pass', verdictLabel: '', detail: '',
+      decisionGraphState: 'absent',
       rootSymptom: { symptom: 'Clean', rule: 'r', time: '', line: '' }, symptoms: [],
       responsibleNodes: [], pipeline: '', service: '', log: [], attribution: {
         rootSymptom: { state: 'null', data: null },

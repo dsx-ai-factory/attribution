@@ -42,6 +42,7 @@ const run = (id: string): RunSummary => ({
   outcome: 'hardware',
   verdictLabel: 'Hardware',
   detail: '',
+  decisionGraphState: 'absent',
   rootSymptom: { symptom: 'Xid79', rule: 'xid', time: '', line: '' },
   symptoms: [],
   responsibleNodes: ['node-a'],
