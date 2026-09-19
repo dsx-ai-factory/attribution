@@ -177,7 +177,9 @@ class AttributionOrchestrator:
 
         for obs in observations:
             try:
-                service_obs = ServiceObservation.model_validate(adapt_log_observation_for_service(obs))
+                service_obs = ServiceObservation.model_validate(
+                    adapt_log_observation_for_service(obs, ctx.get("timezone"))
+                )
                 self.attribution.ingest_observation(attributor_id, service_obs)
             except Exception as e:
                 obs_source = obs.get("context", {}).get("source", "?")
