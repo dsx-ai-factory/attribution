@@ -4151,6 +4151,28 @@ class TestOutcomeReclassification:
         _run_post_outcome(stream, ji, symptoms, outcome=result.outcome_attr, attribution_result=result)
         assert result.outcome_attr.value().outcome == "Fail InfraHW"
 
+    def test_service_account_hyphen_not_reclassified(self, stream, obs_ctx):
+        ji = _job_info_with(cancelled_by="svc-example")
+        bad_nodes_result = CalcBadNodesAttributionResult()
+        result = AttributionResult(event_stream=stream, bad_nodes_attr=bad_nodes_result)
+        result.outcome_attr = _make_outcome("Fail User")
+
+        symptoms = _make_symptoms(obs_ctx, "Python Exception")
+        _run_post_outcome(stream, ji, symptoms, outcome=result.outcome_attr, attribution_result=result)
+        assert result.outcome_attr.value().outcome == "Fail User"
+
+    def test_service_account_underscore_not_reclassified(self, stream, obs_ctx):
+        # svc_tensorrt: real cluster service accounts use an underscore separator,
+        # not the hyphen the guard originally checked for.
+        ji = _job_info_with(cancelled_by="svc_tensorrt")
+        bad_nodes_result = CalcBadNodesAttributionResult()
+        result = AttributionResult(event_stream=stream, bad_nodes_attr=bad_nodes_result)
+        result.outcome_attr = _make_outcome("Fail User")
+
+        symptoms = _make_symptoms(obs_ctx, "Python Exception")
+        _run_post_outcome(stream, ji, symptoms, outcome=result.outcome_attr, attribution_result=result)
+        assert result.outcome_attr.value().outcome == "Fail User"
+
 
 class TestSingleNodeInfraBackfill:
     """SingleNodeInfraBackfill refiner: blame the sole node of a single-node job when
