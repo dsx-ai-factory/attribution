@@ -9,10 +9,20 @@ During Early Access the rule schema, cascade-pattern syntax, and test framework 
 Install `uv`, Node.js 22, and pnpm 10.11, then run:
 
 ```bash
-bash .ci/run-tests.sh all
+make test
 ```
 
-The command runs the 118-workload Docker end-to-end tests, the Attribution Library, Attribution Service, and Blueprint Python suites, then tests and builds the Blueprint frontend. Pass a suite name shown by `.ci/run-tests.sh` to run one part of the gate.
+The root Makefile is the stable public entry point for repository-wide test
+commands. It delegates to `.ci/run-tests.sh`, which keeps local and CI suite
+selection consistent without replacing the native tools used by each
+component. Run `make help` to list the supported targets, `make test-unit` for
+the unit and integration suites, or `make test-e2e` for the Docker end-to-end
+suite.
+
+`make test` runs the 118-workload Docker end-to-end tests, the Attribution
+Library, Attribution Service, and Blueprint Python suites, then tests and
+builds the Blueprint frontend. To run one suite, pass a suite name shown by
+`.ci/run-tests.sh` directly to that script.
 
 ## Install the pre-commit hook
 
