@@ -1,4 +1,6 @@
-// src/services/http-client.service.ts
+// SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// SPDX-License-Identifier: LicenseRef-NvidiaProprietary
+
 export class HttpError extends Error {
   status: number
   constructor(status: number, message: string) {
@@ -10,7 +12,12 @@ export class HttpError extends Error {
 
 const BASE = (import.meta.env.VITE_API_BASE_PATH as string | undefined) || '/api/v1'
 
-export async function httpGet<T>(path: string, params?: Record<string, unknown>, signal?: AbortSignal): Promise<T> {
+export async function httpGet<T>(
+  path: string,
+  params?: Record<string, unknown>,
+  options: { signal?: AbortSignal; decode?: (text: string) => T } = {},
+): Promise<T> {
+  const { signal, decode } = options
   const url = new URL(`${BASE}${path}`, window.location.origin)
   if (params) {
     for (const [k, v] of Object.entries(params)) {
@@ -19,5 +26,5 @@ export async function httpGet<T>(path: string, params?: Record<string, unknown>,
   }
   const res = await fetch(url.toString(), { signal, headers: { Accept: 'application/json' } })
   if (!res.ok) throw new HttpError(res.status, `GET ${path} -> ${res.status}`)
-  return (await res.json()) as T
+  return decode ? decode(await res.text()) : (await res.json()) as T
 }

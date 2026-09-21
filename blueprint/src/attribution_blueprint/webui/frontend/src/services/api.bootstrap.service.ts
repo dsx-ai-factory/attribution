@@ -1,8 +1,11 @@
+// SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// SPDX-License-Identifier: LicenseRef-NvidiaProprietary
+
 import type { FleetFilter } from '@/interfaces/filter'
 import { applyFilter } from '@/lib/filter-state'
 import type { RunDetail, RunSummary } from '@/interfaces/attribution'
 import type { BootstrapPayload, Meta } from '@/interfaces/meta'
-import { ApiService } from '@/services/api.service'
+import { ApiService, parseAttributionJson } from '@/services/api.service'
 
 const EMPTY_META: Meta = {
   versions: { schema: null, pipeline: null, service: null },
@@ -14,7 +17,7 @@ export function readBootstrap(): BootstrapPayload | null {
   const el = document.getElementById('attr-bootstrap')
   if (!el || !el.textContent) return null
   try {
-    return JSON.parse(el.textContent) as BootstrapPayload
+    return parseAttributionJson<BootstrapPayload>(el.textContent)
   } catch {
     return null
   }

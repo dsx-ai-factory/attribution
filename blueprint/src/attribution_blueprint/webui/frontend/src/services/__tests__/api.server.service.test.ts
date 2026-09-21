@@ -1,6 +1,10 @@
+// SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// SPDX-License-Identifier: LicenseRef-NvidiaProprietary
+
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { RunDetail, RunSummary } from '@/interfaces/attribution'
 import { ApiServerService } from '@/services/api.server.service'
+import { parseAttributionJson } from '@/services/api.service'
 import { HttpError } from '@/services/http-client.service'
 
 const { httpGetMock } = vi.hoisted(() => ({ httpGetMock: vi.fn() }))
@@ -116,7 +120,9 @@ describe('ApiServerService', () => {
 
     await expect(api.getRun('a/b')).resolves.toEqual(detail)
     await expect(api.getMeta()).resolves.toEqual({ windowedRuns: 1 })
-    expect(httpGetMock).toHaveBeenNthCalledWith(1, '/runs/a%2Fb')
+    expect(httpGetMock).toHaveBeenNthCalledWith(1, '/runs/a%2Fb', undefined, {
+      decode: parseAttributionJson,
+    })
     expect(httpGetMock).toHaveBeenNthCalledWith(2, '/meta')
   })
 

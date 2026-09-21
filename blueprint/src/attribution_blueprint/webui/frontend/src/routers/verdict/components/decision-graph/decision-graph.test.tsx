@@ -15,6 +15,9 @@ import { DecisionGraphView } from './index'
 import { EDGE_LABEL_HEIGHT, layoutGraph, NODE_HEIGHT, NODE_WIDTH } from './layout'
 import * as graphLayout from './layout'
 
+const referenceMocks = vi.hoisted(() => ({ docs: vi.fn() }))
+vi.mock('@/hooks/use-symptom-documentation', () => ({ useSymptomDocumentation: referenceMocks.docs }))
+
 const evidence: DecisionNode = {
   node_id: '__proto__', node_type: 'EXTRACTION', action: 'CREATED',
   symptom: 'Same symptom', rule_name: 'extract-rule', hostname: 'node-a',
@@ -64,6 +67,7 @@ function renderAction(run: RunSummary = runDetail, detail?: RunDetail) {
 }
 
 beforeEach(() => {
+  referenceMocks.docs.mockReturnValue({ data: undefined })
   // Geometry and pan/zoom are checked in the real browser; jsdom has no layout.
   vi.stubGlobal('ResizeObserver', class { observe() {} unobserve() {} disconnect() {} })
   Element.prototype.scrollIntoView = vi.fn()
@@ -71,6 +75,74 @@ beforeEach(() => {
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); vi.restoreAllMocks() })
 
 describe('decision graph', () => {
+  it.each([
+    { ruleName: null, symptom: '', label: 'Extraction' },
+    { ruleName: '', symptom: '', label: 'Extraction' },
+    { ruleName: '', symptom: 'Recorded symptom', label: 'Recorded symptom' },
+  ])('keeps connected steps identifiable when rule=$ruleName and symptom=$symptom', ({ ruleName, symptom, label }) => {
+    render(<DecisionGraphView graph={{
+      nodes: [{ ...evidence, rule_name: ruleName, symptom }, graph.nodes[3]],
+      edges: [{ parent_id: evidence.node_id, child_id: graph.nodes[3].node_id, edge_type: 'MATCHES' }],
+    }} />)
+    const details = screen.getByRole('complementary', { name: 'Selected decision step' })
+    const connected = within(details).getByRole('button', { name: `From MATCHES: ${label}, Extraction, node-a` })
+    expect(within(connected).getByText(label)).toBeTruthy()
+    fireEvent.click(connected)
+    expect(screen.getByRole('combobox', { name: 'Inspect decision step' }).textContent).toBe(`Extraction · ${label}`)
+  })
+
+  it('follows the selected step exact symptom key in the inspector without a summary link', async () => {
+    const reference = { id: 'canonical-id', title: 'Extraction documentation', doc_url: 'https://docs.example/canonical-id/' }
+    const finalReference = { id: 'final-id', title: 'Outcome documentation', doc_url: 'https://docs.example/final-id/' }
+    referenceMocks.docs.mockReturnValue({ data: { symptoms: {
+      'canonical-id': reference, 'Same symptom': reference, 'Final symptom': finalReference,
+    } } })
+    const detail: RunDetail = {
+      ...runDetail,
+      attribution: {
+        ...runDetail.attribution,
+        rootSymptom: { state: 'available', data: {
+          symptom: evidence.symptom, catalog_id: 'canonical-id',
+          source: { observation_id: '0', source: 'syslog', pos: 0, line: null, rule: null, time: null },
+        } },
+        decisionGraph: { state: 'available', data: {
+          ...graph,
+          nodes: graph.nodes.map((node) => node.node_id === 'unknown'
+            ? { ...node, symptom: 'Unmapped symptom', rule_name: 'canonical-id' } : node),
+        } },
+      },
+    }
+    renderAction(detail, detail)
+    fireEvent.click(screen.getByRole('button', { name: 'View Attribution Logic' }))
+    const doc = await screen.findByRole('link', { name: /Symptom documentation/ })
+    expect(doc.getAttribute('href')).toBe(finalReference.doc_url)
+    expect(doc.getAttribute('target')).toBe('_blank')
+    const details = await screen.findByRole('complementary', { name: 'Selected decision step' })
+    expect(within(details).getByRole('link', { name: /Symptom documentation/ })).toBe(doc)
+    expect(doc.parentElement).toBe(within(details).getByRole('heading', { name: 'Final symptom' }).parentElement)
+    expect(screen.getAllByRole('link', { name: /Symptom documentation/ })).toHaveLength(1)
+    fireEvent.click(within(details).getByRole('button', { name: 'From MATCHES: extract-rule, Extraction, node-a' }))
+    expect(within(details).getByRole('link', { name: /Symptom documentation/ }).getAttribute('href')).toBe(reference.doc_url)
+    expect(within(details).getByText('node-a')).toBeTruthy()
+    expect(screen.getAllByRole('link', { name: /Symptom documentation/ })).toHaveLength(1)
+
+    fireEvent.keyDown(screen.getByLabelText('Inspect decision step'), { key: 'ArrowDown' })
+    fireEvent.click(screen.getByRole('option', { name: /Unknown stage/ }))
+    expect(within(details).getByRole('heading', { name: 'Unmapped symptom' })).toBeTruthy()
+    expect(screen.queryByRole('link', { name: /Symptom documentation/ })).toBeNull()
+  })
+
+  it('links a selected symptom exact API key when the root has no catalog ID', async () => {
+    referenceMocks.docs.mockReturnValue({ data: { symptoms: {
+      'Final symptom': { id: 'canonical-id', title: 'Final symptom', doc_url: 'https://docs.example/canonical-id/' },
+    } } })
+    renderAction(runDetail, runDetail)
+    fireEvent.click(screen.getByRole('button', { name: 'View Attribution Logic' }))
+    const details = await screen.findByRole('complementary', { name: 'Selected decision step' })
+    expect(within(details).getByRole('link', { name: /Symptom documentation/ }).getAttribute('href')).toBe('https://docs.example/canonical-id/')
+    expect(screen.getAllByRole('link', { name: /Symptom documentation/ })).toHaveLength(1)
+  })
+
   it.each([0, -0.000022, 0.000022, 5])('keeps rounded edge tangents on their segments with a %s handle offset', (offset) => {
     const source = { x: -0.00014, y: offset }
     const target = { x: 100.00008, y: 80 + offset }

@@ -1,8 +1,12 @@
-import { type ReactNode } from 'react'
+// SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// SPDX-License-Identifier: LicenseRef-NvidiaProprietary
+
+import { useId, type ReactNode } from 'react'
 import dayjs from 'dayjs'
 import utc from 'dayjs/plugin/utc'
 import timezone from 'dayjs/plugin/timezone'
 import { HoverCard, HoverCardContent, HoverCardTrigger } from '@/components/ui/hover-card'
+import { cn } from '@/lib/utils'
 
 dayjs.extend(utc)
 dayjs.extend(timezone)
@@ -10,8 +14,8 @@ dayjs.extend(timezone)
 const DEFAULT_FORMAT = 'YYYY-MM-DD HH:mm:ss'
 
 /**
- * Hover-driven local↔UTC time popover. Renders UTC inline with a small
- * muted "UTC" suffix; hover panel shows UTC + local with IANA zone.
+ * Hover- and focus-driven local↔UTC time popover. Renders UTC inline with a
+ * small muted "UTC" suffix; the panel shows UTC + local with IANA zone.
  * Pass omitSuffix when the surrounding text already carries (UTC) once.
  */
 export function TimeHover({
@@ -19,15 +23,18 @@ export function TimeHover({
   format = DEFAULT_FORMAT,
   children,
   omitSuffix = false,
+  className,
 }: {
   date: string | number | Date
   format?: string
   children?: ReactNode
   omitSuffix?: boolean
+  className?: string
 }) {
+  const descriptionId = useId()
   const instant = dayjs(date)
   if (!instant.isValid()) {
-    return <span className="text-foreground-muted">Unavailable</span>
+    return <span className={cn('text-foreground-muted', className)}>Unavailable</span>
   }
 
   const utcText = instant.utc().format(format)
@@ -37,7 +44,7 @@ export function TimeHover({
   return (
     <HoverCard openDelay={150} closeDelay={75}>
       <HoverCardTrigger asChild>
-        <span className="underline decoration-dotted decoration-foreground-muted underline-offset-2 hover:decoration-primary">
+        <span tabIndex={0} aria-describedby={descriptionId} className={cn('underline decoration-dotted decoration-foreground-muted underline-offset-2 hover:decoration-primary focus-visible:outline-1 focus-visible:outline-offset-2 focus-visible:outline-foreground-muted', className)}>
           {children ?? (
             <>
               {utcText}
@@ -50,6 +57,7 @@ export function TimeHover({
           )}
         </span>
       </HoverCardTrigger>
+      <span id={descriptionId} className="sr-only">Local time: {localText} ({localTz})</span>
       <HoverCardContent
         align="start"
         sideOffset={6}
