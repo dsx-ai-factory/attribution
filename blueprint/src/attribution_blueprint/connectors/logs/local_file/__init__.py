@@ -15,6 +15,7 @@ from pathlib import Path
 
 from loguru import logger
 
+from attribution_blueprint.connectors.logs import entries_from_text, log_observation
 from attribution_blueprint.exceptions import MCAError
 from attribution_blueprint.types import (
     ExecutionContext,
@@ -137,18 +138,11 @@ class LocalFileLogConnector:
                 if not body:
                     continue
                 observations.append(
-                    {
-                        "context": {
-                            "time_interval": {
-                                "start": context["start_time"],
-                                "end": context["end_time"],
-                            },
-                            "source": self._source,
-                            "format": Format.RAW_LOG,
-                            "resources": "AllJobResources",
-                        },
-                        "body": body,
-                    }
+                    log_observation(
+                        source=self._source,
+                        entries=entries_from_text(body),
+                        context=context,
+                    )
                 )
         return observations
 
@@ -223,18 +217,13 @@ class LocalFileLogConnector:
                     if body == "":
                         continue
                     observations.append(
-                        {
-                            "context": {
-                                "time_interval": {
-                                    "start": context["start_time"],
-                                    "end": context["end_time"],
-                                },
-                                "source": self._source,
-                                "format": Format.RAW_LOG,
-                                "resources": node,
-                            },
-                            "body": body,
-                        }
+                        log_observation(
+                            source=self._source,
+                            format=Format.RAW_LOG,
+                            body=body,
+                            context=context,
+                            resources=node,
+                        )
                     )
         if found_node_dir is False:
             logger.warning(f"local_file SYSLOG: no syslog directories found for ctx {context.get('id')}")

@@ -10,7 +10,7 @@
 
 from datetime import datetime
 from enum import Enum
-from typing import NotRequired, TypedDict
+from typing import Literal, NotRequired, TypedDict
 
 
 class ExecutionContext(TypedDict):
@@ -90,11 +90,13 @@ class Format(str, Enum):
     UFMLOG = "ufmlog"
     PROMETHEUS_METRICS = "prometheus_metrics"
     CSP_EVENT_LIST = "csp_event_list"
+    ENTRY_TIMESERIES = "entry_timeseries"
 
 
 class TimeInterval(TypedDict):
-    start: datetime
-    end: datetime
+    # A None bound is unbounded on that side; the service accepts it only for ENTRY_TIMESERIES.
+    start: datetime | None
+    end: datetime | None
 
 
 class ObservationContext(TypedDict):
@@ -104,10 +106,33 @@ class ObservationContext(TypedDict):
     resources: str
 
 
+class NodeResource(TypedDict):
+    kind: Literal["node"]
+    hostname: str
+
+
+class ReplicaResource(TypedDict):
+    kind: Literal["replica"]
+    name: str
+
+
+ResourceSet = Literal["AllJobResources"] | list[NodeResource | ReplicaResource]
+
+
+class TimeseriesEntry(TypedDict):
+    """One element of an ENTRY_TIMESERIES body. The service rejects any other key."""
+
+    body: str
+    # Nanoseconds since the epoch. Omit when the producer has no timestamp for the line.
+    ts: NotRequired[int]
+    # Omit when the producer has no resource identity for the line.
+    resources: NotRequired[ResourceSet]
+
+
 class Observation(TypedDict):
     context: ObservationContext
     # `body` is the connector's already-serialized payload (JSON for
-    # LOKI_DICT_LIST/RAW_LOKI_STREAMS/PROMETHEUS_METRICS; raw text for
+    # ENTRY_TIMESERIES/LOKI_DICT_LIST/PROMETHEUS_METRICS; raw text for
     # RAW_LOG). The service-side parser branches on `format` to deserialize.
     body: str
 
@@ -127,9 +152,12 @@ def assert_aware(dt: datetime, field: str) -> datetime:
 __all__ = [
     "ExecutionContext",
     "Format",
+    "NodeResource",
     "Observation",
     "ObservationContext",
+    "ReplicaResource",
     "Source",
     "TimeInterval",
+    "TimeseriesEntry",
     "assert_aware",
 ]

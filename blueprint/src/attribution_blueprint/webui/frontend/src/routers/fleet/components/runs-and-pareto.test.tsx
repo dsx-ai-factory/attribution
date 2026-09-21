@@ -2,7 +2,7 @@
 import type { ReactNode } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen } from '@testing-library/react'
-import type { Run } from '@/interfaces/attribution'
+import type { RunSummary } from '@/interfaces/attribution'
 import type { FleetFilter } from '@/interfaces/filter'
 import { ParetoCard } from '@/routers/fleet/components/pareto'
 import { RunsSection } from '@/routers/fleet/components/runs-section'
@@ -54,7 +54,7 @@ const filter: FleetFilter = {
   metric: 'count',
 }
 
-const run = (overrides: Partial<Run> = {}): Run => ({
+const run = (overrides: Partial<RunSummary> = {}): RunSummary => ({
   id: 'run-1',
   jobId: 'team/job',
   workload: 'team/job',
@@ -72,12 +72,12 @@ const run = (overrides: Partial<Run> = {}): Run => ({
   outcome: 'hardware',
   verdictLabel: 'Hardware',
   detail: '',
+  decisionGraphState: 'absent',
   rootSymptom: { symptom: 'Xid79', rule: 'xid', time: '', line: '' },
   symptoms: [],
   responsibleNodes: ['node-a', 'node-b', 'node-c', 'node-d'],
   pipeline: '1',
   service: '2',
-  log: [],
   ...overrides,
 })
 

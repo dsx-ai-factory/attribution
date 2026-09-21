@@ -28,9 +28,10 @@ The following is an example skeleton that would live in `connectors/logs/example
 
 ```python
 from attribution_blueprint import mca_registry as _registry
+from attribution_blueprint.connectors.logs import entries_from_text, log_observation
 from attribution_blueprint.exceptions import MCAError
 from attribution_blueprint.mca_registry import _PARAM
-from attribution_blueprint.types import ExecutionContext, Format, Observation, Source
+from attribution_blueprint.types import ExecutionContext, Observation, Source
 
 
 class ExampleLogConnector:
@@ -43,21 +44,8 @@ class ExampleLogConnector:
         return self._source
 
     def collect(self, context: ExecutionContext) -> list[Observation]:
-        # times must be timezone-aware
-        start = context["start_time"]
-        end = context["end_time"]
         body = self._fetch(context)  # the backend query
-        return [
-            {
-                "context": {
-                    "time_interval": {"start": start, "end": end},
-                    "source": self._source,
-                    "format": Format.RAW_LOG,
-                    "resources": "AllJobResources",
-                },
-                "body": body,
-            }
-        ]
+        return [log_observation(source=self._source, entries=entries_from_text(body), context=context)]
 
     def _fetch(self, context: ExecutionContext) -> str:
         raise NotImplementedError()
@@ -105,11 +93,21 @@ schema for both, and for using
 [`connectors/auth`](../src/attribution_blueprint/connectors/auth/) if needed by
 the new connector.
 
-### Picking A Format
+### Building The Observation
 
-Pick whichever `Format` best fits the data. The pairs in use today, and the
-shape each one expects, are in the
+`collect` must emit a list of observations. The `log_observation` helper emits `Format.ENTRY_TIMESERIES`: one entry per log line. Pass
+`entries=` built by `entries_from_text`, or by hand when the backend already gives
+structured entries with their own `ts` and `resources`. Whether an entry may omit
+those is a per-source contract of the service: for `applog` it falls back to
+parsing timestamp and node out of the body, so bare `{"body": ...}` entries are
+enough. The shape is in the
 [observation API reference](./rest-api.md#2-submit-an-observation).
+
+`time_interval` defaults per source through `log_observation`
+(`DEFAULT_TIME_INTERVAL` in
+[`connectors/logs`](../src/attribution_blueprint/connectors/logs/__init__.py)).
+Pass `time_interval=` to `log_observation` when a connector needs a more specific
+ bound.
 
 `resources` is `"AllJobResources"` in nearly every case. The exception is a
 `syslog` connector emitting `Format.RAW_LOG`: a single node name there lets the

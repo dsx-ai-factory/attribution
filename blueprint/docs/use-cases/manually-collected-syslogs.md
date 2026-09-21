@@ -82,9 +82,38 @@ The connector reads each file as bytes and decodes it as UTF-8. Invalid UTF-8
 bytes are replaced instead of failing the run. It first creates one `raw_log`
 observation per non-empty file. Before upload, Attribution Blueprint splits the
 body into non-empty lines and converts it to the service-compatible syslog
-format. If the first token in a line is an ISO 8601 timestamp, that timestamp is
-used. Otherwise, the context `start_time` is used. The node identity comes from
-the directory name.
+format. The node identity comes from the directory name.
+
+### Line Timestamps
+
+Each line is timestamped from the line itself. **If a timestamp cannot be parsed
+from the line, it is dropped.** The recognized forms are:
+
+| Form | Example line start | Producer |
+|------|--------------------|----------|
+| [ISO 8601](https://www.iso.org/iso-8601-date-and-time-format.html) / [RFC 3339](https://www.rfc-editor.org/rfc/rfc3339) | `2026-09-13T04:12:01+00:00 host ...` | `journalctl -o short-iso`, `dmesg --time-format=iso` |
+| [RFC 5424](https://www.rfc-editor.org/rfc/rfc5424) | `<34>1 2026-09-13T04:12:01Z host ...` | rsyslog `RSYSLOG_SyslogProtocol23Format` |
+| [RFC 3164](https://www.rfc-editor.org/rfc/rfc3164) (yearless) | `Sep 13 04:12:01 host ...` | `journalctl` default, rsyslog traditional `/var/log/syslog` |
+| `dmesg -T` | `[Sun Sep 13 04:12:01 2026] ...` | `dmesg -T`, `dmesg --ctime` |
+
+How those timestamps are interpreted:
+
+- **Year.** RFC 3164 lines carry no year. The year is taken from the context
+  end time, then stepped back one year when that would place the line after the
+  end, so a December line in a January window stays in the past.
+- **Timezone.** RFC 3164 and `dmesg -T` lines carry no UTC offset. They are
+  read in the context `timezone` when it is set (see
+  [Configure One Static Execution Context](#configure-one-static-execution-context))
+  and otherwise in the zone of the context window. Set `timezone` to the zone
+  of the host that wrote the logs; a wrong zone shifts every line by the offset
+  difference.
+- **Undatable lines.** Lines in any other form, including relative `dmesg`
+  offsets (`[12345.678] ...`), cannot be dated and are dropped before upload.
+  One warning per file reports how many lines were dropped.
+
+Prefer `journalctl -o short-iso` and `dmesg --time-format=iso` when collecting.
+Both emit a full date and a UTC offset, so none of the inference above is
+needed.
 
 By default, the connector reads at most the trailing 2 GiB of each file. Set
 `max_bytes` to a smaller value when manually collected files are large. Crash
@@ -273,7 +302,9 @@ Supported placeholders are `{std_out}`, `{std_err}`, `{job_id}`, `{name}`,
 - The static adapter trusts the supplied context. It does not query a scheduler
   or discover workloads by time range.
 - The local-file connector does not filter lines to the execution-context time
-  range. Prepare files that contain evidence relevant to the attempt.
+  range, but lines it cannot date are dropped before upload and the Service
+  filters the rest against the range. Prepare files that contain evidence
+  relevant to the attempt.
 - Missing or unreadable files are skipped. Permission failures are logged.
 - Missing node logs reduce evidence coverage but do not automatically stop the
   run when other evidence is available.

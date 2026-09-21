@@ -1,4 +1,4 @@
-import type { OutcomeKey, PersonaDiagnose, Run } from '@/interfaces/attribution'
+import type { OutcomeKey, PersonaDiagnose, RunSummary } from '@/interfaces/attribution'
 
 const OUTCOME_HEADER: Record<OutcomeKey, string> = {
   hardware: 'HARDWARE',
@@ -42,7 +42,7 @@ function appendGuidance(
   }
 }
 
-export function buildVerdictMarkdown(run: Run, base?: string): string {
+export function buildVerdictMarkdown(run: RunSummary, base?: string): string {
   const verdictUrl = absoluteUrl(`/verdict/${encodeURIComponent(run.id)}`, base)
   const nodeUrls = run.responsibleNodes
     .map((n) => `- Node detail: ${absoluteUrl(`/node/${encodeURIComponent(n)}`, base)}`)
@@ -93,7 +93,7 @@ export function buildVerdictMarkdown(run: Run, base?: string): string {
 
 export function buildNodeMarkdown(
   nodeId: string,
-  attempts: Run[],
+  attempts: RunSummary[],
   base?: string,
 ): string {
   const impactedRuns = attempts.filter((r) => r.responsibleNodes.includes(nodeId))

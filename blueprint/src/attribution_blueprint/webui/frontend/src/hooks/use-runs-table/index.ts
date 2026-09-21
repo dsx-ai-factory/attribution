@@ -1,12 +1,12 @@
 import useSWR from 'swr'
-import type { OutcomeKey, Run } from '@/interfaces/attribution'
+import type { OutcomeKey, RunSummary } from '@/interfaces/attribution'
 import type { FleetFilter } from '@/interfaces/filter'
 import type { RunsPagePayload } from '@/interfaces/meta'
 import { httpGet } from '@/services/http-client.service'
 
 export interface RunsTableGroup {
   outcome: OutcomeKey
-  runs: Run[]
+  runs: RunSummary[]
   total: number
   page: number
   pageSize: number
@@ -27,7 +27,7 @@ export function useRunsTable({
 }): {
   groups: RunsTableGroup[]
   total: number
-  visibleRuns: Run[]
+  visibleRuns: RunSummary[]
   isLoading: boolean
   error: Error | null
 } {

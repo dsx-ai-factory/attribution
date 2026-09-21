@@ -8,12 +8,18 @@
 # without an express license agreement from NVIDIA CORPORATION or
 # its affiliates is strictly prohibited.
 
+import json
 from datetime import datetime, timezone
 
 import pytest
 
 from attribution_blueprint.connectors.logs.local_file import LocalFileLogConnector, parse_size
 from attribution_blueprint.types import Format, Source
+
+
+def _text(observation: dict) -> str:
+    """Rejoin an APPLOG observation's per-line entries into the file text."""
+    return "\n".join(entry["body"] for entry in json.loads(observation["body"]))
 
 
 def _ctx(tmp_path, std_out_template: str, **extra) -> dict:
@@ -44,10 +50,10 @@ def test_reads_existing_file_and_emits_one_observation(tmp_path):
     assert len(obs) == 1
     o = obs[0]
     assert o["context"]["source"] == Source.APPLOG
-    assert o["context"]["format"] == Format.RAW_LOG
+    assert o["context"]["format"] == Format.ENTRY_TIMESERIES
+    assert o["context"]["time_interval"] == {"start": None, "end": None}
     assert o["context"]["resources"] == "AllJobResources"
-    assert "line one" in o["body"]
-    assert "line three" in o["body"]
+    assert json.loads(o["body"]) == [{"body": "line one"}, {"body": "line two"}, {"body": "line three"}, {"body": ""}]
 
 
 def test_substitutes_job_id_placeholder(tmp_path):
@@ -65,7 +71,7 @@ def test_substitutes_job_id_placeholder(tmp_path):
     obs = conn.collect(_ctx(tmp_path, std_out_template=""))
 
     assert len(obs) == 1
-    assert "body" in obs[0]["body"]
+    assert _text(obs[0]) == "body"
 
 
 def test_max_bytes_reads_tail(tmp_path):
@@ -77,7 +83,7 @@ def test_max_bytes_reads_tail(tmp_path):
     conn = LocalFileLogConnector(log_path_templates=["{std_out}"], max_bytes_per_file=100)
 
     obs = conn.collect(_ctx(tmp_path, str(log)))
-    body = obs[0]["body"]
+    body = _text(obs[0])
     assert len(body) == 100
     assert body.endswith(tail)
     assert head not in body
@@ -89,7 +95,7 @@ def test_max_bytes_smaller_than_file_reads_all(tmp_path):
     conn = LocalFileLogConnector(log_path_templates=["{std_out}"], max_bytes_per_file=1024)
 
     obs = conn.collect(_ctx(tmp_path, str(log)))
-    assert obs[0]["body"] == "short content"
+    assert _text(obs[0]) == "short content"
 
 
 def test_empty_template_returns_empty(tmp_path):
@@ -104,7 +110,7 @@ def test_decode_errors_replaced(tmp_path):
     conn = LocalFileLogConnector(log_path_templates=["{std_out}"])
     obs = conn.collect(_ctx(tmp_path, str(log)))
     assert len(obs) == 1
-    assert "valid" in obs[0]["body"]
+    assert "valid" in _text(obs[0])
 
 
 def test_source_is_applog_by_default():
@@ -144,8 +150,8 @@ def test_max_bytes_string_form_reads_tail(tmp_path):
     log.write_text("x" * 900 + "FINAL")
     conn = LocalFileLogConnector(log_path_templates=["{std_out}"], max_bytes_per_file="100B")
     obs = conn.collect(_ctx(tmp_path, str(log)))
-    assert len(obs[0]["body"]) == 100
-    assert obs[0]["body"].endswith("FINAL")
+    assert len(_text(obs[0])) == 100
+    assert _text(obs[0]).endswith("FINAL")
 
 
 def test_default_cap_full_read_when_below_cap(tmp_path):
@@ -156,7 +162,7 @@ def test_default_cap_full_read_when_below_cap(tmp_path):
 
     obs = conn.collect(_ctx(tmp_path, str(log)))
     assert len(obs) == 1
-    assert len(obs[0]["body"]) == 2 * 1024 * 1024
+    assert len(_text(obs[0])) == 2 * 1024 * 1024
 
 
 def test_default_cap_is_2gb():
@@ -175,7 +181,7 @@ def test_explicit_none_disables_cap(tmp_path):
     conn = LocalFileLogConnector(log_path_templates=["{std_out}"], max_bytes_per_file=None)
     assert conn._max_bytes is None
     obs = conn.collect(_ctx(tmp_path, str(log)))
-    assert len(obs[0]["body"]) == 1000
+    assert len(_text(obs[0])) == 1000
 
 
 def test_directory_template_expands_to_all_files(tmp_path):
@@ -189,7 +195,7 @@ def test_directory_template_expands_to_all_files(tmp_path):
 
     obs = conn.collect(_ctx(tmp_path, std_out_template=""))
     assert len(obs) == 3
-    bodies = sorted(o["body"] for o in obs)
+    bodies = sorted(_text(o) for o in obs)
     assert bodies == ["rank0 error", "rank1 error", "rank2 error"]
 
 
@@ -258,7 +264,7 @@ def test_multiple_paths_emit_multiple_observations(tmp_path):
     conn = LocalFileLogConnector(log_path_templates=[str(log_a), str(log_b)])
 
     obs = conn.collect(_ctx(tmp_path, std_out_template=""))
-    assert sorted(o["body"] for o in obs) == ["alpha", "beta"]
+    assert sorted(_text(o) for o in obs) == ["alpha", "beta"]
 
 
 def test_duplicate_paths_are_deduped(tmp_path):
@@ -307,7 +313,7 @@ def test_std_err_template_reads_stderr_file(tmp_path):
     ctx = _ctx(tmp_path, std_out_template="", std_err=str(err_log))
     obs = conn.collect(ctx)
     assert len(obs) == 1
-    assert obs[0]["body"] == "stderr body"
+    assert _text(obs[0]) == "stderr body"
 
 
 def test_std_out_and_std_err_emit_two_observations_when_distinct(tmp_path):
@@ -319,7 +325,7 @@ def test_std_out_and_std_err_emit_two_observations_when_distinct(tmp_path):
     conn = LocalFileLogConnector(log_path_templates=["{std_out}", "{std_err}"])
     ctx = _ctx(tmp_path, std_out_template=str(out_log), std_err=str(err_log))
     obs = conn.collect(ctx)
-    bodies = sorted(o["body"] for o in obs)
+    bodies = sorted(_text(o) for o in obs)
     assert bodies == ["stderr body", "stdout body"]
 
 
@@ -334,7 +340,7 @@ def test_std_err_empty_skipped_std_out_still_read(tmp_path):
     ctx = _ctx(tmp_path, std_out_template=str(out_log))  # no std_err key
     obs = conn.collect(ctx)
     assert len(obs) == 1
-    assert obs[0]["body"] == "stdout body"
+    assert _text(obs[0]) == "stdout body"
 
 
 def test_std_err_same_as_std_out_deduped(tmp_path):
@@ -361,7 +367,7 @@ def test_job_id_substitution_uses_cross_cutting_job_id(tmp_path):
     )
     obs = conn.collect(ctx)
     assert len(obs) == 1
-    assert obs[0]["body"] == "step content"
+    assert _text(obs[0]) == "step content"
 
 
 def test_scheduler_specific_placeholders_are_not_part_of_local_file_contract(tmp_path):
@@ -401,4 +407,4 @@ def test_name_and_user_name_placeholders_substitute(tmp_path):
     }
     obs = conn.collect(ctx)
     assert len(obs) == 1
-    assert obs[0]["body"] == "from alice\n"
+    assert _text(obs[0]) == "from alice\n"

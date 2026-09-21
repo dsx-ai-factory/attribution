@@ -177,7 +177,9 @@ class AttributionOrchestrator:
 
         for obs in observations:
             try:
-                service_obs = ServiceObservation.model_validate(adapt_log_observation_for_service(obs))
+                service_obs = ServiceObservation.model_validate(
+                    adapt_log_observation_for_service(obs, ctx.get("timezone"))
+                )
                 self.attribution.ingest_observation(attributor_id, service_obs)
             except Exception as e:
                 obs_source = obs.get("context", {}).get("source", "?")
@@ -232,8 +234,8 @@ class AttributionOrchestrator:
             source = obs["context"]["source"]
             source_value = source.value if hasattr(source, "value") else source
             path = self.dump_observations_dir / f"{ctx['id']}.{source_value}.json"
-            # Most connector bodies are JSON-encoded (Loki LOKI_DICT_LIST,
-            # RAW_LOKI_STREAMS; PromQL PROMETHEUS_METRICS). local_file emits
+            # Most connector bodies are JSON-encoded (ENTRY_TIMESERIES,
+            # LOKI_DICT_LIST, PROMETHEUS_METRICS). local_file syslog emits
             # `Format.RAW_LOG` whose body is the raw file text — not JSON.
             # Try to decode; if it isn't JSON, preserve the raw string under a
             # `body_raw` key so the dump round-trips for any (Source, Format)
@@ -253,8 +255,8 @@ class AttributionOrchestrator:
                         else obs["context"]["format"]
                     ),
                     "time_interval": {
-                        "start": obs["context"]["time_interval"]["start"].isoformat(),
-                        "end": obs["context"]["time_interval"]["end"].isoformat(),
+                        "start": _isoformat_or_none(obs["context"]["time_interval"]["start"]),
+                        "end": _isoformat_or_none(obs["context"]["time_interval"]["end"]),
                     },
                     "resources": obs["context"]["resources"],
                 },
@@ -329,6 +331,10 @@ class AttributionOrchestrator:
                 # the legacy straggler-parameter keys would 422 every request.
             }
         )
+
+
+def _isoformat_or_none(value: datetime | None) -> str | None:
+    return value.isoformat() if value is not None else None
 
 
 def _context_with_workload_gpu_defaults(ctx: dict, gpus_per_node: int | None) -> dict:

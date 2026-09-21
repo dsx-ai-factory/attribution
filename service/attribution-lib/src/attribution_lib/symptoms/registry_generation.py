@@ -29,7 +29,9 @@ from attribution_lib.symptoms.declarations import (
     SymptomDeclaration,
 )
 from attribution_lib.symptoms.doc_validation import symptom_requires_doc
+from attribution_lib.symptoms.family import SymptomFamily
 from attribution_lib.symptoms.predicate_registry import SymptomPredicate
+from attribution_lib.symptoms.selector import SymptomSelector
 
 OUTCOME_PRIORITIES: tuple[OutcomePriority, ...] = tuple(sorted(OutcomePriority, key=lambda priority: priority.value))
 
@@ -84,6 +86,8 @@ class GeneratedSymptomRegistry:
     # Conditional-discard predicates resolved by name, registered onto the engine via
     # @symptom_predicate. symptom_set_operator resolves conditional_discards through this.
     predicates: Mapping[str, SymptomPredicate] = field(default_factory=dict)
+    # Appended to preserve positional compatibility for existing constructors.
+    families: Mapping[str, SymptomFamily] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         registered_symptoms = frozenset(self.registered_symptoms)
@@ -110,6 +114,7 @@ class GeneratedSymptomRegistry:
         object.__setattr__(self, "metadata", metadata)
         object.__setattr__(self, "scoped_cascade_discards", scoped_cascade_discards)
         object.__setattr__(self, "symptoms_by_category", symptoms_by_category)
+        object.__setattr__(self, "families", MappingProxyType(dict(self.families)))
         object.__setattr__(self, "fallback_prefixes", fallback_prefixes)
         object.__setattr__(self, "dag_discard_behaviors", MappingProxyType(dict(self.dag_discard_behaviors)))
         object.__setattr__(self, "substring_aliases", MappingProxyType(dict(self.substring_aliases)))
@@ -191,6 +196,44 @@ class GeneratedSymptomRegistry:
         except UnknownSymptomError:
             return None
         return self.metadata.get(resolved)
+
+    def family_for(self, symptom: str) -> Optional[SymptomFamily]:
+        """Return declared family metadata for a symptom.
+
+        Args:
+            symptom: Exact or dynamically resolved symptom ID.
+
+        Returns:
+            The declared family schema or member, or None when absent.
+        """
+        try:
+            resolved = self.resolve_symptom(symptom)
+        except UnknownSymptomError:
+            return None
+        return self.families.get(resolved)
+
+    def selector_for(self, symptom: str) -> SymptomSelector:
+        """Build the semantic selector declared for a symptom.
+
+        Family schemas select all members. Family members select their declared
+        properties. Declarations without family metadata retain exact-ID
+        selection.
+
+        Args:
+            symptom: Exact or dynamically resolved symptom ID.
+
+        Returns:
+            Selector representing the resolved declaration.
+
+        Raises:
+            UnknownSymptomError: If no declared symptom matches.
+        """
+        normalized = symptom.strip()
+        resolved = self.resolve_symptom(normalized)
+        family = self.families.get(resolved)
+        if family is None:
+            return SymptomSelector(symptom_id=normalized)
+        return SymptomSelector(family_name=family.name, family_properties=family.properties)
 
     def dag_discard_for(self, symptom: str) -> DagDiscardBehavior:
         """Return the projection behavior when the DAG discards this symptom.
@@ -465,12 +508,70 @@ def registry_from_declarations(
         metadata=metadata_from_declarations(declaration_list),
         scoped_cascade_discards=scoped_cascade_discards_from_declarations(declaration_list),
         symptoms_by_category=symptom_categories_from_declarations(declaration_list),
+        families=symptom_families_from_declarations(declaration_list),
         fallback_prefixes=fallback_prefixes_from_declarations(declaration_list),
         dag_discard_behaviors=dag_discard_behaviors_from_declarations(declaration_list),
         substring_aliases=substring_aliases_from_declarations(declaration_list),
         symptom_docs=symptom_docs_from_declarations(declaration_list),
         predicates=predicates if predicates is not None else {},
     )
+
+
+def symptom_families_from_declarations(
+    declarations: Iterable[SymptomDeclaration],
+) -> dict[str, SymptomFamily]:
+    """Generate family metadata indexed by declared symptom prefix.
+
+    Args:
+        declarations: Symptom declarations.
+
+    Returns:
+        Family metadata for each prefix that declares it.
+
+    Raises:
+        SymptomValidationError: If family schemas or members are invalid.
+    """
+    families: dict[str, SymptomFamily] = {}
+    schemas: dict[str, SymptomFamily] = {}
+    members: list[tuple[str, SymptomFamily]] = []
+    for declaration in declarations:
+        family = declaration.family
+        if family is None:
+            continue
+        if not isinstance(family, SymptomFamily):
+            raise SymptomValidationError(
+                f"Invalid family for {declaration.prefix!r}: expected SymptomFamily, got {type(family).__name__}"
+            )
+        existing = families.get(declaration.prefix)
+        if existing is not None and existing != family:
+            raise SymptomValidationError(
+                f"Conflicting families for {declaration.prefix!r}: {existing!r} and {family!r}"
+            )
+        families[declaration.prefix] = family
+        if len(family.property_types) > 0:
+            existing_schema = schemas.get(family.name)
+            if existing_schema is not None and existing_schema != family:
+                raise SymptomValidationError(f"Conflicting schemas for family {family.name!r}")
+            schemas[family.name] = family
+        elif len(family.properties) > 0:
+            members.append((declaration.prefix, family))
+
+    for prefix, family in members:
+        schema = schemas.get(family.name)
+        if schema is None:
+            raise SymptomValidationError(
+                f"Family member {prefix!r} declares properties without a schema for {family.name!r}"
+            )
+        for name, value in family.properties.items():
+            property_type = schema.property_types.get(name)
+            if property_type is None:
+                raise SymptomValidationError(f"Unknown property {name!r} for family {family.name!r} on {prefix!r}")
+            if not isinstance(value, property_type):
+                raise SymptomValidationError(
+                    f"Invalid value for family {family.name!r} property {name!r} on {prefix!r}: "
+                    f"expected {property_type!r}, got {type(value).__name__}"
+                )
+    return families
 
 
 def known_prefixes_from_declarations(declarations: Iterable[SymptomDeclaration]) -> set[str]:

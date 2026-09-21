@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { useParams } from 'react-router-dom'
 import useSWR from 'swr'
 import { ChevronRight } from 'lucide-react'
-import type { Run } from '@/interfaces/attribution'
+import type { RunDetail } from '@/interfaces/attribution'
 import { useApi } from '@/services/api-context'
 import { buildVerdictMarkdown } from '@/lib/evidence'
 import {
@@ -46,11 +46,12 @@ import { TimeHover } from '@/components/time-hover'
 import { attemptGpuHours } from '@/lib/metric'
 import { useNav } from '@/hooks/use-nav'
 import { LogHero } from '@/routers/verdict/components/log-hero'
+import { DecisionGraphAction } from '@/routers/verdict/components/decision-graph/dialog'
 
 const SECTION_LABEL =
   'font-mono text-xs font-semibold tracking-widest uppercase text-foreground-muted my-5 mb-2.5 flex items-center gap-2.5'
 
-function Actions({ run }: { run: Run }) {
+function Actions({ run }: { run: RunDetail }) {
   const nav = useNav()
   const [copied, setCopied] = useState('')
   const flash = (label: string) => {
@@ -188,7 +189,7 @@ function GuidanceLine({ label, children }: { label: string; children: React.Reac
   )
 }
 
-function CloudOperatorGuidance({ run }: { run: Run }) {
+function CloudOperatorGuidance({ run }: { run: RunDetail }) {
   const card = run.operatorDiagnose
   if (card?.hasPersona !== true) return null
 
@@ -214,7 +215,7 @@ function CloudOperatorGuidance({ run }: { run: Run }) {
   )
 }
 
-function EvidenceList({ run }: { run: Run }) {
+function EvidenceList({ run }: { run: RunDetail }) {
   return (
     <Card size="sm">
       <CardHead title="Verdict" />
@@ -259,6 +260,7 @@ function EvidenceList({ run }: { run: Run }) {
           </KvCell>
         </div>
         <CloudOperatorGuidance run={run} />
+        <div className="mt-4"><DecisionGraphAction run={run} detail={run} /></div>
       </CardContent>
       <CardFooter className="border-t flex-wrap gap-2 bg-background-secondary p-3">
         <Actions run={run} />
@@ -267,7 +269,7 @@ function EvidenceList({ run }: { run: Run }) {
   )
 }
 
-function SymptomsCard({ run }: { run: Run }) {
+function SymptomsCard({ run }: { run: RunDetail }) {
   return (
     <Card size="sm">
       <CardHead title="Symptoms" sub={`${run.symptoms.length} distinct`} />
@@ -289,7 +291,7 @@ function SymptomsCard({ run }: { run: Run }) {
   )
 }
 
-function NodesCard({ run }: { run: Run }) {
+function NodesCard({ run }: { run: RunDetail }) {
   const nav = useNav()
   return (
     <Card size="sm">
@@ -311,7 +313,7 @@ function NodesCard({ run }: { run: Run }) {
   )
 }
 
-function ResponsibleNodesCard({ run }: { run: Run }) {
+function ResponsibleNodesCard({ run }: { run: RunDetail }) {
   const nav = useNav()
   if (run.responsibleNodes.length === 0) return null
 
@@ -394,7 +396,7 @@ function RawPayload({ label, payload }: { label: string; payload: object }) {
   )
 }
 
-function RawPayloads({ run }: { run: Run }) {
+function RawPayloads({ run }: { run: RunDetail }) {
   return (
     <div>
       <div className={SECTION_LABEL}>
@@ -437,7 +439,7 @@ export function VerdictView() {
   const { id: verdictId = '' } = useParams<{ id: string }>()
   const nav = useNav()
   const api = useApi()
-  const { data: fetchedRun, isLoading } = useSWR<Run | undefined, Error>(
+  const { data: fetchedRun, isLoading } = useSWR<RunDetail | undefined, Error>(
     verdictId !== '' ? ['run', verdictId] : null,
     () => api.getRun(verdictId),
   )
@@ -472,7 +474,7 @@ export function VerdictView() {
           )}
           <BreadcrumbSeparator />
           <BreadcrumbItem>
-            <BreadcrumbPage className="inline-block text-foreground font-medium border-b-2 border-foreground-secondary pb-0.5">
+            <BreadcrumbPage className="inline-block text-foreground font-medium">
               {run.jobId}
               {hasWorkload ? ` · attempt ${run.attempt}` : ''}
             </BreadcrumbPage>
@@ -481,7 +483,7 @@ export function VerdictView() {
       </Breadcrumb>
 
       <div className="flex items-start gap-4 my-1.5 mb-2">
-        <h1 className="text-3xl font-bold m-0 tracking-tight">
+        <h1 className="min-w-0 break-words text-3xl font-bold m-0 tracking-tight">
           {hasWorkload ? (
             <>
               Attempt <span className="font-mono text-foreground">{run.attempt}</span> ·{' '}

@@ -1,11 +1,11 @@
 import { useMemo, useState } from 'react'
 import Decimal from 'decimal.js'
-import type { Run } from '@/interfaces/attribution'
+import type { RunSummary } from '@/interfaces/attribution'
 import { nodeGpuHours } from '@/lib/metric'
 import { useNodeRuns } from '@/hooks/use-node-runs'
 import { HoverCard, HoverCardContent, HoverCardTrigger } from '@/components/ui/hover-card'
 
-function summarizeNode(runs: Run[], nodeId: string) {
+function summarizeNode(runs: RunSummary[], nodeId: string) {
   const attempts = runs.filter((r) => r.nodeIds.includes(nodeId) || r.responsibleNodes.includes(nodeId))
   const symptomCounts: Record<string, number> = {}
   let impacted = 0

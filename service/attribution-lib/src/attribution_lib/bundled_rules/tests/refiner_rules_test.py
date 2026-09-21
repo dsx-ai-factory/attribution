@@ -300,6 +300,27 @@ class TestScrubBadNodes:
         assert created[0].evidence is not None
         assert {source["rule_name"] for source in created[0].evidence["sources"]} == source_rules
 
+    def test_sole_allocated_node_can_corroborate_epilog_non_response(self, stream, obs_ctx):
+        job_info = _job_info_with(nodes=["node01"], state="NODE_FAIL")._replace(failed_node=None)
+        epilog_source = _make_source(
+            obs_ctx,
+            datum="Health check failed: Not responding",
+            rule=NodeNotRespondingProvenance.EPILOG_HEALTH_CHECK.value,
+        )
+        bad_nodes = JobNodeAttributions()
+        bad_nodes.add(
+            ["node01"],
+            SourceSet.new_one(RegisteredSymptoms.NODE_NOT_RESPONDING.value, epilog_source),
+        )
+
+        _run_scrub(stream, job_info, bad_nodes)
+
+        source_rules = {source.rule for source in bad_nodes["node01"].attributions[self._CORROBORATED_FAILURE]}
+        assert source_rules == {
+            NodeNotRespondingProvenance.EPILOG_HEALTH_CHECK.value,
+            FailedNodeResolution.SINGLE_ALLOCATED_NODE_INFERENCE.value,
+        }
+
     def test_corroborated_node_failure_is_the_pruned_infra_hw_root_cause(self, stream, obs_ctx):
         job_info = _job_info_with(state="NODE_FAIL")._replace(failed_node="node01")
         epilog_source = _make_source(
