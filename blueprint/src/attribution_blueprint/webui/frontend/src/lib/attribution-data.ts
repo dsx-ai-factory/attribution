@@ -2,7 +2,7 @@ import Decimal from 'decimal.js'
 import type {
   OutcomeKey,
   Outcome,
-  Run,
+  RunSummary,
   DailyBucket,
   DailyBreakdown,
   DailyBreakdownSeries,
@@ -28,16 +28,16 @@ export const OUTCOMES: Record<OutcomeKey, Outcome> = {
 // Pure derivations over a run set (e.g. window-filtered). The single data
 // boundary is the dashboard API; views fetch only the slices they need.
 
-function attemptGpuHours(run: Run): Decimal {
+function attemptGpuHours(run: RunSummary): Decimal {
   return new Decimal(run.gpuCount).times(run.elapsedH)
 }
 
-function nodeGpuHours(run: Run): Decimal {
+function nodeGpuHours(run: RunSummary): Decimal {
   const billedNodes = run.nodes > 0 ? run.nodes : 1
   return attemptGpuHours(run).div(billedNodes)
 }
 
-export function buildSymptomLedger(runs: Run[]): SymptomLedgerEntry[] {
+export function buildSymptomLedger(runs: RunSummary[]): SymptomLedgerEntry[] {
   const m: Record<string, SymptomLedgerEntry> = {}
   const hours: Record<string, Decimal> = {}
   runs.forEach((r) => {
@@ -54,7 +54,7 @@ export function buildSymptomLedger(runs: Run[]): SymptomLedgerEntry[] {
   return Object.values(m).sort((a, b) => b.count - a.count)
 }
 
-export function buildRuleLedger(runs: Run[]): RuleLedgerEntry[] {
+export function buildRuleLedger(runs: RunSummary[]): RuleLedgerEntry[] {
   const m: Record<string, RuleLedgerEntry> = {}
   const hours: Record<string, Decimal> = {}
   runs.forEach((r) => {
@@ -71,7 +71,7 @@ export function buildRuleLedger(runs: Run[]): RuleLedgerEntry[] {
   return Object.values(m).sort((a, b) => b.count - a.count)
 }
 
-export function buildNodeLedger(runs: Run[]): NodeLedgerEntry[] {
+export function buildNodeLedger(runs: RunSummary[]): NodeLedgerEntry[] {
   const m: Record<string, NodeLedgerEntry> = {}
   const hours: Record<string, Decimal> = {}
   runs.forEach((r) => {
@@ -90,7 +90,7 @@ export function buildNodeLedger(runs: Run[]): NodeLedgerEntry[] {
   return Object.values(m).sort((a, b) => b.count - a.count)
 }
 
-export function buildOutcomeLedger(runs: Run[]): OutcomeLedgerEntry[] {
+export function buildOutcomeLedger(runs: RunSummary[]): OutcomeLedgerEntry[] {
   const m: Partial<Record<OutcomeKey, OutcomeLedgerEntry>> = {}
   const hours: Partial<Record<OutcomeKey, Decimal>> = {}
   runs.forEach((r) => {
@@ -154,7 +154,7 @@ export function movementScore(spark: number[]): number {
 
 // Top failure symptoms ranked by in-window movement (not count). Pass/Clean runs
 // are excluded first so a mixed-outcome symptom isn't dropped or mis-colored.
-export function buildMovers(runs: Run[], from: Date, to: Date, limit = 5): SymptomMover[] {
+export function buildMovers(runs: RunSummary[], from: Date, to: Date, limit = 5): SymptomMover[] {
   const spanMs = to.getTime() - from.getTime()
   if (spanMs <= 0) return []
   const count = bucketCount(from, to)
@@ -205,7 +205,7 @@ export function dailySpine(from: Date, to: Date): string[] {
   return days
 }
 
-export function buildDaily(runs: Run[], from: Date, to: Date): DailyBucket[] {
+export function buildDaily(runs: RunSummary[], from: Date, to: Date): DailyBucket[] {
   const days: DailyBucket[] = dailySpine(from, to).map((date) => ({
     date, hw: 0, sw: 0, mix: 0, usr: 0, pass: 0, nodeHours: 0,
   }))
@@ -237,7 +237,7 @@ export const OTHER_COLOR = '#52525b'
 // Per-day stack of failed attempts for ONE outcome, split by root symptom.
 // Top-N symptoms by window total are kept; the rest fold into a trailing 'Other'.
 export function buildDailyByOutcome(
-  runs: Run[],
+  runs: RunSummary[],
   from: Date,
   to: Date,
   outcome: OutcomeKey,
@@ -288,7 +288,7 @@ export function breakdownHighlight(
   return breakdown.series.some((s) => s.symptom === symptom) ? symptom : undefined
 }
 
-export function filterRunsByDate(runs: Run[], from: Date, to: Date): Run[] {
+export function filterRunsByDate(runs: RunSummary[], from: Date, to: Date): RunSummary[] {
   const fromT = from.getTime()
   const toT = to.getTime()
   return runs.filter((r) => {
@@ -302,7 +302,7 @@ export function filterRunsByDate(runs: Run[], from: Date, to: Date): Run[] {
  * fixed in time; a real-clock anchor would yield zero rows for "24h". For an
  * empty set there is nothing to anchor to, so fall back to the wall clock.
  */
-export function nowAnchor(runs: Run[]): Date {
+export function nowAnchor(runs: RunSummary[]): Date {
   if (runs.length === 0) return new Date()
   const t = runs.reduce((acc, r) => Math.max(acc, new Date(r.endTime).getTime()), 0)
   return new Date(t || Date.now())

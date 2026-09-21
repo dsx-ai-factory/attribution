@@ -14,6 +14,8 @@ from dataclasses import dataclass, field
 from enum import Enum, IntEnum
 from typing import TYPE_CHECKING, Optional
 
+from attribution_lib.symptoms.family import SymptomFamily
+
 if TYPE_CHECKING:
     from attribution_lib.rule_types.definitions import RuleLocation
 
@@ -75,7 +77,7 @@ class SymptomDeclaration:
     Outcome declarations populate outcome, priority, and doc. Cascade-only
     declarations leave those fields empty and describe pruning edges for one
     resource scope. Any declaration may assign the symptom to a semantic
-    category for registry queries.
+    category for registry queries and structured family identity.
     """
 
     prefix: str
@@ -98,3 +100,5 @@ class SymptomDeclaration:
     # prefix (e.g. NON_FATAL declares "non-fatal" so "(non-fatal) X" resolves to it).
     resolve_contains: Optional[str] = None
     location: Optional[RuleLocation] = field(default=None, compare=False)
+    # Appended to preserve positional compatibility for existing constructors.
+    family: Optional[SymptomFamily] = None

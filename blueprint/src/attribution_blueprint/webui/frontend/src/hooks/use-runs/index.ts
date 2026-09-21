@@ -1,11 +1,11 @@
 import useSWR, { type KeyedMutator } from 'swr'
-import type { Run } from '@/interfaces/attribution'
+import type { RunSummary } from '@/interfaces/attribution'
 import type { Meta } from '@/interfaces/meta'
 import { useApi } from '@/services/api-context'
 
-type RunsData = { runs: Run[]; meta: Meta }
+type RunsData = { runs: RunSummary[]; meta: Meta }
 
-const EMPTY: Run[] = [] // stable reference — avoids re-render churn
+const EMPTY: RunSummary[] = [] // stable reference — avoids re-render churn
 
 /**
  * Owns the fleet's server state. SWR caches under a single static key, so the
@@ -13,7 +13,7 @@ const EMPTY: Run[] = [] // stable reference — avoids re-render churn
  * mounting its own effect.
  */
 export function useRuns(): {
-  runs: Run[]
+  runs: RunSummary[]
   meta: Meta | null
   isLoading: boolean
   error: Error | null

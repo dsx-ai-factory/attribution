@@ -15,7 +15,7 @@ from attribution_blueprint import mca_registry as _registry
 from attribution_blueprint.connectors.auth import Auth, MTLSAuth, TokenAuth
 from attribution_blueprint.connectors.logs.loki.connector import LokiConnector
 from attribution_blueprint.connectors.logs.loki.templates import BARE_TEMPLATES, TEMPLATES
-from attribution_blueprint.connectors.logs.loki.types import LokiAppEntry, LokiSyslogEntry
+from attribution_blueprint.connectors.logs.loki.types import LokiSyslogEntry
 from attribution_blueprint.exceptions import MCAError
 from attribution_blueprint.mca_registry import _PARAM
 from attribution_blueprint.types import Source
@@ -104,4 +104,4 @@ _registry.register_component(
 )
 
 
-__all__ = ["LokiConnector", "TEMPLATES", "BARE_TEMPLATES", "LokiSyslogEntry", "LokiAppEntry"]
+__all__ = ["LokiConnector", "TEMPLATES", "BARE_TEMPLATES", "LokiSyslogEntry"]

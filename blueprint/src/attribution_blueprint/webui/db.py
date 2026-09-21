@@ -303,9 +303,9 @@ def _filtered_clauses(
         until: Inclusive upper date bound.
         job_query: Free-text search query.
         status: ``failed`` excludes pass rows, ``all`` keeps every row.
-        symptom: Root symptom text filter.
+        symptom: Exact root symptom filter.
         node: Responsible-node or allocated-node text filter.
-        rule: Root rule text filter.
+        rule: Exact root rule filter.
         user: Exact user filter.
 
     Returns:
@@ -335,12 +335,17 @@ def _filtered_clauses(
         )
         like = f"%{escaped}%"
         params.extend([like, like, like, like])
-    if symptom is not None and symptom.strip() != "":
-        clauses.append("r.raw_result_json LIKE ? ESCAPE '\\'")
-        params.append(f"%{_escape_like(symptom.strip())}%")
-    if rule is not None and rule.strip() != "":
-        clauses.append("r.raw_result_json LIKE ? ESCAPE '\\'")
-        params.append(f"%{_escape_like(rule.strip())}%")
+    for value, path in (
+        (symptom, "$.verdict.root_symptom.symptom"),
+        (rule, "$.verdict.root_symptom.source.rule"),
+    ):
+        if value is not None and value != "":
+            clauses.append(
+                "CASE WHEN json_valid(r.raw_result_json) THEN "
+                f"CASE WHEN json_type(r.raw_result_json, '{path}') = 'text' "
+                f"THEN json_extract(r.raw_result_json, '{path}') END END = ?"
+            )
+            params.append(value)
     if node is not None and node.strip() != "":
         like = f"%{_escape_like(node.strip())}%"
         clauses.append(f"({responsible_nodes_column} LIKE ? ESCAPE '\\' OR c.nodes_json LIKE ? ESCAPE '\\')")
@@ -528,9 +533,9 @@ def list_runs_page(
         until: Inclusive upper date bound.
         job_query: Free-text search query.
         status: ``failed`` excludes pass rows, ``all`` keeps every row.
-        symptom: Root symptom text filter.
+        symptom: Exact root symptom filter.
         node: Responsible-node or allocated-node text filter.
-        rule: Root rule text filter.
+        rule: Exact root rule filter.
         user: Exact user filter.
         page: Zero-based page number.
         page_size: Requested page size.
@@ -633,8 +638,11 @@ def symptom_summary(run: RunRow) -> list[tuple[str, int]]:
     """Return [(symptom_name, occurrence_count), ...] sorted by count desc."""
     symptoms = run.raw_result.get("symptoms") or {}
     counts = Counter()
+    if not isinstance(symptoms, dict):
+        return []
     for name, sites in symptoms.items():
-        counts[name] = len(sites or [])
+        if isinstance(sites, list):
+            counts[name] = len(sites)
     return counts.most_common()
 
 

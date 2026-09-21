@@ -1,15 +1,16 @@
-"""Map the read-only SQLite rows to the React SPA's Run shape and build the
-bootstrap payload injected into index.html. No JSON API; see the design spec."""
+"""Map read-only SQLite rows to the React summary and detail contracts."""
 
 from __future__ import annotations
 
 import json as _json
 import re
+from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 from attribution_blueprint.taxonomy import taxonomy_for_service_value
+from attribution_blueprint.webui.attribution_detail import attribution_detail, decision_graph_section
 from attribution_blueprint.webui.diagnose import diagnose_card, operator_diagnose_card
 
 # Raw lib outcome string -> React OutcomeKey. Unmapped values fall through to
@@ -164,10 +165,11 @@ def _log_from_sites(run) -> list[dict[str, Any]]:
     if root_line:
         lines.append({"t": root_time, "level": "symptom", "text": root_line})
         seen.add((root_line, root_time))
-    for _name, sites in ((run.raw_result or {}).get("symptoms") or {}).items():
-        for site in sites or []:
-            src = site.get("source") or {}
-            line = src.get("line") or ""
+    symptoms = run.raw_result.get("symptoms")
+    for sites in symptoms.values() if isinstance(symptoms, dict) else []:
+        for site in sites if isinstance(sites, list) else []:
+            src = _object(site.get("source")) if isinstance(site, dict) else {}
+            line = _text(src.get("line"))
             if not line:
                 continue
             t = _root_symptom_time(run, src)
@@ -303,7 +305,41 @@ def _gpu_count(run) -> int:
     return billed_nodes * _gpus_per_node(run)
 
 
-def run_to_react(run) -> dict[str, Any]:
+def _object(value: Any) -> dict[str, Any]:
+    return value if isinstance(value, dict) else {}
+
+
+def _text(value: Any) -> str:
+    return value if isinstance(value, str) else ""
+
+
+def _display_run(run):
+    """Keep malformed evidence out of display fields without changing storage."""
+    raw = _object(run.raw_result)
+    verdict = _object(raw.get("verdict"))
+    root = _object(verdict.get("root_symptom"))
+    source = _object(root.get("source"))
+    return replace(
+        run,
+        raw_result={
+            **raw,
+            "verdict": {
+                **verdict,
+                "attribution_outcome": _text(verdict.get("attribution_outcome")),
+                "detail": _text(verdict.get("detail")),
+                "root_symptom": {
+                    "symptom": _text(root.get("symptom")),
+                    "catalog_id": _text(root.get("catalog_id")),
+                    "source": {key: _text(source.get(key)) for key in ("rule", "line", "time")},
+                },
+            },
+        },
+    )
+
+
+def _run_summary_fields(run) -> dict[str, Any]:
+    """Map shared display fields without loading logs or validating evidence."""
+    run = _display_run(run)
     verdict = (run.raw_result or {}).get("verdict") or {}
     collectors = (run.raw_result or {}).get("collectors")
     bad_pairs = collectors.get("bad_pairs") if isinstance(collectors, dict) else None
@@ -345,9 +381,27 @@ def run_to_react(run) -> dict[str, Any]:
         "responsibleNodes": list(run.responsible_nodes or []),
         "pipeline": run.pipeline_version or "",
         "service": run.service_api_version or "",
-        "log": _log_from_sites(run),
         "diagnose": _diagnose_camel(diagnose),
         "operatorDiagnose": _diagnose_camel(operator_diagnose),
+    }
+
+
+def run_summary_to_react(run) -> dict[str, Any]:
+    """Return list fields and graph availability without graph data or logs."""
+    return {
+        **_run_summary_fields(run),
+        "decisionGraphState": decision_graph_section(run.raw_result)["state"],
+    }
+
+
+def run_to_react(run) -> dict[str, Any]:
+    """Return a summary plus logs and independently validated V2 evidence."""
+    attribution = attribution_detail(run.raw_result)
+    return {
+        **_run_summary_fields(run),
+        "decisionGraphState": attribution["decisionGraph"]["state"],
+        "log": _log_from_sites(_display_run(run)),
+        "attribution": attribution,
     }
 
 

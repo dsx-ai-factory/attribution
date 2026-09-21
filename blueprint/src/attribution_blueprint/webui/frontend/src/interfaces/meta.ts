@@ -3,7 +3,8 @@ import type {
   DailyBucket,
   NodeLedgerEntry,
   OutcomeLedgerEntry,
-  Run,
+  RunDetail,
+  RunSummary,
   RuleLedgerEntry,
   SymptomLedgerEntry,
   SymptomMover,
@@ -12,7 +13,7 @@ import type {
 
 /** Server-injected bootstrap blob. Mirrors bootstrap.build_payload (Python). */
 export interface BootstrapPayload {
-  runs: Run[]
+  runs: RunDetail[]
   meta: Meta
 }
 
@@ -74,7 +75,7 @@ export interface DashboardPayload {
 }
 
 export interface RunsPagePayload {
-  runs: Run[]
+  runs: RunSummary[]
   total: number
   page: number
   pageSize: number

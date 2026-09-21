@@ -3,7 +3,7 @@ import type { HTMLAttributes, ReactNode } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
-import type { Run } from '@/interfaces/attribution'
+import type { RunSummary } from '@/interfaces/attribution'
 import { OutcomeChip, VerdictPill } from '@/components/chip'
 import { DefHover } from '@/components/def-hover'
 import { ExportMenu } from '@/components/export-menu'
@@ -35,7 +35,7 @@ vi.mock('@/components/ui/popover', () => ({
   ),
 }))
 
-const run = (overrides: Partial<Run> = {}): Run => ({
+const run = (overrides: Partial<RunSummary> = {}): RunSummary => ({
   id: 'run-1',
   jobId: 'team/job',
   workload: 'team/job',
@@ -53,12 +53,12 @@ const run = (overrides: Partial<Run> = {}): Run => ({
   outcome: 'hardware',
   verdictLabel: 'Hardware failure',
   detail: '',
+  decisionGraphState: 'absent',
   rootSymptom: { symptom: 'Xid79', rule: 'xid', time: '', line: '' },
   symptoms: [],
   responsibleNodes: ['node-a'],
   pipeline: '1',
   service: '2',
-  log: [],
   ...overrides,
 })
 

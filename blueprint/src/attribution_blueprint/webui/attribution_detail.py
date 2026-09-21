@@ -1,0 +1,100 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: LicenseRef-NvidiaProprietary
+#
+# NVIDIA CORPORATION, its affiliates and licensors retain all intellectual
+# property and proprietary rights in and to this material, related
+# documentation and any modifications thereto. Any use, reproduction,
+# disclosure or distribution of this material and related documentation
+# without an express license agreement from NVIDIA CORPORATION or
+# its affiliates is strictly prohibited.
+
+"""Validate detail sections independently without rewriting stored V2 evidence."""
+
+from __future__ import annotations
+
+import json
+from collections.abc import Callable
+from graphlib import TopologicalSorter
+from typing import Any
+
+from nvidia_attribution_client.models.decision_graph import DecisionGraph
+from nvidia_attribution_client.models.node_source import NodeSource
+from nvidia_attribution_client.models.resourceless_source import ResourcelessSource
+from nvidia_attribution_client.models.sourced_symptom import SourcedSymptom
+
+
+def _validate_graph(value: Any) -> None:
+    graph = DecisionGraph.model_validate_json(json.dumps(value), strict=True)
+    node_ids = {node.node_id for node in graph.nodes}
+    if len(node_ids) != len(graph.nodes):
+        raise ValueError("Duplicate decision node IDs")
+    predecessors: dict[str, set[str]] = {node_id: set() for node_id in node_ids}
+    for edge in graph.edges:
+        if edge.parent_id not in node_ids or edge.child_id not in node_ids:
+            raise ValueError("Decision edge references a missing node")
+        predecessors[edge.child_id].add(edge.parent_id)
+    TopologicalSorter(predecessors).prepare()
+
+
+def _validate_sites(value: Any) -> None:
+    if not isinstance(value, dict):
+        raise ValueError("Symptoms must be a map")
+    for sites in value.values():
+        if not isinstance(sites, list):
+            raise ValueError("Symptom sites must be an array")
+        for site in sites:
+            if not isinstance(site, dict):
+                raise ValueError("Symptom site must be an object")
+            if site.get("type") == "NodeSource":
+                model = NodeSource
+            elif site.get("type") == "ResourcelessSource":
+                model = ResourcelessSource
+            else:
+                raise ValueError("Missing or invalid symptom site discriminator")
+            model.model_validate_json(json.dumps(site), strict=True)
+
+
+def _section(
+    parent: Any,
+    key: str,
+    validate: Callable[[Any], Any],
+    is_empty: Callable[[Any], bool] = lambda _: False,
+) -> dict[str, Any]:
+    if not isinstance(parent, dict):
+        return {"state": "invalid", "data": None}
+    if key not in parent:
+        return {"state": "absent", "data": None}
+    value = parent[key]
+    if value is None:
+        return {"state": "null", "data": None}
+    try:
+        validate(value)
+    except (ValueError, TypeError):
+        return {"state": "invalid", "data": None}
+    # Models are used only for validation. Serializing them would insert defaults,
+    # normalize timestamps and drop additional provenance from the stored response.
+    return {"state": "empty" if is_empty(value) else "available", "data": value}
+
+
+def decision_graph_section(raw_result: dict[str, Any]) -> dict[str, Any]:
+    """Return the same validated graph state for list entries and run details."""
+    verdict = raw_result.get("verdict", {}) if isinstance(raw_result, dict) else None
+    return _section(verdict, "decision_graph", _validate_graph, lambda value: not value["nodes"] and not value["edges"])
+
+
+def attribution_detail(raw_result: dict[str, Any]) -> dict[str, Any]:
+    """Expose raw root, sites and graph with separate availability states.
+
+    The models come from the generated Service SDK in this repository. Invalid
+    graph data cannot invalidate a sound verdict or its symptom-site evidence.
+    """
+    verdict = raw_result.get("verdict", {}) if isinstance(raw_result, dict) else None
+    return {
+        "rootSymptom": _section(
+            verdict,
+            "root_symptom",
+            lambda value: SourcedSymptom.model_validate_json(json.dumps(value), strict=True),
+        ),
+        "symptomSites": _section(raw_result, "symptoms", _validate_sites, lambda value: not any(value.values())),
+        "decisionGraph": decision_graph_section(raw_result),
+    }

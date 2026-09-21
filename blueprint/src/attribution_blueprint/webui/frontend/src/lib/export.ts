@@ -1,17 +1,17 @@
 import Decimal from 'decimal.js'
-import type { Run } from '@/interfaces/attribution'
+import type { RunDetail, RunSummary } from '@/interfaces/attribution'
 import { attemptGpuHours, nodeGpuHours } from './metric'
 
 /** Per-run elapsed hours, rounded to 4dp at the export boundary for clean output. */
-function exportElapsed(run: Run): number {
+function exportElapsed(run: RunSummary): number {
   return new Decimal(run.elapsedH).toDecimalPlaces(4).toNumber()
 }
 
-function exportAttemptGpuHours(run: Run): number {
+function exportAttemptGpuHours(run: RunSummary): number {
   return attemptGpuHours(run).toDecimalPlaces(4).toNumber()
 }
 
-function exportNodeGpuHours(run: Run): number {
+function exportNodeGpuHours(run: RunSummary): number {
   return nodeGpuHours(run).toDecimalPlaces(4).toNumber()
 }
 
@@ -96,7 +96,7 @@ export function toYaml(value: unknown, indent = 0): string {
   return `${pad}${yamlScalar(value)}`
 }
 
-export function verdictExportData(run: Run) {
+export function verdictExportData(run: RunSummary) {
   return {
     attempt_uid: run.attemptUid,
     execution_context: run.jobId,
@@ -129,7 +129,7 @@ export function verdictExportData(run: Run) {
   }
 }
 
-export function logToText(run: Run): string {
+export function logToText(run: RunDetail): string {
   return run.log
     .map((l) => {
       const ts = l.t
@@ -143,7 +143,7 @@ export function logToText(run: Run): string {
     .join('\n')
 }
 
-export function nodeExportData(nodeId: string, attempts: Run[]) {
+export function nodeExportData(nodeId: string, attempts: RunSummary[]) {
   const impacted = attempts.filter((r) => r.responsibleNodes.includes(nodeId))
   const symptomCounts: Record<string, number> = {}
   impacted.forEach((r) => {
@@ -174,7 +174,7 @@ export function nodeExportData(nodeId: string, attempts: Run[]) {
   }
 }
 
-const CSV_COLUMNS: { header: string; pick: (r: Run) => string | number }[] = [
+const CSV_COLUMNS: { header: string; pick: (r: RunSummary) => string | number }[] = [
   { header: 'end_time_utc',    pick: (r) => r.endTime },
   { header: 'execution_context', pick: (r) => r.jobId },
   { header: 'workload',        pick: (r) => (r.workload && r.workload !== '—' ? r.workload : '') },
@@ -203,13 +203,13 @@ function csvCell(value: string | number): string {
   return s
 }
 
-export function runsToCSV(runs: Run[]): string {
+export function runsToCSV(runs: RunSummary[]): string {
   const header = CSV_COLUMNS.map((c) => c.header).join(',')
   const rows = runs.map((r) => CSV_COLUMNS.map((c) => csvCell(c.pick(r))).join(','))
   return [header, ...rows].join('\n')
 }
 
-export function runsExportData(runs: Run[]) {
+export function runsExportData(runs: RunSummary[]) {
   return runs.map(verdictExportData)
 }
 

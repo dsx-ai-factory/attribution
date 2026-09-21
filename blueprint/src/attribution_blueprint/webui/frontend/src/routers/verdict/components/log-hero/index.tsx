@@ -3,7 +3,7 @@ import Editor, { type OnMount, loader } from '@monaco-editor/react'
 import * as monaco from 'monaco-editor'
 import dayjs from 'dayjs'
 import utc from 'dayjs/plugin/utc'
-import type { Run } from '@/interfaces/attribution'
+import type { RunDetail } from '@/interfaces/attribution'
 import { VerdictPill } from '@/components/chip'
 
 dayjs.extend(utc)
@@ -43,7 +43,7 @@ interface FormattedLine {
   isDebug: boolean
 }
 
-function formatLog(run: Run): { content: string; lines: FormattedLine[]; symptomLine: number } {
+function formatLog(run: RunDetail): { content: string; lines: FormattedLine[]; symptomLine: number } {
   let symptomLine = -1
   const lines: FormattedLine[] = run.log.map((l, i) => {
     const ts = dayjs(l.t).utc().format('HH:mm:ss')
@@ -95,7 +95,7 @@ const MONACO_OPTIONS: monaco.editor.IStandaloneEditorConstructionOptions = {
   padding: { top: 8, bottom: 8 },
 }
 
-function MonacoLog({ run }: { run: Run }) {
+function MonacoLog({ run }: { run: RunDetail }) {
   const { content, lines, symptomLine } = useMemo(() => formatLog(run), [run])
   const decorationsRef = useRef<monaco.editor.IEditorDecorationsCollection | null>(null)
 
@@ -153,7 +153,7 @@ function MonacoLog({ run }: { run: Run }) {
   )
 }
 
-function LogAttribution({ run }: { run: Run }) {
+function LogAttribution({ run }: { run: RunDetail }) {
   const matchedAt = dayjs(run.rootSymptom.time)
   const matchedAtText = matchedAt.isValid() ? matchedAt.utc().format('HH:mm:ss') : 'Unavailable'
 
@@ -175,7 +175,7 @@ function LogAttribution({ run }: { run: Run }) {
   )
 }
 
-const OUTCOME_HEAD: Record<Run['outcome'], string> = {
+const OUTCOME_HEAD: Record<RunDetail['outcome'], string> = {
   hardware: 'HARDWARE',
   software: 'SOFTWARE',
   multi:    'MULTI-CATEGORY',
@@ -184,7 +184,7 @@ const OUTCOME_HEAD: Record<Run['outcome'], string> = {
   pass:     'PASS',
 }
 
-export function LogHero({ run }: { run: Run }) {
+export function LogHero({ run }: { run: RunDetail }) {
   return (
     <div className="bg-background-secondary border border-border rounded-md overflow-hidden">
       <div className="flex items-center gap-3 px-4 py-3 border-b border-border bg-background-active">

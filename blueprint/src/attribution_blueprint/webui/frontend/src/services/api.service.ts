@@ -1,5 +1,5 @@
 import type { FleetFilter } from '@/interfaces/filter'
-import type { Run } from '@/interfaces/attribution'
+import type { RunDetail, RunSummary } from '@/interfaces/attribution'
 import type { Meta } from '@/interfaces/meta'
 
 /**
@@ -8,8 +8,8 @@ import type { Meta } from '@/interfaces/meta'
  */
 export abstract class ApiService {
   /** The FULL injected/served run set, unfiltered. Views own all filtering. */
-  abstract getAllRuns(): Promise<Run[]>
-  abstract getRuns(filter: FleetFilter): Promise<Run[]>
-  abstract getRun(id: string): Promise<Run | undefined>
+  abstract getAllRuns(): Promise<RunSummary[]>
+  abstract getRuns(filter: FleetFilter): Promise<RunSummary[]>
+  abstract getRun(id: string): Promise<RunDetail | undefined>
   abstract getMeta(): Promise<Meta>
 }

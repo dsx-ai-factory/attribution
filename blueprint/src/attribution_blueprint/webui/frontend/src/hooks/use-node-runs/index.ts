@@ -1,12 +1,12 @@
 import useSWR from 'swr'
-import type { Run } from '@/interfaces/attribution'
+import type { RunSummary } from '@/interfaces/attribution'
 import type { RunsPagePayload } from '@/interfaces/meta'
 import { httpGet } from '@/services/http-client.service'
 
 const PAGE_SIZE = 100
 
-async function fetchNodeRuns(nodeId: string): Promise<Run[]> {
-  const runs: Run[] = []
+async function fetchNodeRuns(nodeId: string): Promise<RunSummary[]> {
+  const runs: RunSummary[] = []
   let page = 0
   let total: number | null = null
 
@@ -30,11 +30,11 @@ export function useNodeRuns(
   nodeId: string,
   enabled = true,
 ): {
-  runs: Run[]
+  runs: RunSummary[]
   isLoading: boolean
   error: Error | null
 } {
   const key = enabled && nodeId !== '' ? ['node-runs', nodeId] : null
-  const { data, isLoading, error } = useSWR<Run[], Error>(key, () => fetchNodeRuns(nodeId))
+  const { data, isLoading, error } = useSWR<RunSummary[], Error>(key, () => fetchNodeRuns(nodeId))
   return { runs: data ?? [], isLoading, error: error ?? null }
 }

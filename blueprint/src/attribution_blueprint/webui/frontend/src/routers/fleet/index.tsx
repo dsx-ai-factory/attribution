@@ -241,7 +241,7 @@ export function FleetView() {
     <div>
       {/* Filter bar */}
       <div className="sticky top-0 z-20 mb-5 bg-background flex flex-col gap-2">
-        <div className="flex items-center gap-2.5 bg-background-active border border-border rounded-md px-3 py-2.5">
+        <div className="flex flex-wrap items-center gap-2.5 bg-background-active border border-border rounded-md px-3 py-2.5">
           <ToggleGroup
             type="single"
             value={preset}
@@ -272,7 +272,7 @@ export function FleetView() {
           </div>
           <div className="flex-1" />
           {runCountLabel !== null && (
-            <span className="font-mono text-xs text-foreground-muted whitespace-nowrap">
+            <span className="min-w-0 font-mono text-xs text-foreground-muted">
               {runCountLabel}
             </span>
           )}

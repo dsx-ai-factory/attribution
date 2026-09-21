@@ -436,12 +436,19 @@ class SourceProcessingConfig:
 
     time_start: Optional[Callable[[JobInfo], Optional[datetime]]] = None
     time_end: Optional[Callable[[JobInfo], Optional[datetime]]] = None
+    """Legacy formats only: `entry_timeseries` filters on the producer-declared `context.time_interval` instead.
+
+    TODO: drop both once every source accepts only `entry_timeseries`.
+    """
     body_fallbacks: BodyFallbacks = BodyFallbacks()
     """Per line: what an `entry_timeseries` entry may parse out of its body; `year_fallback` is filled per job."""
     fallback_unknown_nodes: bool = False
     """Per line: a node that fails to resolve against the job keeps the line as resource ANY instead of dropping it."""
-    requires_nodes: bool = False
-    """Per job: skip the whole source when `job_info.nodes` is empty."""
+    requires_job_nodes: bool = False
+    """Per job: skip the whole source when `job_info.nodes` is empty, since node checks pass anything then.
+
+    Not `BodyFallbacks.require_node`, which drops a single entry that declares no node.
+    """
 
 
 # Populated by core.py via register_source_config(); keeps rules_engine

@@ -190,6 +190,64 @@ def _run_scrub(stream, job_info, bad_nodes, recorder=None):
     run_scrub_phase_refiners(stream, job_info, my_bad_nodes=bad_nodes, recorder=recorder)
 
 
+class TestPoisonedGspComposite:
+    _FATAL = "NV_PGSP_FALCON_IRQSTAT_FATAL_ERROR"
+    _XID94 = "XID-94-CONTAINED_ERROR"
+    _RESET = "NV_ERR_RESET_REQUIRED kernel_gsp.c"
+
+    @pytest.mark.parametrize("reset", ["NV_ERR_RESET_REQUIRED", "NV_ERR_RESET_REQUIRED ", _RESET])
+    def test_combines_all_evidence_and_records_provenance(self, stream, obs_ctx, job_info, reset):
+        bad_nodes = JobNodeAttributions()
+        for i, symptom in enumerate([self._FATAL, self._XID94, reset]):
+            source = _make_source(obs_ctx, datum=symptom, line_num=i + 1)
+            bad_nodes.add(["node01"], SourceSet.new_one(symptom, source))
+        recorder = DecisionRecorder(job_info.id)
+
+        _run_scrub(stream, job_info, bad_nodes, recorder=recorder)
+
+        sources = list(bad_nodes["node01"].attributions["poisoned gsp"])
+        assert {source.datum for source in sources} == {self._FATAL, self._XID94, reset}
+        assert {source.line_num for source in sources} == {1, 2, 3}
+        created = [
+            event
+            for event in recorder.events
+            if event.rule_name == "PoisonedGspComposite"
+            and event.action is Action.CREATED
+            and event.symptom == "poisoned gsp"
+        ]
+        assert len(created) == 1
+        assert created[0].hostname == "node01"
+
+    @pytest.mark.parametrize("demoted", [_FATAL, _XID94, _RESET])
+    def test_demoted_evidence_does_not_complete_combination(self, stream, obs_ctx, job_info, demoted):
+        bad_nodes = _make_bad_nodes(obs_ctx, {"node01": [self._FATAL, self._XID94, self._RESET]})
+        bad_nodes["node01"].discard(demoted)
+
+        _run_scrub(stream, job_info, bad_nodes)
+
+        assert "poisoned gsp" not in bad_nodes["node01"]
+
+    def test_component_pruning_preserves_evidence_on_other_nodes(self, stream, obs_ctx, job_info):
+        job_info = job_info._replace(nodes=["node01", "node02"])
+        bad_nodes = _make_bad_nodes(
+            obs_ctx,
+            {"node01": [self._FATAL, self._XID94, self._RESET], "node02": [self._XID94, self._RESET]},
+        )
+
+        symptoms = calculate_symptoms(event_stream=stream, job_info=job_info, my_bad_nodes=bad_nodes)
+
+        assert "poisoned gsp" in symptoms
+        assert "poisoned gsp" in bad_nodes["node01"]
+        assert "poisoned gsp" not in bad_nodes["node02"]
+        for component in [self._FATAL, self._XID94, self._RESET]:
+            assert component not in bad_nodes["node01"]
+            assert bad_nodes["node01"].attributions[component].has_interesting()
+        assert self._XID94 in bad_nodes["node02"]
+        assert self._RESET in bad_nodes["node02"]
+        assert self._XID94 in symptoms
+        assert self._RESET in symptoms
+
+
 class TestScrubBadNodes:
     """Tests for the ScrubBadNodes refiner (SCRUB phase, pre-aggregation)."""
 
@@ -241,6 +299,27 @@ class TestScrubBadNodes:
         assert created[0].hostname == "node01"
         assert created[0].evidence is not None
         assert {source["rule_name"] for source in created[0].evidence["sources"]} == source_rules
+
+    def test_sole_allocated_node_can_corroborate_epilog_non_response(self, stream, obs_ctx):
+        job_info = _job_info_with(nodes=["node01"], state="NODE_FAIL")._replace(failed_node=None)
+        epilog_source = _make_source(
+            obs_ctx,
+            datum="Health check failed: Not responding",
+            rule=NodeNotRespondingProvenance.EPILOG_HEALTH_CHECK.value,
+        )
+        bad_nodes = JobNodeAttributions()
+        bad_nodes.add(
+            ["node01"],
+            SourceSet.new_one(RegisteredSymptoms.NODE_NOT_RESPONDING.value, epilog_source),
+        )
+
+        _run_scrub(stream, job_info, bad_nodes)
+
+        source_rules = {source.rule for source in bad_nodes["node01"].attributions[self._CORROBORATED_FAILURE]}
+        assert source_rules == {
+            NodeNotRespondingProvenance.EPILOG_HEALTH_CHECK.value,
+            FailedNodeResolution.SINGLE_ALLOCATED_NODE_INFERENCE.value,
+        }
 
     def test_corroborated_node_failure_is_the_pruned_infra_hw_root_cause(self, stream, obs_ctx):
         job_info = _job_info_with(state="NODE_FAIL")._replace(failed_node="node01")

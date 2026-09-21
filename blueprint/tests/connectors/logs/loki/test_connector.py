@@ -95,57 +95,63 @@ def test_syslog_body_is_flat_dict_list(mocker):
     ]
 
 
-def test_applog_format_is_raw_loki_streams(mocker):
-    _mock_response(mocker, [{"stream": {}, "values": [["1", "x"]]}])
-    conn = LokiConnector(
+def _applog_connector(**kwargs) -> LokiConnector:
+    return LokiConnector(
         endpoint="https://loki.example",
         auth=TokenAuth("tok"),
         source=Source.APPLOG,
         query_kwargs={"app": "myapp", "service_name": "x"},
         templates={Source.APPLOG: ["{{}}"]},
+        **kwargs,
     )
-    obs = conn.collect(_ctx())
-    assert obs[0]["context"]["format"] == Format.RAW_LOKI_STREAMS
 
 
-def test_applog_renames_node_label_to_node_name_for_service(mocker):
-    """attribution_lib.observation.processing reads `stream["node_name"]` only.
-    The connector's configured node_label (default `host_name`) must be
-    rewritten to `node_name` in each forwarded stream's labels, else every
-    APPLOG entry is attributed with node=None."""
+def test_applog_body_is_unbounded_entry_timeseries_with_labelled_resources(mocker):
     streams = [
-        {"stream": {"host_name": "n1", "app": "x"}, "values": [["1", "line1"]]},
-        {"stream": {"host_name": "n2", "app": "x"}, "values": [["2", "line2"]]},
+        {"stream": {"host_name": "n1", "pod": "trainer-0"}, "values": [["1", "[rank 0] step 1"]]},
+        {"stream": {"app": "x"}, "values": [["2", "[rank 1] no labels"], ["not-a-timestamp", "dropped"]]},
     ]
     _mock_response(mocker, streams)
-    conn = LokiConnector(
-        endpoint="https://loki.example",
-        auth=TokenAuth("tok"),
-        source=Source.APPLOG,
-        query_kwargs={"app": "myapp", "service_name": "x"},
-        templates={Source.APPLOG: ["{{}}"]},
-    )
-    obs = conn.collect(_ctx())
-    decoded = json.loads(obs[0]["body"])
-    assert {s["stream"].get("node_name") for s in decoded} == {"n1", "n2"}
+
+    obs = _applog_connector().collect(_ctx())
+
+    assert obs[0]["context"]["format"] == Format.ENTRY_TIMESERIES
+    assert obs[0]["context"]["time_interval"] == {"start": None, "end": None}
+    assert json.loads(obs[0]["body"]) == [
+        {
+            "body": "[rank 0] step 1",
+            "ts": 1,
+            "resources": [{"kind": "node", "hostname": "n1"}, {"kind": "replica", "name": "trainer-0"}],
+        },
+        {"body": "[rank 1] no labels", "ts": 2},
+    ]
 
 
-def test_applog_node_label_already_node_name_is_noop(mocker):
-    """When the configured node_label is already `node_name`, the encoded
-    streams pass through unchanged."""
-    streams = [{"stream": {"node_name": "n1"}, "values": [["1", "x"]]}]
+def test_applog_json_payloads_unwrap_line_and_hostname(mocker):
+    streams = [
+        {
+            "stream": {"app": "x"},
+            "values": [
+                ["1", json.dumps({"body": "[rank 1] oops", "attributes": {"hostname": "n2"}})],
+                ["2", json.dumps({"data": {"message": "terminate called", "hostname": "n3"}})],
+                ["3", json.dumps({"unrelated": True})],
+            ],
+        },
+        {
+            "stream": {"host_name": "n1"},
+            "values": [["4", json.dumps({"body": "kept", "attributes": {"hostname": "n9"}})]],
+        },
+    ]
     _mock_response(mocker, streams)
-    conn = LokiConnector(
-        endpoint="https://loki.example",
-        auth=TokenAuth("tok"),
-        source=Source.APPLOG,
-        query_kwargs={"app": "myapp", "service_name": "x"},
-        templates={Source.APPLOG: ["{{}}"]},
-        node_label="node_name",
-    )
-    obs = conn.collect(_ctx())
-    decoded = json.loads(obs[0]["body"])
-    assert decoded[0]["stream"]["node_name"] == "n1"
+
+    obs = _applog_connector().collect(_ctx())
+
+    assert json.loads(obs[0]["body"]) == [
+        {"body": "[rank 1] oops", "ts": 1, "resources": [{"kind": "node", "hostname": "n2"}]},
+        {"body": "terminate called", "ts": 2, "resources": [{"kind": "node", "hostname": "n3"}]},
+        {"body": '{"unrelated": true}', "ts": 3},
+        {"body": "kept", "ts": 4, "resources": [{"kind": "node", "hostname": "n1"}]},
+    ]
 
 
 def test_mtls_auth_sets_session_cert(mocker):

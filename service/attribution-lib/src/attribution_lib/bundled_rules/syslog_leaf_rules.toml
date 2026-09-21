@@ -41,6 +41,25 @@ line    = " NVRM: rpcRmApiAlloc_GSP: GspRmAlloc failed"
 symptom = "GspRmAlloc failed"
 
 [[extractor]]
+name     = "SyslogGspFatalError"
+match_re = '\bNV_PGSP_FALCON_IRQSTAT_FATAL_ERROR\b'
+emit     = { type = "bad_node", symptom = "NV_PGSP_FALCON_IRQSTAT_FATAL_ERROR" }
+[[extractor.cases]]
+expect  = "bad"
+line    = "<4>1 2026-09-08T05:26:29.410430-07:00 test-node-001 kernel - - - NVRM: kgspServiceFatalHwError_GB100: NV_PGSP_FALCON_IRQSTAT_FATAL_ERROR FB Poison pending (mask: 0x1)"
+symptom = "NV_PGSP_FALCON_IRQSTAT_FATAL_ERROR"
+[[extractor.cases]]
+expect  = "bad"
+line    = "Sep 7 07:20:04 test-node-001 kernel: NVRM: kgspServiceFatalHwError_GB100: NV_PGSP_FALCON_IRQSTAT_FATAL_ERROR FB Poison pending (mask: 0x1)"
+symptom = "NV_PGSP_FALCON_IRQSTAT_FATAL_ERROR"
+[[extractor.cases]]
+expect = "none"
+line   = "NVRM: NV_PGSP_FALCON_IRQSTAT_FATAL_ERROR_CLEARED"
+[[extractor.cases]]
+expect = "none"
+line   = "NVRM: rpcRmApiAlloc_GSP: GspRmAlloc failed"
+
+[[extractor]]
 name         = "SyslogNumaMemoryExhaustion"
 match_re     = 'NVRM: nvAssertFailedNoLog: Assertion failed: \(status == NV_OK\) \|\| \(\(status == NV_ERR_NO_MEMORY\)'
 emit         = { type = "bad_node", symptom = "NUMA node memory exhaustion", derived_rule = "numa-node-memory-exhaustion" }
