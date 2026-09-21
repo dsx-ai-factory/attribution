@@ -6,7 +6,8 @@ During Early Access the rule schema, cascade-pattern syntax, and test framework 
 
 ## Run the test gate
 
-Install `uv`, Node.js 22, and pnpm 10.11, then run:
+Install `uv`, Node.js 22, and pnpm 10.11, and complete the
+[Docker prerequisites](blueprint/docs/quickstart.md#prerequisites). Then run:
 
 ```bash
 make test
