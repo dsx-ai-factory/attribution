@@ -1,5 +1,5 @@
 import { Search, X } from 'lucide-react'
-import type { OutcomeKey, Run } from '@/interfaces/attribution'
+import type { OutcomeKey, RunSummary } from '@/interfaces/attribution'
 import { OUTCOMES } from '@/lib/attribution-data'
 import type { FleetFilter } from '@/interfaces/filter'
 import { withDimension } from '@/lib/filter-state'
@@ -58,7 +58,7 @@ export function RunsToolbar({
   setFilter,
 }: {
   runs: number
-  filteredRuns: Run[]
+  filteredRuns: RunSummary[]
   filter: FleetFilter
   setFilter: (next: FleetFilter) => void
 }) {
@@ -151,13 +151,13 @@ export function RunsToolbar({
       </div>
 
       <div className="flex flex-wrap items-center gap-2.5">
-        <div className="relative">
+        <div className="relative w-96 max-w-full">
           <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 size-3.5 text-foreground-muted pointer-events-none" />
           <input
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             placeholder="Filter by execution context, workload, user, symptom, rule, node, UID, detail"
-            className="bg-card border border-border rounded-sm pl-8 pr-2 py-1.5 font-mono text-xs text-foreground w-96 focus:outline-none focus:border-zinc-700"
+            className="bg-card border border-border rounded-sm pl-8 pr-2 py-1.5 font-mono text-xs text-foreground w-full focus:outline-none focus:border-zinc-700"
           />
         </div>
 
@@ -179,7 +179,7 @@ export function RunsToolbar({
           onValueChange={(v) => v && setOutcome(v as OutcomeChoice)}
           variant="outline"
           size="sm"
-          className="font-mono"
+          className="max-w-full overflow-x-auto p-px font-mono"
         >
           <ToggleGroupItem value="all">All outcomes</ToggleGroupItem>
           {OUTCOME_ORDER.map((g) => (

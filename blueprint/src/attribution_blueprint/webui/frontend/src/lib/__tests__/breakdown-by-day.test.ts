@@ -1,17 +1,18 @@
 import { describe, it, expect } from 'vitest'
 import { buildDailyByOutcome, dailySpine, buildDaily, breakdownHighlight } from '@/lib/attribution-data'
-import type { Run, OutcomeKey } from '@/interfaces/attribution'
+import type { RunSummary, OutcomeKey } from '@/interfaces/attribution'
 
-const base: Run = {
+const base: RunSummary = {
   id: '1', jobId: 'team/x', workload: 'team/x', attempt: 1, attemptUid: 'u', user: 'alice',
   status: 'FAILED', nodes: 1, nodeIds: ['n1'], elapsedH: 1.5, gpusPerNode: 8, gpuCount: 8,
   endTime: '2026-05-26T00:00:00Z', startTime: '2026-05-26T00:00:00Z',
   outcome: 'hardware', verdictLabel: 'Hardware', detail: '',
+  decisionGraphState: 'absent',
   rootSymptom: { symptom: 'GpuFell', rule: 'gpu_fell_off_bus', time: 'T', line: 'x' },
-  symptoms: [], responsibleNodes: [], pipeline: '0.1.0', service: 'v2', log: [],
+  symptoms: [], responsibleNodes: [], pipeline: '0.1.0', service: 'v2',
 }
 
-function mk(symptom: string, outcome: OutcomeKey, endTime: string): Run {
+function mk(symptom: string, outcome: OutcomeKey, endTime: string): RunSummary {
   return { ...base, outcome, endTime, rootSymptom: { ...base.rootSymptom, symptom } }
 }
 
@@ -27,7 +28,7 @@ describe('dailySpine', () => {
 
 describe('buildDailyByOutcome', () => {
   it('buckets failed attempts of one outcome by day and symptom', () => {
-    const runs: Run[] = [
+    const runs: RunSummary[] = [
       mk('GpuFell', 'hardware', '2026-05-26T01:00:00Z'),
       mk('GpuFell', 'hardware', '2026-05-26T02:00:00Z'),
       mk('EccDoubleBit', 'hardware', '2026-05-28T01:00:00Z'),
@@ -45,13 +46,13 @@ describe('buildDailyByOutcome', () => {
   })
 
   it('only counts the requested outcome', () => {
-    const runs: Run[] = [mk('GpuFell', 'hardware', '2026-05-26T01:00:00Z')]
+    const runs: RunSummary[] = [mk('GpuFell', 'hardware', '2026-05-26T01:00:00Z')]
     expect(buildDailyByOutcome(runs, from, to, 'software').total).toBe(0)
     expect(buildDailyByOutcome(runs, from, to, 'software').series).toEqual([])
   })
 
   it('folds symptoms beyond topN into a single trailing Other series', () => {
-    const runs: Run[] = [
+    const runs: RunSummary[] = [
       mk('A', 'hardware', '2026-05-26T01:00:00Z'),
       mk('A', 'hardware', '2026-05-26T02:00:00Z'),
       mk('A', 'hardware', '2026-05-27T02:00:00Z'), // A total 3
@@ -68,7 +69,7 @@ describe('buildDailyByOutcome', () => {
   })
 
   it('breaks total ties by symptom name ascending', () => {
-    const runs: Run[] = [
+    const runs: RunSummary[] = [
       mk('Zeta', 'hardware', '2026-05-26T01:00:00Z'),
       mk('Alpha', 'hardware', '2026-05-27T01:00:00Z'),
     ]

@@ -17,6 +17,7 @@ the resulting argv plus the emitted Observations.
 
 from __future__ import annotations
 
+import json
 import subprocess
 from datetime import datetime, timezone
 
@@ -24,6 +25,11 @@ import pytest
 
 from attribution_blueprint.connectors.logs.kubectl_logs import KubectlLogsConnector
 from attribution_blueprint.types import Format, Source
+
+
+def _text(observation: dict) -> str:
+    """Rejoin an APPLOG observation's per-line entries into the kubectl stdout."""
+    return "\n".join(entry["body"] for entry in json.loads(observation["body"]))
 
 
 def _ctx(**extra) -> dict:
@@ -74,15 +80,14 @@ def test_emits_one_observation_per_pod(mocker):
     obs = conn.collect(_ctx())
 
     assert len(obs) == 2
-    bodies = {o["body"] for o in obs}
+    bodies = {_text(o) for o in obs}
     assert "rank=0\nstep=100\n" in bodies
     assert any("CUDA error: device-side assert" in b for b in bodies)
     for o in obs:
         assert o["context"]["source"] == Source.APPLOG
-        assert o["context"]["format"] == Format.RAW_LOG
+        assert o["context"]["format"] == Format.ENTRY_TIMESERIES
         assert o["context"]["resources"] == "AllJobResources"
-        assert o["context"]["time_interval"]["start"] == datetime(2026, 5, 1, 12, 0, 0, tzinfo=timezone.utc)
-        assert o["context"]["time_interval"]["end"] == datetime(2026, 5, 1, 12, 30, 0, tzinfo=timezone.utc)
+        assert o["context"]["time_interval"] == {"start": None, "end": None}
 
 
 def test_skips_empty_bodies(mocker):
@@ -96,7 +101,7 @@ def test_skips_empty_bodies(mocker):
     conn = KubectlLogsConnector()
     obs = conn.collect(_ctx())
     assert len(obs) == 1
-    assert obs[0]["body"] == "rank=1\n"
+    assert _text(obs[0]) == "rank=1\n"
 
 
 def test_continues_when_one_pod_errors(mocker):
@@ -111,7 +116,7 @@ def test_continues_when_one_pod_errors(mocker):
     conn = KubectlLogsConnector()
     obs = conn.collect(_ctx())
     assert len(obs) == 1
-    assert obs[0]["body"] == "rank=1 logs survived"
+    assert _text(obs[0]) == "rank=1 logs survived"
 
 
 def test_returns_empty_when_pod_names_absent(mocker):
@@ -185,7 +190,7 @@ def test_truncates_large_bodies_to_last_n_bytes(mocker):
     conn = KubectlLogsConnector(max_bytes_per_pod=64)
     obs = conn.collect(_ctx(pod_names=["train-abc-trainer-0-0"]))
     assert len(obs) == 1
-    body = obs[0]["body"]
+    body = _text(obs[0])
     assert len(body.encode("utf-8")) <= 64
     # The cap keeps the tail, so the crash line survives.
     assert "exit 42" in body
@@ -215,6 +220,9 @@ def test_source_can_be_overridden_to_syslog(mocker):
     conn = KubectlLogsConnector(source=Source.SYSLOG)
     obs = conn.collect(_ctx(pod_names=["train-abc-trainer-0-0"]))
     assert obs[0]["context"]["source"] == Source.SYSLOG
+    assert obs[0]["context"]["format"] == Format.RAW_LOG
+    assert obs[0]["context"]["time_interval"]["start"] == datetime(2026, 5, 1, 12, 0, 0, tzinfo=timezone.utc)
+    assert obs[0]["body"] == "x"
 
 
 def test_kubectl_timeout_returns_empty_for_that_pod(mocker):

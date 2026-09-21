@@ -8,7 +8,7 @@ import type {
   OutcomeKey,
   OutcomeLedgerEntry,
   RuleLedgerEntry,
-  Run,
+  RunSummary,
   SymptomLedgerEntry,
   UserLedgerEntry,
 } from '@/interfaces/attribution'
@@ -63,7 +63,7 @@ function buildParetoSeries(
   nodeLedger: NodeLedgerEntry[],
   userLedger: UserLedgerEntry[],
   ruleLedger: RuleLedgerEntry[],
-  runs: Run[],
+  runs: RunSummary[],
 ): ParetoRow[] {
   const valueOf = (d: { count: number; nodeHours: number }) =>
     metric === 'count' ? d.count : d.nodeHours
@@ -580,7 +580,7 @@ export function ParetoCard({
   userLedger: UserLedgerEntry[]
   ruleLedger: RuleLedgerEntry[]
   outcomeLedger: OutcomeLedgerEntry[]
-  runs: Run[]
+  runs: RunSummary[]
 }) {
   const axis = filter.axis
   const metric = filter.metric

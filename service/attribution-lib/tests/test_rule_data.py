@@ -20,6 +20,7 @@ from attribution_lib.observation.inbound import (
     Format as ObservationFormat,
     Source as ObservationSource,
 )
+from attribution_lib.observation.processing import render_metric_body
 from attribution_lib.resources.resource_set import AllJobResources
 from attribution_lib.sources import Source
 from test_support.helpers import (
@@ -68,24 +69,38 @@ def _run_node_metrics_case(case_data: RuleDataCase, attribution_test_builder, si
     timestamp = case_data.case.get("timestamp", 1744734450)
     metric = _make_node_metric(case_data.case["metric"], case_data.case["value"], timestamp, node, component)
 
-    result = attribution_test_builder(
-        job_info=job_info,
-        data=[metric],
-        source=ObservationSource.NODE_METRICS,
-        format=ObservationFormat.PROMETHEUS_METRICS,
-        check_fn=process_check,
-    )
-    node_attr = result.get_node_attributions()
+    # Under entry_timeseries the producer renders the body and stamps nanoseconds; the rules must
+    # read the same verdict off either wire form.
+    wire_forms = [
+        (ObservationFormat.PROMETHEUS_METRICS, metric),
+        (
+            ObservationFormat.ENTRY_TIMESERIES,
+            {
+                "ts": timestamp * 1_000_000_000,
+                "resources": [{"kind": "node", "hostname": node}],
+                "body": render_metric_body(metric),
+            },
+        ),
+    ]
+    for format, wire in wire_forms:
+        result = attribution_test_builder(
+            job_info=job_info,
+            data=[wire],
+            source=ObservationSource.NODE_METRICS,
+            format=format,
+            check_fn=process_check,
+        )
+        node_attr = result.get_node_attributions()
 
-    match case_data.case["expect"]:
-        case "bad":
-            match_bad(node_attr, node, case_data.case["expected_symptom"], case_data.case["expected_rule"])
-        case "interesting":
-            match_interesting(node_attr, node, case_data.case["expected_symptom"], case_data.case["expected_rule"])
-        case "no_match":
-            assert node not in node_attr.attributions or not node_attr.attributions[node].attributions._data
-        case other:
-            raise ValueError(f"Unsupported expectation {other!r} in {case_data.path}")
+        match case_data.case["expect"]:
+            case "bad":
+                match_bad(node_attr, node, case_data.case["expected_symptom"], case_data.case["expected_rule"])
+            case "interesting":
+                match_interesting(node_attr, node, case_data.case["expected_symptom"], case_data.case["expected_rule"])
+            case "no_match":
+                assert node not in node_attr.attributions or not node_attr.attributions[node].attributions._data
+            case other:
+                raise ValueError(f"Unsupported expectation {other!r} in {case_data.path}")
 
 
 def _make_nvlink_metric(metric: str, value: float, timestamp: int, node: str, component: str, cluster: str) -> dict:

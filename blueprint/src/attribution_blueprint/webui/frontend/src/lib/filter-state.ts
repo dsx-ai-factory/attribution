@@ -1,4 +1,4 @@
-import type { OutcomeKey, Run } from '@/interfaces/attribution'
+import type { OutcomeKey, RunSummary } from '@/interfaces/attribution'
 import type { FleetFilter, ParetoAxis, ParetoMetric } from '@/interfaces/filter'
 
 const OUTCOMES_LIST: OutcomeKey[] = ['hardware', 'software', 'multi', 'user', 'undetermined', 'pass']
@@ -82,7 +82,7 @@ export function serializeFilter(f: FleetFilter): URLSearchParams {
   return sp
 }
 
-function matchesSearch(r: Run, q: string): boolean {
+function matchesSearch(r: RunSummary, q: string): boolean {
   const needle = q.toLowerCase()
   return (
     r.jobId.toLowerCase().includes(needle) ||
@@ -97,7 +97,7 @@ function matchesSearch(r: Run, q: string): boolean {
   )
 }
 
-export function applyFilter(runs: Run[], f: FleetFilter): Run[] {
+export function applyFilter(runs: RunSummary[], f: FleetFilter): RunSummary[] {
   return runs.filter((r) => {
     if (f.status === 'failed' && r.outcome === 'pass') return false
     if (f.outcome && r.outcome !== f.outcome) return false

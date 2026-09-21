@@ -17,7 +17,7 @@ move declarations next to the extractor rules that emit them. doc anchors are
 derived placeholders pending the attribution documentation manifest.
 """
 
-from attribution_lib.rules import cascade_symptom, known_symptom, outcome_symptom
+from attribution_lib.rules import SymptomFamily, cascade_symptom, known_symptom, outcome_symptom
 from attribution_lib.symptoms.declarations import (
     CascadeScope,
     DagDiscardBehavior,
@@ -40,6 +40,53 @@ NODE_FAILURE_CASCADE_TARGETS = (
     "Corroborated node failure",
 )
 
+XID_FAMILY_SCHEMA = SymptomFamily(
+    name="xid",
+    property_types={
+        "number": int,
+        "mnemonic": str,
+        "subcode": str,
+        "port_down_reason_code": int,
+        "port_down_reason": str,
+        "error_status": int,
+    },
+)
+
+
+def _xid_member(
+    number: int,
+    *,
+    mnemonic: str | None = None,
+    subcode: str | None = None,
+    port_down_reason_code: int | None = None,
+    port_down_reason: str | None = None,
+    error_status: int | None = None,
+) -> SymptomFamily:
+    """Build an XID family member from explicitly decoded identity fields.
+
+    Args:
+        number: NVIDIA XID number.
+        mnemonic: Optional catalog mnemonic for a classic XID.
+        subcode: Optional decoded NVLink subcode.
+        port_down_reason_code: Optional numeric NVLink port-down reason.
+        port_down_reason: Optional symbolic NVLink port-down reason.
+        error_status: Optional decoded NVLink error status.
+
+    Returns:
+        Structured XID family identity containing the supplied fields.
+    """
+    properties: dict[str, object] = {"number": number}
+    for name, value in (
+        ("mnemonic", mnemonic),
+        ("subcode", subcode),
+        ("port_down_reason_code", port_down_reason_code),
+        ("port_down_reason", port_down_reason),
+        ("error_status", error_status),
+    ):
+        if value is not None:
+            properties[name] = value
+    return SymptomFamily(name="xid", properties=properties)
+
 
 outcome_symptom(
     "unknown-symptom-",
@@ -57,6 +104,7 @@ outcome_symptom(
 
 outcome_symptom(
     "XID-149",
+    family=_xid_member(149),
     outcome="Fail InfraHW",
     priority=OutcomePriority.CRITICAL,
     doc="xid-149",
@@ -288,7 +336,7 @@ outcome_symptom(
     "Corroborated node failure",
     outcome="Fail InfraHW",
     priority=OutcomePriority.HIGH_HW,
-    doc="not-responding",
+    doc="corroborated-node-failure",
     hw_cause="Known HW Cause - Node",
     cascade_discards=("Node failure reported by slurm", "Node not responding"),
 )
@@ -449,6 +497,7 @@ outcome_symptom(
 
 outcome_symptom(
     "XID-74-",
+    family=_xid_member(74),
     outcome="Fail InfraHW",
     priority=OutcomePriority.HIGH_HW,
     doc="xid-74",
@@ -457,6 +506,7 @@ outcome_symptom(
 
 outcome_symptom(
     "XID-79-",
+    family=_xid_member(79),
     outcome="Fail InfraHW",
     priority=OutcomePriority.HIGH_HW,
     doc="xid-79",
@@ -479,6 +529,7 @@ outcome_symptom(
 
 outcome_symptom(
     "XID-171-",
+    family=_xid_member(171),
     outcome="Fail InfraHW",
     priority=OutcomePriority.HIGH_HW,
     doc="xid-171",
@@ -488,6 +539,7 @@ outcome_symptom(
 
 outcome_symptom(
     "XID-172-",
+    family=_xid_member(172),
     outcome="Fail InfraHW",
     priority=OutcomePriority.HIGH_HW,
     doc="xid-172",
@@ -497,6 +549,7 @@ outcome_symptom(
 
 outcome_symptom(
     "XID-48-",
+    family=_xid_member(48),
     outcome="Fail InfraHW",
     priority=OutcomePriority.HIGH_HW,
     doc="xid-48",
@@ -505,6 +558,7 @@ outcome_symptom(
 
 outcome_symptom(
     "XID-95-",
+    family=_xid_member(95),
     outcome="Fail InfraHW",
     priority=OutcomePriority.HIGH_HW,
     doc="xid-95",
@@ -512,7 +566,16 @@ outcome_symptom(
 )
 
 outcome_symptom(
+    "poisoned gsp",
+    outcome="Fail InfraHW",
+    priority=OutcomePriority.HIGH_HW,
+    doc="ecc-error",
+    hw_cause="Known HW Cause - Node",
+)
+
+outcome_symptom(
     "XID-120-",
+    family=_xid_member(120),
     outcome="Fail InfraHW",
     priority=OutcomePriority.HIGH_HW,
     doc="xid-120",
@@ -712,6 +775,7 @@ outcome_symptom(
 
 outcome_symptom(
     "XID-13-",
+    family=_xid_member(13),
     outcome="Fail MultiCategory",
     priority=OutcomePriority.MEDIUM,
     doc="xid-13",
@@ -719,6 +783,7 @@ outcome_symptom(
 
 outcome_symptom(
     "XID-31-",
+    family=_xid_member(31),
     outcome="Fail MultiCategory",
     priority=OutcomePriority.MEDIUM,
     doc="xid-31",
@@ -726,6 +791,7 @@ outcome_symptom(
 
 outcome_symptom(
     "XID-32-",
+    family=_xid_member(32),
     outcome="Fail MultiCategory",
     priority=OutcomePriority.MEDIUM,
     doc="xid-32",
@@ -733,6 +799,7 @@ outcome_symptom(
 
 outcome_symptom(
     "XID-38-",
+    family=_xid_member(38),
     outcome="Fail MultiCategory",
     priority=OutcomePriority.MEDIUM,
     doc="xid-38",
@@ -740,6 +807,7 @@ outcome_symptom(
 
 outcome_symptom(
     "XID-92-",
+    family=_xid_member(92),
     outcome="Fail MultiCategory",
     priority=OutcomePriority.MEDIUM,
     doc="xid-92",
@@ -747,6 +815,7 @@ outcome_symptom(
 
 outcome_symptom(
     "XID-94-",
+    family=_xid_member(94),
     outcome="Fail MultiCategory",
     priority=OutcomePriority.MEDIUM,
     doc="xid-94",
@@ -754,6 +823,7 @@ outcome_symptom(
 
 outcome_symptom(
     "XID-109-",
+    family=_xid_member(109),
     outcome="Fail MultiCategory",
     priority=OutcomePriority.MEDIUM,
     doc="xid-109",
@@ -761,6 +831,7 @@ outcome_symptom(
 
 outcome_symptom(
     "XID-137-",
+    family=_xid_member(137),
     outcome="Fail MultiCategory",
     priority=OutcomePriority.MEDIUM,
     doc="xid-137",
@@ -768,6 +839,7 @@ outcome_symptom(
 
 outcome_symptom(
     "XID-43-",
+    family=_xid_member(43),
     outcome="Fail User",
     priority=OutcomePriority.MEDIUM_XID,
     doc="xid-43",
@@ -775,6 +847,7 @@ outcome_symptom(
 
 outcome_symptom(
     "XID-44-",
+    family=_xid_member(44),
     outcome="Fail MultiCategory",
     priority=OutcomePriority.MEDIUM_XID,
     doc="xid-44",
@@ -782,6 +855,7 @@ outcome_symptom(
 
 outcome_symptom(
     "XID-45-",
+    family=_xid_member(45),
     outcome="Fail MultiCategory",
     priority=OutcomePriority.MEDIUM_XID,
     doc="xid-45",
@@ -789,6 +863,7 @@ outcome_symptom(
 
 outcome_symptom(
     "XID-",
+    family=XID_FAMILY_SCHEMA,
     outcome="Fail InfraHW",
     priority=OutcomePriority.MEDIUM_BROAD,
     doc="xid",
@@ -2370,6 +2445,7 @@ cascade_symptom(
 
 cascade_symptom(
     "XID-145",
+    family=_xid_member(145),
     cascade_discards=(
         "cudaErrorLaunchFailure",
         "cudaErrorNvlinkUncorrectable",
@@ -2399,21 +2475,25 @@ cascade_symptom(
 
 cascade_symptom(
     "XID-63-INFOROM_DRAM_RETIREMENT_EVENT",
+    family=_xid_member(63, mnemonic="INFOROM_DRAM_RETIREMENT_EVENT"),
     cascade_discards=("XID-63-INFOROM_DRAM_RETIREMENT_EVENT",),
 )
 
 cascade_symptom(
     "XID-31-MMU_ERR_FLT",
+    family=_xid_member(31, mnemonic="MMU_ERR_FLT"),
     cascade_discards=("cudaErrorIllegalAddress",),
 )
 
 cascade_symptom(
     "XID-171-UNCORRECTABLE_DRAM_ERROR",
+    family=_xid_member(171, mnemonic="UNCORRECTABLE_DRAM_ERROR"),
     cascade_discards=("XID-48-", "XID-63-", "XID-94-", "cudaErrorContained"),
 )
 
 cascade_symptom(
     "XID-172-UNCORRECTABLE_SRAM_ERROR",
+    family=_xid_member(172, mnemonic="UNCORRECTABLE_SRAM_ERROR"),
     cascade_discards=("XID-48-", "XID-94-", "cudaErrorContained"),
 )
 
@@ -2452,6 +2532,9 @@ known_symptom("EFA Error-107")
 known_symptom("EFA Error-connection-reset")
 
 known_symptom("Fabric manager lost connection to GPU")
+
+# The fatal GSP marker needs XID-94 and NV_ERR_RESET_REQUIRED to diagnose ECC.
+known_symptom("NV_PGSP_FALCON_IRQSTAT_FATAL_ERROR")
 
 outcome_symptom(
     "Fabric manager lost connection to all GPUs",
@@ -2494,63 +2577,112 @@ known_symptom("RuntimeError", fallback_prefix=True)
 
 known_symptom("Software caused connection abort")
 
-known_symptom("XID-109-CTXSW_TIMEOUT_ERROR")
+known_symptom("XID-109-CTXSW_TIMEOUT_ERROR", family=_xid_member(109, mnemonic="CTXSW_TIMEOUT_ERROR"))
 
-known_symptom("XID-119-GSP_RPC_TIMEOUT")
+known_symptom("XID-119-GSP_RPC_TIMEOUT", family=_xid_member(119, mnemonic="GSP_RPC_TIMEOUT"))
 
-known_symptom("XID-120-GSP_ERROR")
+known_symptom("XID-120-GSP_ERROR", family=_xid_member(120, mnemonic="GSP_ERROR"))
 
-known_symptom("XID-13-GR_EXCEPTION")
+known_symptom("XID-13-GR_EXCEPTION", family=_xid_member(13, mnemonic="GR_EXCEPTION"))
 
-known_symptom("XID-13-GR_EXCEPTION /")
+known_symptom("XID-13-GR_EXCEPTION /", family=_xid_member(13, mnemonic="GR_EXCEPTION"))
 
-known_symptom("XID-13-GR_EXCEPTION /\nGR_ERROR_SW_NOTIFY")
+known_symptom(
+    "XID-13-GR_EXCEPTION /\nGR_ERROR_SW_NOTIFY",
+    family=_xid_member(13, mnemonic="GR_EXCEPTION"),
+)
 
-known_symptom("XID-145-RLW_REMAP-4")
+known_symptom("XID-137-NVLINK_PRIV_ERR", family=_xid_member(137, mnemonic="NVLINK_PRIV_ERR"))
 
-known_symptom("XID-145-RLW_REMAP-8")
+known_symptom("XID-145-RLW_REMAP-4", family=_xid_member(145, subcode="RLW_REMAP", error_status=4))
 
-known_symptom("XID-145-RLW_SRC_TRACK-4")
+known_symptom("XID-145-RLW_REMAP-8", family=_xid_member(145, subcode="RLW_REMAP", error_status=8))
 
-known_symptom("XID-145-RLW_SRC_TRACK-8")
+known_symptom("XID-145-RLW_RXPIPE-8", family=_xid_member(145, subcode="RLW_RXPIPE", error_status=8))
 
-known_symptom("XID-149.0-NETIR_INT-NO_LINK_DOWN-0")
+known_symptom("XID-145-RLW_SRC_TRACK-4", family=_xid_member(145, subcode="RLW_SRC_TRACK", error_status=4))
 
-known_symptom("XID-149.10-NETIR_LINK_DOWN-PHY_LAYER_RETRANSMIT_TIMEOUT-0")
+known_symptom("XID-145-RLW_SRC_TRACK-8", family=_xid_member(145, subcode="RLW_SRC_TRACK", error_status=8))
 
-known_symptom("XID-149.37-NETIR_LINK_DOWN-PEER_RESET_EVENT-0")
+known_symptom(
+    "XID-149.0-NETIR_INT-NO_LINK_DOWN-0",
+    family=_xid_member(
+        149,
+        subcode="NETIR_INT",
+        port_down_reason_code=0,
+        port_down_reason="NO_LINK_DOWN",
+        error_status=0,
+    ),
+)
 
-known_symptom("XID-149.4-NETIR_LINK_DOWN-ALIGNMENT_LOSS-0")
+known_symptom(
+    "XID-149.10-NETIR_LINK_DOWN-PHY_LAYER_RETRANSMIT_TIMEOUT-0",
+    family=_xid_member(
+        149,
+        subcode="NETIR_LINK_DOWN",
+        port_down_reason_code=10,
+        port_down_reason="PHY_LAYER_RETRANSMIT_TIMEOUT",
+        error_status=0,
+    ),
+)
 
-known_symptom("XID-162-PSHC_REENGAGED")
+known_symptom(
+    "XID-149.37-NETIR_LINK_DOWN-PEER_RESET_EVENT-0",
+    family=_xid_member(
+        149,
+        subcode="NETIR_LINK_DOWN",
+        port_down_reason_code=37,
+        port_down_reason="PEER_RESET_EVENT",
+        error_status=0,
+    ),
+)
 
-known_symptom("XID-163-PSHC_DISENGAGED")
+known_symptom(
+    "XID-149.4-NETIR_LINK_DOWN-ALIGNMENT_LOSS-0",
+    family=_xid_member(
+        149,
+        subcode="NETIR_LINK_DOWN",
+        port_down_reason_code=4,
+        port_down_reason="ALIGNMENT_LOSS",
+        error_status=0,
+    ),
+)
 
-known_symptom("XID-43-RESETCHANNEL_VERIF_ERROR")
+known_symptom("XID-162-PSHC_REENGAGED", family=_xid_member(162, mnemonic="PSHC_REENGAGED"))
 
-known_symptom("XID-44-GR_FAULT_DURING_CTXSW")
+known_symptom("XID-163-PSHC_DISENGAGED", family=_xid_member(163, mnemonic="PSHC_DISENGAGED"))
 
-known_symptom("XID-45-PREEMPTIVE_REMOVAL")
+known_symptom("XID-43-RESETCHANNEL_VERIF_ERROR", family=_xid_member(43, mnemonic="RESETCHANNEL_VERIF_ERROR"))
 
-known_symptom("XID-48-GPU_ECC_DBE")
+known_symptom("XID-44-GR_FAULT_DURING_CTXSW", family=_xid_member(44, mnemonic="GR_FAULT_DURING_CTXSW"))
 
-known_symptom("XID-62-")
+known_symptom("XID-45-PREEMPTIVE_REMOVAL", family=_xid_member(45, mnemonic="PREEMPTIVE_REMOVAL"))
 
-known_symptom("XID-62-PMU_HALT_ERROR")
+known_symptom("XID-48-GPU_ECC_DBE", family=_xid_member(48, mnemonic="GPU_ECC_DBE"))
 
-known_symptom("XID-63-")
+known_symptom("XID-62-", family=_xid_member(62))
 
-known_symptom("XID-64-INFOROM_DRAM_RETIREMENT_FAILURE")
+known_symptom("XID-62-PMU_HALT_ERROR", family=_xid_member(62, mnemonic="PMU_HALT_ERROR"))
 
-known_symptom("XID-74-NVLINK_ERROR")
+known_symptom("XID-63-", family=_xid_member(63))
 
-known_symptom("XID-79-GPU_HAS_FALLEN_OFF_THE_BUS")
+known_symptom(
+    "XID-64-INFOROM_DRAM_RETIREMENT_FAILURE",
+    family=_xid_member(64, mnemonic="INFOROM_DRAM_RETIREMENT_FAILURE"),
+)
 
-known_symptom("XID-92-EXCESSIVE_SBE_INTERRUPTS")
+known_symptom("XID-74-NVLINK_ERROR", family=_xid_member(74, mnemonic="NVLINK_ERROR"))
 
-known_symptom("XID-94-CONTAINED_ERROR")
+known_symptom(
+    "XID-79-GPU_HAS_FALLEN_OFF_THE_BUS",
+    family=_xid_member(79, mnemonic="GPU_HAS_FALLEN_OFF_THE_BUS"),
+)
 
-known_symptom("XID-95-UNCONTAINED_ERROR")
+known_symptom("XID-92-EXCESSIVE_SBE_INTERRUPTS", family=_xid_member(92, mnemonic="EXCESSIVE_SBE_INTERRUPTS"))
+
+known_symptom("XID-94-CONTAINED_ERROR", family=_xid_member(94, mnemonic="CONTAINED_ERROR"))
+
+known_symptom("XID-95-UNCONTAINED_ERROR", family=_xid_member(95, mnemonic="UNCONTAINED_ERROR"))
 
 known_symptom("alias else")
 

@@ -35,6 +35,7 @@ from datetime import timezone
 
 from loguru import logger
 
+from attribution_blueprint.connectors.logs import entries_from_text, log_observation
 from attribution_blueprint.exceptions import MCAError
 from attribution_blueprint.types import (
     ExecutionContext,
@@ -43,6 +44,11 @@ from attribution_blueprint.types import (
     Source,
     assert_aware,
 )
+
+_FORMAT_FOR_SOURCE: dict[Source, Format] = {
+    Source.APPLOG: Format.ENTRY_TIMESERIES,
+    Source.SYSLOG: Format.RAW_LOG,
+}
 
 DEFAULT_MAX_BYTES_PER_POD = 16 * 1024 * 1024  # 16 MiB — caps a single pod
 DEFAULT_TIMEOUT_SECONDS = 60
@@ -150,21 +156,14 @@ class KubectlLogsConnector:
                 continue
             if self._max_bytes is not None:
                 body = _tail_bytes(body, self._max_bytes)
-            observations.append(
-                {
-                    "context": {
-                        "time_interval": {
-                            "start": context["start_time"],
-                            "end": context["end_time"],
-                        },
-                        "source": self._source,
-                        "format": Format.RAW_LOG,
-                        "resources": "AllJobResources",
-                    },
-                    "body": body,
-                }
-            )
+            observations.append(self._observation(body, context))
         return observations
+
+    def _observation(self, body: str, context: ExecutionContext) -> Observation:
+        fmt = _FORMAT_FOR_SOURCE[self._source]
+        if fmt == Format.ENTRY_TIMESERIES:
+            return log_observation(source=self._source, entries=entries_from_text(body), context=context)
+        return log_observation(source=self._source, format=fmt, body=body, context=context)
 
     # --- private kubectl plumbing -----------------------------------------
 

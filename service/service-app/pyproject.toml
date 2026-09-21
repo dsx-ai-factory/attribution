@@ -52,7 +52,7 @@ managed = true
 members = ["nvidia_attribution_client"]
 
 [tool.uv.sources]
-attribution-lib = { path = "../attribution-lib", editable = false }
+attribution-lib = { path = "../attribution-lib", editable = true }
 
 [build-system]
 requires = ["hatchling"]
