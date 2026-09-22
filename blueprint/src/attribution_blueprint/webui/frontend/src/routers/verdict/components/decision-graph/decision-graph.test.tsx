@@ -14,6 +14,7 @@ import { TraceEdge } from './edge'
 import { DecisionGraphView } from './index'
 import { EDGE_LABEL_HEIGHT, layoutGraph, NODE_HEIGHT, NODE_WIDTH } from './layout'
 import * as graphLayout from './layout'
+import { traceRelationships } from './trace'
 
 const referenceMocks = vi.hoisted(() => ({ docs: vi.fn() }))
 vi.mock('@/hooks/use-symptom-documentation', () => ({ useSymptomDocumentation: referenceMocks.docs }))
@@ -73,6 +74,56 @@ beforeEach(() => {
   Element.prototype.scrollIntoView = vi.fn()
 })
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); vi.restoreAllMocks() })
+
+describe('selected decision relationships', () => {
+  const relationships = (pairs: [string, string][]): DecisionGraph['edges'] => pairs.map(([parent_id, child_id]) => ({
+    parent_id, child_id, edge_type: 'MATCHES',
+  }))
+
+  it('traces upstream and downstream independently without including siblings or a bypass between traced nodes', () => {
+    const edges = relationships([
+      ['A', 'S'], ['S', 'B'], ['A', 'X'], ['Y', 'B'], ['A', 'B'],
+    ])
+    const original = structuredClone(edges)
+    edges.forEach(Object.freeze)
+    Object.freeze(edges)
+
+    const trace = traceRelationships(edges, 'S')
+
+    expect(trace.nodeIds).toEqual(new Set(['A', 'S', 'B']))
+    expect(trace.edgeIndexes).toEqual(new Set([0, 1]))
+    expect(edges).toEqual(original)
+  })
+
+  it('includes every hop through upstream and downstream branches and convergence', () => {
+    const edges = relationships([
+      ['U', 'A'], ['U', 'C'], ['A', 'S'], ['C', 'S'],
+      ['S', 'B'], ['S', 'D'], ['B', 'V'], ['D', 'V'], ['V', 'W'],
+      ['A', 'side'], ['other', 'B'], ['A', 'B'], ['disconnected', 'island'],
+    ])
+
+    const trace = traceRelationships(edges, 'S')
+
+    expect(trace.nodeIds).toEqual(new Set(['U', 'A', 'C', 'S', 'B', 'D', 'V', 'W']))
+    expect(trace.edgeIndexes).toEqual(new Set([0, 1, 2, 3, 4, 5, 6, 7, 8]))
+  })
+
+  it('terminates cycles while preserving self and parallel edges, opaque IDs and isolated selections', () => {
+    const edges = relationships([
+      ['', '__proto__'], ['__proto__', 'constructor'], ['constructor', ''],
+      ['__proto__', '__proto__'], ['', '__proto__'], ['other', 'toString'],
+    ])
+    const original = structuredClone(edges)
+
+    const trace = traceRelationships(edges, '')
+
+    expect(trace.nodeIds).toEqual(new Set(['', '__proto__', 'constructor']))
+    expect(trace.edgeIndexes).toEqual(new Set([0, 1, 2, 3, 4]))
+    expect(traceRelationships(edges, 'isolated')).toEqual({ nodeIds: new Set(['isolated']), edgeIndexes: new Set() })
+    expect(traceRelationships([], '')).toEqual({ nodeIds: new Set(['']), edgeIndexes: new Set() })
+    expect(edges).toEqual(original)
+  })
+})
 
 describe('decision graph', () => {
   it.each([
@@ -278,25 +329,37 @@ describe('decision graph', () => {
   })
 
   it('starts at the outcome and follows actual incoming and outgoing relationships', () => {
-    render(<DecisionGraphView graph={graph} />)
+    const { container } = render(<DecisionGraphView graph={graph} />)
+    const expectTrace = (selected: string, related: string[], muted: string[]) => {
+      const nodeIds = (className: string) => new Set([...container.querySelectorAll(`.react-flow__node.${className}`)]
+        .map((node) => node.getAttribute('data-id')))
+      expect(nodeIds('selected')).toEqual(new Set([selected]))
+      expect(nodeIds('decision-node-related')).toEqual(new Set(related))
+      expect(nodeIds('decision-node-muted')).toEqual(new Set(muted))
+    }
     const details = screen.getByRole('complementary', { name: 'Selected decision step' })
     expect(within(details).getByRole('heading', { name: 'Final symptom' })).toBeTruthy()
+    expectTrace('toString', ['__proto__', 'constructor'], ['', 'unknown'])
     fireEvent.click(within(details).getByRole('button', { name: 'From MATCHES: extract-rule, Extraction, node-a' }))
+    expectTrace('__proto__', ['', 'toString'], ['constructor', 'unknown'])
     expect(within(details).getByText('0')).toBeTruthy()
     expect(within(details).getByText(evidence.datum!)).toBeTruthy()
     expect(details.querySelector('script')).toBeNull()
     expect(within(details).getByText('2026-08-01T00:00:00Z')).toBeTruthy()
     fireEvent.click(within(details).getByRole('button', { name: /To PRUNES: prune-rule/ }))
+    expectTrace('', ['__proto__'], ['constructor', 'toString', 'unknown'])
     expect(within(details).getByText('PRUNED')).toBeTruthy()
     expect(within(details).getByText('A recorded reason')).toBeTruthy()
     expect(within(details).getByText('No source evidence recorded for this step.')).toBeTruthy()
     fireEvent.keyDown(screen.getByLabelText('Inspect decision step'), { key: 'ArrowDown' })
     fireEvent.click(screen.getByRole('option', { name: /Unknown stage/ }))
+    expectTrace('unknown', [], ['__proto__', 'constructor', '', 'toString'])
     expect(within(details).getByText('Unknown stage')).toBeTruthy()
     expect(within(details).getByText('No reason recorded for this step.')).toBeTruthy()
     expect(within(details).queryByRole('button')).toBeNull()
     fireEvent.click(screen.getByRole('button', { name: 'Reset' }))
     expect(within(details).getByRole('heading', { name: 'Final symptom' })).toBeTruthy()
+    expectTrace('toString', ['__proto__', 'constructor'], ['', 'unknown'])
   })
 
   it('inspects the first recorded step when a graph has no outcome', () => {

@@ -8,6 +8,7 @@ import {
   getViewportForBounds,
   ViewportPortal,
   Handle,
+  MarkerType,
   Position,
   ReactFlow,
   useReactFlow,
@@ -22,6 +23,7 @@ import { SymptomDocumentationLink } from '@/components/symptom-documentation'
 import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { layoutGraph, NODE_HEIGHT, NODE_WIDTH, type TraceNode, type GraphStage } from './layout'
 import { TraceEdge } from './edge'
+import { traceRelationships } from './trace'
 import '@xyflow/react/dist/style.css'
 import './style.css'
 
@@ -49,8 +51,8 @@ function StepNode({ data: { step }, selected }: NodeProps<TraceNode>) {
   return (
     <div
       className={cn(
-        'flex flex-col gap-1.5 rounded-md border bg-background px-3 py-2.5 shadow-sm transition-colors',
-        selected ? 'border-foreground ring-1 ring-foreground/30' : 'border-border hover:border-foreground-muted',
+        'decision-step flex flex-col gap-1.5 rounded-md border bg-background px-3 py-2.5 shadow-sm transition-colors',
+        selected ? 'border-primary-300 ring-1 ring-primary-300/40' : 'border-border hover:border-foreground-muted',
       )}
       style={{ width: NODE_WIDTH, height: NODE_HEIGHT }}
     >
@@ -63,7 +65,7 @@ function StepNode({ data: { step }, selected }: NodeProps<TraceNode>) {
           {step.action}
         </span>
       </div>
-      <div className="line-clamp-2 break-words text-sm font-medium leading-4 text-foreground" title={step.symptom}>
+      <div className={cn('line-clamp-2 break-words text-sm font-medium leading-4', selected ? 'text-primary-300' : 'text-foreground')} title={step.symptom}>
         {step.symptom || 'No symptom recorded'}
       </div>
       <div className="mt-auto space-y-0.5 text-[10px] leading-3 text-foreground-muted">
@@ -183,12 +185,28 @@ export function DecisionGraphView({ graph }: { graph: DecisionGraph }) {
   const [selectedId, setSelectedId] = useState(initialId)
   const [viewRequest, setViewRequest] = useState<{ revision: number; nodeId: string | null }>({ revision: 0, nodeId: null })
   const selected = graph.nodes.find((node) => node.node_id === selectedId) ?? graph.nodes[0]
-  const nodes = useMemo(() => layout.nodes.map((node) => ({ ...node, selected: node.id === selected.node_id })), [layout.nodes, selected.node_id])
+  const trace = useMemo(() => traceRelationships(graph.edges, selected.node_id), [graph.edges, selected.node_id])
+  const nodes = useMemo(() => layout.nodes.map((node) => ({
+    ...node,
+    selected: node.id === selected.node_id,
+    className: node.id === selected.node_id ? undefined : trace.nodeIds.has(node.id) ? 'decision-node-related' : 'decision-node-muted',
+  })), [layout.nodes, selected.node_id, trace])
+  const edges = useMemo(() => layout.edges.map((edge, index) => {
+    const highlighted = trace.edgeIndexes.has(index)
+    const color = highlighted ? 'var(--color-primary-300)' : 'var(--foreground-muted)'
+    return {
+      ...edge,
+      animated: highlighted,
+      markerEnd: { type: MarkerType.ArrowClosed, color },
+      style: { ...edge.style, stroke: color, strokeWidth: highlighted ? 2 : 1.25, opacity: highlighted ? 1 : 0.3 },
+    }
+  }), [layout.edges, trace])
 
   return (
     <div className="flex shrink-0 flex-col lg:min-h-0 lg:flex-1">
       <div className="flex shrink-0 flex-wrap items-center justify-between gap-3 border-y border-border bg-background px-5 py-3">
         <div className="flex flex-wrap gap-x-4 gap-y-2 text-[11px] text-foreground-muted" aria-label="Graph legend">
+          <span className="flex items-center gap-1.5"><span className="h-0.5 w-3 bg-primary-300" />Selected path</span>
           <span className="flex items-center gap-1.5"><span className="size-1.5 rounded-full bg-foreground-muted" />Recorded evidence</span>
           <span className="flex items-center gap-1.5"><span className="size-1.5 rounded-full bg-emerald-300" />Matched</span>
           <span className="flex items-center gap-1.5"><span className="size-1.5 rounded-full bg-red-300" />Removed / pruned</span>
@@ -239,7 +257,7 @@ export function DecisionGraphView({ graph }: { graph: DecisionGraph }) {
           <div className="absolute inset-0">
             <ReactFlow<TraceNode>
               nodes={nodes}
-              edges={layout.edges}
+              edges={edges}
               nodeTypes={NODE_TYPES}
               edgeTypes={EDGE_TYPES}
               onNodesChange={(changes) => {
