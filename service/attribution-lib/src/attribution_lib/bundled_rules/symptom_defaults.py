@@ -879,12 +879,12 @@ outcome_symptom(
     ),
 )
 
+# Resource exhaustion can come from infrastructure pressure or users requesting more resources than are available.
 outcome_symptom(
     "NV_ERR_INSUFFICIENT_RESOURCES",
-    outcome="Fail InfraSW",
+    outcome="Fail MultiCategory",
     priority=OutcomePriority.MEDIUM_SW,
     doc="nv-err-insufficient-resources",
-    hw_cause="Driver bug",
 )
 
 outcome_symptom(
