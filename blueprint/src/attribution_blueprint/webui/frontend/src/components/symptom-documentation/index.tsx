@@ -19,11 +19,10 @@ export function SymptomDocumentationLink({ symptomId }: { symptomId?: string | n
             asChild
             variant="outline"
             size="xs"
-            className="rounded-[4px] border-foreground-muted/25 bg-background-active px-1.5 font-sans text-[11px] font-normal focus-visible:border-primary-300 focus-visible:bg-primary-900 focus-visible:text-primary-300 not-disabled:not-aria-disabled:hover:border-primary-300 not-disabled:not-aria-disabled:hover:bg-primary-900 not-disabled:not-aria-disabled:hover:text-primary-300"
           >
             <a href={reference.doc_url} target="_blank" rel="noopener noreferrer" aria-label={`Symptom documentation for ${reference.title} (opens in a new tab)`}>
               Doc
-              <ArrowUpRight aria-hidden="true" className="size-2.5" strokeWidth={1.5} />
+              <ArrowUpRight aria-hidden="true" data-icon="inline-end" />
             </a>
           </Button>
         </TooltipTrigger>

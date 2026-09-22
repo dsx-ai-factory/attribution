@@ -297,7 +297,7 @@ function NodesSection({ run }: { run: RunDetail }) {
                     {!attemptNodes.has(node) && <span className="mt-0.5 block text-[11px] text-foreground-muted">Not listed in attempt nodes</span>}
                   </span>{' '}
                   {responsibleNodes.has(node) && (
-                    <span className="ml-1 shrink-0 rounded-sm border border-border px-[5px] py-0.5 text-[10px] leading-3 text-foreground-muted">Responsible</span>
+                    <Badge variant="neutral" className="ml-1">Responsible</Badge>
                   )}
                 </Link>
               </NodeHoverCard>

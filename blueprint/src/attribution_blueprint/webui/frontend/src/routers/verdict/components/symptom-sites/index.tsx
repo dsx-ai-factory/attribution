@@ -6,6 +6,7 @@ import { ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight, FileText, Serve
 import type { RunDetail, SymptomSite } from '@/interfaces/attribution'
 import { TimeHover } from '@/components/time-hover'
 import { SymptomDocumentationLink } from '@/components/symptom-documentation'
+import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 
@@ -44,8 +45,13 @@ function SiteContext({ site }: { site: SymptomSite }) {
         <Icon aria-hidden="true" className="size-3.5 shrink-0 text-foreground-muted" />
         <span className="min-w-0 break-words">{isNode ? site.node || 'Node not recorded' : 'Job-level evidence'}</span>
       </span>
-      <span className="min-w-0 break-words text-foreground-muted"><span className="sr-only">Source: </span>{site.source.source || 'Source not recorded'}</span>
-      <SiteStatus status={site.status} />
+      <span className="min-w-0 break-words text-foreground-muted">
+        <span className="sr-only">Source: </span>
+        {site.source.source ? (
+          <Badge variant="neutral">{site.source.source}</Badge>
+        ) : 'Source not recorded'}
+      </span>
+      {site.status === 'bad' && <SiteStatus status="bad" />}
     </div>
   )
 }
