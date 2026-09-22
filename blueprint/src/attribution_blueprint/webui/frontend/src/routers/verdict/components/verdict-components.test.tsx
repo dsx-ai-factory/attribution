@@ -176,6 +176,21 @@ describe('SymptomsSection', () => {
     time: '2026-05-01T00:03:00+00:00',
   }
 
+  const evidenceSites = (count: number): SymptomSite[] => Array.from({ length: count }, (_, index) => ({
+    type: 'NodeSource',
+    node: `node-${index + 1}`,
+    status: index % 3 === 0 ? 'bad' : 'interesting',
+    source: { ...source, pos: index, line: `Recorded evidence ${index + 1}` },
+  }))
+
+  const runWithEvidence = (sites: SymptomSite[], id = 'run-1'): RunDetail => run({
+    id,
+    attribution: {
+      ...run().attribution,
+      symptomSites: { state: 'available', data: { 'Recorded symptom': sites } },
+    },
+  })
+
   it('links each exact API symptom key beside its disclosure without toggling evidence', () => {
     const reference = { id: 'canonical-id', title: 'Published symptom', doc_url: 'https://docs.example/original/path/' }
     mocks.symptomDocumentation.mockReturnValue({ data: { symptoms: {
@@ -305,6 +320,137 @@ describe('SymptomsSection', () => {
     expect(within(screen.getByRole('article', { name: 'node-a: Bad' })).getByText('syslog')).toBeTruthy()
     expect(within(screen.getByRole('article', { name: 'node-a: Supporting evidence' })).getByText('slurm_info')).toBeTruthy()
     expect(screen.getAllByRole('article')).toHaveLength(4)
+  })
+
+  it('pages every recorded site in order without deduplicating IDs, changing totals, or fetching more data', () => {
+    const sites = evidenceSites(21)
+    const detail = runWithEvidence(sites)
+    const original = structuredClone(detail)
+    const fetch = vi.spyOn(globalThis, 'fetch').mockRejectedValue(new Error('Evidence is already recorded in the run'))
+    try {
+      render(<SymptomsSection run={detail} />)
+      const trigger = screen.getByRole('button', { name: 'Recorded symptom 21 sites' })
+      const summary = within(trigger.closest('tr')!)
+      fireEvent.click(trigger)
+
+      const first = screen.getByRole('button', { name: 'First evidence page' })
+      const previous = screen.getByRole('button', { name: 'Previous evidence page' })
+      const next = screen.getByRole('button', { name: 'Next evidence page' })
+      const last = screen.getByRole('button', { name: 'Last evidence page' })
+      const pages = screen.getByRole('group', { name: 'Recorded symptom evidence pages' })
+      const displayedLines = () => screen.getAllByRole('article').map((article) => article.querySelector('pre')?.textContent)
+      const allLines: (string | null | undefined)[] = []
+      const expectFullSummary = () => {
+        expect(summary.getByText('nodes').textContent).toBe('21 nodes')
+        expect(summary.getByText('Bad').textContent).toBe('7 Bad')
+        expect(summary.getByText('Supporting evidence').textContent).toBe('14 Supporting evidence')
+        expect(summary.getByRole('cell', { name: '21' })).toBeTruthy()
+        expect(trigger.getAttribute('aria-expanded')).toBe('true')
+      }
+
+      expect(first.hasAttribute('disabled')).toBe(true)
+      expect(previous.hasAttribute('disabled')).toBe(true)
+      expect(next.hasAttribute('disabled')).toBe(false)
+      expect(last.hasAttribute('disabled')).toBe(false)
+      expect(pages.textContent).toContain('1–10 of 21 sites')
+      expect(screen.getAllByRole('article')).toHaveLength(10)
+      allLines.push(...displayedLines())
+      expectFullSummary()
+
+      fireEvent.click(next)
+      expect(pages.textContent).toContain('11–20 of 21 sites')
+      expect(screen.getAllByRole('article')).toHaveLength(10)
+      allLines.push(...displayedLines())
+      expectFullSummary()
+
+      fireEvent.click(next)
+      expect(pages.textContent).toContain('21–21 of 21 sites')
+      expect(screen.getAllByRole('article')).toHaveLength(1)
+      allLines.push(...displayedLines())
+      expect(allLines).toEqual(sites.map((site) => site.source.line))
+      const finalSite = within(screen.getByRole('article', { name: 'node-21: Supporting evidence' }))
+      expect(finalSite.getByText('node-21')).toBeTruthy()
+      expect(finalSite.getByText('syslog')).toBeTruthy()
+      expect(finalSite.getByText('Observation').nextElementSibling?.textContent).toBe(source.observation_id)
+      expect(finalSite.getByText('Source position').nextElementSibling?.textContent).toBe('20')
+      expect(first.hasAttribute('disabled')).toBe(false)
+      expect(previous.hasAttribute('disabled')).toBe(false)
+      expect(next.hasAttribute('disabled')).toBe(true)
+      expect(last.hasAttribute('disabled')).toBe(true)
+      expectFullSummary()
+
+      fireEvent.click(previous)
+      expect(displayedLines()).toEqual(sites.slice(10, 20).map((site) => site.source.line))
+      fireEvent.click(first)
+      expect(displayedLines()).toEqual(sites.slice(0, 10).map((site) => site.source.line))
+      fireEvent.click(last)
+      expect(displayedLines()).toEqual([sites[20].source.line])
+      expectFullSummary()
+      expect(fetch).not.toHaveBeenCalled()
+      expect(detail).toEqual(original)
+    } finally {
+      fetch.mockRestore()
+    }
+  })
+
+  it('starts at the first evidence page after collapsing and reopening a symptom', () => {
+    render(<SymptomsSection run={runWithEvidence(evidenceSites(21))} />)
+    const trigger = screen.getByRole('button', { name: 'Recorded symptom 21 sites' })
+    fireEvent.click(trigger)
+    fireEvent.click(screen.getByRole('button', { name: 'Last evidence page' }))
+    expect(screen.getByRole('article', { name: 'node-21: Supporting evidence' })).toBeTruthy()
+
+    fireEvent.click(trigger)
+    expect(screen.queryByRole('article')).toBeNull()
+    expect(screen.queryByRole('group', { name: 'Recorded symptom evidence pages' })).toBeNull()
+    fireEvent.click(trigger)
+    expect(screen.getAllByRole('article')).toHaveLength(10)
+    expect(screen.getByRole('article', { name: 'node-1: Bad' })).toBeTruthy()
+    expect(screen.queryByRole('article', { name: 'node-21: Supporting evidence' })).toBeNull()
+    expect(screen.getByRole('button', { name: 'First evidence page' }).hasAttribute('disabled')).toBe(true)
+  })
+
+  it('keeps the current page valid when recorded sites shrink and does not restore a stale page when they grow', () => {
+    const sites = evidenceSites(21)
+    const { rerender } = render(<SymptomsSection run={runWithEvidence(sites)} />)
+    fireEvent.click(screen.getByRole('button', { name: 'Recorded symptom 21 sites' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Last evidence page' }))
+
+    rerender(<SymptomsSection run={runWithEvidence(sites.slice(0, 11))} />)
+    expect(screen.getByRole('group', { name: 'Recorded symptom evidence pages' }).textContent).toContain('11–11 of 11 sites')
+    expect(screen.getAllByRole('article')).toHaveLength(1)
+    expect(screen.getByRole('article', { name: 'node-11: Supporting evidence' })).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Next evidence page' }).hasAttribute('disabled')).toBe(true)
+
+    rerender(<SymptomsSection run={runWithEvidence(sites)} />)
+    expect(screen.getByRole('group', { name: 'Recorded symptom evidence pages' }).textContent).toContain('11–20 of 21 sites')
+    expect(screen.getAllByRole('article')).toHaveLength(10)
+    expect(screen.getByRole('article', { name: 'node-11: Supporting evidence' })).toBeTruthy()
+    expect(screen.queryByRole('article', { name: 'node-21: Supporting evidence' })).toBeNull()
+
+    rerender(<SymptomsSection run={runWithEvidence(sites.slice(0, 10))} />)
+    expect(screen.queryByRole('group', { name: 'Recorded symptom evidence pages' })).toBeNull()
+    expect(screen.getAllByRole('article')).toHaveLength(10)
+    expect(screen.getByRole('article', { name: 'node-1: Bad' })).toBeTruthy()
+    rerender(<SymptomsSection run={runWithEvidence(sites)} />)
+    expect(screen.getByRole('group', { name: 'Recorded symptom evidence pages' }).textContent).toContain('1–10 of 21 sites')
+    expect(screen.getByRole('button', { name: 'First evidence page' }).hasAttribute('disabled')).toBe(true)
+  })
+
+  it('closes evidence when navigating to another run with the same symptom name', () => {
+    const sites = evidenceSites(21)
+    const { rerender } = render(<SymptomsSection run={runWithEvidence(sites)} />)
+    fireEvent.click(screen.getByRole('button', { name: 'Recorded symptom 21 sites' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Last evidence page' }))
+
+    rerender(<SymptomsSection run={runWithEvidence(sites, 'run-2')} />)
+    const trigger = screen.getByRole('button', { name: 'Recorded symptom 21 sites' })
+    expect(trigger.getAttribute('aria-expanded')).toBe('false')
+    expect(screen.queryByRole('article')).toBeNull()
+    fireEvent.click(trigger)
+    expect(screen.getAllByRole('article')).toHaveLength(10)
+    expect(screen.getByRole('article', { name: 'node-1: Bad' })).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'First evidence page' }).hasAttribute('disabled')).toBe(true)
   })
 
   it('keeps single-site context visible when collapsed and distinguishes empty evidence', () => {

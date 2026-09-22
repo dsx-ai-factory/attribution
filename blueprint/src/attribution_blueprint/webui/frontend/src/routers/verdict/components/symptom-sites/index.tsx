@@ -2,10 +2,11 @@
 // SPDX-License-Identifier: LicenseRef-NvidiaProprietary
 
 import { useId, useState, type MouseEvent, type ReactNode } from 'react'
-import { ChevronRight, FileText, Server } from 'lucide-react'
+import { ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight, FileText, Server } from 'lucide-react'
 import type { RunDetail, SymptomSite } from '@/interfaces/attribution'
 import { TimeHover } from '@/components/time-hover'
 import { SymptomDocumentationLink } from '@/components/symptom-documentation'
+import { Button } from '@/components/ui/button'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 
 const unavailableMessage = {
@@ -125,6 +126,48 @@ function SiteEvidence({ site, showContext }: { site: SymptomSite; showContext: b
   )
 }
 
+const EVIDENCE_PAGE_SIZE = 10
+
+function EvidenceSites({ symptom, sites }: { symptom: string; sites: SymptomSite[] }) {
+  const scrollId = useId()
+  const [requestedPage, setPage] = useState(0)
+  const lastPage = Math.max(0, Math.ceil(sites.length / EVIDENCE_PAGE_SIZE) - 1)
+  const page = Math.min(requestedPage, lastPage)
+  if (page !== requestedPage) setPage(page)
+  const start = page * EVIDENCE_PAGE_SIZE
+  const end = Math.min(start + EVIDENCE_PAGE_SIZE, sites.length)
+
+  return (
+    <>
+      <div
+        key={page}
+        id={scrollId}
+        role="region"
+        aria-label={`${symptom || 'Unnamed symptom'} evidence`}
+        tabIndex={0}
+        className="max-h-[min(60vh,28rem)] min-w-0 overflow-auto rounded-sm focus-visible:outline-1 focus-visible:outline-offset-[-1px] focus-visible:outline-foreground-muted"
+      >
+        <div className="divide-y divide-border">
+          {sites.slice(start, end).map((site, index) => <SiteEvidence key={start + index} site={site} showContext={sites.length > 1} />)}
+        </div>
+      </div>
+      {sites.length > EVIDENCE_PAGE_SIZE && (
+        <div role="group" aria-label={`${symptom || 'Unnamed symptom'} evidence pages`} className="mt-3 flex items-center justify-between gap-3 border-t border-border pt-2.5 text-xs text-foreground-muted">
+          <span aria-live="polite" aria-atomic="true">
+            <span className="font-mono tabular-nums">{start + 1}–{end}</span> of <span className="font-mono tabular-nums">{sites.length}</span> sites
+          </span>
+          <div className="flex items-center gap-1">
+            <Button type="button" variant="ghost" size="icon-sm" disabled={page === 0} aria-label="First evidence page" aria-controls={scrollId} onClick={() => setPage(0)}><ChevronsLeft aria-hidden="true" className="size-3.5" /></Button>
+            <Button type="button" variant="ghost" size="icon-sm" disabled={page === 0} aria-label="Previous evidence page" aria-controls={scrollId} onClick={() => setPage(page - 1)}><ChevronLeft aria-hidden="true" className="size-3.5" /></Button>
+            <Button type="button" variant="ghost" size="icon-sm" disabled={page === lastPage} aria-label="Next evidence page" aria-controls={scrollId} onClick={() => setPage(page + 1)}><ChevronRight aria-hidden="true" className="size-3.5" /></Button>
+            <Button type="button" variant="ghost" size="icon-sm" disabled={page === lastPage} aria-label="Last evidence page" aria-controls={scrollId} onClick={() => setPage(lastPage)}><ChevronsRight aria-hidden="true" className="size-3.5" /></Button>
+          </div>
+        </div>
+      )}
+    </>
+  )
+}
+
 function SymptomRows({ symptom, sites }: { symptom: string; sites: SymptomSite[] }) {
   const detailId = useId()
   const [open, setOpen] = useState(false)
@@ -154,9 +197,7 @@ function SymptomRows({ symptom, sites }: { symptom: string; sites: SymptomSite[]
       <TableRow id={detailId} hidden={!open} className="border-t border-b-0 border-border bg-background-active/30 transition-none hover:bg-background-active/30">
         <TableCell colSpan={5} className="px-4 py-3.5 whitespace-normal">
           {open && (sites.length > 0 ? (
-            <div className="divide-y divide-border">
-              {sites.map((site, index) => <SiteEvidence key={index} site={site} showContext={sites.length > 1} />)}
-            </div>
+            <EvidenceSites symptom={symptom} sites={sites} />
           ) : <p className="m-0 text-[13px] leading-5 text-foreground-muted">No sites recorded for this symptom.</p>)}
         </TableCell>
       </TableRow>
@@ -203,7 +244,7 @@ export function SymptomsSection({ run }: { run: RunDetail }) {
               <TableHead scope="col" className="h-auto whitespace-normal text-right text-foreground-muted">Sites</TableHead>
             </TableRow>
           </TableHeader>
-          <TableBody className="[&_tr:last-child]:border-t">
+          <TableBody key={run.id} className="[&_tr:last-child]:border-t">
             {symptoms.map(([symptom, sites]) => <SymptomRows key={symptom} symptom={symptom} sites={sites} />)}
           </TableBody>
         </Table>
