@@ -100,7 +100,6 @@ curl --fail-with-body --silent --show-error \
       "start": null,
       "end": null
     },
-    "resources": "AllJobResources",
     "source": "applog",
     "format": "entry_timeseries"
   },
@@ -109,13 +108,8 @@ curl --fail-with-body --silent --show-error \
 JSON
 ```
 
-Validated source and format pairs used by the Blueprint's current log
-connectors are:
-
-| Source | Formats |
-|---|---|
-| `applog` | `entry_timeseries` |
-| `syslog` | `loki_dict_list`, `raw_loki_streams` |
+The Blueprint's log connectors send both `applog` and `syslog` observations
+as `entry_timeseries`.
 
 For the structured formats, `body` is a JSON-encoded string containing the
 format's array or object. The service rejects mismatched source and format
