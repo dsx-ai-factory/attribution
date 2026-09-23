@@ -253,7 +253,7 @@ describe('SymptomsSection', () => {
     expect(screen.queryByRole('article')).toBeNull()
     fireEvent.click(trigger)
 
-    const finding = within(screen.getByRole('article', { name: 'node-a: Bad' }))
+    const finding = within(screen.getByRole('article', { name: 'node-a: Responsible' }))
     expect(finding.getByText('recorded-rule')).toBeTruthy()
     expect(finding.getByText('syslog')).toBeTruthy()
     expect(finding.getByText('Observation').nextElementSibling?.textContent).toBe(observationId)
@@ -264,10 +264,10 @@ describe('SymptomsSection', () => {
     const log = finding.getByRole('region', { name: 'Source evidence' })
     expect([...log.querySelectorAll('pre')].map(line => line.textContent).join('')).toBe(source.line)
     expect(within(screen.getByRole('article', { name: 'node-b: Supporting evidence' })).getByText('supporting line')).toBeTruthy()
-    const job = within(screen.getByRole('article', { name: 'Job-level evidence: Bad' }))
+    const job = within(screen.getByRole('article', { name: 'Job-level evidence: Responsible' }))
     expect(job.getByText('Source position').nextElementSibling?.textContent).toBe('Not recorded')
     expect(job.getByText('No source line recorded.')).toBeTruthy()
-    expect(screen.queryByText(/pruned|responsible/i)).toBeNull()
+    expect(screen.queryByText(/pruned/i)).toBeNull()
     expect(detail).toEqual(original)
 
     fireEvent.click(trigger)
@@ -305,21 +305,46 @@ describe('SymptomsSection', () => {
         ],
       },
     }
-    render(<SymptomsSection run={detail} />)
+    const { rerender } = render(<SymptomsSection run={detail} />)
 
     const trigger = screen.getByRole('button', { name: 'Mixed symptom 4 sites' })
     expect(screen.getByText('node').textContent).toBe('1 node')
     expect(screen.getByText('Job-level evidence')).toBeTruthy()
     expect(screen.getByText('Node not recorded')).toBeTruthy()
-    expect(screen.getByText('Bad').textContent).toBe('2 Bad')
+    expect(screen.getByText('Responsible').textContent).toBe('2 Responsible')
     expect(screen.getByText('Supporting evidence').textContent).toBe('2 Supporting evidence')
     expect(screen.getByText('sources').textContent).toBe('2 sources')
     expect(screen.queryByRole('article')).toBeNull()
 
     fireEvent.click(trigger)
-    expect(within(screen.getByRole('article', { name: 'node-a: Bad' })).getByText('syslog')).toBeTruthy()
-    expect(within(screen.getByRole('article', { name: 'node-a: Supporting evidence' })).getByText('slurm_info')).toBeTruthy()
+    for (const node of ['node-a', 'Node not recorded']) {
+      const site = within(screen.getByRole('article', { name: `${node}: Responsible` }))
+      expect(site.getByText(node)).toBeTruthy()
+      expect(site.getByText('syslog').getAttribute('data-slot')).toBe('badge')
+      expect(site.getByText('Responsible').getAttribute('data-slot')).toBe('badge')
+      expect(site.getByText('Responsible').textContent).toBe('Responsible')
+      expect(site.queryByText('Supporting evidence')).toBeNull()
+    }
+    for (const [label, sourceName] of [['node-a', 'slurm_info'], ['Job-level evidence', 'syslog']]) {
+      const site = within(screen.getByRole('article', { name: `${label}: Supporting evidence` }))
+      expect(site.getByText(label)).toBeTruthy()
+      expect(site.getByText(sourceName).getAttribute('data-slot')).toBe('badge')
+      expect(site.queryByText('Supporting evidence')).toBeNull()
+      expect(site.queryByText('Responsible')).toBeNull()
+    }
+    expect(screen.queryByText('Bad')).toBeNull()
     expect(screen.getAllByRole('article')).toHaveLength(4)
+
+    const sites = detail.attribution.symptomSites.data!['Mixed symptom']
+    for (const [status, label, otherLabel] of [
+      ['bad', 'Responsible', 'Supporting evidence'],
+      ['interesting', 'Supporting evidence', 'Responsible'],
+    ] as const) {
+      rerender(<SymptomsSection run={runWithEvidence(sites.filter((site) => site.status === status))} />)
+      const row = within(screen.getByRole('button', { name: 'Recorded symptom 2 sites' }).closest('tr')!)
+      expect(row.getByText(label).textContent).toBe(`2 ${label}`)
+      expect(row.queryByText(otherLabel)).toBeNull()
+    }
   })
 
   it('pages every recorded site in order without deduplicating IDs, changing totals, or fetching more data', () => {
@@ -342,7 +367,7 @@ describe('SymptomsSection', () => {
       const allLines: (string | null | undefined)[] = []
       const expectFullSummary = () => {
         expect(summary.getByText('nodes').textContent).toBe('21 nodes')
-        expect(summary.getByText('Bad').textContent).toBe('7 Bad')
+        expect(summary.getByText('Responsible').textContent).toBe('7 Responsible')
         expect(summary.getByText('Supporting evidence').textContent).toBe('14 Supporting evidence')
         expect(summary.getByRole('cell', { name: '21' })).toBeTruthy()
         expect(trigger.getAttribute('aria-expanded')).toBe('true')
@@ -405,7 +430,7 @@ describe('SymptomsSection', () => {
     expect(screen.queryByRole('group', { name: 'Recorded symptom evidence pages' })).toBeNull()
     fireEvent.click(trigger)
     expect(screen.getAllByRole('article')).toHaveLength(10)
-    expect(screen.getByRole('article', { name: 'node-1: Bad' })).toBeTruthy()
+    expect(screen.getByRole('article', { name: 'node-1: Responsible' })).toBeTruthy()
     expect(screen.queryByRole('article', { name: 'node-21: Supporting evidence' })).toBeNull()
     expect(screen.getByRole('button', { name: 'First evidence page' }).hasAttribute('disabled')).toBe(true)
   })
@@ -431,7 +456,7 @@ describe('SymptomsSection', () => {
     rerender(<SymptomsSection run={runWithEvidence(sites.slice(0, 10))} />)
     expect(screen.queryByRole('group', { name: 'Recorded symptom evidence pages' })).toBeNull()
     expect(screen.getAllByRole('article')).toHaveLength(10)
-    expect(screen.getByRole('article', { name: 'node-1: Bad' })).toBeTruthy()
+    expect(screen.getByRole('article', { name: 'node-1: Responsible' })).toBeTruthy()
     rerender(<SymptomsSection run={runWithEvidence(sites)} />)
     expect(screen.getByRole('group', { name: 'Recorded symptom evidence pages' }).textContent).toContain('1–10 of 21 sites')
     expect(screen.getByRole('button', { name: 'First evidence page' }).hasAttribute('disabled')).toBe(true)
@@ -449,7 +474,7 @@ describe('SymptomsSection', () => {
     expect(screen.queryByRole('article')).toBeNull()
     fireEvent.click(trigger)
     expect(screen.getAllByRole('article')).toHaveLength(10)
-    expect(screen.getByRole('article', { name: 'node-1: Bad' })).toBeTruthy()
+    expect(screen.getByRole('article', { name: 'node-1: Responsible' })).toBeTruthy()
     expect(screen.getByRole('button', { name: 'First evidence page' }).hasAttribute('disabled')).toBe(true)
   })
 
@@ -459,6 +484,7 @@ describe('SymptomsSection', () => {
       state: 'available',
       data: {
         'Supporting symptom': [{ type: 'NodeSource', node: '', status: 'interesting', source: { ...source, line: '', source: '' } }],
+        'Responsible symptom': [{ type: 'NodeSource', node: 'node-a', status: 'bad', source }],
         'No recorded sites': [],
       },
     }
@@ -466,7 +492,16 @@ describe('SymptomsSection', () => {
 
     expect(screen.getByText('Node not recorded')).toBeTruthy()
     expect(screen.getByText('Source not recorded')).toBeTruthy()
-    expect(screen.getByText('Supporting evidence')).toBeTruthy()
+    expect(screen.getByRole('columnheader', { name: 'Status' })).toBeTruthy()
+    const supportingRow = within(screen.getByRole('button', { name: 'Supporting symptom 1 site' }).closest('tr')!)
+    const responsibleRow = within(screen.getByRole('button', { name: 'Responsible symptom 1 site' }).closest('tr')!)
+    const emptyRow = within(screen.getByRole('button', { name: 'No recorded sites 0 sites' }).closest('tr')!)
+    expect(supportingRow.getByText('Supporting evidence').textContent).toBe('1 Supporting evidence')
+    expect(supportingRow.queryByText('Responsible')).toBeNull()
+    expect(responsibleRow.getByText('Responsible').textContent).toBe('1 Responsible')
+    expect(responsibleRow.queryByText('Supporting evidence')).toBeNull()
+    expect(emptyRow.getAllByRole('cell')[3].textContent).toBe('—')
+    expect(emptyRow.queryByText(/Responsible|Supporting evidence/)).toBeNull()
     expect(screen.queryByText('Source line is empty.')).toBeNull()
     fireEvent.click(screen.getByRole('button', { name: 'Supporting symptom 1 site' }))
     expect(screen.getByText('Source line is empty.')).toBeTruthy()

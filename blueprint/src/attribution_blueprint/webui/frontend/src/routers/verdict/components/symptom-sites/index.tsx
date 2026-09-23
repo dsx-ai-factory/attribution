@@ -17,6 +17,11 @@ const unavailableMessage = {
   empty: 'No symptom sites were recorded for this run.',
 }
 
+const SITE_STATUS_LABELS: Record<SymptomSite['status'], string> = {
+  bad: 'Responsible',
+  interesting: 'Supporting evidence',
+}
+
 function EvidenceField({ label, children }: { label: string; children: ReactNode }) {
   return (
     <div className="min-w-0">
@@ -28,11 +33,10 @@ function EvidenceField({ label, children }: { label: string; children: ReactNode
 
 function SiteStatus({ status, count }: { status: SymptomSite['status']; count?: number }) {
   return (
-    <span className={`inline-flex items-center gap-1.5 text-xs ${status === 'bad' ? 'text-destructive-300' : 'text-foreground-muted'}`}>
-      <span aria-hidden="true" className="size-1 shrink-0 rounded-full bg-current" />
+    <Badge variant={status === 'bad' ? 'accent' : 'neutral'}>
       {count !== undefined && <><span className="font-mono tabular-nums">{count}</span>{' '}</>}
-      {status === 'bad' ? 'Bad' : 'Supporting evidence'}
-    </span>
+      {SITE_STATUS_LABELS[status]}
+    </Badge>
   )
 }
 
@@ -47,9 +51,7 @@ function SiteContext({ site }: { site: SymptomSite }) {
       </span>
       <span className="min-w-0 break-words text-foreground-muted">
         <span className="sr-only">Source: </span>
-        {site.source.source ? (
-          <Badge variant="neutral">{site.source.source}</Badge>
-        ) : 'Source not recorded'}
+        <Badge variant="neutral">{site.source.source || 'Source not recorded'}</Badge>
       </span>
       {site.status === 'bad' && <SiteStatus status="bad" />}
     </div>
@@ -84,12 +86,11 @@ function SourceSummary({ sites }: { sites: SymptomSite[] }) {
 
 function StatusSummary({ sites }: { sites: SymptomSite[] }) {
   if (sites.length === 0) return <>—</>
-  if (sites.length === 1) return <SiteStatus status={sites[0].status} />
-  const badCount = sites.filter((site) => site.status === 'bad').length
+  const responsibleCount = sites.filter((site) => site.status === 'bad').length
   return (
     <div className="flex flex-wrap gap-x-3 gap-y-1">
-      {badCount > 0 && <SiteStatus status="bad" count={badCount} />}
-      {badCount < sites.length && <SiteStatus status="interesting" count={sites.length - badCount} />}
+      {responsibleCount > 0 && <SiteStatus status="bad" count={responsibleCount} />}
+      {responsibleCount < sites.length && <SiteStatus status="interesting" count={sites.length - responsibleCount} />}
     </div>
   )
 }
@@ -113,7 +114,7 @@ function SourceLog({ line }: { line: string | null }) {
 function SiteEvidence({ site, showContext }: { site: SymptomSite; showContext: boolean }) {
   const { source } = site
   const label = site.type === 'NodeSource' ? site.node || 'Node not recorded' : 'Job-level evidence'
-  const status = site.status === 'bad' ? 'Bad' : 'Supporting evidence'
+  const status = SITE_STATUS_LABELS[site.status]
   return (
     <article aria-label={`${label}: ${status}`} className="min-w-0 py-3.5 first:pt-0 last:pb-0">
       {showContext && <SiteContext site={site} />}

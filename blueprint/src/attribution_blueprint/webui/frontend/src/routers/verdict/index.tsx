@@ -227,9 +227,7 @@ function EvidenceList({ run }: { run: RunDetail }) {
             <b className="wrap-anywhere font-semibold">{root ? root.symptom : run.rootSymptom.symptom}</b>
           </KvCell>
           <KvCell label={<DefHover term="rule">root_symptom.rule</DefHover>}>
-            <Badge variant="outline" className="font-mono text-primary border-border">
-              {run.rootSymptom.rule}
-            </Badge>
+            <span className="wrap-anywhere">{run.rootSymptom.rule}</span>
           </KvCell>
           <KvCell label="root_symptom.time">
             <TimeHover date={run.rootSymptom.time} format="YYYY-MM-DD HH:mm:ss" />
@@ -297,7 +295,7 @@ function NodesSection({ run }: { run: RunDetail }) {
                     {!attemptNodes.has(node) && <span className="mt-0.5 block text-[11px] text-foreground-muted">Not listed in attempt nodes</span>}
                   </span>{' '}
                   {responsibleNodes.has(node) && (
-                    <Badge variant="neutral" className="ml-1">Responsible</Badge>
+                    <Badge variant="accent" className="ml-1">Responsible</Badge>
                   )}
                 </Link>
               </NodeHoverCard>
