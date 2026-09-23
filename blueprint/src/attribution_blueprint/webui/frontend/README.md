@@ -57,12 +57,12 @@ link using that step's own symptom; neither location borrows the root symptom's
 The reference response is shared through SWR, with focus refresh and automatic
 error retries disabled; requests time out after ten seconds.
 
-## Browser requirements
+## Observation IDs
 
-Use a browser with native `JSON.parse` reviver source context support. The frontend
-uses original JSON number tokens to display observation IDs without rounding
-64-bit integers. Other numeric quantities remain numbers. HTTP detail requests
-and the injected bootstrap use the same decoder; no parser polyfill is bundled.
+The WebUI serializes source observation IDs as decimal strings in both HTTP run
+details and the injected bootstrap, preserving 64-bit IDs before they reach the
+browser. Stored Service evidence is unchanged, and numeric quantities remain
+numbers. The frontend uses ordinary JSON parsing without a custom reviver.
 
 ## Tech
 

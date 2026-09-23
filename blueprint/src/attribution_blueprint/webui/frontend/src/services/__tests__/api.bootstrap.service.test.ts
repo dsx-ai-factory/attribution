@@ -71,11 +71,11 @@ describe('ApiBootstrapService', () => {
         "attribution": {
           "rootSymptom": {
             "state": "available",
-            "data": { "source": { "observation_id": 9223372036854775807, "pos": 0 } }
+            "data": { "source": { "observation_id": "9223372036854775807", "pos": 0 } }
           },
           "symptomSites": {
             "state": "available",
-            "data": { "fault": [{ "source": { "observation_id": -6139371663235533333, "pos": null } }] }
+            "data": { "fault": [{ "source": { "observation_id": "-6139371663235533333", "pos": null } }] }
           }
         }
       }],

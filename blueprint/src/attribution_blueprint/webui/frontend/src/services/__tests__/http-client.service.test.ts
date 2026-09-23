@@ -4,7 +4,6 @@
 
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { HttpError, httpGet } from '@/services/http-client.service'
-import { parseAttributionJson } from '@/services/api.service'
 
 afterEach(() => {
   vi.unstubAllGlobals()
@@ -49,26 +48,27 @@ describe('httpGet', () => {
   })
 
   it.each(['0', '-1', '9007199254740993', '-6139371663235533333'])(
-    'decodes an observation ID from the raw response without rounding: %s',
+    'preserves string observation IDs and numeric quantities in the response: %s',
     async (observationId) => {
       const text = `{
-        "root": { "source": { "observation_id": ${observationId}, "pos": 0 } },
-        "sites": [{ "source": { "observation_id": ${observationId}, "pos": null } }],
+        "root": { "source": { "observation_id": "${observationId}", "pos": 0 } },
+        "sites": [{ "source": { "observation_id": "${observationId}", "pos": null } }],
         "count": 8,
         "elapsedH": 0.125,
         "log": "observation_id: 9007199254740993"
       }`
-      const response = { ok: true, text: vi.fn().mockResolvedValue(text), json: vi.fn() }
+      const response = { ok: true, text: vi.fn(), json: vi.fn().mockImplementation(async () => JSON.parse(text)) }
       vi.stubGlobal('fetch', vi.fn().mockResolvedValue(response))
 
-      await expect(httpGet('/runs/run', undefined, { decode: parseAttributionJson })).resolves.toEqual({
+      await expect(httpGet('/runs/run')).resolves.toEqual({
         root: { source: { observation_id: observationId, pos: 0 } },
         sites: [{ source: { observation_id: observationId, pos: null } }],
         count: 8,
         elapsedH: 0.125,
         log: 'observation_id: 9007199254740993',
       })
-      expect(response.json).not.toHaveBeenCalled()
+      expect(response.json).toHaveBeenCalledOnce()
+      expect(response.text).not.toHaveBeenCalled()
     },
   )
 })

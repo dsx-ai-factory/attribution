@@ -15,9 +15,9 @@ const BASE = (import.meta.env.VITE_API_BASE_PATH as string | undefined) || '/api
 export async function httpGet<T>(
   path: string,
   params?: Record<string, unknown>,
-  options: { signal?: AbortSignal; decode?: (text: string) => T } = {},
+  options: { signal?: AbortSignal } = {},
 ): Promise<T> {
-  const { signal, decode } = options
+  const { signal } = options
   const url = new URL(`${BASE}${path}`, window.location.origin)
   if (params) {
     for (const [k, v] of Object.entries(params)) {
@@ -26,5 +26,5 @@ export async function httpGet<T>(
   }
   const res = await fetch(url.toString(), { signal, headers: { Accept: 'application/json' } })
   if (!res.ok) throw new HttpError(res.status, `GET ${path} -> ${res.status}`)
-  return decode ? decode(await res.text()) : (await res.json()) as T
+  return (await res.json()) as T
 }

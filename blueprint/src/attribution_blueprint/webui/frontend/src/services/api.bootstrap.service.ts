@@ -5,7 +5,7 @@ import type { FleetFilter } from '@/interfaces/filter'
 import { applyFilter } from '@/lib/filter-state'
 import type { RunDetail, RunSummary } from '@/interfaces/attribution'
 import type { BootstrapPayload, Meta } from '@/interfaces/meta'
-import { ApiService, parseAttributionJson } from '@/services/api.service'
+import { ApiService } from '@/services/api.service'
 
 const EMPTY_META: Meta = {
   versions: { schema: null, pipeline: null, service: null },
@@ -17,7 +17,7 @@ export function readBootstrap(): BootstrapPayload | null {
   const el = document.getElementById('attr-bootstrap')
   if (!el || !el.textContent) return null
   try {
-    return parseAttributionJson<BootstrapPayload>(el.textContent)
+    return JSON.parse(el.textContent) as BootstrapPayload
   } catch {
     return null
   }
