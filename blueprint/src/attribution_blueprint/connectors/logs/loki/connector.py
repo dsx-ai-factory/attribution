@@ -17,10 +17,8 @@ from loguru import logger
 from attribution_blueprint.connectors.auth import Auth
 from attribution_blueprint.connectors.logs import log_observation
 from attribution_blueprint.connectors.logs.loki.templates import TEMPLATES
-from attribution_blueprint.connectors.logs.loki.types import LokiSyslogEntry
 from attribution_blueprint.types import (
     ExecutionContext,
-    Format,
     NodeResource,
     Observation,
     ReplicaResource,
@@ -28,11 +26,6 @@ from attribution_blueprint.types import (
     TimeseriesEntry,
     assert_aware,
 )
-
-_FORMAT_FOR_SOURCE: dict[Source, Format] = {
-    Source.SYSLOG: Format.LOKI_DICT_LIST,
-    Source.APPLOG: Format.ENTRY_TIMESERIES,
-}
 
 DEFAULT_LIMIT = 5000
 DEFAULT_NODE_LABEL = "host_name"
@@ -167,46 +160,17 @@ class LokiConnector:
         if not all_streams:
             return []
 
-        fmt = _FORMAT_FOR_SOURCE[self._source]
-        body = self._encode_body(all_streams, fmt)
-        return [log_observation(source=self._source, format=fmt, body=body, context=context)]
+        entries = self._entries(all_streams)
+        return [log_observation(source=self._source, entries=entries, context=context)]
 
-    def _encode_body(self, streams: list[dict], fmt: Format) -> str:
+    def _entries(self, streams: list[dict]) -> list[TimeseriesEntry]:
         # Multi-template runs and pagination can produce duplicate streams
         # (same labels, overlapping values). Coalesce by label set and dedup
         # (timestamp, line) pairs before encoding so the service doesn't
         # double-count.
         streams = self._merge_streams(streams)
-        if fmt == Format.LOKI_DICT_LIST:
-            # The service's LOKI_DICT_LIST consumer expects a flat list of
-            # LokiSyslogEntry, not raw Loki streams.
-            # Entries with node=None are dropped: attribution_lib's syslog
-            # entry parser passes node directly into verify_node() with no
-            # None-guard, so emitting them crashes the service. Whoever
-            # configured the connector with the wrong node_label (or hit a
-            # stream missing the label) should see the warning here.
-            entries: list[LokiSyslogEntry] = []
-            dropped_no_node = 0
-            for stream in streams:
-                labels = stream.get("stream", {}) or {}
-                node = labels.get(self._node_label) if self._node_label else None
-                if node is None:
-                    dropped_no_node += sum(1 for _ in stream.get("values", []) or [])
-                    continue
-                for ts, line in stream.get("values", []) or []:
-                    try:
-                        timestamp = int(ts)
-                    except (TypeError, ValueError):
-                        continue
-                    entries.append({"timestamp": timestamp, "body": line, "node": node})
-            if dropped_no_node:
-                logger.warning(
-                    f"loki SYSLOG: dropped {dropped_no_node} entries with missing "
-                    f"{self._node_label!r} label (service requires node identity)"
-                )
-            return json.dumps(entries)
-        # ENTRY_TIMESERIES: one entry per stream value. Node and pod labels ride
-        # along as per-entry resources only when the stream carries them.
+        # One entry per stream value. Node and pod labels ride along as
+        # per-entry resources only when the stream carries them.
         timeseries: list[TimeseriesEntry] = []
         for stream in streams:
             labels = stream.get("stream") or {}
@@ -227,7 +191,7 @@ class LokiConnector:
                 if resources:
                     entry["resources"] = resources
                 timeseries.append(entry)
-        return json.dumps(timeseries)
+        return timeseries
 
     @staticmethod
     def _merge_streams(streams: list[dict]) -> list[dict]:

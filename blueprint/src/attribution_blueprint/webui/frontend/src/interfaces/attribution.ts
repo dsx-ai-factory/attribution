@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// SPDX-License-Identifier: LicenseRef-NvidiaProprietary
+
 export type OutcomeKey = 'hardware' | 'software' | 'multi' | 'user' | 'undetermined' | 'pass'
 
 export interface Outcome {
@@ -44,8 +47,9 @@ export type AttributionSection<T> =
   | { state: 'empty'; data: T }
   | { state: 'absent' | 'null' | 'invalid'; data: null }
 
-// Wire fields mirror the Service V2 models; nullable values remain distinct from
-// optional fields and source positions are not converted to display line numbers.
+// WebUI detail fields preserve Service V2 evidence and nullability. Observation
+// IDs are decoded from the original JSON number tokens as strings, since Service
+// integers can exceed JavaScript's exact range. Source positions stay numeric.
 export type ObservationSource =
   | ''
   | 'slurm_info'
@@ -62,7 +66,7 @@ export type ObservationSource =
   | 'csp_event'
 
 export interface AttributionSource {
-  observation_id: number
+  observation_id: string
   source: ObservationSource
   pos: number | null
   line: string | null

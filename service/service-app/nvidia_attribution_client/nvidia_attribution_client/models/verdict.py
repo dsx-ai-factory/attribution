@@ -16,10 +16,15 @@ import pprint
 import re  # noqa: F401
 import json
 
-from pydantic import BaseModel, ConfigDict, StrictStr
+from pydantic import BaseModel, ConfigDict, Field, StrictStr
 from typing import Any, ClassVar, Dict, List, Optional
+from typing_extensions import Annotated
+from nvidia_attribution_client.models.cancellation_actor import CancellationActor
 from nvidia_attribution_client.models.decision_graph import DecisionGraph
+from nvidia_attribution_client.models.failure_domain import FailureDomain
 from nvidia_attribution_client.models.sourced_symptom import SourcedSymptom
+from nvidia_attribution_client.models.terminal_state import TerminalState
+from nvidia_attribution_client.models.uncertainty_type import UncertaintyType
 from typing import Optional, Set
 from typing_extensions import Self
 from pydantic_core import to_jsonable_python
@@ -31,8 +36,12 @@ class Verdict(BaseModel):
     root_symptom: Optional[SourcedSymptom]
     attribution_outcome: StrictStr
     detail: StrictStr
+    terminal_states: Annotated[List[TerminalState], Field(min_length=1)] = Field(description="Plausible terminal states in NVIDIA Attribution's assessment. Values are alternatives, with no ranking or probabilities; omitted states are ruled out by that assessment. A singleton does not guarantee correctness, and the number of values is not a confidence score.")
+    failure_domains: Optional[List[FailureDomain]] = Field(default=None, description="Plausible failure domains, conditional on Fail. Values express alternatives, not simultaneous causes or equal probabilities. Empty means failure is absent or its domain is unspecified; consult terminal_states to distinguish these cases.")
+    cancellation_actors: Optional[List[CancellationActor]] = Field(default=None, description="Plausible initiators, conditional on Cancelled. Values express alternatives without ranking or probabilities. Empty means cancellation is absent or its actor is unspecified; consult terminal_states to distinguish these cases.")
+    uncertainty_type: Optional[UncertaintyType] = None
     decision_graph: Optional[DecisionGraph] = None
-    __properties: ClassVar[List[str]] = ["root_symptom", "attribution_outcome", "detail", "decision_graph"]
+    __properties: ClassVar[List[str]] = ["root_symptom", "attribution_outcome", "detail", "terminal_states", "failure_domains", "cancellation_actors", "uncertainty_type", "decision_graph"]
 
     model_config = ConfigDict(
         validate_by_name=True,
@@ -84,6 +93,11 @@ class Verdict(BaseModel):
         if self.root_symptom is None and "root_symptom" in self.model_fields_set:
             _dict['root_symptom'] = None
 
+        # set to None if uncertainty_type (nullable) is None
+        # and model_fields_set contains the field
+        if self.uncertainty_type is None and "uncertainty_type" in self.model_fields_set:
+            _dict['uncertainty_type'] = None
+
         # set to None if decision_graph (nullable) is None
         # and model_fields_set contains the field
         if self.decision_graph is None and "decision_graph" in self.model_fields_set:
@@ -104,6 +118,10 @@ class Verdict(BaseModel):
             "root_symptom": SourcedSymptom.from_dict(obj["root_symptom"]) if obj.get("root_symptom") is not None else None,
             "attribution_outcome": obj.get("attribution_outcome"),
             "detail": obj.get("detail"),
+            "terminal_states": obj.get("terminal_states"),
+            "failure_domains": obj.get("failure_domains"),
+            "cancellation_actors": obj.get("cancellation_actors"),
+            "uncertainty_type": obj.get("uncertainty_type"),
             "decision_graph": DecisionGraph.from_dict(obj["decision_graph"]) if obj.get("decision_graph") is not None else None
         })
         return _obj

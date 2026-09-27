@@ -60,6 +60,8 @@ function GraphContent({ runId, detail }: { runId: string; detail?: RunDetail }) 
     )
   }
   const section = run.attribution.decisionGraph
+  const root = run.attribution.rootSymptom.state === 'available' ? run.attribution.rootSymptom.data : null
+  const rootName = root ? root.symptom : run.rootSymptom.symptom
   if (section.state !== 'available') {
     return <div role="status" className="flex min-h-60 flex-1 items-center justify-center px-6 text-sm text-foreground-muted">{UNAVAILABLE[section.state]}</div>
   }
@@ -67,9 +69,9 @@ function GraphContent({ runId, detail }: { runId: string; detail?: RunDetail }) 
   return (
     <>
       <div className="shrink-0 px-5 py-4 sm:px-6">
-        <p className="m-0 text-sm leading-6 text-foreground">
+        <p className="m-0 break-words text-sm leading-6 text-foreground">
           FACT attributed this run to <strong className="font-medium">{run.verdictLabel}</strong>.
-          {run.rootSymptom.symptom && <> The recorded root symptom is <span className="font-medium">{run.rootSymptom.symptom}</span>.</>}
+          {rootName && <> The recorded root symptom is <span className="font-medium">{rootName}</span>.</>}
         </p>
         <div className="mt-2 flex flex-wrap items-baseline justify-between gap-x-6 gap-y-2 text-xs text-foreground-muted">
           {run.detail && <span className="min-w-0 break-words">Service detail <span className="ml-1.5 text-foreground-secondary">{run.detail}</span></span>}
@@ -130,7 +132,7 @@ export function DecisionGraphAction({ run, detail, compact = false }: { run: Run
           className="fixed top-1/2 left-1/2 z-50 flex h-[min(880px,92dvh)] w-[calc(100vw-24px)] max-w-[1440px] -translate-x-1/2 -translate-y-1/2 flex-col overflow-hidden rounded-xl border border-border bg-card shadow-2xl outline-none sm:w-[calc(100vw-64px)]"
           onClick={(event) => event.stopPropagation()}
         >
-          <div className="flex shrink-0 items-start justify-between gap-4 border-b border-border px-5 py-4 sm:px-6">
+          <div className="flex shrink-0 items-center justify-between gap-4 border-b border-border px-5 py-4 sm:px-6">
             <div className="min-w-0">
               <Dialog.Title className="m-0 flex items-center gap-2 text-base font-semibold tracking-tight"><GitBranch className="size-4 text-primary-300" />Attribution logic</Dialog.Title>
               <Dialog.Description className="mt-1 mb-0 truncate text-xs text-foreground-muted">{run.jobId} · attempt <span className="font-mono">{run.attempt}</span></Dialog.Description>

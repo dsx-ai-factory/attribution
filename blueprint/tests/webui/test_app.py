@@ -8,7 +8,9 @@
 # without an express license agreement from NVIDIA CORPORATION or
 # its affiliates is strictly prohibited.
 
+import json
 import sqlite3
+from copy import deepcopy
 from datetime import datetime, timezone
 
 import pytest
@@ -18,8 +20,13 @@ pytest.importorskip("fastapi")  # NOTE: jinja2 importorskip removed
 from fastapi.testclient import TestClient
 
 from attribution_blueprint.connectors.outputs.sqlite import SQLiteOutput
-from attribution_blueprint.webui import app as appmod
+from attribution_blueprint.webui import (
+    app as appmod,
+    bootstrap,
+    db,
+)
 from attribution_blueprint.webui.app import create_app
+from attribution_blueprint.webui.attribution_detail import attribution_detail
 from attribution_blueprint.webui.db import DatabaseSchemaError
 
 
@@ -810,12 +817,21 @@ def test_create_app_missing_db(tmp_path):
         create_app(str(tmp_path / "nope.db"))
 
 
-def test_run_detail_preserves_evidence_without_expanding_list_payload(tmp_path):
+@pytest.mark.parametrize(
+    "observation_id", [0, -1, 9007199254740993, -9007199254740993, 9223372036854775807, -9223372036854775808]
+)
+def test_run_detail_preserves_evidence_without_expanding_list_payload(tmp_path, observation_id):
     payload = _attr("Fail InfraHW")
     payload["collectors"] = {"bad_pairs": "pair evidence"}
     payload["verdict"]["root_symptom"]["catalog_id"] = None
     source = payload["verdict"]["root_symptom"]["source"]
-    source.update(line=None, time=None, extra_provenance="retained")
+    source.update(
+        observation_id=observation_id,
+        line=None,
+        time=None,
+        extra_provenance={"observation_id": 23, "retained": True},
+    )
+    payload["symptoms"]["XID-79"][0]["source"]["observation_id"] = observation_id
     payload["symptoms"]["XID-79"].append(
         {
             "type": "ResourcelessSource",
@@ -823,6 +839,7 @@ def test_run_detail_preserves_evidence_without_expanding_list_payload(tmp_path):
             "source": dict(source),
         }
     )
+    raw_payload = deepcopy(payload)
     p = tmp_path / "detail.db"
     out = SQLiteOutput(str(p))
     out.write(_ctx("job", "attempt"), payload)
@@ -832,16 +849,57 @@ def test_run_detail_preserves_evidence_without_expanding_list_payload(tmp_path):
     summary = client.get("/api/v1/runs").json()["runs"][0]
     assert "attribution" not in summary and "log" not in summary
     assert summary["decisionGraphState"] == "absent"
-    detail = client.get(f"/api/v1/runs/{summary['id']}").json()
+    response = client.get(f"/api/v1/runs/{summary['id']}")
+    detail = response.json()
     assert {key: detail[key] for key in summary} == summary
     assert detail["errorPairs"] == "pair evidence"
     assert detail["responsibleNodes"] == ["node-a"]
-    assert detail["attribution"] == {
-        "rootSymptom": {"state": "available", "data": payload["verdict"]["root_symptom"]},
-        "symptomSites": {"state": "available", "data": payload["symptoms"]},
+    expected_root = deepcopy(payload["verdict"]["root_symptom"])
+    expected_root["source"]["observation_id"] = str(observation_id)
+    expected_sites = deepcopy(payload["symptoms"])
+    for site in expected_sites["XID-79"]:
+        site["source"]["observation_id"] = str(observation_id)
+    expected_attribution = {
+        "rootSymptom": {"state": "available", "data": expected_root},
+        "symptomSites": {"state": "available", "data": expected_sites},
         "decisionGraph": {"state": "absent", "data": None},
     }
+    assert detail["attribution"] == expected_attribution
+    # The wire value is already a string: an ordinary browser JSON.parse needs no
+    # reviver or original-token support to retain every digit, including zero.
+    assert response.text.count(f'"observation_id":"{observation_id}"') == 3
+    assert detail["symptoms"] == [{"name": "XID-79", "sites": 2}]
+    assert detail["nodes"] == 1
+    assert detail["attribution"]["rootSymptom"]["data"]["source"]["pos"] == 0
+
+    run = db.get_run(str(p), summary["id"])
+    assert bootstrap.run_to_react(run)["attribution"] == expected_attribution
+    assert run.raw_result == raw_payload
+    injected = bootstrap.inject('<div id="root"></div>', bootstrap.build_payload(str(p)))
+    blob = injected.split('id="attr-bootstrap">', 1)[1].split("</script>", 1)[0]
+    assert json.loads(blob)["runs"][0]["attribution"] == expected_attribution
+    assert payload == raw_payload
+    assert db.get_run(str(p), summary["id"]).raw_result == raw_payload
     assert client.get("/api/v1/runs/missing").status_code == 404
+
+
+@pytest.mark.parametrize("section,key", [("rootSymptom", "root_symptom"), ("symptomSites", "symptoms")])
+@pytest.mark.parametrize("state,value", [("absent", None), ("null", None), ("invalid", {"source": {}})])
+def test_observation_id_projection_preserves_unavailable_sections(section, key, state, value):
+    payload = _attr("Fail InfraHW")
+    parent = payload["verdict"] if key == "root_symptom" else payload
+    if state == "absent":
+        del parent[key]
+    else:
+        parent[key] = value
+    raw_payload = deepcopy(payload)
+
+    detail = attribution_detail(payload)
+
+    assert detail[section] == {"state": state, "data": None}
+    other_section = "symptomSites" if section == "rootSymptom" else "rootSymptom"
+    assert detail[other_section]["state"] == "available"
+    assert payload == raw_payload
 
 
 @pytest.mark.parametrize(

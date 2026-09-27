@@ -70,6 +70,9 @@ register_source_config(
     SourceProcessingConfig(
         time_start=_epilog_time_start,
         time_end=lambda ji: ji.interest_end_time + timedelta(minutes=10),
+        # A line declaring no node is read for one and dropped if that fails.
+        # An explicit timestamp is expected, else the entry is dropped.
+        body_fallbacks=BodyFallbacks(parse_node=True, require_node=True, require_timestamp=True),
     ),
 )
 register_source_config(
@@ -77,6 +80,9 @@ register_source_config(
     SourceProcessingConfig(
         time_start=lambda ji: ji.interest_start_time,
         time_end=lambda ji: ji.interest_end_time,
+        # A line declaring no node is read for one and dropped if that fails.
+        # An explicit timestamp is expected, else the entry is dropped.
+        body_fallbacks=BodyFallbacks(parse_node=True, require_node=True, require_timestamp=True),
         requires_job_nodes=True,
     ),
 )
@@ -106,6 +112,8 @@ register_source_config(
     SourceProcessingConfig(
         time_start=lambda ji: ji.interest_start_time,
         time_end=lambda ji: ji.interest_end_time,
+        # Same as node_metrics: a sample naming no node must not count against the whole job.
+        body_fallbacks=BodyFallbacks(require_node=True),
         requires_job_nodes=True,
     ),
 )

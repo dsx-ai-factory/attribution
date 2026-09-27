@@ -19,6 +19,7 @@ nvidia_attribution_client/models/attributor_info_v2.py
 nvidia_attribution_client/models/attributor_metadata.py
 nvidia_attribution_client/models/attributor_workload_info_v1.py
 nvidia_attribution_client/models/attributor_workload_info_v2.py
+nvidia_attribution_client/models/cancellation_actor.py
 nvidia_attribution_client/models/decision_action.py
 nvidia_attribution_client/models/decision_edge.py
 nvidia_attribution_client/models/decision_graph.py
@@ -28,6 +29,7 @@ nvidia_attribution_client/models/duplicate_attributor_error.py
 nvidia_attribution_client/models/duplicate_observation_error.py
 nvidia_attribution_client/models/errors.py
 nvidia_attribution_client/models/event_storage_overflow_error.py
+nvidia_attribution_client/models/failure_domain.py
 nvidia_attribution_client/models/format.py
 nvidia_attribution_client/models/global_attribution.py
 nvidia_attribution_client/models/http_validation_error.py
@@ -54,7 +56,9 @@ nvidia_attribution_client/models/straggler_attribution.py
 nvidia_attribution_client/models/switch_attribution.py
 nvidia_attribution_client/models/symptom_status.py
 nvidia_attribution_client/models/symptoms_value_inner.py
+nvidia_attribution_client/models/terminal_state.py
 nvidia_attribution_client/models/time_interval.py
+nvidia_attribution_client/models/uncertainty_type.py
 nvidia_attribution_client/models/unknown_attributor_id_error.py
 nvidia_attribution_client/models/unknown_observation_format_error.py
 nvidia_attribution_client/models/validation_error.py

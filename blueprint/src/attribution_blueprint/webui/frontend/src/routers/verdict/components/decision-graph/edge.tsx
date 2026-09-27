@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: LicenseRef-NvidiaProprietary
 
 import { BaseEdge, EdgeLabelRenderer, getSmoothStepPath, type Edge, type EdgeProps } from '@xyflow/react'
+import { cn } from '@/lib/utils'
 import { EDGE_LABEL_HEIGHT, type TraceEdgeData } from './layout'
 
 function roundedPath(points: { x: number; y: number }[]) {
@@ -25,7 +26,7 @@ function roundedPath(points: { x: number; y: number }[]) {
   return `${path} L ${points.at(-1)!.x} ${points.at(-1)!.y}`
 }
 
-export function TraceEdge({ id, sourceX, sourceY, targetX, targetY, sourcePosition, targetPosition, markerEnd, style, label, data }: EdgeProps<Edge<TraceEdgeData>>) {
+export function TraceEdge({ id, sourceX, sourceY, targetX, targetY, sourcePosition, targetPosition, markerEnd, style, label, data, animated }: EdgeProps<Edge<TraceEdgeData>>) {
   const [defaultPath, defaultLabelX, defaultLabelY] = getSmoothStepPath({
     sourceX, sourceY, targetX, targetY, sourcePosition, targetPosition, borderRadius: 12,
   })
@@ -43,9 +44,9 @@ export function TraceEdge({ id, sourceX, sourceY, targetX, targetY, sourcePositi
         <EdgeLabelRenderer>
           <div
             data-slot="decision-edge-label"
-            className="pointer-events-none absolute box-border overflow-hidden rounded-sm border border-border bg-background-secondary px-2 py-0.5 text-center font-sans text-[10px] leading-[14px] text-ellipsis whitespace-nowrap text-foreground-secondary shadow-sm"
+            className={cn('pointer-events-none absolute box-border overflow-hidden rounded-sm border bg-background-secondary px-2 py-0.5 text-center font-sans text-[10px] leading-[14px] text-ellipsis whitespace-nowrap shadow-sm', animated ? 'border-primary-300/50 text-primary-300' : 'border-border text-foreground-secondary')}
             title={data?.edgeType}
-            style={{ width: data?.labelWidth, height: EDGE_LABEL_HEIGHT, transform: `translate(-50%, -50%) translate(${labelX}px, ${labelY}px)` }}
+            style={{ opacity: style?.opacity, width: data?.labelWidth, height: EDGE_LABEL_HEIGHT, transform: `translate(-50%, -50%) translate(${labelX}px, ${labelY}px)` }}
           >
             {label}
           </div>

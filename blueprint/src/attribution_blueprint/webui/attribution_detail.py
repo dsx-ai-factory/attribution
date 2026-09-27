@@ -8,7 +8,7 @@
 # without an express license agreement from NVIDIA CORPORATION or
 # its affiliates is strictly prohibited.
 
-"""Validate detail sections independently without rewriting stored V2 evidence."""
+"""Validate and project detail sections without rewriting stored V2 evidence."""
 
 from __future__ import annotations
 
@@ -54,11 +54,23 @@ def _validate_sites(value: Any) -> None:
             model.model_validate_json(json.dumps(site), strict=True)
 
 
+def _project_source_id(record: dict[str, Any]) -> dict[str, Any]:
+    # Observation IDs are opaque identifiers. Encode them while Python still has
+    # the exact integer, before a browser's JSON parser can round an int64 value.
+    source = record["source"]
+    return {**record, "source": {**source, "observation_id": str(source["observation_id"])}}
+
+
+def _project_sites(sites: dict[str, list[dict[str, Any]]]) -> dict[str, Any]:
+    return {symptom: [_project_source_id(site) for site in entries] for symptom, entries in sites.items()}
+
+
 def _section(
     parent: Any,
     key: str,
     validate: Callable[[Any], Any],
     is_empty: Callable[[Any], bool] = lambda _: False,
+    project: Callable[[Any], Any] = lambda value: value,
 ) -> dict[str, Any]:
     if not isinstance(parent, dict):
         return {"state": "invalid", "data": None}
@@ -73,7 +85,7 @@ def _section(
         return {"state": "invalid", "data": None}
     # Models are used only for validation. Serializing them would insert defaults,
     # normalize timestamps and drop additional provenance from the stored response.
-    return {"state": "empty" if is_empty(value) else "available", "data": value}
+    return {"state": "empty" if is_empty(value) else "available", "data": project(value)}
 
 
 def decision_graph_section(raw_result: dict[str, Any]) -> dict[str, Any]:
@@ -83,10 +95,12 @@ def decision_graph_section(raw_result: dict[str, Any]) -> dict[str, Any]:
 
 
 def attribution_detail(raw_result: dict[str, Any]) -> dict[str, Any]:
-    """Expose raw root, sites and graph with separate availability states.
+    """Expose root, sites and graph with separate availability states.
 
     The models come from the generated Service SDK in this repository. Invalid
     graph data cannot invalidate a sound verdict or its symptom-site evidence.
+    Only known observation IDs are projected to strings for lossless browser
+    transport; other evidence and unknown provenance fields remain unchanged.
     """
     verdict = raw_result.get("verdict", {}) if isinstance(raw_result, dict) else None
     return {
@@ -94,7 +108,14 @@ def attribution_detail(raw_result: dict[str, Any]) -> dict[str, Any]:
             verdict,
             "root_symptom",
             lambda value: SourcedSymptom.model_validate_json(json.dumps(value), strict=True),
+            project=_project_source_id,
         ),
-        "symptomSites": _section(raw_result, "symptoms", _validate_sites, lambda value: not any(value.values())),
+        "symptomSites": _section(
+            raw_result,
+            "symptoms",
+            _validate_sites,
+            lambda value: not any(value.values()),
+            project=_project_sites,
+        ),
         "decisionGraph": decision_graph_section(raw_result),
     }

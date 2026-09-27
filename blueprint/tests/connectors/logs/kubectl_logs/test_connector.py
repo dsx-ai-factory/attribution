@@ -86,7 +86,6 @@ def test_emits_one_observation_per_pod(mocker):
     for o in obs:
         assert o["context"]["source"] == Source.APPLOG
         assert o["context"]["format"] == Format.ENTRY_TIMESERIES
-        assert o["context"]["resources"] == "AllJobResources"
         assert o["context"]["time_interval"] == {"start": None, "end": None}
 
 
@@ -216,13 +215,28 @@ def test_source_can_be_overridden_to_syslog(mocker):
     A user pointing the connector at a node-agent's stdout (e.g. a
     DaemonSet that tails kernel ring buffer) can switch the source to
     SYSLOG so the right service-side rules fire."""
-    _stub_logs(mocker, {"train-abc-trainer-0-0": "x"})
+    _stub_logs(mocker, {"train-abc-trainer-0-0": "2026-05-01T12:00:03Z kernel: oops\nundated line\n"})
     conn = KubectlLogsConnector(source=Source.SYSLOG)
     obs = conn.collect(_ctx(pod_names=["train-abc-trainer-0-0"]))
     assert obs[0]["context"]["source"] == Source.SYSLOG
-    assert obs[0]["context"]["format"] == Format.RAW_LOG
+    assert obs[0]["context"]["format"] == Format.ENTRY_TIMESERIES
     assert obs[0]["context"]["time_interval"]["start"] == datetime(2026, 5, 1, 12, 0, 0, tzinfo=timezone.utc)
-    assert obs[0]["body"] == "x"
+    assert json.loads(obs[0]["body"]) == [{"body": "2026-05-01T12:00:03Z kernel: oops", "ts": 1777636803000000000}]
+
+
+@pytest.mark.parametrize("source", [Source.APPLOG, Source.SYSLOG])
+def test_pod_nodes_stamps_node_only_on_mapped_pods(mocker, source):
+    """`pod_nodes` declares the node on every entry of a scheduled pod; a pod
+    absent from the mapping emits entries without resources."""
+    line = "2026-05-01T12:00:03Z rank=0 step=100\n"
+    _stub_logs(mocker, {"train-abc-trainer-0-0": line, "train-abc-trainer-0-1": line})
+    conn = KubectlLogsConnector(source=source)
+    obs = conn.collect(_ctx(pod_nodes={"train-abc-trainer-0-0": "node005"}))
+
+    # Observations come back in `pod_names` order.
+    mapped, unmapped = (json.loads(o["body"]) for o in obs)
+    assert mapped and all(e["resources"] == [{"kind": "node", "hostname": "node005"}] for e in mapped)
+    assert unmapped and all("resources" not in e for e in unmapped)
 
 
 def test_kubectl_timeout_returns_empty_for_that_pod(mocker):

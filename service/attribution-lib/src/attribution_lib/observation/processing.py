@@ -108,6 +108,13 @@ class BodyFallbacks:
     - `parse_node` only: the node is read from the body if possible, else ANY
     - both: the node is read from the body, else the entry is dropped
 
+    `parse_timestamp` and `require_timestamp` pair the same way. When `ts` is null:
+
+    - neither: the entry is kept, untimed
+    - `require_timestamp` only: the entry is dropped
+    - `parse_timestamp` only: the timestamp is read from the body if possible, else untimed
+    - both: the timestamp is read from the body, else the entry is dropped
+
     `year_fallback` only matters for year-less formats (`[E1231 23:57:09 ...]`): its year is used,
     and a parsed date after it rolls back a year. None (job end unknown) means current year.
     """
@@ -116,6 +123,7 @@ class BodyFallbacks:
     parse_timestamp: bool = False
     year_fallback: Optional[datetime] = None
     require_node: bool = False
+    require_timestamp: bool = False
 
 
 class EntrySourceBase(ABC, Generic[E, T_co]):

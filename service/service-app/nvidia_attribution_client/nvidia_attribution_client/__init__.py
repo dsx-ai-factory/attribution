@@ -39,6 +39,7 @@ __all__ = [
     "AttributorMetadata",
     "AttributorWorkloadInfoV1",
     "AttributorWorkloadInfoV2",
+    "CancellationActor",
     "DecisionAction",
     "DecisionEdge",
     "DecisionGraph",
@@ -48,6 +49,7 @@ __all__ = [
     "DuplicateObservationError",
     "Errors",
     "EventStorageOverflowError",
+    "FailureDomain",
     "Format",
     "GlobalAttribution",
     "HTTPValidationError",
@@ -74,7 +76,9 @@ __all__ = [
     "SwitchAttribution",
     "SymptomStatus",
     "SymptomsValueInner",
+    "TerminalState",
     "TimeInterval",
+    "UncertaintyType",
     "UnknownAttributorIdError",
     "UnknownObservationFormatError",
     "ValidationError",
@@ -111,6 +115,7 @@ from nvidia_attribution_client.models.attributor_info_v2 import AttributorInfoV2
 from nvidia_attribution_client.models.attributor_metadata import AttributorMetadata as AttributorMetadata
 from nvidia_attribution_client.models.attributor_workload_info_v1 import AttributorWorkloadInfoV1 as AttributorWorkloadInfoV1
 from nvidia_attribution_client.models.attributor_workload_info_v2 import AttributorWorkloadInfoV2 as AttributorWorkloadInfoV2
+from nvidia_attribution_client.models.cancellation_actor import CancellationActor as CancellationActor
 from nvidia_attribution_client.models.decision_action import DecisionAction as DecisionAction
 from nvidia_attribution_client.models.decision_edge import DecisionEdge as DecisionEdge
 from nvidia_attribution_client.models.decision_graph import DecisionGraph as DecisionGraph
@@ -120,6 +125,7 @@ from nvidia_attribution_client.models.duplicate_attributor_error import Duplicat
 from nvidia_attribution_client.models.duplicate_observation_error import DuplicateObservationError as DuplicateObservationError
 from nvidia_attribution_client.models.errors import Errors as Errors
 from nvidia_attribution_client.models.event_storage_overflow_error import EventStorageOverflowError as EventStorageOverflowError
+from nvidia_attribution_client.models.failure_domain import FailureDomain as FailureDomain
 from nvidia_attribution_client.models.format import Format as Format
 from nvidia_attribution_client.models.global_attribution import GlobalAttribution as GlobalAttribution
 from nvidia_attribution_client.models.http_validation_error import HTTPValidationError as HTTPValidationError
@@ -146,7 +152,9 @@ from nvidia_attribution_client.models.straggler_attribution import StragglerAttr
 from nvidia_attribution_client.models.switch_attribution import SwitchAttribution as SwitchAttribution
 from nvidia_attribution_client.models.symptom_status import SymptomStatus as SymptomStatus
 from nvidia_attribution_client.models.symptoms_value_inner import SymptomsValueInner as SymptomsValueInner
+from nvidia_attribution_client.models.terminal_state import TerminalState as TerminalState
 from nvidia_attribution_client.models.time_interval import TimeInterval as TimeInterval
+from nvidia_attribution_client.models.uncertainty_type import UncertaintyType as UncertaintyType
 from nvidia_attribution_client.models.unknown_attributor_id_error import UnknownAttributorIdError as UnknownAttributorIdError
 from nvidia_attribution_client.models.unknown_observation_format_error import UnknownObservationFormatError as UnknownObservationFormatError
 from nvidia_attribution_client.models.validation_error import ValidationError as ValidationError

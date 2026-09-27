@@ -1,4 +1,6 @@
-// src/services/http-client.service.ts
+// SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// SPDX-License-Identifier: LicenseRef-NvidiaProprietary
+
 export class HttpError extends Error {
   status: number
   constructor(status: number, message: string) {
@@ -10,7 +12,12 @@ export class HttpError extends Error {
 
 const BASE = (import.meta.env.VITE_API_BASE_PATH as string | undefined) || '/api/v1'
 
-export async function httpGet<T>(path: string, params?: Record<string, unknown>, signal?: AbortSignal): Promise<T> {
+export async function httpGet<T>(
+  path: string,
+  params?: Record<string, unknown>,
+  options: { signal?: AbortSignal } = {},
+): Promise<T> {
+  const { signal } = options
   const url = new URL(`${BASE}${path}`, window.location.origin)
   if (params) {
     for (const [k, v] of Object.entries(params)) {

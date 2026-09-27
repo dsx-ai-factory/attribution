@@ -246,11 +246,12 @@ expect = "interesting"
 line   = "Connection lost to node 42: host-359412e9"
 
 
-# --- SyslogOomKill: 3-way pick_one classification of kernel OOM-killer lines ----
+# --- SyslogOomKill: classify kernel OOM-killer victim lines ----------------------
 # main's syslog_oom_kill: system-service victims owned by a system UID are infra
-# failures (bad); a cgroup OOM of a UID>0 task is a user-task failure (bad);
-# everything else is recorded as interesting context. The `when` clauses guard
-# OPTIONAL captures with `is not None` (load-time optional-capture guard).
+# failures (bad); a cgroup OOM of a UID>0 task is a user-task failure (bad); and
+# a global OOM with a regular-user victim is a user failure (bad). Everything
+# else is recorded as interesting context. The `when` clauses guard OPTIONAL
+# captures with `is not None` (load-time optional-capture guard).
 [[extractor]]
 name = "SyslogOomKill"
 match_re = '(?P<cgroup>Memory cgroup )?[Oo]ut of memory: Killed process \d+ \((?P<process_name>[^)]+)\)(?:.*?UID:(?P<uid>\d+))?'
@@ -266,6 +267,14 @@ when = "cgroup is not None and uid is not None and int(uid) > 0"
 type = "bad_node"
 symptom = "OOM kill of user task"
 derived_rule = "user-task-oom-kill"
+[[extractor.emit.branches]]
+# UID 1000 is the conventional first regular-user UID. Keep lower-UID global
+# OOM victims as context because a system process being selected as the victim
+# does not establish a user-caused failure.
+when = "cgroup is None and uid is not None and int(uid) >= 1000"
+type = "bad_node"
+symptom = "System-out of memory"
+derived_rule = "system-out-of-memory"
 [extractor.emit.default]
 type = "interesting_node"
 symptom = "OOM kill (other)"
@@ -281,8 +290,13 @@ symptom = "OOM kill of system service"
 expect  = "bad"
 line    = "Memory cgroup out of memory: Killed process 123 (python) total-vm:200kB, UID:1000"
 symptom = "OOM kill of user task"
-# default: global OOM, no cgroup/UID, non-service process -> interesting, other.
+# branch 3: global OOM with a regular-user victim -> bad, system OOM symptom.
+[[extractor.cases]]
+expect  = "bad"
+line    = "Sep 18 15:39:54 node-001 kernel: Out of memory: Killed process 12345 (python3) total-vm:200kB, UID:1000"
+symptom = "System-out of memory"
+# default: global OOM of a system-owned non-service process -> interesting, other.
 [[extractor.cases]]
 expect  = "interesting"
-line    = "Out of memory: Killed process 999 (python) total-vm:200kB"
+line    = "Out of memory: Killed process 999 (python) total-vm:200kB, UID:999"
 symptom = "OOM kill (other)"
