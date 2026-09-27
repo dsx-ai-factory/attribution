@@ -8,19 +8,22 @@ import {
   getViewportForBounds,
   ViewportPortal,
   Handle,
+  MarkerType,
   Position,
   ReactFlow,
   useReactFlow,
   useStore,
   type NodeProps,
 } from '@xyflow/react'
-import { ArrowRight, FileText, GitBranch, LocateFixed, RotateCcw, ScanLine } from 'lucide-react'
+import { ChevronRight, FileText, GitBranch, LocateFixed, RotateCcw, ScanLine } from 'lucide-react'
 import type { DecisionGraph, DecisionNode, DecisionNodeType } from '@/interfaces/attribution'
 import { cn } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
+import { SymptomDocumentationLink } from '@/components/symptom-documentation'
 import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { layoutGraph, NODE_HEIGHT, NODE_WIDTH, type TraceNode, type GraphStage } from './layout'
 import { TraceEdge } from './edge'
+import { traceRelationships } from './trace'
 import '@xyflow/react/dist/style.css'
 import './style.css'
 
@@ -34,6 +37,10 @@ const STAGES: Record<DecisionNodeType, string> = {
   OUTCOME: 'Outcome',
 }
 
+function stepLabel(step: DecisionNode) {
+  return step.rule_name || step.symptom || STAGES[step.node_type]
+}
+
 function stepTone(step: DecisionNode) {
   if (step.action === 'REMOVED' || step.action === 'PRUNED') return 'text-red-300 border-red-400/40'
   if (step.action === 'MATCHED') return 'text-emerald-300 border-emerald-400/40'
@@ -44,8 +51,8 @@ function StepNode({ data: { step }, selected }: NodeProps<TraceNode>) {
   return (
     <div
       className={cn(
-        'flex flex-col gap-1.5 rounded-md border bg-background px-3 py-2.5 shadow-sm transition-colors',
-        selected ? 'border-foreground ring-1 ring-foreground/30' : 'border-border hover:border-foreground-muted',
+        'decision-step flex flex-col gap-1.5 rounded-md border bg-background px-3 py-2.5 shadow-sm transition-colors',
+        selected ? 'border-primary-300 ring-1 ring-primary-300/40' : 'border-border hover:border-foreground-muted',
       )}
       style={{ width: NODE_WIDTH, height: NODE_HEIGHT }}
     >
@@ -58,7 +65,7 @@ function StepNode({ data: { step }, selected }: NodeProps<TraceNode>) {
           {step.action}
         </span>
       </div>
-      <div className="line-clamp-2 break-words text-sm font-medium leading-4 text-foreground" title={step.symptom}>
+      <div className={cn('line-clamp-2 break-words text-sm font-medium leading-4', selected ? 'text-primary-300' : 'text-foreground')} title={step.symptom}>
         {step.symptom || 'No symptom recorded'}
       </div>
       <div className="mt-auto space-y-0.5 text-[10px] leading-3 text-foreground-muted">
@@ -104,7 +111,10 @@ function StepDetails({ step, graph, onSelect }: {
         <span className="text-[11px] font-medium uppercase tracking-wider text-foreground-muted">Step details</span>
         <span className={cn('rounded-sm border px-2 py-1 text-[10px]', stepTone(step))}>{step.action}</span>
       </div>
-      <h3 className="m-0 break-words text-sm font-semibold leading-6">{step.symptom || 'No symptom recorded'}</h3>
+      <div className="flex min-w-0 items-center gap-1.5">
+        <h3 className="m-0 min-w-0 break-words text-sm font-semibold leading-7">{step.symptom || 'No symptom recorded'}</h3>
+        <SymptomDocumentationLink symptomId={step.symptom} />
+      </div>
       <dl className="my-5 grid grid-cols-2 gap-x-4 gap-y-4">
         <DetailField label="Stage">{STAGES[step.node_type]}</DetailField>
         <DetailField label="Host">{step.hostname ?? 'Not recorded'}</DetailField>
@@ -129,19 +139,21 @@ function StepDetails({ step, graph, onSelect }: {
       </div>
       {related.length > 0 && (
         <div className="mt-5 border-t border-border pt-4">
-          <h4 className="mb-2 text-xs font-medium">Connected steps <span className="ml-1 font-mono text-foreground-muted">{related.length}</span></h4>
-          <div className="space-y-1">
+          <h4 className="mb-3 flex items-center justify-between text-xs font-medium">Connected steps <span className="font-mono text-foreground-muted">{related.length}</span></h4>
+          <ul className="m-0 list-none divide-y divide-border overflow-hidden rounded-md border border-border p-0">
             {related.map(({ edge, incoming, other }, index) => (
-              <button key={index} type="button" aria-label={`${incoming ? 'From' : 'To'} ${edge.edge_type}: ${other.rule_name ?? other.symptom}, ${STAGES[other.node_type]}, ${other.hostname ?? 'No host recorded'}`} onClick={() => onSelect(other.node_id)} className="group w-full min-w-0 rounded-md p-2 text-left hover:bg-background-active focus-visible:outline-2 focus-visible:outline-primary">
-                <span className="mb-1 flex items-center gap-1.5 text-[10px] text-foreground-muted">
-                  <ArrowRight className={cn('size-3', incoming && 'rotate-180')} />
-                  {incoming ? 'From' : 'To'} · {edge.edge_type}
-                </span>
-                <span className="block break-words text-[11px] leading-4 group-hover:text-primary-300">{other.rule_name ?? other.symptom ?? STAGES[other.node_type]}</span>
-                <span className="mt-1 block truncate text-[10px] text-foreground-muted">{STAGES[other.node_type]} · {other.hostname ?? 'No host recorded'}</span>
-              </button>
+              <li key={index}>
+                <Button type="button" variant="ghost" aria-label={`${incoming ? 'From' : 'To'} ${edge.edge_type}: ${stepLabel(other)}, ${STAGES[other.node_type]}, ${other.hostname ?? 'No host recorded'}`} onClick={() => onSelect(other.node_id)} className="h-auto w-full min-w-0 justify-between gap-3 rounded-none border-0 px-3 py-3 text-left whitespace-normal focus-visible:ring-2 focus-visible:ring-inset">
+                  <span className="min-w-0 space-y-1">
+                    <span className="block break-words text-xs font-medium leading-5">{stepLabel(other)}</span>
+                    <span className="block break-words text-[11px] font-normal leading-4 text-foreground-muted">{STAGES[other.node_type]} · {other.hostname ?? 'No host recorded'}</span>
+                    <span className="block text-[10px] font-normal leading-4 text-foreground-muted">{incoming ? 'From' : 'To'} · {edge.edge_type}</span>
+                  </span>
+                  <ChevronRight aria-hidden="true" className="size-3.5 shrink-0 text-foreground-muted" />
+                </Button>
+              </li>
             ))}
-          </div>
+          </ul>
         </div>
       )}
     </aside>
@@ -173,31 +185,47 @@ export function DecisionGraphView({ graph }: { graph: DecisionGraph }) {
   const [selectedId, setSelectedId] = useState(initialId)
   const [viewRequest, setViewRequest] = useState<{ revision: number; nodeId: string | null }>({ revision: 0, nodeId: null })
   const selected = graph.nodes.find((node) => node.node_id === selectedId) ?? graph.nodes[0]
-  const nodes = useMemo(() => layout.nodes.map((node) => ({ ...node, selected: node.id === selected.node_id })), [layout.nodes, selected.node_id])
+  const trace = useMemo(() => traceRelationships(graph.edges, selected.node_id), [graph.edges, selected.node_id])
+  const nodes = useMemo(() => layout.nodes.map((node) => ({
+    ...node,
+    selected: node.id === selected.node_id,
+    className: node.id === selected.node_id ? undefined : trace.nodeIds.has(node.id) ? 'decision-node-related' : 'decision-node-muted',
+  })), [layout.nodes, selected.node_id, trace])
+  const edges = useMemo(() => layout.edges.map((edge, index) => {
+    const highlighted = trace.edgeIndexes.has(index)
+    const color = highlighted ? 'var(--color-primary-300)' : 'var(--foreground-muted)'
+    return {
+      ...edge,
+      animated: highlighted,
+      markerEnd: { type: MarkerType.ArrowClosed, color },
+      style: { ...edge.style, stroke: color, strokeWidth: highlighted ? 2 : 1.25, opacity: highlighted ? 1 : 0.3 },
+    }
+  }), [layout.edges, trace])
 
   return (
     <div className="flex shrink-0 flex-col lg:min-h-0 lg:flex-1">
       <div className="flex shrink-0 flex-wrap items-center justify-between gap-3 border-y border-border bg-background px-5 py-3">
         <div className="flex flex-wrap gap-x-4 gap-y-2 text-[11px] text-foreground-muted" aria-label="Graph legend">
+          <span className="flex items-center gap-1.5"><span className="h-0.5 w-3 bg-primary-300" />Selected path</span>
           <span className="flex items-center gap-1.5"><span className="size-1.5 rounded-full bg-foreground-muted" />Recorded evidence</span>
           <span className="flex items-center gap-1.5"><span className="size-1.5 rounded-full bg-emerald-300" />Matched</span>
           <span className="flex items-center gap-1.5"><span className="size-1.5 rounded-full bg-red-300" />Removed / pruned</span>
         </div>
-        <div className="grid w-full min-w-0 max-w-full grid-cols-[auto_1fr] items-center gap-2 sm:flex sm:w-auto sm:flex-wrap sm:gap-3">
-          <div role="group" aria-label="Inspect a step" className="contents sm:flex sm:min-w-0 sm:max-w-full sm:items-center sm:gap-1">
+        <div className="flex w-full min-w-0 max-w-full flex-wrap items-center gap-2 sm:w-auto sm:gap-3">
+          <div role="group" aria-label="Inspect a step" className="contents sm:flex sm:min-w-0 sm:max-w-full sm:flex-wrap sm:items-center sm:gap-1">
             <Select value={String(graph.nodes.indexOf(selected))} onValueChange={(value) => setSelectedId(graph.nodes[Number(value)].node_id)}>
-              <SelectTrigger aria-label="Inspect decision step" className="col-span-2 w-full min-w-0 max-w-full bg-background text-xs text-foreground-secondary sm:w-60 dark:bg-background dark:hover:bg-background-active">
-                <SelectValue><span className="truncate">{STAGES[selected.node_type]} · {selected.rule_name ?? selected.symptom}</span></SelectValue>
+              <SelectTrigger aria-label="Inspect decision step" className="w-full min-w-0 max-w-full bg-background text-xs text-foreground-secondary sm:w-60 dark:bg-background dark:hover:bg-background-active">
+                <SelectValue><span className="truncate">{STAGES[selected.node_type]} · {stepLabel(selected)}</span></SelectValue>
               </SelectTrigger>
               <SelectContent position="popper" align="end" collisionPadding={12} className="max-h-[min(24rem,var(--radix-select-content-available-height))] w-96 max-w-[calc(100vw-24px)]">
                 <SelectGroup>
                   {graph.nodes.map((node, index) => (
-                    <SelectItem key={node.node_id} value={String(index)} textValue={`${STAGES[node.node_type]} ${node.rule_name ?? node.symptom} ${node.hostname ?? ''}`} className="py-2 [&>span:last-child]:min-w-0">
+                    <SelectItem key={node.node_id} value={String(index)} textValue={`${STAGES[node.node_type]} ${stepLabel(node)} ${node.hostname ?? ''}`} className="py-2 [&>span:last-child]:min-w-0">
                       <span className="min-w-0">
                         <span className="mb-1 flex items-center gap-2 text-[10px] text-foreground-muted">
                           {STAGES[node.node_type]} <span className={stepTone(node)}>{node.action}</span>
                         </span>
-                        <span className="line-clamp-2 break-words text-[11px] leading-4">{node.rule_name || node.symptom || 'No rule recorded'}</span>
+                        <span className="line-clamp-2 break-words text-[11px] leading-4">{stepLabel(node)}</span>
                         <span className="mt-1 block truncate text-[10px] text-foreground-muted">{node.hostname ?? 'No host recorded'} · {node.symptom || 'No symptom recorded'}</span>
                       </span>
                     </SelectItem>
@@ -229,7 +257,7 @@ export function DecisionGraphView({ graph }: { graph: DecisionGraph }) {
           <div className="absolute inset-0">
             <ReactFlow<TraceNode>
               nodes={nodes}
-              edges={layout.edges}
+              edges={edges}
               nodeTypes={NODE_TYPES}
               edgeTypes={EDGE_TYPES}
               onNodesChange={(changes) => {

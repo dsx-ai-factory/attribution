@@ -16,10 +16,10 @@ from pathlib import Path
 from loguru import logger
 
 from attribution_blueprint.connectors.logs import entries_from_text, log_observation
+from attribution_blueprint.connectors.logs.syslog import syslog_entries_from_text
 from attribution_blueprint.exceptions import MCAError
 from attribution_blueprint.types import (
     ExecutionContext,
-    Format,
     Observation,
     Source,
     assert_aware,
@@ -154,7 +154,7 @@ class LocalFileLogConnector:
                 child directories below each configured base path.
 
         Returns:
-            One ``RAW_LOG`` observation per readable syslog file.
+            One observation per readable, non-empty syslog file.
         """
         observations: list[Observation] = []
         seen: set[Path] = set()
@@ -216,15 +216,8 @@ class LocalFileLogConnector:
                         continue
                     if body == "":
                         continue
-                    observations.append(
-                        log_observation(
-                            source=self._source,
-                            format=Format.RAW_LOG,
-                            body=body,
-                            context=context,
-                            resources=node,
-                        )
-                    )
+                    entries = syslog_entries_from_text(body, context, node=node)
+                    observations.append(log_observation(source=self._source, entries=entries, context=context))
         if found_node_dir is False:
             logger.warning(f"local_file SYSLOG: no syslog directories found for ctx {context.get('id')}")
         return observations

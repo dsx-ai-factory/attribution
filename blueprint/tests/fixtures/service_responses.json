@@ -21,7 +21,11 @@
         }
       },
       "attribution_outcome": "Fail InfraHW",
-      "detail": "GPU fell off the bus on node-001"
+      "detail": "GPU fell off the bus on node-001",
+      "terminal_states": ["Fail"],
+      "failure_domains": ["InfraHW"],
+      "cancellation_actors": [],
+      "uncertainty_type": null
     },
     "symptoms": {
       "GpuFell": [

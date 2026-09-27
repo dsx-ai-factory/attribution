@@ -156,6 +156,7 @@ def test_discover_by_ids_normalizes_finished_workload(mocker):
     assert ctx["name"] == "job-train-mnist-abc12"
     assert ctx["state"] == "FINISHED_SUCCEEDED"
     assert ctx["nodes"] == ["node005"]
+    assert ctx["pod_nodes"] == {"train-mnist-abc12-0": "node005"}
     assert ctx["start_time"] == datetime(2026, 5, 1, 12, 0, 0, tzinfo=timezone.utc)
     assert ctx["end_time"] == datetime(2026, 5, 1, 12, 30, 0, tzinfo=timezone.utc)
     assert ctx["user_name"] == "alice"
@@ -558,7 +559,7 @@ def test_collect_pod_evidence_rejects_unlabelled_and_mismatched_pods():
         {"metadata": {"labels": {}}, "spec": {"nodeName": "n-unlabelled"}},
         {"metadata": {"labels": {"batch.kubernetes.io/controller-uid": "owner-B"}}, "spec": {"nodeName": "n-other"}},
     ]
-    nodes, failed_node, _ = _collect_pod_evidence(pods, ("batch.kubernetes.io/controller-uid", "owner-A"))
+    nodes, failed_node, _, _ = _collect_pod_evidence(pods, ("batch.kubernetes.io/controller-uid", "owner-A"))
     assert nodes == ["n-good"]
     assert failed_node is None
 
@@ -669,9 +670,9 @@ def test_failed_node_is_deterministic_across_pod_orderings():
     pods_c = [_pod("n-b", 2), _pod("n-d", 0), _pod("n-a", 1), _pod("n-c", 137)]
 
     selector = ("batch.kubernetes.io/controller-uid", "owner-A")
-    _, failed_a, _ = _collect_pod_evidence(pods_a, selector)
-    _, failed_b, _ = _collect_pod_evidence(pods_b, selector)
-    _, failed_c, _ = _collect_pod_evidence(pods_c, selector)
+    _, failed_a, _, _ = _collect_pod_evidence(pods_a, selector)
+    _, failed_b, _, _ = _collect_pod_evidence(pods_b, selector)
+    _, failed_c, _, _ = _collect_pod_evidence(pods_c, selector)
 
     assert failed_a == failed_b == failed_c == "n-a"
 
@@ -683,7 +684,60 @@ def test_collect_pod_evidence_returns_empty_for_workload_with_no_owner_job():
     from attribution_blueprint.connectors.execution_contexts.kueue.connector import _collect_pod_evidence
 
     pods = [{"metadata": {"labels": {"batch.kubernetes.io/controller-uid": "anything"}}, "spec": {"nodeName": "n"}}]
-    assert _collect_pod_evidence(pods, None) == ([], None, [])
+    assert _collect_pod_evidence(pods, None) == ([], None, [], {})
+
+
+def test_pod_nodes_maps_scheduled_pods_and_omits_unscheduled_ones():
+    from attribution_blueprint.connectors.execution_contexts.kueue.connector import _collect_pod_evidence
+
+    selector = ("batch.kubernetes.io/controller-uid", "owner-A")
+    pods = [
+        {"metadata": {"name": "w-0", "labels": {selector[0]: selector[1]}}, "spec": {"nodeName": "n-1"}},
+        {"metadata": {"name": "w-1", "labels": {selector[0]: selector[1]}}, "spec": {"nodeName": "n-2"}},
+        {"metadata": {"name": "w-pending", "labels": {selector[0]: selector[1]}}, "spec": {}},
+    ]
+    evidence = _collect_pod_evidence(pods, selector)
+    assert evidence.pod_nodes == {"w-0": "n-1", "w-1": "n-2"}
+    assert evidence.pod_names == ["w-0", "w-1", "w-pending"]
+
+
+def test_same_named_jobsets_in_two_namespaces_keep_separate_pod_evidence():
+    """The pod list is pooled across workloads and the JobSet label is only
+    unique per namespace, so pods must be scoped to the workload's namespace
+    before matching or `pod_nodes` from one tenant overwrites the other's."""
+    from attribution_blueprint.connectors.execution_contexts.kueue.connector import _parse_workload
+
+    def _wl(ns: str) -> dict:
+        return {
+            "metadata": {
+                "name": "train",
+                "namespace": ns,
+                "uid": f"wl-{ns}",
+                "creationTimestamp": "2026-05-01T11:59:00Z",
+                "ownerReferences": [{"apiVersion": "jobset.x-k8s.io/v1alpha2", "kind": "JobSet", "name": "train"}],
+            },
+            "spec": {},
+            "status": {
+                "conditions": [
+                    {"type": "Admitted", "status": "True", "lastTransitionTime": "2026-05-01T12:00:00Z"},
+                    {"type": "Finished", "status": "True", "lastTransitionTime": "2026-05-01T12:30:00Z"},
+                ]
+            },
+        }
+
+    def _pod(ns: str, node: str) -> dict:
+        return {
+            "metadata": {"name": "train-w-0-0", "namespace": ns, "labels": {"jobset.sigs.k8s.io/jobset-name": "train"}},
+            "spec": {"nodeName": node},
+            "status": {},
+        }
+
+    pods = [_pod("team-alpha", "node-a"), _pod("team-beta", "node-b")]
+    now = datetime(2026, 5, 1, 13, 0, tzinfo=timezone.utc)
+    alpha = _parse_workload(_wl("team-alpha"), pods, {}, now=now)
+    beta = _parse_workload(_wl("team-beta"), pods, {}, now=now)
+    assert alpha["nodes"] == ["node-a"] and alpha["pod_nodes"] == {"train-w-0-0": "node-a"}
+    assert beta["nodes"] == ["node-b"] and beta["pod_nodes"] == {"train-w-0-0": "node-b"}
 
 
 def test_discover_by_time_range_rejects_naive_datetimes(mocker):

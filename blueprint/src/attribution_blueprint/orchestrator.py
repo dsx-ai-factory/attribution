@@ -22,7 +22,6 @@ from attribution_blueprint.connectors.attribution import (
 )
 from attribution_blueprint.connectors.execution_contexts import ExecutionContextAdapter
 from attribution_blueprint.connectors.logs import LogConnector
-from attribution_blueprint.connectors.logs.service_observation_adapter import adapt_log_observation_for_service
 from attribution_blueprint.connectors.metrics import MetricsConnector
 from attribution_blueprint.connectors.outputs import OutputConnector
 from attribution_blueprint.result import ConnectorReport, enrich_attribution_result, service_outcome
@@ -177,9 +176,7 @@ class AttributionOrchestrator:
 
         for obs in observations:
             try:
-                service_obs = ServiceObservation.model_validate(
-                    adapt_log_observation_for_service(obs, ctx.get("timezone"))
-                )
+                service_obs = ServiceObservation.model_validate(obs)
                 self.attribution.ingest_observation(attributor_id, service_obs)
             except Exception as e:
                 obs_source = obs.get("context", {}).get("source", "?")
@@ -234,12 +231,11 @@ class AttributionOrchestrator:
             source = obs["context"]["source"]
             source_value = source.value if hasattr(source, "value") else source
             path = self.dump_observations_dir / f"{ctx['id']}.{source_value}.json"
-            # Most connector bodies are JSON-encoded (ENTRY_TIMESERIES,
-            # LOKI_DICT_LIST, PROMETHEUS_METRICS). local_file syslog emits
-            # `Format.RAW_LOG` whose body is the raw file text — not JSON.
-            # Try to decode; if it isn't JSON, preserve the raw string under a
-            # `body_raw` key so the dump round-trips for any (Source, Format)
-            # pair without crashing the per-context loop.
+            # Bundled connector bodies are JSON-encoded (ENTRY_TIMESERIES,
+            # PROMETHEUS_METRICS); a third-party connector may still send plain
+            # text. Preserve a non-JSON body under `body_raw` so the dump
+            # round-trips for any (Source, Format) pair without crashing the
+            # per-context loop.
             raw_body = obs["body"]
             body_field: dict[str, object]
             try:
@@ -258,7 +254,6 @@ class AttributionOrchestrator:
                         "start": _isoformat_or_none(obs["context"]["time_interval"]["start"]),
                         "end": _isoformat_or_none(obs["context"]["time_interval"]["end"]),
                     },
-                    "resources": obs["context"]["resources"],
                 },
                 **body_field,
             }

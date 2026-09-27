@@ -66,7 +66,7 @@ from __future__ import annotations
 import json
 import subprocess
 from datetime import datetime, timezone
-from typing import NotRequired, TypedDict
+from typing import NamedTuple, NotRequired, TypedDict
 
 from loguru import logger
 
@@ -112,6 +112,9 @@ class KueueExecutionContext(TypedDict):
     # don't need to re-derive the per-owner pod selector. Empty list when the
     # owner type isn't supported or all pods have been garbage-collected.
     pod_names: NotRequired[list[str]]
+    # Pod name -> `.spec.nodeName`, for connectors that need per-pod node
+    # identity. Unscheduled pods are absent.
+    pod_nodes: NotRequired[dict[str, str]]
 
 
 # Kueue's Workload condition vocabulary. Stable since Kueue v0.6 and described
@@ -260,12 +263,20 @@ def _pod_selector_for(workload: dict) -> tuple[str, str] | None:
     return None
 
 
+class _PodEvidence(NamedTuple):
+    nodes: list[str]
+    failed_node: str | None
+    pod_names: list[str]
+    pod_nodes: dict[str, str]
+
+
 def _collect_pod_evidence(
     pods: list[dict],
     selector: tuple[str, str] | None,
-) -> tuple[list[str], str | None, list[str]]:
-    """Return `(sorted unique nodes, lex-smallest failed_node, sorted pod
-    names)` for pods whose `metadata.labels[selector.key] == selector.value`.
+) -> _PodEvidence:
+    """Return sorted unique nodes, the lex-smallest failed_node, sorted pod
+    names and the pod -> node mapping for pods whose
+    `metadata.labels[selector.key] == selector.value`.
 
     The caller is responsible for narrowing the input list to pods that
     might belong to this workload — typically via the kubectl label
@@ -278,15 +289,16 @@ def _collect_pod_evidence(
     connectors (e.g. `kubectl_logs`) don't have to re-derive the
     per-owner pod selector and re-fetch the pod list.
 
-    Returns ([], None, []) when `selector` is None — Workloads without
+    Returns empty evidence when `selector` is None — Workloads without
     a recognised owner have no pods to attribute.
     """
     if not selector:
-        return [], None, []
+        return _PodEvidence([], None, [], {})
     key, value = selector
     nodes: set[str] = set()
     failed_nodes: set[str] = set()
     pod_names: set[str] = set()
+    pod_nodes: dict[str, str] = {}
     for pod in pods:
         meta = pod.get("metadata") or {}
         labels = meta.get("labels") or {}
@@ -299,6 +311,8 @@ def _collect_pod_evidence(
         node_name = spec.get("nodeName")
         if node_name:
             nodes.add(node_name)
+            if pod_name:
+                pod_nodes[pod_name] = node_name
         status = pod.get("status") or {}
         for cs in status.get("containerStatuses") or []:
             terminated = (cs.get("state") or {}).get("terminated") or {}
@@ -312,7 +326,7 @@ def _collect_pod_evidence(
     # match, which flakes when the API server returns pods in a different
     # order between runs.
     failed_node = min(failed_nodes) if failed_nodes else None
-    return sorted(nodes), failed_node, sorted(pod_names)
+    return _PodEvidence(sorted(nodes), failed_node, sorted(pod_names), pod_nodes)
 
 
 def _extract_time_limit(workload: dict, owner_jobs: dict[str, dict]) -> int | None:
@@ -519,7 +533,11 @@ def _parse_workload(
         end_time = now
         logger.debug(f"workload {namespace}/{name} not finished; substituting now() for end_time")
 
-    nodes, failed_node, pod_names = _collect_pod_evidence(pods, _pod_selector_for(workload))
+    # `pods` is pooled across every workload in the batch. The JobSet label is
+    # only unique within a namespace, so a same-named JobSet elsewhere would
+    # otherwise leak its pods (and overwrite `pod_nodes`) into this workload.
+    own_pods = [pod for pod in pods if ((pod.get("metadata") or {}).get("namespace") or "default") == namespace]
+    evidence = _collect_pod_evidence(own_pods, _pod_selector_for(workload))
 
     ctx: KueueExecutionContext = {
         "id": uid,
@@ -534,7 +552,7 @@ def _parse_workload(
         # distinguishable from other UNDEFINED sources without involving
         # the attribution service.
         "scheduler": "kueue",
-        "nodes": nodes,
+        "nodes": evidence.nodes,
         "start_time": start_time,
         "end_time": end_time,
         "job_id": f"{namespace}/{name}",
@@ -559,11 +577,13 @@ def _parse_workload(
     if gpu_count is not None:
         ctx["gpu_count"] = gpu_count
 
-    if failed_node:
-        ctx["failed_node"] = failed_node
+    if evidence.failed_node:
+        ctx["failed_node"] = evidence.failed_node
 
-    if pod_names:
-        ctx["pod_names"] = pod_names
+    if len(evidence.pod_names) > 0:
+        ctx["pod_names"] = evidence.pod_names
+    if len(evidence.pod_nodes) > 0:
+        ctx["pod_nodes"] = evidence.pod_nodes
 
     time_limit = _extract_time_limit(workload, owner_jobs)
     if time_limit is not None:

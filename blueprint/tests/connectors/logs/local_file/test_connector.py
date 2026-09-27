@@ -52,7 +52,6 @@ def test_reads_existing_file_and_emits_one_observation(tmp_path):
     assert o["context"]["source"] == Source.APPLOG
     assert o["context"]["format"] == Format.ENTRY_TIMESERIES
     assert o["context"]["time_interval"] == {"start": None, "end": None}
-    assert o["context"]["resources"] == "AllJobResources"
     assert json.loads(o["body"]) == [{"body": "line one"}, {"body": "line two"}, {"body": "line three"}, {"body": ""}]
 
 
@@ -209,7 +208,8 @@ def test_syslog_directory_expands_context_node_directories(tmp_path):
     node_a.mkdir(parents=True)
     node_b.mkdir()
     (node_a / "kernel.log").write_text("2026-05-01T00:00:03Z node-a kernel\nnode-a nvrm\n")
-    (node_b / "messages.log").write_text("node-b kernel\n")
+    (node_b / "messages.log").write_text("May  1 00:00:04 node-b kernel: oops\n")
+    (node_b / "undated.log").write_text("node-b kernel\n")
     conn = LocalFileLogConnector(log_path_templates=[str(base)], source=Source.SYSLOG)
     ctx = _ctx(tmp_path, std_out_template="", nodes=["node-a", "node-b", "node-c"])
 
@@ -220,12 +220,22 @@ def test_syslog_directory_expands_context_node_directories(tmp_path):
     finally:
         logger.remove(sink_id)
 
-    assert len(obs) == 2
+    assert len(obs) == 3
     assert all(observation["context"]["source"] == Source.SYSLOG for observation in obs)
-    assert all(observation["context"]["format"] == Format.RAW_LOG for observation in obs)
-    assert sorted((observation["context"]["resources"], observation["body"]) for observation in obs) == [
-        ("node-a", "2026-05-01T00:00:03Z node-a kernel\nnode-a nvrm\n"),
-        ("node-b", "node-b kernel\n"),
+    assert all(observation["context"]["format"] == Format.ENTRY_TIMESERIES for observation in obs)
+    assert all(
+        observation["context"]["time_interval"] == {"start": ctx["start_time"], "end": ctx["end_time"]}
+        for observation in obs
+    )
+    assert sorted(entry["body"] for observation in obs for entry in json.loads(observation["body"])) == [
+        "2026-05-01T00:00:03Z node-a kernel",
+        "May  1 00:00:04 node-b kernel: oops",
+    ]
+    assert sorted(
+        entry["resources"][0]["hostname"] for observation in obs for entry in json.loads(observation["body"])
+    ) == [
+        "node-a",
+        "node-b",
     ]
     missing_warnings = [
         warning

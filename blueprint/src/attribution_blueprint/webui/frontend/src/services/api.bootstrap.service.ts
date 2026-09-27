@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// SPDX-License-Identifier: LicenseRef-NvidiaProprietary
+
 import type { FleetFilter } from '@/interfaces/filter'
 import { applyFilter } from '@/lib/filter-state'
 import type { RunDetail, RunSummary } from '@/interfaces/attribution'

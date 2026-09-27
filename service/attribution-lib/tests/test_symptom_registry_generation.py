@@ -86,6 +86,17 @@ def test_nv_err_busy_retry_maps_to_infrasw():
     assert match.outcome == "Fail InfraSW"
 
 
+def test_nv_err_insufficient_resources_maps_to_multicategory():
+    """Allow for users requesting more resources than are available."""
+    registry = _load_committed_registry()
+
+    match = registry.outcome_for(["NV_ERR_INSUFFICIENT_RESOURCES mem_alloc.c"])
+
+    assert match is not None
+    assert match.matched_prefix == "NV_ERR_INSUFFICIENT_RESOURCES"
+    assert match.outcome == "Fail MultiCategory"
+
+
 def test_slurm_node_failure_maps_to_infrasw():
     """Treat the scheduler's NODE_FAIL state as infrastructure software evidence."""
     registry = _load_committed_registry()

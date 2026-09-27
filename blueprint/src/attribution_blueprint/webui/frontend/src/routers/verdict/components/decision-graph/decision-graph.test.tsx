@@ -14,6 +14,10 @@ import { TraceEdge } from './edge'
 import { DecisionGraphView } from './index'
 import { EDGE_LABEL_HEIGHT, layoutGraph, NODE_HEIGHT, NODE_WIDTH } from './layout'
 import * as graphLayout from './layout'
+import { traceRelationships } from './trace'
+
+const referenceMocks = vi.hoisted(() => ({ docs: vi.fn() }))
+vi.mock('@/hooks/use-symptom-documentation', () => ({ useSymptomDocumentation: referenceMocks.docs }))
 
 const evidence: DecisionNode = {
   node_id: '__proto__', node_type: 'EXTRACTION', action: 'CREATED',
@@ -64,13 +68,132 @@ function renderAction(run: RunSummary = runDetail, detail?: RunDetail) {
 }
 
 beforeEach(() => {
+  referenceMocks.docs.mockReturnValue({ data: undefined })
   // Geometry and pan/zoom are checked in the real browser; jsdom has no layout.
   vi.stubGlobal('ResizeObserver', class { observe() {} unobserve() {} disconnect() {} })
   Element.prototype.scrollIntoView = vi.fn()
 })
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); vi.restoreAllMocks() })
 
+describe('selected decision relationships', () => {
+  const relationships = (pairs: [string, string][]): DecisionGraph['edges'] => pairs.map(([parent_id, child_id]) => ({
+    parent_id, child_id, edge_type: 'MATCHES',
+  }))
+
+  it('traces upstream and downstream independently without including siblings or a bypass between traced nodes', () => {
+    const edges = relationships([
+      ['A', 'S'], ['S', 'B'], ['A', 'X'], ['Y', 'B'], ['A', 'B'],
+    ])
+    const original = structuredClone(edges)
+    edges.forEach(Object.freeze)
+    Object.freeze(edges)
+
+    const trace = traceRelationships(edges, 'S')
+
+    expect(trace.nodeIds).toEqual(new Set(['A', 'S', 'B']))
+    expect(trace.edgeIndexes).toEqual(new Set([0, 1]))
+    expect(edges).toEqual(original)
+  })
+
+  it('includes every hop through upstream and downstream branches and convergence', () => {
+    const edges = relationships([
+      ['U', 'A'], ['U', 'C'], ['A', 'S'], ['C', 'S'],
+      ['S', 'B'], ['S', 'D'], ['B', 'V'], ['D', 'V'], ['V', 'W'],
+      ['A', 'side'], ['other', 'B'], ['A', 'B'], ['disconnected', 'island'],
+    ])
+
+    const trace = traceRelationships(edges, 'S')
+
+    expect(trace.nodeIds).toEqual(new Set(['U', 'A', 'C', 'S', 'B', 'D', 'V', 'W']))
+    expect(trace.edgeIndexes).toEqual(new Set([0, 1, 2, 3, 4, 5, 6, 7, 8]))
+  })
+
+  it('terminates cycles while preserving self and parallel edges, opaque IDs and isolated selections', () => {
+    const edges = relationships([
+      ['', '__proto__'], ['__proto__', 'constructor'], ['constructor', ''],
+      ['__proto__', '__proto__'], ['', '__proto__'], ['other', 'toString'],
+    ])
+    const original = structuredClone(edges)
+
+    const trace = traceRelationships(edges, '')
+
+    expect(trace.nodeIds).toEqual(new Set(['', '__proto__', 'constructor']))
+    expect(trace.edgeIndexes).toEqual(new Set([0, 1, 2, 3, 4]))
+    expect(traceRelationships(edges, 'isolated')).toEqual({ nodeIds: new Set(['isolated']), edgeIndexes: new Set() })
+    expect(traceRelationships([], '')).toEqual({ nodeIds: new Set(['']), edgeIndexes: new Set() })
+    expect(edges).toEqual(original)
+  })
+})
+
 describe('decision graph', () => {
+  it.each([
+    { ruleName: null, symptom: '', label: 'Extraction' },
+    { ruleName: '', symptom: '', label: 'Extraction' },
+    { ruleName: '', symptom: 'Recorded symptom', label: 'Recorded symptom' },
+  ])('keeps connected steps identifiable when rule=$ruleName and symptom=$symptom', ({ ruleName, symptom, label }) => {
+    render(<DecisionGraphView graph={{
+      nodes: [{ ...evidence, rule_name: ruleName, symptom }, graph.nodes[3]],
+      edges: [{ parent_id: evidence.node_id, child_id: graph.nodes[3].node_id, edge_type: 'MATCHES' }],
+    }} />)
+    const details = screen.getByRole('complementary', { name: 'Selected decision step' })
+    const connected = within(details).getByRole('button', { name: `From MATCHES: ${label}, Extraction, node-a` })
+    expect(within(connected).getByText(label)).toBeTruthy()
+    fireEvent.click(connected)
+    expect(screen.getByRole('combobox', { name: 'Inspect decision step' }).textContent).toBe(`Extraction · ${label}`)
+  })
+
+  it('follows the selected step exact symptom key in the inspector without a summary link', async () => {
+    const reference = { id: 'canonical-id', title: 'Extraction documentation', doc_url: 'https://docs.example/canonical-id/' }
+    const finalReference = { id: 'final-id', title: 'Outcome documentation', doc_url: 'https://docs.example/final-id/' }
+    referenceMocks.docs.mockReturnValue({ data: { symptoms: {
+      'canonical-id': reference, 'Same symptom': reference, 'Final symptom': finalReference,
+    } } })
+    const detail: RunDetail = {
+      ...runDetail,
+      attribution: {
+        ...runDetail.attribution,
+        rootSymptom: { state: 'available', data: {
+          symptom: evidence.symptom, catalog_id: 'canonical-id',
+          source: { observation_id: '0', source: 'syslog', pos: 0, line: null, rule: null, time: null },
+        } },
+        decisionGraph: { state: 'available', data: {
+          ...graph,
+          nodes: graph.nodes.map((node) => node.node_id === 'unknown'
+            ? { ...node, symptom: 'Unmapped symptom', rule_name: 'canonical-id' } : node),
+        } },
+      },
+    }
+    renderAction(detail, detail)
+    fireEvent.click(screen.getByRole('button', { name: 'View Attribution Logic' }))
+    const doc = await screen.findByRole('link', { name: /Symptom documentation/ })
+    expect(doc.getAttribute('href')).toBe(finalReference.doc_url)
+    expect(doc.getAttribute('target')).toBe('_blank')
+    const details = await screen.findByRole('complementary', { name: 'Selected decision step' })
+    expect(within(details).getByRole('link', { name: /Symptom documentation/ })).toBe(doc)
+    expect(doc.parentElement).toBe(within(details).getByRole('heading', { name: 'Final symptom' }).parentElement)
+    expect(screen.getAllByRole('link', { name: /Symptom documentation/ })).toHaveLength(1)
+    fireEvent.click(within(details).getByRole('button', { name: 'From MATCHES: extract-rule, Extraction, node-a' }))
+    expect(within(details).getByRole('link', { name: /Symptom documentation/ }).getAttribute('href')).toBe(reference.doc_url)
+    expect(within(details).getByText('node-a')).toBeTruthy()
+    expect(screen.getAllByRole('link', { name: /Symptom documentation/ })).toHaveLength(1)
+
+    fireEvent.keyDown(screen.getByLabelText('Inspect decision step'), { key: 'ArrowDown' })
+    fireEvent.click(screen.getByRole('option', { name: /Unknown stage/ }))
+    expect(within(details).getByRole('heading', { name: 'Unmapped symptom' })).toBeTruthy()
+    expect(screen.queryByRole('link', { name: /Symptom documentation/ })).toBeNull()
+  })
+
+  it('links a selected symptom exact API key when the root has no catalog ID', async () => {
+    referenceMocks.docs.mockReturnValue({ data: { symptoms: {
+      'Final symptom': { id: 'canonical-id', title: 'Final symptom', doc_url: 'https://docs.example/canonical-id/' },
+    } } })
+    renderAction(runDetail, runDetail)
+    fireEvent.click(screen.getByRole('button', { name: 'View Attribution Logic' }))
+    const details = await screen.findByRole('complementary', { name: 'Selected decision step' })
+    expect(within(details).getByRole('link', { name: /Symptom documentation/ }).getAttribute('href')).toBe('https://docs.example/canonical-id/')
+    expect(screen.getAllByRole('link', { name: /Symptom documentation/ })).toHaveLength(1)
+  })
+
   it.each([0, -0.000022, 0.000022, 5])('keeps rounded edge tangents on their segments with a %s handle offset', (offset) => {
     const source = { x: -0.00014, y: offset }
     const target = { x: 100.00008, y: 80 + offset }
@@ -206,25 +329,37 @@ describe('decision graph', () => {
   })
 
   it('starts at the outcome and follows actual incoming and outgoing relationships', () => {
-    render(<DecisionGraphView graph={graph} />)
+    const { container } = render(<DecisionGraphView graph={graph} />)
+    const expectTrace = (selected: string, related: string[], muted: string[]) => {
+      const nodeIds = (className: string) => new Set([...container.querySelectorAll(`.react-flow__node.${className}`)]
+        .map((node) => node.getAttribute('data-id')))
+      expect(nodeIds('selected')).toEqual(new Set([selected]))
+      expect(nodeIds('decision-node-related')).toEqual(new Set(related))
+      expect(nodeIds('decision-node-muted')).toEqual(new Set(muted))
+    }
     const details = screen.getByRole('complementary', { name: 'Selected decision step' })
     expect(within(details).getByRole('heading', { name: 'Final symptom' })).toBeTruthy()
+    expectTrace('toString', ['__proto__', 'constructor'], ['', 'unknown'])
     fireEvent.click(within(details).getByRole('button', { name: 'From MATCHES: extract-rule, Extraction, node-a' }))
+    expectTrace('__proto__', ['', 'toString'], ['constructor', 'unknown'])
     expect(within(details).getByText('0')).toBeTruthy()
     expect(within(details).getByText(evidence.datum!)).toBeTruthy()
     expect(details.querySelector('script')).toBeNull()
     expect(within(details).getByText('2026-08-01T00:00:00Z')).toBeTruthy()
     fireEvent.click(within(details).getByRole('button', { name: /To PRUNES: prune-rule/ }))
+    expectTrace('', ['__proto__'], ['constructor', 'toString', 'unknown'])
     expect(within(details).getByText('PRUNED')).toBeTruthy()
     expect(within(details).getByText('A recorded reason')).toBeTruthy()
     expect(within(details).getByText('No source evidence recorded for this step.')).toBeTruthy()
     fireEvent.keyDown(screen.getByLabelText('Inspect decision step'), { key: 'ArrowDown' })
     fireEvent.click(screen.getByRole('option', { name: /Unknown stage/ }))
+    expectTrace('unknown', [], ['__proto__', 'constructor', '', 'toString'])
     expect(within(details).getByText('Unknown stage')).toBeTruthy()
     expect(within(details).getByText('No reason recorded for this step.')).toBeTruthy()
     expect(within(details).queryByRole('button')).toBeNull()
     fireEvent.click(screen.getByRole('button', { name: 'Reset' }))
     expect(within(details).getByRole('heading', { name: 'Final symptom' })).toBeTruthy()
+    expectTrace('toString', ['__proto__', 'constructor'], ['', 'unknown'])
   })
 
   it('inspects the first recorded step when a graph has no outcome', () => {
