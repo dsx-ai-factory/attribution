@@ -100,7 +100,9 @@ the new connector.
 structured entries with their own `ts` and `resources`. Whether an entry may omit
 those is a per-source contract of the service: for `applog` it falls back to
 parsing timestamp and node out of the body, so bare `{"body": ...}` entries are
-enough. The shape is in the
+enough. For `syslog` every entry needs a `ts`; build them with
+`syslog_entries_from_text`, which dates each line from its own timestamp and
+drops lines it cannot date. The shape is in the
 [observation API reference](./rest-api.md#2-submit-an-observation).
 
 `time_interval` defaults per source through `log_observation`
@@ -109,11 +111,9 @@ enough. The shape is in the
 Pass `time_interval=` to `log_observation` when a connector needs a more specific
  bound.
 
-`resources` is `"AllJobResources"` in nearly every case. The exception is a
-`syslog` connector emitting `Format.RAW_LOG`: a single node name there lets the
-blueprint tag each line with that node rather than guessing it from the line
-text — see the syslog branch of
-[local file](../src/attribution_blueprint/connectors/logs/local_file/__init__.py).
+Node identity belongs on the entry: when a connector knows which host a line came from, it declares `resources: [{"kind": "node", "hostname": ...}]` on that entry, as the syslog branch of [local file](../src/attribution_blueprint/connectors/logs/local_file/__init__.py) does with the directory name. An entry that declares no node is left to the
+service, which for `syslog` reads the hostname field of an RFC 3164 line and
+drops a line that names none.
 
 ## Third-Party Libraries
 

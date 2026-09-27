@@ -12,6 +12,13 @@ from datetime import datetime, timedelta
 from unittest.mock import MagicMock
 from zoneinfo import ZoneInfo
 
+import pytest
+from attribution_lib.compound_outcome import (
+    CancellationActor,
+    FailureDomain,
+    TerminalState,
+    UncertaintyType,
+)
 from attribution_lib.core import AttributionResult, CalcBadNodesAttributionResult
 from attribution_lib.observation import Context as FullObservationContext
 from attribution_lib.observation.inbound import (
@@ -26,12 +33,14 @@ from attribution_lib.sources import (
     Source as LibSource,
     SourceSet,
 )
+from pydantic import ValidationError
 
 from app.observation import ObservationSource
 from app.v2.models import (
     AttributionResponseV2,
     NodeSource,
     ResourcelessSource,
+    Verdict,
 )
 
 _UTC = ZoneInfo("UTC")
@@ -189,6 +198,91 @@ class TestV2Models:
         response = AttributionResponseV2.from_lib_attribution(set(), result)
 
         assert response.verdict.attribution_outcome == "Pass"
+
+    def test_compound_outcome_fields_for_pass(self):
+        """Pass -> terminal_states=[PASS], no domains/actors/uncertainty; attribution_outcome unchanged."""
+        result = _empty_result()
+        _set_outcome(result, OutcomeAttribution(outcome="Pass", hw_cause="Not Applicable"), _lib_source(rule="job_ok"))
+
+        verdict = AttributionResponseV2.from_lib_attribution(set(), result).verdict
+
+        assert verdict.attribution_outcome == "Pass"
+        assert verdict.terminal_states == [TerminalState.PASS]
+        assert verdict.failure_domains == []
+        assert verdict.cancellation_actors == []
+        assert verdict.uncertainty_type is None
+
+    def test_compound_outcome_fields_for_fail_infra_hw(self):
+        """Fail InfraHW -> terminal_states=[FAIL], failure_domains=[InfraHW]."""
+        result = _empty_result()
+        _set_outcome(
+            result,
+            OutcomeAttribution(outcome="Fail InfraHW", hw_cause="GPU fell off the bus"),
+            _lib_source(rule="xid_79_gpu_off_bus"),
+        )
+
+        verdict = AttributionResponseV2.from_lib_attribution(set(), result).verdict
+
+        assert verdict.attribution_outcome == "Fail InfraHW"
+        assert verdict.terminal_states == [TerminalState.FAIL]
+        assert verdict.failure_domains == [FailureDomain.INFRA_HW]
+        assert verdict.cancellation_actors == []
+        assert verdict.uncertainty_type is None
+
+    def test_compound_outcome_fields_for_artificial(self):
+        """Artificial -> terminal_states=[ExpectedFail]."""
+        result = _empty_result()
+        _set_outcome(result, OutcomeAttribution(outcome="Artificial"), _lib_source(rule="synthetic_test"))
+
+        verdict = AttributionResponseV2.from_lib_attribution(set(), result).verdict
+
+        assert verdict.terminal_states == [TerminalState.EXPECTED_FAIL]
+
+    def test_compound_outcome_fields_for_cancelled_by_user(self):
+        """Cancelled by User -> terminal_states=[Cancelled], cancellation_actors=[User]."""
+        result = _empty_result()
+        _set_outcome(result, OutcomeAttribution(outcome="Cancelled by User"), _lib_source(rule="slurm_cancel"))
+
+        verdict = AttributionResponseV2.from_lib_attribution(set(), result).verdict
+
+        assert verdict.terminal_states == [TerminalState.CANCELLED]
+        assert verdict.cancellation_actors == [CancellationActor.USER]
+        assert verdict.failure_domains == []
+
+    def test_compound_outcome_fields_for_incomplete_info(self):
+        """Incomplete Info (the no-match default) -> all four terminal states, Aleatoric uncertainty."""
+        verdict = AttributionResponseV2.from_lib_attribution(set(), _empty_result()).verdict
+
+        assert verdict.attribution_outcome == "Incomplete Info"
+        assert set(verdict.terminal_states) == {
+            TerminalState.PASS,
+            TerminalState.FAIL,
+            TerminalState.EXPECTED_FAIL,
+            TerminalState.CANCELLED,
+        }
+        assert verdict.failure_domains == []
+        assert verdict.cancellation_actors == []
+        assert verdict.uncertainty_type == UncertaintyType.ALEATORIC
+
+    def test_compound_outcome_fields_for_fail_multicategory(self):
+        """Fail MultiCategory -> all three failure domains, Aleatoric uncertainty."""
+        result = _empty_result()
+        _set_outcome(
+            result,
+            OutcomeAttribution(outcome="Fail MultiCategory", root_cause_symptom="XID-31-"),
+            _lib_source(rule="xid_31_mem_page_fault"),
+        )
+
+        verdict = AttributionResponseV2.from_lib_attribution(set(), result).verdict
+
+        assert verdict.terminal_states == [TerminalState.FAIL]
+        assert set(verdict.failure_domains) == {FailureDomain.USER, FailureDomain.INFRA_HW, FailureDomain.INFRA_SW}
+        assert verdict.uncertainty_type == UncertaintyType.ALEATORIC
+
+    def test_verdict_rejects_empty_terminal_states(self):
+        """terminal_states is required non-empty on the wire, matching CompoundOutcome's invariant."""
+        with pytest.raises(ValidationError):
+            Verdict(root_symptom=None, attribution_outcome="Pass", detail="", terminal_states=[])
 
     def test_symptoms_emits_node_source_for_per_node_symptom(self):
         """When a single Source is attributed to a single node, V2 emits a NodeSource."""

@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// SPDX-License-Identifier: LicenseRef-NvidiaProprietary
+
 import * as React from "react"
 import { cva, type VariantProps } from "class-variance-authority"
 import { Loader2 } from "lucide-react"
@@ -11,16 +14,16 @@ const buttonVariants = cva(
     variants: {
       variant: {
         default:
-          "border-primary-600 bg-primary-500/80 text-primary-900 focus-visible:bg-primary-500 enabled:hover:bg-primary-500 enabled:hover:text-primary-950 dark:border-primary-600 dark:bg-primary-700/60 dark:text-white dark:focus-visible:bg-primary-600/70 dark:enabled:hover:border-primary-600 dark:enabled:hover:bg-primary-600/70 dark:enabled:hover:text-white enabled:active:bg-primary-600 dark:enabled:active:bg-primary-600/90",
+          "border-primary-600 bg-primary-500/80 text-primary-900 focus-visible:bg-primary-500 not-disabled:not-aria-disabled:hover:bg-primary-500 not-disabled:not-aria-disabled:hover:text-primary-950 dark:border-primary-600 dark:bg-primary-700/60 dark:text-white dark:focus-visible:bg-primary-600/70 dark:not-disabled:not-aria-disabled:hover:border-primary-600 dark:not-disabled:not-aria-disabled:hover:bg-primary-600/70 dark:not-disabled:not-aria-disabled:hover:text-white not-disabled:not-aria-disabled:active:bg-primary-600 dark:not-disabled:not-aria-disabled:active:bg-primary-600/90",
         destructive:
-          "border-destructive-600 bg-destructive-500/80 text-white focus-visible:bg-destructive-500 enabled:hover:border-destructive-500 enabled:hover:bg-destructive-500 dark:border-destructive-600 dark:bg-destructive-700/80 dark:text-white dark:focus-visible:bg-destructive-600 dark:enabled:hover:border-destructive-600 dark:enabled:hover:bg-destructive-600 enabled:active:bg-destructive-600 dark:enabled:active:bg-destructive-700",
+          "border-destructive-600 bg-destructive-500/80 text-white focus-visible:bg-destructive-500 not-disabled:not-aria-disabled:hover:border-destructive-500 not-disabled:not-aria-disabled:hover:bg-destructive-500 dark:border-destructive-600 dark:bg-destructive-700/80 dark:text-white dark:focus-visible:bg-destructive-600 dark:not-disabled:not-aria-disabled:hover:border-destructive-600 dark:not-disabled:not-aria-disabled:hover:bg-destructive-600 not-disabled:not-aria-disabled:active:bg-destructive-600 dark:not-disabled:not-aria-disabled:active:bg-destructive-700",
         outline:
-          "border-border bg-background text-foreground-secondary focus-visible:bg-background-active enabled:hover:bg-background-active enabled:hover:text-foreground aria-expanded:bg-background-active aria-expanded:text-foreground enabled:active:bg-background-secondary/70",
+          "border-border bg-background text-foreground-secondary focus-visible:bg-background-active not-disabled:not-aria-disabled:hover:bg-background-active not-disabled:not-aria-disabled:hover:text-foreground aria-expanded:bg-background-active aria-expanded:text-foreground not-disabled:not-aria-disabled:active:bg-background-secondary/70",
         secondary:
-          "border-border bg-background-secondary text-foreground-secondary focus-visible:bg-background-active enabled:hover:bg-background-active enabled:hover:text-foreground aria-expanded:bg-background-active aria-expanded:text-foreground enabled:active:bg-background-secondary/90",
+          "border-border bg-background-secondary text-foreground-secondary focus-visible:bg-background-active not-disabled:not-aria-disabled:hover:bg-background-active not-disabled:not-aria-disabled:hover:text-foreground aria-expanded:bg-background-active aria-expanded:text-foreground not-disabled:not-aria-disabled:active:bg-background-secondary/90",
         ghost:
-          "bg-transparent text-foreground-secondary focus-visible:bg-background-active enabled:hover:bg-background-active enabled:hover:text-foreground aria-expanded:bg-background-active aria-expanded:text-foreground enabled:active:bg-background-secondary/60",
-        link: "px-0! text-foreground-secondary underline-offset-4 focus-visible:text-foreground enabled:hover:text-foreground enabled:hover:underline enabled:active:text-foreground-secondary/80",
+          "bg-transparent text-foreground-secondary focus-visible:bg-background-active not-disabled:not-aria-disabled:hover:bg-background-active not-disabled:not-aria-disabled:hover:text-foreground aria-expanded:bg-background-active aria-expanded:text-foreground not-disabled:not-aria-disabled:active:bg-background-secondary/60",
+        link: "px-0! text-foreground-secondary underline-offset-4 focus-visible:text-foreground not-disabled:not-aria-disabled:hover:text-foreground not-disabled:not-aria-disabled:hover:underline not-disabled:not-aria-disabled:active:text-foreground-secondary/80",
       },
       size: {
         default:

@@ -31,23 +31,27 @@ from __future__ import annotations
 
 import re
 import subprocess
+from collections.abc import Callable
 from datetime import timezone
 
 from loguru import logger
 
 from attribution_blueprint.connectors.logs import entries_from_text, log_observation
+from attribution_blueprint.connectors.logs.syslog import syslog_entries_from_text
 from attribution_blueprint.exceptions import MCAError
 from attribution_blueprint.types import (
     ExecutionContext,
-    Format,
     Observation,
     Source,
+    TimeseriesEntry,
     assert_aware,
 )
 
-_FORMAT_FOR_SOURCE: dict[Source, Format] = {
-    Source.APPLOG: Format.ENTRY_TIMESERIES,
-    Source.SYSLOG: Format.RAW_LOG,
+# Splits one pod's full `kubectl logs` stdout into entries. `node` is declared on
+# each entry.
+_ENTRIES_FOR_SOURCE: dict[Source, Callable[[str, ExecutionContext, str | None], list[TimeseriesEntry]]] = {
+    Source.APPLOG: lambda text, context, node: entries_from_text(text, node),
+    Source.SYSLOG: syslog_entries_from_text,
 }
 
 DEFAULT_MAX_BYTES_PER_POD = 16 * 1024 * 1024  # 16 MiB — caps a single pod
@@ -95,9 +99,10 @@ class KubectlLogsConnector:
     """Collector that emits one APPLOG (or SYSLOG) Observation per pod by
     shelling ``kubectl logs``.
 
-    Reads ``context["namespace"]`` and ``context["pod_names"]`` (a list
-    populated by the kueue ECA). Pods listed there but missing from the
-    cluster (e.g. gc'd before query) produce a warning and are skipped.
+    Reads ``context["namespace"]`` and ``context["pod_names"]``. Pods listed
+    there but missing from the cluster (e.g. gc'd before query) produce a
+    warning and are skipped. ``context["pod_nodes"]`` (pod -> node) stamps
+    each entry with the node it came from. The kueue ECA populates all three.
     """
 
     def __init__(
@@ -149,6 +154,7 @@ class KubectlLogsConnector:
             )
             return []
 
+        pod_nodes: dict[str, str] = context.get("pod_nodes") or {}
         observations: list[Observation] = []
         for pod in pod_names:
             body = self._read_pod_logs(pod, namespace, context)
@@ -156,14 +162,11 @@ class KubectlLogsConnector:
                 continue
             if self._max_bytes is not None:
                 body = _tail_bytes(body, self._max_bytes)
-            observations.append(self._observation(body, context))
-        return observations
 
-    def _observation(self, body: str, context: ExecutionContext) -> Observation:
-        fmt = _FORMAT_FOR_SOURCE[self._source]
-        if fmt == Format.ENTRY_TIMESERIES:
-            return log_observation(source=self._source, entries=entries_from_text(body), context=context)
-        return log_observation(source=self._source, format=fmt, body=body, context=context)
+            entries = _ENTRIES_FOR_SOURCE[self._source](body, context, pod_nodes.get(pod))
+            obs = log_observation(source=self._source, entries=entries, context=context)
+            observations.append(obs)
+        return observations
 
     # --- private kubectl plumbing -----------------------------------------
 

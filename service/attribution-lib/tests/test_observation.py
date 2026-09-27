@@ -64,8 +64,17 @@ from attribution_lib.rules_engine import process_observation_source
 from test_support.helpers import make_node_to_ranks, observation_base
 
 JOB_NODE = "fake-node-a"
+"""A node that IS part of the test job."""
 OTHER_JOB_NODE = "fake-node-b"
+"""Another node that IS part of the test job."""
+OUT_OF_JOB_NODE = "node-not-in-test-job"
+"""A node that is NOT part of the test job."""
 NODE_RESOURCE = [{"kind": "node", "hostname": JOB_NODE}]
+"""A resource that declares the test job node."""
+LINE_NAMING_JOB_NODE = (
+    f"Jan  5 06:59:25 {JOB_NODE} torchrun: [E0105 06:59:25.800744155 ProcessGroupNCCL.cpp:1923] undeclared"
+)
+"""A syslog-shaped line that names the test job node in its body."""
 
 
 @pytest.fixture
@@ -848,8 +857,6 @@ class TestTimeseriesEntry:
         with pytest.raises(UnknownResourceError):
             entry_obj.node(syslog_job_info)
 
-    # Syslog-shaped for the context's source, with a yearless framework timestamp for the body parser.
-    UNDECLARED = f"Jan  5 06:59:25 {JOB_NODE} torchrun: [E0105 06:59:25.800744155 ProcessGroupNCCL.cpp:1923] undeclared"
     REPLICA = [{"kind": "replica", "name": "worker-0"}]
     OTHER_NODE = [{"kind": "node", "hostname": OTHER_JOB_NODE}]
 
@@ -858,21 +865,21 @@ class TestTimeseriesEntry:
         [
             pytest.param(
                 {"parse_node": True},
-                entry(UNDECLARED),
+                entry(LINE_NAMING_JOB_NODE),
                 ResourceSetClass([Node(hostname=JOB_NODE)]),
                 None,
                 id="node",
             ),
             pytest.param(
                 {"parse_timestamp": True},
-                entry(UNDECLARED),
+                entry(LINE_NAMING_JOB_NODE),
                 ResourceSetClass.ANY,
                 datetime(2024, 1, 5, 6, 59, 25, tzinfo=ZoneInfo("America/Los_Angeles")),
                 id="timestamp",
             ),
             pytest.param(
                 {"parse_node": True},
-                entry(UNDECLARED, resources=REPLICA),
+                entry(LINE_NAMING_JOB_NODE, resources=REPLICA),
                 ResourceSetClass([Node(hostname=JOB_NODE), Replica(name="worker-0")]),
                 None,
                 id="replica_without_a_node",
@@ -886,7 +893,7 @@ class TestTimeseriesEntry:
             ),
             pytest.param(
                 {"parse_node": True, "parse_timestamp": True},
-                entry(UNDECLARED, ts=10**9, resources=OTHER_NODE),
+                entry(LINE_NAMING_JOB_NODE, ts=10**9, resources=OTHER_NODE),
                 ResourceSetClass([Node(hostname=OTHER_JOB_NODE)]),
                 datetime.fromtimestamp(1, ZoneInfo("America/Los_Angeles")),
                 id="declared_fields_win",
@@ -937,54 +944,193 @@ class TestTimeseriesEntry:
         with pytest.raises(UnknownResourceError):
             unparsed.node(syslog_job_info)
 
-    def test_a_metric_entry_declaring_no_node_is_dropped_rather_than_charged_to_the_job(
-        self, syslog_job_info, timezone
-    ):
-        """Legacy `prometheus_metrics` rejected a node-less sample; the generic format would resolve it to ANY."""
-        body = "time: 1718452800, metric_name: up, metric_value: 0, threshold: None, cluster: c1, node: x, component: "
-        named, unnamed = observation_base(
-            syslog_job_info,
-            timezone,
-            ObservationSource.NODE_METRICS,
-            ObservationFormat.ENTRY_TIMESERIES,
-            [entry(body, ts=1718452800_000_000_000, resources=[{"kind": "node", "hostname": JOB_NODE}]), entry(body)],
-        )
 
-        assert named.node(syslog_job_info) == JOB_NODE
-        with pytest.raises(UnknownResourceError):
-            unnamed.node(syslog_job_info)
+METRIC_BODY = "time: 1718452800, metric_name: up, metric_value: 0, threshold: None, cluster: c1, node: x, component: "
+TIMESERIES_SOURCES = [
+    ObservationSource.SYSLOG,
+    ObservationSource.NODE_METRICS,
+    ObservationSource.NVLINK_METRICS,
+    ObservationSource.HEALTH_CHECK,
+]
+OPEN_WINDOW = TimeInterval(None, None)
 
 
-class TestTimeseriesExtraction:
-    def test_the_declared_interval_is_the_only_time_filter(self, extract, syslog_job_info):
+@pytest.mark.parametrize("source", TIMESERIES_SOURCES)
+class TestTimeWindowFilter:
+    """The declared interval is the only time filter, and it reads the same for every source."""
+
+    def test_a_timed_entry_is_kept_only_inside_the_declared_window(self, extract, syslog_job_info, source):
         before_job = syslog_job_info.job_start_time - timedelta(hours=2)
         in_declared = "inside the declared window"
         in_job_window = "inside the job window"
-        untimed = "no timestamp at all"
         entries = [
             entry(in_declared, ts=ns(before_job + timedelta(minutes=30)), resources=NODE_RESOURCE),
             entry(
-                in_job_window,
-                ts=ns(syslog_job_info.job_start_time + timedelta(minutes=30)),
-                resources=NODE_RESOURCE,
+                in_job_window, ts=ns(syslog_job_info.job_start_time + timedelta(minutes=30)), resources=NODE_RESOURCE
             ),
-            entry(untimed, resources=NODE_RESOURCE),
         ]
 
         def surviving(time_interval):
             return extract(
-                syslog_job_info,
-                ObservationSource.SYSLOG,
-                ObservationFormat.ENTRY_TIMESERIES,
-                entries,
-                time_interval=time_interval,
+                syslog_job_info, source, ObservationFormat.ENTRY_TIMESERIES, entries, time_interval=time_interval
             )
 
-        # An untimed entry cannot be outside a window, so it survives every one of them.
-        assert surviving(TimeInterval(before_job, before_job + timedelta(hours=1))) == [in_declared, untimed]
-        assert surviving(TimeInterval(None, None)) == [in_declared, in_job_window, untimed]
+        assert surviving(TimeInterval(before_job, before_job + timedelta(hours=1))) == [in_declared]
+        assert surviving(OPEN_WINDOW) == [in_declared, in_job_window]
         # A half-null interval still filters on the bound it has, which two nulls would never exercise.
-        assert surviving(TimeInterval(syslog_job_info.job_start_time, None)) == [in_job_window, untimed]
+        assert surviving(TimeInterval(syslog_job_info.job_start_time, None)) == [in_job_window]
+
+
+class TestSyslogFallbacks:
+    """What a syslog line needs to carry, or have parsed out of it, to be kept."""
+
+    @pytest.mark.parametrize(
+        ("resources", "body", "kept"),
+        [
+            pytest.param(NODE_RESOURCE, "kernel: declared job node", True, id="declares_a_job_node"),
+            pytest.param(
+                [{"kind": "node", "hostname": OUT_OF_JOB_NODE}],
+                "kernel: declared host outside the job",
+                False,
+                id="declares_a_host_outside_the_job",
+            ),
+            pytest.param(
+                [{"kind": "node", "hostname": JOB_NODE}, {"kind": "node", "hostname": OTHER_JOB_NODE}],
+                "kernel: two declared nodes",
+                False,
+                id="declares_two_nodes",
+            ),
+            pytest.param("AllJobResources", LINE_NAMING_JOB_NODE, False, id="declares_all_job_resources"),
+            pytest.param(None, LINE_NAMING_JOB_NODE, True, id="line_names_a_job_node"),
+            pytest.param(None, "Jan  5 06:59:25 kernel: no hostname field on this line", False, id="no_node_anywhere"),
+        ],
+    )
+    def test_resources(self, extract, syslog_job_info, resources, body, kept):
+        """A declared job node wins; failing that the line's hostname field; failing that the line is dropped."""
+        ts = ns(syslog_job_info.job_start_time + timedelta(minutes=30))
+
+        surviving = extract(
+            syslog_job_info,
+            ObservationSource.SYSLOG,
+            ObservationFormat.ENTRY_TIMESERIES,
+            [entry(body, ts=ts, resources=resources)],
+            time_interval=OPEN_WINDOW,
+        )
+
+        assert surviving == ([body] if kept else [])
+
+    @pytest.mark.parametrize(
+        ("ts", "kept"),
+        [
+            pytest.param(1704466765800744155, True, id="ts_present"),
+            pytest.param(0, True, id="ts_zero_is_the_epoch"),
+            pytest.param(None, False, id="ts_null"),
+        ],
+    )
+    def test_timestamp(self, extract, syslog_job_info, ts, kept):
+        """The source requires a timestamp, so an untimed line is dropped even by a window that excludes nothing."""
+        body = "kernel: a line"
+
+        surviving = extract(
+            syslog_job_info,
+            ObservationSource.SYSLOG,
+            ObservationFormat.ENTRY_TIMESERIES,
+            [entry(body, ts=ts, resources=NODE_RESOURCE)],
+            time_interval=OPEN_WINDOW,
+        )
+
+        assert surviving == ([body] if kept else [])
+
+
+@pytest.mark.parametrize("source", [ObservationSource.NODE_METRICS, ObservationSource.NVLINK_METRICS])
+class TestMetricFallbacks:
+    """What a metric sample needs to declare to be kept; nothing is parsed out of the body."""
+
+    @pytest.mark.parametrize(
+        ("resources", "kept"),
+        [
+            pytest.param(NODE_RESOURCE, True, id="declares_a_job_node"),
+            pytest.param([{"kind": "node", "hostname": OUT_OF_JOB_NODE}], False, id="declares_a_host_outside_the_job"),
+            pytest.param(None, False, id="declares_no_node"),
+        ],
+    )
+    def test_resources(self, extract, syslog_job_info, source, resources, kept):
+        """A sample naming no job node cannot be charged to the job, so it is dropped rather than resolved to ANY."""
+        surviving = extract(
+            syslog_job_info,
+            source,
+            ObservationFormat.ENTRY_TIMESERIES,
+            [entry(METRIC_BODY, ts=1718452800_000_000_000, resources=resources)],
+            time_interval=OPEN_WINDOW,
+        )
+
+        assert surviving == ([METRIC_BODY] if kept else [])
+
+    @pytest.mark.parametrize(
+        ("ts", "kept"),
+        [
+            pytest.param(1718452800_000_000_000, True, id="ts_present"),
+            pytest.param(None, True, id="ts_null_is_kept_untimed"),
+        ],
+    )
+    def test_timestamp(self, extract, syslog_job_info, source, ts, kept):
+        surviving = extract(
+            syslog_job_info,
+            source,
+            ObservationFormat.ENTRY_TIMESERIES,
+            [entry(METRIC_BODY, ts=ts, resources=NODE_RESOURCE)],
+            time_interval=OPEN_WINDOW,
+        )
+
+        assert surviving == ([METRIC_BODY] if kept else [])
+
+
+class TestHealthCheckFallbacks:
+    """What a health check record needs to carry, or have parsed out of it, to be kept."""
+
+    BODY = "Not responding"
+
+    @pytest.mark.parametrize(
+        ("resources", "body", "kept"),
+        [
+            pytest.param(NODE_RESOURCE, BODY, True, id="declares_a_job_node"),
+            pytest.param(
+                [{"kind": "node", "hostname": OUT_OF_JOB_NODE}], BODY, False, id="declares_a_host_outside_the_job"
+            ),
+            pytest.param(None, LINE_NAMING_JOB_NODE, True, id="line_names_a_job_node"),
+            pytest.param(None, BODY, False, id="no_node_anywhere"),
+        ],
+    )
+    def test_resources(self, extract, syslog_job_info, resources, body, kept):
+        """A declared job node wins; failing that a syslog hostname field in the body; failing that it is dropped."""
+        surviving = extract(
+            syslog_job_info,
+            ObservationSource.HEALTH_CHECK,
+            ObservationFormat.ENTRY_TIMESERIES,
+            [entry(body, ts=1718452800_000_000_000, resources=resources)],
+            time_interval=OPEN_WINDOW,
+        )
+
+        assert surviving == ([body] if kept else [])
+
+    @pytest.mark.parametrize(
+        ("ts", "kept"),
+        [
+            pytest.param(1718452800_000_000_000, True, id="ts_present"),
+            pytest.param(None, False, id="ts_null"),
+        ],
+    )
+    def test_timestamp(self, extract, syslog_job_info, ts, kept):
+        """Every legacy record carried a timestamp, so an untimed one is dropped rather than kept untimed."""
+        surviving = extract(
+            syslog_job_info,
+            ObservationSource.HEALTH_CHECK,
+            ObservationFormat.ENTRY_TIMESERIES,
+            [entry(self.BODY, ts=ts, resources=NODE_RESOURCE)],
+            time_interval=OPEN_WINDOW,
+        )
+
+        assert surviving == ([self.BODY] if kept else [])
 
 
 # TODO: Legacy tests should be removed once validated in production.

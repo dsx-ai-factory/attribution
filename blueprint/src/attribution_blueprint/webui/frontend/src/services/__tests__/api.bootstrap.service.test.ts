@@ -1,4 +1,7 @@
 // @vitest-environment jsdom
+// SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// SPDX-License-Identifier: LicenseRef-NvidiaProprietary
+
 import { describe, it, expect, beforeEach } from 'vitest'
 import type { BootstrapPayload } from '@/interfaces/meta'
 import { ApiBootstrapService } from '@/services/api.bootstrap.service'
@@ -57,5 +60,35 @@ describe('ApiBootstrapService', () => {
     const ds = new ApiBootstrapService()
     expect(await ds.getRun('a')).toEqual(blob.runs[0])
     expect((await ds.getMeta()).windowedRuns).toBe(2)
+  })
+
+  it('keeps source observation IDs exact when parsing the injected run details', async () => {
+    document.body.innerHTML = `<script type="application/json" id="attr-bootstrap">{
+      "runs": [{
+        "id": "precise",
+        "gpuCount": 8,
+        "elapsedH": 0.125,
+        "attribution": {
+          "rootSymptom": {
+            "state": "available",
+            "data": { "source": { "observation_id": "9223372036854775807", "pos": 0 } }
+          },
+          "symptomSites": {
+            "state": "available",
+            "data": { "fault": [{ "source": { "observation_id": "-6139371663235533333", "pos": null } }] }
+          }
+        }
+      }],
+      "meta": ${JSON.stringify(blob.meta)}
+    }</script>`
+
+    const detail = await new ApiBootstrapService().getRun('precise')
+
+    expect(detail?.attribution.rootSymptom.data?.source.observation_id).toBe('9223372036854775807')
+    expect(detail?.attribution.symptomSites.data?.fault[0].source.observation_id).toBe('-6139371663235533333')
+    expect(detail?.attribution.rootSymptom.data?.source.pos).toBe(0)
+    expect(detail?.attribution.symptomSites.data?.fault[0].source.pos).toBeNull()
+    expect(detail?.gpuCount).toBe(8)
+    expect(detail?.elapsedH).toBe(0.125)
   })
 })

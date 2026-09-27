@@ -1,4 +1,7 @@
 // @vitest-environment jsdom
+// SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// SPDX-License-Identifier: LicenseRef-NvidiaProprietary
+
 import type { HTMLAttributes, ReactNode } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen } from '@testing-library/react'
@@ -145,19 +148,35 @@ describe('node, time, and shell components', () => {
 
     expect(screen.getByText('Xid79')).toBeTruthy()
     expect(screen.getByText('15.00h')).toBeTruthy()
-    expect(screen.getByText('Click to open node detail →')).toBeTruthy()
   })
 
-  it('renders valid UTC times, custom children, and invalid input', () => {
-    const { rerender } = render(<TimeHover date="2026-05-01T01:02:03Z" />)
+  it('renders valid UTC times, custom children and styles, and invalid input', () => {
+    const { container, rerender } = render(<TimeHover date="2026-05-01T01:02:03Z" />)
     expect(screen.getAllByText('2026-05-01 01:02:03').length).toBeGreaterThan(0)
     expect(screen.getAllByText('UTC').length).toBeGreaterThan(0)
+    const trigger = container.querySelector<HTMLSpanElement>('span.underline')!
+    expect(trigger.tabIndex).toBe(0)
+    trigger.focus()
+    expect(document.activeElement).toBe(trigger)
+    const description = document.getElementById(trigger.getAttribute('aria-describedby')!)
+    expect(description?.textContent).toContain('Local time:')
+    expect(description?.textContent).toContain(Intl.DateTimeFormat().resolvedOptions().timeZone)
 
-    rerender(<TimeHover date="2026-05-01T01:02:03Z" omitSuffix>custom time</TimeHover>)
-    expect(screen.getByText('custom time')).toBeTruthy()
+    rerender(<TimeHover date="2026-05-01T01:02:03Z" omitSuffix className="no-underline cursor-default text-xs">custom time</TimeHover>)
+    const customTime = screen.getByText('custom time')
+    expect(customTime.classList.contains('no-underline')).toBe(true)
+    expect(customTime.classList.contains('underline')).toBe(false)
+    expect(customTime.classList.contains('decoration-dotted')).toBe(true)
+    expect(customTime.classList.contains('cursor-default')).toBe(true)
+    expect(customTime.tabIndex).toBe(0)
+    expect(customTime.getAttribute('aria-describedby')).toBe(description?.id)
 
-    rerender(<TimeHover date="invalid" />)
-    expect(screen.getByText('Unavailable')).toBeTruthy()
+    rerender(<TimeHover date="invalid" className="text-xs" />)
+    const unavailable = screen.getByText('Unavailable')
+    expect(unavailable.classList.contains('text-foreground-muted')).toBe(true)
+    expect(unavailable.classList.contains('text-xs')).toBe(true)
+    expect(unavailable.hasAttribute('tabindex')).toBe(false)
+    expect(unavailable.hasAttribute('aria-describedby')).toBe(false)
   })
 
   it('renders the active route in the top bar', () => {

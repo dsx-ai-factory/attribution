@@ -1,5 +1,8 @@
 // @vitest-environment jsdom
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+// SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// SPDX-License-Identifier: LicenseRef-NvidiaProprietary
+
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { renderHook } from '@testing-library/react'
 import type { RunSummary } from '@/interfaces/attribution'
 import { useDashboard } from '@/hooks/use-dashboard'
@@ -9,6 +12,7 @@ import { useRuns } from '@/hooks/use-runs'
 import { useRunsTable } from '@/hooks/use-runs-table'
 import { useNav } from '@/hooks/use-nav'
 import { useECharts } from '@/hooks/use-echarts'
+import { useSymptomDocumentation } from '@/hooks/use-symptom-documentation'
 
 const mocks = vi.hoisted(() => ({
   useSWR: vi.fn(),
@@ -52,6 +56,7 @@ const run = (id: string): RunSummary => ({
 
 beforeEach(() => {
   vi.clearAllMocks()
+  vi.stubEnv('VITE_SYMPTOM_DOCS_URL', 'https://reference.example/api/docs/symptoms')
   mocks.useSWR.mockReturnValue({
     data: undefined,
     isLoading: false,
@@ -60,7 +65,54 @@ beforeEach(() => {
   })
 })
 
+afterEach(() => {
+  vi.unstubAllGlobals()
+  vi.unstubAllEnvs()
+})
+
 describe('data hooks', () => {
+  it('requests the reference API directly and shares its unmodified response by URL', async () => {
+    const catalog = { symptoms: { 'recorded-id': { id: 'recorded-id', title: 'Title', doc_url: 'https://docs.example/original-path/' } } }
+    const fetch = vi.fn().mockResolvedValue(new Response(JSON.stringify(catalog)))
+    vi.stubGlobal('fetch', fetch)
+    renderHook(() => useSymptomDocumentation())
+    const [key, fetcher, options] = mocks.useSWR.mock.calls[0]
+    expect(key).toBe('https://reference.example/api/docs/symptoms')
+    await expect(fetcher(key)).resolves.toEqual(catalog)
+    expect(fetch).toHaveBeenCalledWith(key, expect.objectContaining({ headers: { Accept: 'application/json' }, redirect: 'error', signal: expect.any(AbortSignal) }))
+    expect(options).toMatchObject({ revalidateOnFocus: false, shouldRetryOnError: false })
+    expect(mocks.httpGet).not.toHaveBeenCalled()
+  })
+
+  it('disables documentation requests without a recorded ID', () => {
+    renderHook(() => useSymptomDocumentation(false))
+    expect(mocks.useSWR.mock.calls[0][0]).toBeNull()
+  })
+
+  it.each([undefined, '', '/api/docs/symptoms', 'not a URL'])('disables documentation requests for absent or invalid configuration %s', (url) => {
+    vi.stubEnv('VITE_SYMPTOM_DOCS_URL', url)
+    renderHook(() => useSymptomDocumentation())
+    expect(mocks.useSWR.mock.calls[0][0]).toBeNull()
+  })
+
+  it('allows an explicitly configured HTTP endpoint in a built local preview', () => {
+    vi.stubEnv('DEV', false)
+    vi.stubEnv('VITE_SYMPTOM_DOCS_URL', 'http://reference.example/api/docs/symptoms')
+    expect(window.location.hostname).toBe('localhost')
+    renderHook(() => useSymptomDocumentation())
+    expect(mocks.useSWR.mock.calls[0][0]).toBe('http://reference.example/api/docs/symptoms')
+  })
+
+  it('surfaces reference API failures through SWR without a fallback catalog', async () => {
+    const fetch = vi.fn().mockResolvedValueOnce(new Response('', { status: 503 })).mockRejectedValueOnce(new DOMException('Timed out', 'TimeoutError'))
+    vi.stubGlobal('fetch', fetch)
+    renderHook(() => useSymptomDocumentation())
+    const [key, fetcher] = mocks.useSWR.mock.calls[0]
+    await expect(fetcher(key)).rejects.toThrow('503')
+    await expect(fetcher(key)).rejects.toThrow('Timed out')
+    expect(mocks.httpGet).not.toHaveBeenCalled()
+  })
+
   it('builds the dashboard cache key and request', async () => {
     mocks.useSWR.mockReturnValue({
       data: { metrics: { windowedRuns: 2 } },
