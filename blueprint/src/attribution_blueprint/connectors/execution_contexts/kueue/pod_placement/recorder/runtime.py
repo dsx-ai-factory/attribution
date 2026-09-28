@@ -13,6 +13,7 @@ from __future__ import annotations
 import queue
 import random
 import threading
+from datetime import datetime
 
 from loguru import logger
 
@@ -35,6 +36,16 @@ class ResolutionPending(RuntimeError):
 
 class UnsupportedOwner(RuntimeError):
     pass
+
+
+class StaleOwnerReference(RuntimeError):
+    """A namespace/name lookup returned an object whose uid doesn't match
+    the uid already known from the referencing object's ownerReference.
+
+    Kubernetes names are reusable after deletion; this means the original
+    Job/JobSet was deleted and a different object with the same name now
+    exists. Treated the same as ResolutionPending: retry, since the correct
+    object may become visible, but never trust the mismatched one."""
 
 
 class KubernetesIdentityResolver:
@@ -70,6 +81,16 @@ class KubernetesIdentityResolver:
 
         job = self.batch_api.read_namespaced_job(pod_owner["name"], namespace).to_dict()
         job = _normalize_resource(job, api_version="batch/v1", kind="Job")
+        job_uid = (job.get("metadata") or {}).get("uid")
+        pod_owner_uid = pod_owner.get("uid")
+        if not pod_owner_uid or job_uid != pod_owner_uid:
+            # `pod_owner["name"]` is only a lookup key, not an identity: names
+            # are reusable after deletion, so this Job may be a different
+            # object than the one that created the Pod. Never trust it.
+            raise StaleOwnerReference(
+                f"Job {namespace}/{pod_owner['name']} uid mismatch "
+                f"(Pod controller ref uid={pod_owner_uid!r}, fetched uid={job_uid!r})"
+            )
         jobset_ref = controller_owner(job, "JobSet")
         if jobset_ref and jobset_ref.get("name"):
             owner_resource = self.custom_api.get_namespaced_custom_object(
@@ -79,6 +100,12 @@ class KubernetesIdentityResolver:
                 "jobsets",
                 jobset_ref["name"],
             )
+            owner_uid = (owner_resource.get("metadata") or {}).get("uid")
+            if jobset_ref.get("uid") and owner_uid != jobset_ref["uid"]:
+                raise StaleOwnerReference(
+                    f"JobSet {namespace}/{jobset_ref['name']} uid mismatch "
+                    f"(Job controller ref uid={jobset_ref['uid']!r}, fetched uid={owner_uid!r})"
+                )
         else:
             owner_resource = job
 
@@ -260,6 +287,12 @@ class PodPlacementRecorder:
             except UnsupportedOwner as error:
                 logger.warning(f"skipping unsupported Pod: {error}")
                 return
+            except StaleOwnerReference as error:
+                # The name-reuse collision is permanent for this Pod (its own
+                # controller-uid reference points at an object that is gone
+                # for good), so retrying will not help; skip immediately.
+                logger.warning(f"skipping Pod with stale owner reference: {error}")
+                return
             except Exception:
                 logger.exception("failed to record Pod placement")
                 return
@@ -272,7 +305,17 @@ def _as_dict(resource) -> dict:
 
 
 def _normalize_resource(resource: dict, *, api_version: str | None = None, kind: str | None = None) -> dict:
-    """Convert Kubernetes client's snake_case dictionaries to API JSON keys."""
+    """Convert Kubernetes client's snake_case dictionaries to API JSON keys.
+
+    Also makes the result recursively JSON-safe: the Kubernetes SDK's
+    `.to_dict()` leaves timestamp fields (e.g. `last_transition_time`) as
+    Python `datetime` objects, not strings. Renaming a key to
+    `lastTransitionTime` doesn't change its value's type, and a raw
+    `datetime` reaching `json.dumps` in the store raises `TypeError`. Rather
+    than stringifying only the one known timestamp field, `_to_jsonable`
+    below converts every `datetime` anywhere in the structure to RFC3339,
+    so any other SDK-provided timestamp is safe too.
+    """
     metadata = resource.get("metadata") or {}
     normalized_metadata = {
         "name": metadata.get("name"),
@@ -295,7 +338,7 @@ def _normalize_resource(resource: dict, *, api_version: str | None = None, kind:
     spec = resource.get("spec") or {}
     status = resource.get("status") or {}
     container_statuses = status.get("container_statuses") or status.get("containerStatuses") or []
-    return {
+    normalized = {
         **resource,
         "apiVersion": resource.get("api_version") or resource.get("apiVersion") or api_version,
         "kind": resource.get("kind") or kind,
@@ -313,6 +356,23 @@ def _normalize_resource(resource: dict, *, api_version: str | None = None, kind:
             "containerStatuses": [_normalize_container_status(item) for item in container_statuses],
         },
     }
+    return _to_jsonable(normalized)
+
+
+def _to_jsonable(value):
+    """Recursively convert `datetime` values to RFC3339 strings.
+
+    Applied to every Kubernetes resource this recorder normalizes, so a
+    `datetime` the SDK left in a nested field (not just the known
+    `lastTransitionTime` one) can never reach `json.dumps` downstream.
+    """
+    if isinstance(value, datetime):
+        return value.isoformat().replace("+00:00", "Z")
+    if isinstance(value, dict):
+        return {key: _to_jsonable(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_to_jsonable(item) for item in value]
+    return value
 
 
 def _normalize_container_status(container_status: dict) -> dict:

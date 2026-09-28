@@ -29,6 +29,21 @@ CREATE INDEX IF NOT EXISTS placement_record_workload
 """
 
 
+def _failure_evidence_rank(reason: str | None) -> int:
+    """Rank failure evidence strength: no evidence < generic container exit
+    < explicit node-loss.
+
+    Two node-loss-tier reasons (e.g. `NodeLost` vs `DeletionByPodGC`) rank
+    equally: they are different Kubernetes signaling mechanisms for the
+    same underlying fact and are semantically equivalent for attribution.
+    """
+    if not reason:
+        return 0
+    if reason.startswith("ExitCode:"):
+        return 1
+    return 2
+
+
 class SQLitePlacementStore:
     """Single-writer placement store backed by a persistent SQLite file."""
 
@@ -93,10 +108,15 @@ class SQLitePlacementStore:
                 )
             if not record.node_failure_reason or record.node_failure_reason == existing.node_failure_reason:
                 return CreateResult.DUPLICATE
-            if existing.node_failure_reason:
-                raise PlacementConflictError(
-                    f"placement for Pod UID {record.pod_uid} already has different node failure evidence"
-                )
+            if _failure_evidence_rank(record.node_failure_reason) <= _failure_evidence_rank(
+                existing.node_failure_reason
+            ):
+                # A downgrade (e.g. NodeLost already stored, ExitCode:137
+                # arrives later), or a different-but-equivalent-tier reason
+                # (e.g. NodeLost vs DeletionByPodGC): keep the evidence
+                # already stored rather than raising a conflict or churning
+                # the row for a change that wouldn't affect attribution.
+                return CreateResult.DUPLICATE
 
             connection.execute(
                 """

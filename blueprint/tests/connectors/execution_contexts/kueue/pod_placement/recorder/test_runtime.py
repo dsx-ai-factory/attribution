@@ -8,15 +8,21 @@
 # without an express license agreement from NVIDIA CORPORATION or
 # its affiliates is strictly prohibited.
 
+from datetime import datetime, timezone
+
 import pytest
 from kubernetes.client.exceptions import ApiException
 
 from attribution_blueprint.connectors.execution_contexts.kueue.helpers import OwnerIdentity, WorkloadIdentity
+from attribution_blueprint.connectors.execution_contexts.kueue.pod_placement.models import PlacementRecord
 from attribution_blueprint.connectors.execution_contexts.kueue.pod_placement.recorder.runtime import (
     KubernetesIdentityResolver,
     PodPlacementRecorder,
     ResolutionPending,
+    StaleOwnerReference,
+    _normalize_resource,
 )
+from attribution_blueprint.connectors.execution_contexts.kueue.pod_placement.sqlite_store import SQLitePlacementStore
 from attribution_blueprint.connectors.execution_contexts.kueue.pod_placement.store import CreateResult
 
 
@@ -72,6 +78,81 @@ def _workload(owner_kind="Job", owner_name="job-a", owner_uid="job-uid-1"):
             ],
         },
     }
+
+
+class TestNormalizeResourceTimestamps:
+    """G1: the Kubernetes SDK's `.to_dict()` leaves timestamps as `datetime`
+    objects; `_normalize_resource` must make them JSON-safe, not just
+    rename the key."""
+
+    def test_condition_last_transition_time_becomes_rfc3339_string(self):
+        raw = {
+            "metadata": {"namespace": "ns", "name": "pod-a", "uid": "pod-uid-1"},
+            "spec": {"node_name": "node-a"},
+            "status": {
+                "conditions": [
+                    {
+                        "type": "PodScheduled",
+                        "status": "True",
+                        "last_transition_time": datetime(2026, 5, 1, 12, 0, 0, tzinfo=timezone.utc),
+                    }
+                ]
+            },
+        }
+
+        normalized = _normalize_resource(raw)
+
+        scheduled = normalized["status"]["conditions"][0]["lastTransitionTime"]
+        assert scheduled == "2026-05-01T12:00:00Z"
+        assert isinstance(scheduled, str)
+
+    def test_real_v1pod_style_object_round_trips_through_sqlite(self, tmp_path):
+        """End-to-end regression: a real `V1Pod`-shaped `.to_dict()` result
+        (datetime timestamps, not strings) must normalize, record, survive
+        a store reopen, and read back with an RFC3339 string, not a
+        datetime or a `json.dumps` crash."""
+
+        class _FakePod:
+            """Stands in for `kubernetes.client.V1Pod.to_dict()`'s output shape."""
+
+            def to_dict(self):
+                return {
+                    "metadata": {
+                        "namespace": "ns",
+                        "name": "pod-a",
+                        "uid": "pod-uid-1",
+                        "owner_references": [
+                            {"api_version": "batch/v1", "kind": "Job", "name": "job-a", "uid": "job-uid-1"}
+                        ],
+                    },
+                    "spec": {"node_name": "node-a"},
+                    "status": {
+                        "conditions": [
+                            {
+                                "type": "PodScheduled",
+                                "status": "True",
+                                "last_transition_time": datetime(2026, 5, 1, 12, 0, 0, tzinfo=timezone.utc),
+                            }
+                        ]
+                    },
+                }
+
+        normalized = _normalize_resource(_FakePod().to_dict())
+
+        record = PlacementRecord.for_pod(
+            normalized,
+            WorkloadIdentity(name="wl-a", uid="wl-uid-1"),
+            OwnerIdentity(api_version="batch/v1", kind="Job", name="job-a", uid="job-uid-1"),
+            "owner-uid",
+        )
+        assert record.scheduled_at == "2026-05-01T12:00:00Z"
+
+        path = tmp_path / "placements.db"
+        SQLitePlacementStore(str(path)).create(record)  # must not raise TypeError from json.dumps
+
+        reopened = SQLitePlacementStore(str(path)).list_for_workload("ns", "wl-uid-1")
+        assert reopened[0].scheduled_at == "2026-05-01T12:00:00Z"
+        assert isinstance(reopened[0].scheduled_at, str)
 
 
 @pytest.mark.parametrize(("field", "kwargs"), [("queue_size", {"queue_size": 0}), ("workers", {"workers": 0})])
@@ -152,6 +233,71 @@ class TestKubernetesIdentityResolver:
 
         with pytest.raises(ResolutionPending, match="not visible yet"):
             KubernetesIdentityResolver(batch_api, mocker.Mock()).resolve(_owned_pod())
+
+    def test_reused_job_name_with_different_uid_raises_stale_owner_reference(self, mocker):
+        """G4: the Pod's controller reference points at `job-uid-1`, but the
+        Job namespace/name lookup (the only lookup kubectl/the SDK offer)
+        returns a *different* object — e.g. the original Job was deleted
+        and a same-named replacement now exists. The mismatch must not be
+        trusted as this Pod's owner."""
+        batch_api = mocker.Mock()
+        batch_api.read_namespaced_job.return_value.to_dict.return_value = {
+            "metadata": {"namespace": "ns", "name": "job-a", "uid": "job-uid-1-REPLACEMENT"}
+        }
+
+        with pytest.raises(StaleOwnerReference, match="uid mismatch"):
+            KubernetesIdentityResolver(batch_api, mocker.Mock()).resolve(_owned_pod())
+
+    def test_reused_jobset_name_with_different_uid_raises_stale_owner_reference(self, mocker):
+        """G4: the Job's JobSet controller reference points at
+        `set-uid-1`, but the JobSet namespace/name lookup returns a
+        different object — e.g. the original JobSet was deleted and a
+        same-named replacement now exists."""
+        batch_api = mocker.Mock()
+        batch_api.read_namespaced_job.return_value.to_dict.return_value = {
+            "metadata": {
+                "namespace": "ns",
+                "name": "job-a",
+                "uid": "job-uid-1",
+                "owner_references": [
+                    {
+                        "api_version": "jobset.x-k8s.io/v1alpha2",
+                        "kind": "JobSet",
+                        "name": "set-a",
+                        "uid": "set-uid-1",
+                        "controller": True,
+                    }
+                ],
+            }
+        }
+        custom_api = mocker.Mock()
+        custom_api.get_namespaced_custom_object.return_value = {
+            "apiVersion": "jobset.x-k8s.io/v1alpha2",
+            "kind": "JobSet",
+            "metadata": {"namespace": "ns", "name": "set-a", "uid": "set-uid-1-REPLACEMENT"},
+        }
+
+        with pytest.raises(StaleOwnerReference, match="uid mismatch"):
+            KubernetesIdentityResolver(batch_api, custom_api).resolve(_owned_pod(annotation=False))
+
+
+class TestRecordSkipsStaleOwnerReference:
+    """G4: `_record` must skip (not retry, not crash) a Pod whose owner
+    resolution hits a `StaleOwnerReference`, since the mismatch is
+    permanent for that Pod."""
+
+    def test_stale_job_owner_reference_is_skipped_without_recording(self, mocker):
+        recorder, store = _make_recorder(mocker, None)
+        recorder.resolver.resolve.side_effect = StaleOwnerReference("job-a uid mismatch")
+        warning = mocker.patch(
+            "attribution_blueprint.connectors.execution_contexts.kueue.pod_placement.recorder.runtime.logger.warning"
+        )
+
+        recorder._record(_pod())
+
+        store.create.assert_not_called()
+        recorder.resolver.resolve.assert_called_once()  # no retry
+        assert "stale owner reference" in warning.call_args.args[0]
 
 
 def test_run_relists_after_expired_watch_and_processes_events(mocker):

@@ -57,6 +57,42 @@ def test_later_failure_evidence_updates_raw_record(tmp_path):
     assert store.list_for_workload("ns", "wl-uid-1")[0].node_failure_reason == "NodeLost"
 
 
+def test_stronger_node_loss_evidence_upgrades_generic_exit_code(tmp_path):
+    """Exit code arrives first, then node-loss evidence: the stronger,
+    more specific evidence must overwrite the weaker one, surviving a
+    store reopen."""
+    path = tmp_path / "placements.db"
+    store = SQLitePlacementStore(str(path))
+    store.create(_record(reason="ExitCode:137"))
+
+    assert store.create(_record(reason="NodeLost")) == CreateResult.UPDATED
+    assert SQLitePlacementStore(str(path)).list_for_workload("ns", "wl-uid-1")[0].node_failure_reason == "NodeLost"
+
+
+def test_node_loss_evidence_arriving_before_exit_code_is_not_downgraded(tmp_path):
+    """Node-loss evidence arrives first, then a generic exit code: the
+    weaker evidence must not overwrite the stronger evidence already
+    stored, and must not raise a conflict either."""
+    path = tmp_path / "placements.db"
+    store = SQLitePlacementStore(str(path))
+    store.create(_record(reason="NodeLost"))
+
+    assert store.create(_record(reason="ExitCode:137")) == CreateResult.DUPLICATE
+    assert SQLitePlacementStore(str(path)).list_for_workload("ns", "wl-uid-1")[0].node_failure_reason == "NodeLost"
+
+
+def test_two_distinct_node_loss_reasons_are_treated_as_equivalent(tmp_path):
+    """NodeLost and DeletionByPodGC are different Kubernetes signaling
+    mechanisms for the same underlying node-loss fact. Neither should
+    raise a conflict or overwrite the other; whichever is recorded first
+    is kept."""
+    store = SQLitePlacementStore(str(tmp_path / "placements.db"))
+    store.create(_record(reason="NodeLost"))
+
+    assert store.create(_record(reason="DeletionByPodGC")) == CreateResult.DUPLICATE
+    assert store.list_for_workload("ns", "wl-uid-1")[0].node_failure_reason == "NodeLost"
+
+
 def test_conflicting_immutable_placement_is_rejected(tmp_path):
     store = SQLitePlacementStore(str(tmp_path / "placements.db"))
     store.create(_record())
