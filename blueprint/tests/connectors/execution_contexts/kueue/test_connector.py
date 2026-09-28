@@ -617,6 +617,13 @@ def test_disruption_target_pod_normalizes_admitted_workload_to_node_fail(mocker)
 
 
 def test_taint_manager_disruption_target_does_not_imply_node_failure(mocker):
+    """DeletionByTaintManager only proves the node was unreachable/NotReady
+    long enough for the NoExecute toleration window to expire - it does
+    NOT prove the Node API object was ever deleted, unlike DeletionByPodGC.
+    Treating it as node-loss evidence risks misclassifying transient
+    unreachability or a routine eviction as a hardware failure, so it must
+    not normalize the Workload to NODE_FAIL on its own.
+    """
     workloads = deepcopy(WORKLOADS)
     workload = next(item for item in workloads["items"] if item["metadata"]["name"] == "job-still-running-qq01")
     workload["status"]["conditions"] = [

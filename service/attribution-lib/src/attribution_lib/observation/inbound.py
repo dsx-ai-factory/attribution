@@ -85,7 +85,8 @@ class Source(str, Enum):
 
     - `csp_event`
 
-       Formats: `[csp_event_list]`. Timestamps should be in seconds.
+       Formats: `[csp_event_list, entry_timeseries]`. Timestamps should be in seconds for
+       `csp_event_list`, nanoseconds otherwise.
 
        CSP event events indicating infrastructure-level host failures,
        repairs, or maintenance actions reported by the cloud service provider.
@@ -284,7 +285,8 @@ class Format(str, Enum):
       - A declared node is used as-is, so a host specifier in IP form must be resolved by the producer. If
         no node is declared, the node is parsed out of the body instead, keeping any declared replicas. An
         entry that still names no node is dropped.
-      - `body` is the line as received.
+      - `body` is the line as received. The library never parses its shape beyond the fallbacks
+        noted below; what a body must look like is whatever the source's rules match.
 
       Deviations:
       - `applog`:
@@ -301,6 +303,12 @@ class Format(str, Enum):
       - `node_metrics` and `nvlink_metrics`:
         - `ts` can be null, in which case the entry is kept and treated as untimed.
         - `resources` must name the node; the body is never parsed for one.
+      - `csp_event`:
+        - `ts` must be set; the body is never parsed for one. An entry without it is dropped.
+        - `resources` must name the node; the body is never parsed for one.
+        - There is no received line: producers render the body as
+          `csp_event: category=<category>, reason=<reason>, status=<status>`, optionally followed by
+          `, source_event=<compact JSON, sorted keys>` carrying the provider payload.
 
       Example:
       ```json

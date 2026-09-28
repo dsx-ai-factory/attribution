@@ -951,6 +951,7 @@ TIMESERIES_SOURCES = [
     ObservationSource.NODE_METRICS,
     ObservationSource.NVLINK_METRICS,
     ObservationSource.HEALTH_CHECK,
+    ObservationSource.CSP_EVENT,
 ]
 OPEN_WINDOW = TimeInterval(None, None)
 
@@ -1125,6 +1126,51 @@ class TestHealthCheckFallbacks:
         surviving = extract(
             syslog_job_info,
             ObservationSource.HEALTH_CHECK,
+            ObservationFormat.ENTRY_TIMESERIES,
+            [entry(self.BODY, ts=ts, resources=NODE_RESOURCE)],
+            time_interval=OPEN_WINDOW,
+        )
+
+        assert surviving == ([self.BODY] if kept else [])
+
+
+class TestCspEventFallbacks:
+    """A provider event names its host and moment outside the body, so both must be declared."""
+
+    BODY = "csp_event: category=HOST_FAILURE, reason=BAD_GPU, status="
+
+    @pytest.mark.parametrize(
+        ("resources", "kept"),
+        [
+            pytest.param(NODE_RESOURCE, True, id="declares_a_job_node"),
+            pytest.param([{"kind": "node", "hostname": OUT_OF_JOB_NODE}], False, id="declares_a_host_outside_the_job"),
+            pytest.param(None, False, id="declares_no_node"),
+        ],
+    )
+    def test_resources(self, extract, syslog_job_info, resources, kept):
+        """Only a declared job node keeps the entry; the body is never parsed for one."""
+        surviving = extract(
+            syslog_job_info,
+            ObservationSource.CSP_EVENT,
+            ObservationFormat.ENTRY_TIMESERIES,
+            [entry(self.BODY, ts=1718452800_000_000_000, resources=resources)],
+            time_interval=OPEN_WINDOW,
+        )
+
+        assert surviving == ([self.BODY] if kept else [])
+
+    @pytest.mark.parametrize(
+        ("ts", "kept"),
+        [
+            pytest.param(1718452800_000_000_000, True, id="ts_present"),
+            pytest.param(None, False, id="ts_null"),
+        ],
+    )
+    def test_timestamp(self, extract, syslog_job_info, ts, kept):
+        """Every legacy event carried a timestamp, so an untimed one is dropped rather than kept untimed."""
+        surviving = extract(
+            syslog_job_info,
+            ObservationSource.CSP_EVENT,
             ObservationFormat.ENTRY_TIMESERIES,
             [entry(self.BODY, ts=ts, resources=NODE_RESOURCE)],
             time_interval=OPEN_WINDOW,
