@@ -102,7 +102,6 @@ __all__ = [
     "LokiQueryBudgetExceeded",
     "LokiQueryClient",
     "LokiRangeCache",
-    "LokiSyslogEntry",
     "TEMPLATES",
     "node_from_labels",
 ]

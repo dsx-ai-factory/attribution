@@ -374,7 +374,7 @@ def test_streams_merged_and_values_deduped(mocker):
     obs = conn.collect(_ctx())
     body = json.loads(obs[0]["body"])
     # Only the three unique (timestamp, body) pairs survive, in timestamp order.
-    assert [(e["timestamp"], e["body"]) for e in body] == [(1, "a"), (2, "b"), (3, "c")]
+    assert [(e["ts"], e["body"]) for e in body] == [(1, "a"), (2, "b"), (3, "c")]
 
 
 def test_string_template_accepted_for_pdf_compat():
@@ -405,7 +405,7 @@ def test_custom_node_label_filters_and_decodes(mocker):
     )
     obs = conn.collect(_ctx())
     body = json.loads(obs[0]["body"])
-    assert body[0]["node"] == "n1"
+    assert body[0]["resources"] == [{"kind": "node", "hostname": "n1"}]
 
 
 # --- batch collection -------------------------------------------------------
@@ -454,9 +454,9 @@ def test_collect_batch_fetches_one_window_and_slices_by_node_and_time(mocker):
     decoded_a = json.loads(result["a"][0]["body"])
     assert [entry["body"] for entry in decoded_a] == ["n1 inside"]  # n2 is before a's window
     assert result["a"][0]["context"]["time_interval"] == {"start": end - timedelta(minutes=30), "end": end}
-    assert result["a"][0]["context"]["format"] == Format.LOKI_DICT_LIST
+    assert result["a"][0]["context"]["format"] == Format.ENTRY_TIMESERIES
     decoded_b = json.loads(result["b"][0]["body"])
-    assert [entry["node"] for entry in decoded_b] == ["n3"]
+    assert [entry["resources"] for entry in decoded_b] == [[{"kind": "node", "hostname": "n3"}]]
 
 
 def test_collect_batch_trims_each_context_to_its_trailing_window(mocker):
@@ -575,7 +575,7 @@ def test_collect_batch_keeps_partial_result_when_page_budget_runs_out(mocker):
 
     assert post.call_count == 1
     assert [entry["body"] for entry in json.loads(result["a"][0]["body"])] == ["a", "b"]
-    assert json.loads(result["a"][0]["body"])[0]["timestamp"] == ns(end - timedelta(minutes=30))
+    assert json.loads(result["a"][0]["body"])[0]["ts"] == ns(end - timedelta(minutes=30))
 
 
 @pytest.mark.parametrize("kwargs", [{"batch_window_hours": -1}, {"node_chunk_size": 0}])
@@ -623,7 +623,7 @@ def test_collect_batch_reuses_cached_buckets_across_calls(mocker, tmp_path):
     second = conn.collect_batch(contexts)
 
     assert post.call_count == 1
-    assert json.loads(first["a"][0]["body"])[0]["timestamp"] == ns(end - timedelta(minutes=10)) + 1
+    assert json.loads(first["a"][0]["body"])[0]["ts"] == ns(end - timedelta(minutes=10)) + 1
     assert second == first
 
 
@@ -731,3 +731,14 @@ def test_collect_batch_reads_cached_history_node_scoped_per_context(mocker, tmp_
 
     assert [entry["body"] for entry in json.loads(result["a"][0]["body"])] == ["n1-deep"]
     assert [entry["body"] for entry in json.loads(result["b"][0]["body"])] == ["n2-deep"]
+
+
+def test_every_exported_name_is_importable():
+    """`__all__` must name only what the package defines.
+
+    Main removed LokiSyslogEntry when syslog moved to entry_timeseries; an
+    export list that still named it would make a star import raise.
+    """
+    import attribution_blueprint.connectors.logs.loki as loki
+
+    assert [name for name in loki.__all__ if not hasattr(loki, name)] == []

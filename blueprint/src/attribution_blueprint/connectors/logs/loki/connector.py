@@ -21,7 +21,6 @@ from attribution_blueprint.connectors.logs.loki.range_cache import LokiRangeCach
 from attribution_blueprint.connectors.logs.loki.templates import TEMPLATES
 from attribution_blueprint.types import (
     ExecutionContext,
-    Format,
     Observation,
     NodeResource,
     ReplicaResource,
@@ -361,42 +360,24 @@ class LokiConnector:
         )
 
     def _observation(self, entries: list[LokiEntry], context: ExecutionContext) -> Observation:
-        fmt = _FORMAT_FOR_SOURCE[self._source]
-        if fmt == Format.LOKI_DICT_LIST:
-            # The service's LOKI_DICT_LIST consumer expects a flat list of
-            # LokiSyslogEntry, not raw Loki streams. Entries without a node
-            # are dropped: attribution_lib's syslog parser passes node into
-            # verify_node() with no None-guard.
-            flat: list[LokiSyslogEntry] = []
-            dropped_no_node = 0
-            for entry in entries:
-                if entry["node"] is None:
-                    dropped_no_node += 1
-                    continue
-                flat.append({"timestamp": entry["timestamp"], "body": entry["body"], "node": entry["node"]})
-            if dropped_no_node:
-                logger.warning(
-                    f"loki SYSLOG: dropped {dropped_no_node} entries with missing "
-                    f"{self._node_label!r} label (service requires node identity)"
-                )
-            body = json.dumps(flat)
-        else:
-            # Preserve batch slicing while emitting the shared timeseries format.
-            timeseries: list[TimeseriesEntry] = []
-            for entry in entries:
-                line, node = _extract_body_and_node(entry["body"], entry["node"])
-                item: TimeseriesEntry = {"body": line, "ts": entry["timestamp"]}
-                resources: list[NodeResource | ReplicaResource] = []
-                if node is not None:
-                    resources.append({"kind": "node", "hostname": node})
-                replica = entry["labels"].get("pod")
-                if replica is not None:
-                    resources.append({"kind": "replica", "name": replica})
-                if resources != []:
-                    item["resources"] = resources
-                timeseries.append(item)
-            body = json.dumps(timeseries)
-        return log_observation(source=self._source, format=fmt, body=body, context=context)
+        # Every source emits the shared timeseries format, syslog included, so
+        # batch slicing and single collection produce the same observation.
+        # Node and pod labels ride along as per-entry resources only when the
+        # stream carries them.
+        timeseries: list[TimeseriesEntry] = []
+        for entry in entries:
+            line, node = _extract_body_and_node(entry["body"], entry["node"])
+            item: TimeseriesEntry = {"body": line, "ts": entry["timestamp"]}
+            resources: list[NodeResource | ReplicaResource] = []
+            if node is not None:
+                resources.append({"kind": "node", "hostname": node})
+            replica = entry["labels"].get("pod")
+            if replica is not None:
+                resources.append({"kind": "replica", "name": replica})
+            if resources != []:
+                item["resources"] = resources
+            timeseries.append(item)
+        return log_observation(source=self._source, entries=timeseries, context=context)
 
     def _inject_node_filter(self, query: str, nodes: list[str]) -> str:
         """Inject `<node_label>=~"<n1|n2|...>"` into every top-level stream
