@@ -1,6 +1,6 @@
 import { Fragment, useMemo, useState } from 'react'
 import { ChevronLeft, ChevronRight } from 'lucide-react'
-import type { OutcomeKey, Run } from '@/interfaces/attribution'
+import type { OutcomeKey, RunSummary } from '@/interfaces/attribution'
 import type { FleetFilter } from '@/interfaces/filter'
 import type { PageByOutcome, RunsTableGroup } from '@/hooks/use-runs-table'
 import { Badge } from '@/components/ui/badge'
@@ -23,6 +23,7 @@ import { TimeHover } from '@/components/time-hover'
 import { attemptGpuHours } from '@/lib/metric'
 import { isWindowed } from '@/lib/date-window'
 import { useNav } from '@/hooks/use-nav'
+import { DecisionGraphAction } from '@/routers/verdict/components/decision-graph/dialog'
 
 const OUTCOME_ORDER: { key: OutcomeKey; label: string; dot: string }[] = [
   { key: 'hardware', label: 'Hardware Fault',        dot: 'bg-red-400' },
@@ -33,7 +34,7 @@ const OUTCOME_ORDER: { key: OutcomeKey; label: string; dot: string }[] = [
   { key: 'pass',     label: 'Pass',                  dot: 'bg-primary' },
 ]
 
-const COL_COUNT = 9
+const COL_COUNT = 10
 const PAGE_SIZE_OPTIONS = [10, 25, 50]
 const RESPONSIBLE_NODE_INLINE_LIMIT = 3
 
@@ -59,17 +60,21 @@ function RunColumnHeaders({ className = '' }: { className?: string }) {
       <TableHead>
         <DefHover term="responsible-nodes">Responsible nodes</DefHover>
       </TableHead>
+      <TableHead className="w-16 text-center font-sans">Actions</TableHead>
     </TableRow>
   )
 }
 
-function RunRow({ r }: { r: Run }) {
+function RunRow({ r }: { r: RunSummary }) {
   const nav = useNav()
   const visibleResponsibleNodes = r.responsibleNodes.slice(0, RESPONSIBLE_NODE_INLINE_LIMIT)
   const hasMoreResponsibleNodes = r.responsibleNodes.length > visibleResponsibleNodes.length
   return (
     <TableRow
-      onClick={() => nav('verdict', { id: r.id })}
+      onClick={(event) => {
+        // Portaled dialogs and tooltips are not part of the clickable row.
+        if (event.currentTarget.contains(event.target as Node)) nav('verdict', { id: r.id })
+      }}
       className="cursor-pointer group"
     >
       <TableCell className="font-mono text-xs text-foreground">
@@ -85,7 +90,9 @@ function RunRow({ r }: { r: Run }) {
       </TableCell>
       <TableCell className="text-foreground-secondary">{r.user}</TableCell>
       <TableCell>
-        <OutcomeChip outcome={r.outcome} />
+        <div className="flex items-center">
+          <OutcomeChip outcome={r.outcome} />
+        </div>
       </TableCell>
       <TableCell className="font-mono text-foreground text-right">{r.gpuCount}</TableCell>
       <TableCell className="font-mono text-foreground text-right">
@@ -116,6 +123,11 @@ function RunRow({ r }: { r: Run }) {
         ) : (
           <span aria-label="no responsible nodes" className="text-zinc-700 select-none">·</span>
         )}
+      </TableCell>
+      <TableCell className="py-1">
+        <div className="flex justify-center">
+          <DecisionGraphAction run={r} compact />
+        </div>
       </TableCell>
     </TableRow>
   )
@@ -205,7 +217,7 @@ export function RunsSection({
 }: {
   groups: RunsTableGroup[]
   matchingRuns: number
-  visibleRuns: Run[]
+  visibleRuns: RunSummary[]
   filter: FleetFilter
   setFilter: (next: FleetFilter) => void
   pageByOutcome: PageByOutcome
@@ -232,7 +244,7 @@ export function RunsSection({
     filter.outcome || filter.symptom || filter.node || filter.rule || filter.user || filter.q
       ? 'clear the active filter chips above'
       : null,
-    filter.status === 'failed' ? 'uncheck "Failed only" to include passing runs' : null,
+    filter.status === 'failed' ? 'uncheck "Hide passing runs"' : null,
     windowed ? 'widen the date range' : null,
   ].filter((hint) => hint !== null)
 

@@ -15,11 +15,14 @@ from __future__ import annotations
 from collections.abc import Mapping, MutableMapping, Sequence
 from typing import Any, Optional
 
+from attribution_lib.symptoms.family import SymptomFamily
+
 
 class BaseSymptom:
     """Runtime symptom instance - carries metadata through the system.
     Base contract:
     - symptom_id: The actual symptom identifier string (e.g., "XID-13-", "IB Error-12")
+    - family: Optional structured family identity
     - sources: Where this symptom was detected (log lines, metrics, etc.)
     - attributes: Additional metadata about this symptom occurrence
     - cascade_discards: List of symptom patterns to discard when this symptom is present
@@ -29,11 +32,15 @@ class BaseSymptom:
         self,
         *,
         symptom_id: str,
+        family: Optional[SymptomFamily] = None,
         sources: Optional[Sequence[Any]] = None,
         attributes: Optional[Mapping[str, Any]] = None,
         cascade_discards: Optional[Sequence[str]] = None,
     ):
+        if family is not None and len(family.property_types) > 0:
+            raise ValueError("BaseSymptom family must contain member properties, not property_types")
         self._symptom_id = symptom_id
+        self._family = family
         self._sources: list[Any] = list(sources or [])
         self._attributes: dict[str, Any] = dict(attributes or {})
         self._cascade_discards: list[str] = list(cascade_discards or [])
@@ -42,6 +49,11 @@ class BaseSymptom:
     def symptom_id(self) -> str:
         """The symptom identifier string (e.g., 'XID-13-', 'IB Error-12')."""
         return self._symptom_id
+
+    @property
+    def family(self) -> Optional[SymptomFamily]:
+        """Return structured family identity supplied by declaration or emission."""
+        return self._family
 
     @property
     def sources(self) -> list[Any]:
@@ -71,12 +83,23 @@ class BaseSymptom:
         self._attributes.update(updates)
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        """Serialize the symptom, including structured identity when present.
+
+        Returns:
+            Symptom data in its compatible dictionary representation.
+        """
+        result: dict[str, Any] = {
             "symptom_id": self._symptom_id,
             "sources": self._sources,
             "attributes": dict(self._attributes),
             "cascade_discards": list(self._cascade_discards),
         }
+        if self._family is not None:
+            result["family"] = {
+                "name": self._family.name,
+                "properties": dict(self._family.properties),
+            }
+        return result
 
     def matches(self, pattern: str) -> bool:
         """Check if this symptom matches a given pattern.

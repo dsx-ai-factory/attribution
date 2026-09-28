@@ -39,36 +39,75 @@ def controller_owner(resource: dict, kind: str | None = None) -> dict | None:
     return owners[0] if len(owners) == 1 else None
 
 
-def pod_selector_for(workload: dict) -> tuple[str, str] | None:
-    """Return the label selector that identifies Pods for a supported owner."""
+def pod_selector_for(workload: dict) -> tuple[str, str, str] | None:
+    """Return the `(namespace, label-key, label-value)` selector that
+    identifies Pods for a supported owner.
+
+    Namespace is required alongside the label: the JobSet pod label
+    carries only a name, which is unique per namespace but not
+    cluster-wide, and cluster-wide discovery can pool pods from every
+    namespace before filtering. Always match via `pod_matches_selector`.
+    """
     owner = controller_owner(workload)
     if owner is None:
         return None
+    namespace = (workload.get("metadata") or {}).get("namespace") or "default"
     if owner.get("kind") == "Job" and owner.get("uid"):
-        return POD_OWNER_LABEL, owner["uid"]
+        return namespace, POD_OWNER_LABEL, owner["uid"]
     if owner.get("kind") == "JobSet" and owner.get("name"):
-        return POD_JOBSET_LABEL, owner["name"]
+        return namespace, POD_JOBSET_LABEL, owner["name"]
+    return None
+
+
+def pod_matches_selector(pod: dict, selector: tuple[str, str, str]) -> bool:
+    """Return whether `pod` matches a `pod_selector_for` selector."""
+    namespace, label_key, label_value = selector
+    metadata = pod.get("metadata") or {}
+    if metadata.get("namespace") != namespace:
+        return False
+    return (metadata.get("labels") or {}).get(label_key) == label_value
+
+
+def _jobset_owner_uid(job: dict) -> str | None:
+    """Return the uid of the JobSet that owns `job`, from `job`'s own
+    ownerReferences, or None if `job` has no JobSet controller reference."""
+    for owner in (job.get("metadata") or {}).get("ownerReferences") or []:
+        if owner.get("kind") == "JobSet" and owner.get("uid"):
+            return owner["uid"]
     return None
 
 
 def jobs_for_workload(workload: dict, owner_jobs: dict[str, dict]) -> list[dict]:
-    """Return direct or JobSet child Jobs associated with a Workload."""
+    """Return direct or JobSet child Jobs associated with a Workload.
+
+    Every returned Job's identity is confirmed by uid, not just the name
+    used to look it up: names are reusable after deletion, so a
+    namespace/name (or `jobset-name` label) lookup can return a different
+    object than the one the ownerReference originally pointed to. A uid
+    mismatch is treated as stale evidence, not a valid owner.
+    """
     owner = controller_owner(workload)
     if owner is None:
         return []
     namespace = (workload.get("metadata") or {}).get("namespace") or ""
     owner_name = owner.get("name")
+    owner_uid = owner.get("uid")
     if not owner_name:
         return []
     if owner.get("kind") == "Job":
         job = owner_jobs.get(f"{namespace}/{owner_name}")
-        return [job] if job is not None else []
+        if job is None:
+            return []
+        if (job.get("metadata") or {}).get("uid") != owner_uid:
+            return []
+        return [job]
     if owner.get("kind") == "JobSet":
         return [
             job
             for job in owner_jobs.values()
             if (job.get("metadata") or {}).get("namespace") == namespace
             and ((job.get("metadata") or {}).get("labels") or {}).get(POD_JOBSET_LABEL) == owner_name
+            and _jobset_owner_uid(job) == owner_uid
         ]
     return []
 

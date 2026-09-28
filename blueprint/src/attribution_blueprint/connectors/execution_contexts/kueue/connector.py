@@ -53,15 +53,21 @@ not the ECA.
 Pod ownership is resolved via the **standard batch/v1 Job pod labels**,
 not the Kueue label. `kueue.x-k8s.io/job-uid` is set by Kueue on the
 **Workload** object (carrying the owner Job's UID so callers can link a
-Workload back to its Job); it is NOT stamped on the pods. The pods are
-created by the Kubernetes Job controller, which stamps the canonical
-`batch.kubernetes.io/controller-uid=<job.uid>` and
-`batch.kubernetes.io/job-name=<job.name>` labels. This adapter pulls the
-owner Job's UID out of the Workload's `ownerReferences` and selects pods
-with `batch.kubernetes.io/controller-uid=<owner_uid>`. (Both an earlier
-bug — looking up by Workload UID — and a follow-on bug — looking up by
-the Kueue label rather than the batch label — produced empty pod sets
-on real clusters; the fixtures masked both by conflating UIDs.)
+Workload back to its Job. The pods are created by the Kubernetes Job 
+controller, which stamps the `batch.kubernetes.io/controller-uid=<job.uid>` 
+and `batch.kubernetes.io/job-name=<job.name>` labels. 
+This adapter pulls the owner Job's UID out of the Workload's 
+`ownerReferences` and selects pods with 
+`batch.kubernetes.io/controller-uid=<owner_uid>`. 
+
+The JobSet pod label carries only a name, which is unique per namespace
+but not cluster-wide, so `_pod_selector_for`/`_pod_matches_selector` 
+always scope matching to the Workload's own namespace.
+
+Owner Jobs/JobSet children are looked up by namespace/name, but names are
+reusable after deletion. `_jobs_for_workload` confirms the fetched
+object's uid against the ownerReference's uid before trusting it as the
+real owner.
 """
 
 from __future__ import annotations
@@ -78,6 +84,7 @@ from attribution_blueprint.connectors.execution_contexts.kueue.helpers import (
     POD_JOBSET_LABEL as _POD_JOBSET_LABEL,
     jobs_for_workload as _jobs_for_workload,
     owner_job_uids as _owner_job_uids,
+    pod_matches_selector as _pod_matches_selector,
     pod_node_failure_reason as _pod_node_failure_reason,
     pod_selector_for as _pod_selector_for,
 )
@@ -122,11 +129,9 @@ class KueueExecutionContext(TypedDict):
     queue_name: NotRequired[str]
     priority_class: NotRequired[int]
     gpu_count: NotRequired[int]
-    # Pod names belonging to this Workload at the time of discovery. Populated
-    # in `_finalize` from the same pod listing used for node/failed_node
-    # evidence. Downstream log/metric connectors consume this list so they
-    # don't need to re-derive the per-owner pod selector. Empty list when the
-    # owner type isn't supported or all pods have been garbage-collected.
+    # Pod names belonging to this Workload at the time of discovery. Empty 
+    # list when the owner type isn't supported or all pods have been 
+    # garbage-collected.
     pod_names: NotRequired[list[str]]
     pod_placements: NotRequired[list[PodPlacement]]
 
@@ -243,17 +248,16 @@ def _pod_reports_node_failure(pod: dict) -> bool:
 
 def _collect_pod_evidence(
     pods: list[dict],
-    selector: tuple[str, str] | None,
+    selector: tuple[str, str, str] | None,
 ) -> tuple[list[str], str | None, list[str]]:
     """Return `(sorted unique nodes, lex-smallest failed_node, sorted pod
-    names)` for pods whose `metadata.labels[selector.key] == selector.value`.
+    names)` for pods matching `selector`.
 
     The caller is responsible for narrowing the input list to pods that
     might belong to this workload — typically via the kubectl label
-    selector in `_fetch_pods_for`. This function still re-checks each
-    pod's label as a defensive filter: a pod missing the label, or
-    carrying a different value, must NEVER be associated with this
-    workload's evidence even if it leaked into the input list.
+    selector in `_fetch_pods_for`. This function still re-checks each pod
+    against `_pod_matches_selector` as a defensive filter (namespace +
+    label), since cluster-wide discovery can pool pods across namespaces.
 
     Pod names are returned alongside the node evidence so downstream
     connectors (e.g. `kubectl_logs`) don't have to re-derive the
@@ -264,15 +268,13 @@ def _collect_pod_evidence(
     """
     if not selector:
         return [], None, []
-    key, value = selector
     nodes: set[str] = set()
     failed_nodes: set[str] = set()
     pod_names: set[str] = set()
     for pod in pods:
-        meta = pod.get("metadata") or {}
-        labels = meta.get("labels") or {}
-        if labels.get(key) != value:
+        if not _pod_matches_selector(pod, selector):
             continue
+        meta = pod.get("metadata") or {}
         pod_name = meta.get("name")
         if pod_name:
             pod_names.add(pod_name)
@@ -298,16 +300,15 @@ def _collect_pod_evidence(
     return sorted(nodes), failed_node, sorted(pod_names)
 
 
-def _live_pod_placements(pods: list[dict], selector: tuple[str, str] | None) -> list[PodPlacement]:
+def _live_pod_placements(pods: list[dict], selector: tuple[str, str, str] | None) -> list[PodPlacement]:
     """Return bound Pod placements matching one Workload owner selector."""
     if selector is None:
         return []
-    key, value = selector
     placements: list[PodPlacement] = []
     for pod in pods:
-        metadata = pod.get("metadata") or {}
-        if (metadata.get("labels") or {}).get(key) != value:
+        if not _pod_matches_selector(pod, selector):
             continue
+        metadata = pod.get("metadata") or {}
         node_name = (pod.get("spec") or {}).get("nodeName")
         if metadata.get("uid") and metadata.get("name") and node_name:
             placements.append(
@@ -410,14 +411,12 @@ def _owner_job_failure_reason(workload: dict, owner_jobs: dict[str, dict]) -> st
     return earliest_reason
 
 
-def _has_node_failure_pod(pods: list[dict], selector: tuple[str, str] | None) -> bool:
+def _has_node_failure_pod(pods: list[dict], selector: tuple[str, str, str] | None) -> bool:
     """Return whether a selected Pod reports a Kubernetes node-loss signal."""
     if selector is None:
         return False
-    key, value = selector
     for pod in pods:
-        metadata = pod.get("metadata") or {}
-        if (metadata.get("labels") or {}).get(key) != value:
+        if not _pod_matches_selector(pod, selector):
             continue
         if _pod_reports_node_failure(pod):
             return True
@@ -428,6 +427,11 @@ def _workload_condition_is_true(workload: dict, condition_type: str) -> bool:
     conditions = (workload.get("status") or {}).get("conditions") or []
     condition = _condition(conditions, condition_type)
     return bool(condition and condition.get("status") == "True")
+
+
+# kueue_state values where the Workload currently holds admission/quota.
+# These outrank stale Requeued=True history in `_service_state` below.
+_CURRENT_ADMISSION_OR_RESERVATION_STATES = frozenset({"ADMITTED", "RUNNING", "QUOTA_RESERVED"})
 
 
 def _service_state(
@@ -445,7 +449,17 @@ def _service_state(
         return "NODE_FAIL"
     if _has_node_failure_pod(pods, _pod_selector_for(workload)):
         return "NODE_FAIL"
-    if _workload_condition_is_true(workload, _COND_REQUEUED):
+    # Requeued=True can stay True after re-admission, so a raw condition
+    # check can't tell "still awaiting admission" from "running again".
+    # Gate on kueue_state instead: it already reflects current precedence
+    # (Finished/Admitted/RUNNING/QuotaReserved outrank requeue history).
+    currently_admitted_or_reserved = kueue_state in _CURRENT_ADMISSION_OR_RESERVATION_STATES
+    currently_finished = kueue_state.startswith("FINISHED")
+    if (
+        not currently_admitted_or_reserved
+        and not currently_finished
+        and _workload_condition_is_true(workload, _COND_REQUEUED)
+    ):
         return "REQUEUED"
     if kueue_state.startswith("EVICTED"):
         # Any other Evicted reasons (e.g. queue stopped,
@@ -935,11 +949,10 @@ class KueueExecutionContextAdapter:
             selector = _pod_selector_for(wl)
             if selector is None:
                 continue
-            key, value = selector
-            ns = (wl.get("metadata") or {}).get("namespace") or ""
-            args = ["get", "pods", "-l", f"{key}={value}"]
-            if ns:
-                args += ["-n", ns]
+            namespace, label_key, label_value = selector
+            args = ["get", "pods", "-l", f"{label_key}={label_value}"]
+            if namespace:
+                args += ["-n", namespace]
             else:
                 args += ["-A"]
             payload = self._run_json(args)

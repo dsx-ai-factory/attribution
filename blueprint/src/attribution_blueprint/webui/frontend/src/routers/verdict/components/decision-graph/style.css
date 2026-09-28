@@ -1,0 +1,59 @@
+/*
+ * SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-License-Identifier: LicenseRef-NvidiaProprietary
+ */
+
+.decision-canvas .react-flow {
+  --xy-background-color: var(--background-secondary);
+  --xy-controls-button-background-color: var(--background);
+  --xy-controls-button-background-color-hover: var(--background-active);
+  --xy-controls-button-color: var(--foreground-secondary);
+  --xy-controls-button-border-color: var(--border);
+}
+
+.decision-canvas .react-flow__node:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 4px;
+}
+
+.decision-canvas .react-flow__pane {
+  touch-action: pan-y;
+}
+
+.decision-touch-hint {
+  display: none;
+}
+
+@media (pointer: coarse) {
+  .decision-touch-hint {
+    display: inline;
+  }
+
+  .decision-pointer-hint {
+    display: none;
+  }
+}
+
+.decision-canvas .react-flow__controls {
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: none;
+}
+
+.decision-canvas .react-flow__controls-button {
+  width: 32px;
+  height: 32px;
+}
+
+.decision-canvas .react-flow__attribution {
+  background: var(--background-secondary);
+}
+
+.decision-canvas .react-flow__attribution a {
+  color: var(--foreground-muted);
+}
+
+.decision-canvas .react-flow__viewport-portal {
+  z-index: -1;
+}

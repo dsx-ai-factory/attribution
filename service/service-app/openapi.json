@@ -1620,6 +1620,15 @@
         "title": "AttributorWorkloadInfoV2",
         "description": "V2 wire shape: ``nodes`` is the explicit node->ranks mapping."
       },
+      "CancellationActor": {
+        "type": "string",
+        "enum": [
+          "User",
+          "Operator"
+        ],
+        "title": "CancellationActor",
+        "description": "Possible initiators carried by `Cancelled`."
+      },
       "DecisionAction": {
         "type": "string",
         "enum": [
@@ -1861,6 +1870,16 @@
         "title": "EventStorageOverflowError",
         "description": "Error for when an attributor's event storage exceeds its memory budget.\n\nRaised instead of a generic 500 when ATTRIBUTOR_ALLOW_DISK_SPILL=false\n(the default for containerized deployments with no writable disk) and an\nattributor's DuckDB connection exceeds ATTRIBUTOR_DUCKDB_MEMORY_LIMIT.\nIsolated to the one attributor/request that triggered it."
       },
+      "FailureDomain": {
+        "type": "string",
+        "enum": [
+          "User",
+          "InfraHW",
+          "InfraSW"
+        ],
+        "title": "FailureDomain",
+        "description": "Possible domains of responsibility carried by `Fail`."
+      },
       "Format": {
         "type": "string",
         "enum": [
@@ -1876,7 +1895,7 @@
           "entry_timeseries"
         ],
         "title": "Format",
-        "description": "Specifies the types of formats the 'lines' in an observation can be in.\n\nNot all sources can be specified in each format; see above for clarification.\n\nFurthermore, some sources expect slightly different fields in formats.\n\nIn particular, the `applog` source expects the entry found in the given format to have a rank-like prefix; for them, the host-specifier field, if present in a format, is optional. `entry_timeseries` is the exception: it parses the prefix only out of an entry that declares no `resources`, and a body timestamp only when `ts` is null (see below).\n\nFor `syslog` and `health_check`, the rank-like prefix is not expected, and `host-specifier` fields are mandatory.\n\nRank-like prefixes are match the following regex: \"^\\[rank\\s*:?\\s*(?P<rank>\\d+)\\]\" or have an integer followed by a colon at the start of the line.\n\nExamples:\n\n    [rank3] Message\n     3: another message\n    [rank :10] a third message\n\n\n- `string_list`:\n\n    Raw text\n\n    Lines of text separated by newlines. No hosts associations.\n\n- `raw_log`:\n\n    Raw text\n\n    entries separated by newlines. Rank-like prefix expected for applog.\n\n- `raw_loki_streams`:\n\n    JSON-based\n\n    Top-Level Structure:\n    - An array of objects, each with:\n      - `stream`: If host-spcifier needed, *Required*. If present, must contain the `node_name` field (string); which is the host-specifier. All other fields in stream are permitted but ignored.\n      - `values`: *Required*. An array of entries.\n\n    Details:\n    - `stream` Object. *Required* if host-specifier:\n      - Required Field:\n        - `node_name` (string): Identifies the node that generated the logs. Host specifier.\n        - Other fields: Any other fields within stream are permitted but ignored.\n    - `values` Array:\n      - Each entry is a 2-element array:\n        - Timestamp (string): Unix timestamp; unit scale dictated by Source (see above).\n        - Entry (string): the main content. Should have rank-line prefix for applog.\n    - Other fields:\n      - Any other fields at any level are permitted but ignored.\n\n    Example (`syslog` source):\n    ```json\n    [\n      {\n        \"stream\": {\n          \"node_name\": \"host-a1b2c3d4\"\n        },\n        \"values\": [\n          [\n            \"1744734437830498000\",\n            \"Apr 24 12:04:06 host-a1b2c3d4 kernel: message repeated 8 times: [ NVRM: subdeviceCtrlCmdBusGetNvlinkStatus_IMPL: Failed to collect nvlink status info!]\"\n          ]\n        ]\n      }\n    ]\n    ```\n\n- `loki_dict_list`:\n\n    JSON-based.\n\n    Top-Level Structure:\n    -  An array of objects, each with:\n        - `values`: Required. An array of entries.\n\n    Details:\n    - `values` Array:\n      Each entry is a 2-element array:\n      - Timestamp (string): Unix timestamp; unit scale dictated by Source (see above).\n      - Content (string): A JSON-encoded object with at least the following fields:\n        - `body` (string): entry (required; rank-like prefix expected for APPLOG.)\n        - `hostname` (string): The source hostname (required if host-specified needed.)\n    - Other fields:\n      - The `stream` object is optional and, if present, is ignored.\n      - Any other fields in the log message JSON are permitted but ignored.\n\n    Example (`syslog` source)\n    ```json\n    [\n      {\n        \"values\": [\n          [\n            \"1744734421212766000\",\n            \"{\\\"body\\\":\\\"Some log message\\\",\\\"hostname\\\":\\\"server-01\\\"}\"\n          ]\n        ]\n      }\n    ]\n    ```\n\n- `csv_metric_response`:\n\n  Not implemented presently.\n\n- `prometheus_metrics`:\n\n  JSON-based.\n\n  Top-Level Structure:\n  - An array of objects, each representing a metric data point.\n\n  Details:\n  - Each object must contain:\n    - `timestamp` (int): Unix timestamp in seconds\n    - `value` (Union[int, float, string]): Metric value (initially as string, converted later)\n    - `metric` (string): Metric name (e.g., \"node_infiniband_link_downed_total\")\n    - `labels` (dict): Prometheus labels including node and device information\n    - `node` (string): Node identifier (required, extracted from net_host_name label)\n    - `component` (string, optional): Component/device identifier (e.g., \"mlx5_0\", \"mlx5_1\")\n    - `cluster` (string, optional): Cluster identifier (e.g., \"cluster-e5f6g7h8\", extracted from s_cluster label)\n\n  Example:\n  ```json\n  [\n    {\n      \"timestamp\": 1753898040,\n      \"value\": \"1\",\n      \"metric\": \"node_infiniband_link_downed_total\",\n      \"labels\": {\n        \"net_host_name\": \"host-i9j0k1l2\",\n        \"s_cluster\": \"cluster-e5f6g7h8\",\n        \"device\": \"mlx5_0\",\n        \"instance\": \"host-i9j0k1l2:9100\"\n      },\n      \"node\": \"host-i9j0k1l2\",\n      \"component\": \"mlx5_0\",\n      \"cluster\": \"cluster-e5f6g7h8\"\n    }\n  ]\n  ```\n\n- `entry_timeseries`:\n\n  JSON-based.\n\n  Top-Level Structure:\n  - An array of entry objects.\n\n  Details:\n  - Each entry object contains:\n    - `body` (string): *Required*. Matched verbatim; nothing is parsed out of it except the\n      `applog` fallbacks described below.\n    - `ts` (int or null): Unix timestamp in **nanoseconds**, or null/absent when the producer\n      has no timestamp for this entry. It means \"this entry occurred no later than this time\".\n      Rounded up to microsecond precision internally, since that is all a `datetime` holds. An\n      entry without a timestamp is never dropped by time filtering.\n    - `resources` (optional): What this entry is about. Either the exact string `\"AllJobResources\"`\n      or an array naming exactly one `{\"kind\": \"node\", \"hostname\": ...}`, optionally alongside\n      `{\"kind\": \"replica\", \"name\": ...}` objects, which are recorded but not attributed on. Absent,\n      null and `\"AllJobResources\"` all mean every job resource, so they single out no node. Neither\n      does an array that fails to name exactly one node the job owns \u2014 for example `[]`, several\n      nodes, replicas with no node (except under `applog`, see below), or a hostname outside the job.\n      Singling out no node is what decides the entry's fate: a source that requires one drops it, a\n      source that does not records it against every job resource. Either way the rest of the array is still processed.\n  - Any other key in an entry is permitted but ignored.\n\n  Unlike every other format, entries here are only time-filtered by the observation context's\n  `time_interval`. That interval is the producer's declared intent: a null bound means unbounded on\n  that side, so an interval of two nulls disables time filtering for the observation entirely.\n\n  Key Source Behavior:\n  - `applog`:\n    - `ts` absent or null: the body is parsed for a timestamp. Year-less formats resolve it against\n      the workload's `job_end_time`.\n    - `resources` absent, null, or an array naming no node (for example replicas only): the node is\n      read from the rank-like or node-name text prefix, and declared replicas are kept. A line with\n      no usable prefix is recorded against every job resource, never dropped. An explicit\n      `\"AllJobResources\"` skips the prefix parse altogether.\n\n  Example:\n  ```json\n  [\n    {\n      \"ts\": 1744734437830498000,\n      \"resources\": [{\"kind\": \"node\", \"hostname\": \"host-a1b2c3d4\"}],\n      \"body\": \"some log message\"\n    },\n    {\n      \"body\": \"a continuation entry the producer could not timestamp\"\n    }\n  ]\n  ```"
+        "description": "Specifies the types of formats the 'lines' in an observation can be in.\n\nNot all sources can be specified in each format; see above for clarification.\n\nFurthermore, some sources expect slightly different fields in formats.\n\nIn particular, the `applog` source expects the entry found in the given format to have a rank-like prefix; for them, the host-specifier field, if present in a format, is optional. `entry_timeseries` is the exception: it parses the prefix only out of an entry that declares no `resources`, and a body timestamp only when `ts` is null (see below).\n\nFor `syslog` and `health_check`, the rank-like prefix is not expected, and `host-specifier` fields are mandatory.\n\nRank-like prefixes are match the following regex: \"^\\[rank\\s*:?\\s*(?P<rank>\\d+)\\]\" or have an integer followed by a colon at the start of the line.\n\nExamples:\n\n    [rank3] Message\n     3: another message\n    [rank :10] a third message\n\n\n- `string_list`:\n\n    Raw text\n\n    Lines of text separated by newlines. No hosts associations.\n\n- `raw_log`:\n\n    Raw text\n\n    entries separated by newlines. Rank-like prefix expected for applog.\n\n- `raw_loki_streams`:\n\n    JSON-based\n\n    Top-Level Structure:\n    - An array of objects, each with:\n      - `stream`: If host-spcifier needed, *Required*. If present, must contain the `node_name` field (string); which is the host-specifier. All other fields in stream are permitted but ignored.\n      - `values`: *Required*. An array of entries.\n\n    Details:\n    - `stream` Object. *Required* if host-specifier:\n      - Required Field:\n        - `node_name` (string): Identifies the node that generated the logs. Host specifier.\n        - Other fields: Any other fields within stream are permitted but ignored.\n    - `values` Array:\n      - Each entry is a 2-element array:\n        - Timestamp (string): Unix timestamp; unit scale dictated by Source (see above).\n        - Entry (string): the main content. Should have rank-line prefix for applog.\n    - Other fields:\n      - Any other fields at any level are permitted but ignored.\n\n    Example (`syslog` source):\n    ```json\n    [\n      {\n        \"stream\": {\n          \"node_name\": \"host-a1b2c3d4\"\n        },\n        \"values\": [\n          [\n            \"1744734437830498000\",\n            \"Apr 24 12:04:06 host-a1b2c3d4 kernel: message repeated 8 times: [ NVRM: subdeviceCtrlCmdBusGetNvlinkStatus_IMPL: Failed to collect nvlink status info!]\"\n          ]\n        ]\n      }\n    ]\n    ```\n\n- `loki_dict_list`:\n\n    JSON-based.\n\n    Top-Level Structure:\n    -  An array of objects, each with:\n        - `values`: Required. An array of entries.\n\n    Details:\n    - `values` Array:\n      Each entry is a 2-element array:\n      - Timestamp (string): Unix timestamp; unit scale dictated by Source (see above).\n      - Content (string): A JSON-encoded object with at least the following fields:\n        - `body` (string): entry (required; rank-like prefix expected for APPLOG.)\n        - `hostname` (string): The source hostname (required if host-specified needed.)\n    - Other fields:\n      - The `stream` object is optional and, if present, is ignored.\n      - Any other fields in the log message JSON are permitted but ignored.\n\n    Example (`syslog` source)\n    ```json\n    [\n      {\n        \"values\": [\n          [\n            \"1744734421212766000\",\n            \"{\\\"body\\\":\\\"Some log message\\\",\\\"hostname\\\":\\\"server-01\\\"}\"\n          ]\n        ]\n      }\n    ]\n    ```\n\n- `csv_metric_response`:\n\n  Not implemented presently.\n\n- `prometheus_metrics`:\n\n  JSON-based.\n\n  Top-Level Structure:\n  - An array of objects, each representing a metric data point.\n\n  Details:\n  - Each object must contain:\n    - `timestamp` (int): Unix timestamp in seconds\n    - `value` (Union[int, float, string]): Metric value (initially as string, converted later)\n    - `metric` (string): Metric name (e.g., \"node_infiniband_link_downed_total\")\n    - `labels` (dict): Prometheus labels including node and device information\n    - `node` (string): Node identifier (required, extracted from net_host_name label)\n    - `component` (string, optional): Component/device identifier (e.g., \"mlx5_0\", \"mlx5_1\")\n    - `cluster` (string, optional): Cluster identifier (e.g., \"cluster-e5f6g7h8\", extracted from s_cluster label)\n\n  Example:\n  ```json\n  [\n    {\n      \"timestamp\": 1753898040,\n      \"value\": \"1\",\n      \"metric\": \"node_infiniband_link_downed_total\",\n      \"labels\": {\n        \"net_host_name\": \"host-i9j0k1l2\",\n        \"s_cluster\": \"cluster-e5f6g7h8\",\n        \"device\": \"mlx5_0\",\n        \"instance\": \"host-i9j0k1l2:9100\"\n      },\n      \"node\": \"host-i9j0k1l2\",\n      \"component\": \"mlx5_0\",\n      \"cluster\": \"cluster-e5f6g7h8\"\n    }\n  ]\n  ```\n\n- `entry_timeseries`:\n\n  JSON-based.\n\n  Top-Level Structure:\n  - An array of entry objects.\n\n  Details:\n  - Each entry object contains:\n    - `body` (string): *Required*. Matched verbatim; nothing is parsed out of it except the\n      `applog`, `syslog` and `ufmlog` fallbacks described below.\n    - `ts` (int or null): Unix timestamp in **nanoseconds**, or null/absent when the producer\n      has no timestamp for this entry. It means \"this entry occurred no later than this time\".\n      Rounded up to microsecond precision internally, since that is all a `datetime` holds. An\n      entry without a timestamp is never dropped by time filtering.\n    - `resources` (optional): What this entry is about. Either the exact string `\"AllJobResources\"`\n      or an array naming exactly one `{\"kind\": \"node\", \"hostname\": ...}`, optionally alongside\n      `{\"kind\": \"replica\", \"name\": ...}` objects, which are recorded but not attributed on. Absent,\n      null and `\"AllJobResources\"` all mean every job resource, so they single out no node. Neither\n      does an array that fails to name exactly one node the job owns \u2014 for example `[]`, several\n      nodes, replicas with no node (except under `applog`, see below), or a hostname outside the job.\n      Singling out no node is what decides the entry's fate: a source that requires one drops it, a\n      source that does not records it against every job resource. Either way the rest of the array is still processed.\n  - Any other key in an entry is permitted but ignored.\n\n  Unlike every other format, entries here are only time-filtered by the observation context's\n  `time_interval`. That interval is the producer's declared intent: a null bound means unbounded on\n  that side, so an interval of two nulls disables time filtering for the observation entirely.\n\n  Key Source Behavior:\n  - `applog`:\n    - `ts` absent or null: the body is parsed for a timestamp. Year-less formats resolve it against\n      the workload's `job_end_time`.\n    - `resources` absent, null, or an array naming no node (for example replicas only): the node is\n      read from the rank-like or node-name text prefix, and declared replicas are kept. A line with\n      no usable prefix is recorded against every job resource, never dropped. An explicit\n      `\"AllJobResources\"` skips the prefix parse altogether.\n  - `syslog`:\n    - `ts` is the line's timestamp in nanoseconds. An entry without it is dropped, never\n      parsed out of the body.\n    - A declared node in `resources` is used as-is, so a host specifier in IP form must be\n      resolved by the producer. With `resources` absent or null the node is read out of the\n      syslog line's hostname field instead; a line naming none is dropped.\n    - `body` is the syslog line as received. The declared interval is what the producer meant\n      to cover, typically the selected job record plus whatever slack it admits for terminal\n      events logged just after the record ends.\n  - `ufmlog`:\n    - `ts` is the line's timestamp in nanoseconds. An entry without it is kept, never\n      parsed out of the body, and treated as untimed.\n    - A declared node in `resources` is used as-is and the body is never parsed. With\n      `resources` absent or null the job node is read out of the line instead, which names it\n      either in the link form `(Computer:<node> (<guid>))` or the node form\n      `(<node>) node is Down`; a line naming neither is dropped\n    - `body` is the fabric manager log line as received\n  - `node_metrics` and `nvlink_metrics`:\n    - `ts` is the sample time in nanoseconds. An entry without it is kept, never\n      parsed out of the body, and treated as untimed.\n    - `resources` must name the node the sample is about. An entry that declares no node, or a\n      node that is not in the job, is dropped.\n    - `body` is the line `prometheus_metrics` renders from a metric entry, byte for byte\n\n  Example:\n  ```json\n  [\n    {\n      \"ts\": 1744734437830498000,\n      \"resources\": [{\"kind\": \"node\", \"hostname\": \"host-a1b2c3d4\"}],\n      \"body\": \"some log message\"\n    },\n    {\n      \"body\": \"a continuation entry the producer could not timestamp\"\n    }\n  ]\n  ```"
       },
       "GlobalAttribution": {
         "properties": {
@@ -2314,7 +2333,7 @@
           "csp_event"
         ],
         "title": "Source",
-        "description": "The classes of observations that can be ingested.\n\n- `slurm_info`\n\n    Automatically attached to JobInfo objects; not supported for other Observations. No relevant Format.\n\n- `job_keywords`\n\n    Formats: `[string_list]`\n\n    Keywords extracted from preprocessing some logs.\n\n- `applog`\n\n    Formats: `[raw_log, loki_dict_list, raw_loki_streams]`. Timestamps should in in nanoseconds, entries must have rank-like prefixes.\n\n    Application's stdout/stderr.\n\n- `syslog`\n\n    Formats: `[loki_dict_list, raw_loki_streams]`. Timestamps should be in nanoseconds. Host-specifiers required.\n\n    Data from dmesg/syslog\n\n- `health_check`\n\n    Formats: `[loki_dict_list, raw_loki_streams]`. Timestamps should be in milliseconds. Host-specifiers required.\n\n    Data from health checks.\n\n- `node_metrics`\n\n   Formats: `[prometheus_metrics]`. Timestamps should be in seconds, entries must have node information.\n\n   Prometheus metrics data for node attribution.\n\n- `nvlink_metrics`\n\n   Formats: `[prometheus_metrics]`. Timestamps should be in seconds, entries must have node information.\n\n   Prometheus metrics data for nvlink attribution.\n\n- `ib_metrics`\n\n   Not implemented.\n\n- `eth_metrics`\n\n   Not implemented.\n\n- `network_syslog`\n\n   Not implemented.\n\n- `csp_event`\n\n   Formats: `[csp_event_list]`. Timestamps should be in seconds.\n\n   CSP event events indicating infrastructure-level host failures,\n   repairs, or maintenance actions reported by the cloud service provider."
+        "description": "The classes of observations that can be ingested.\n\n- `slurm_info`\n\n    Automatically attached to JobInfo objects; not supported for other Observations. No relevant Format.\n\n- `job_keywords`\n\n    Formats: `[string_list]`\n\n    Keywords extracted from preprocessing some logs.\n\n- `applog`\n\n    Formats: `[raw_log, loki_dict_list, raw_loki_streams]`. Timestamps should in in nanoseconds, entries must have rank-like prefixes.\n\n    Application's stdout/stderr.\n\n- `syslog`\n\n    Formats: `[loki_dict_list, raw_loki_streams, entry_timeseries]`. Timestamps should be in nanoseconds.\n    Host-specifiers required.\n\n    Data from dmesg/syslog\n\n- `health_check`\n\n    Formats: `[loki_dict_list, raw_loki_streams]`. Timestamps should be in milliseconds. Host-specifiers required.\n\n    Data from health checks.\n\n- `node_metrics`\n\n   Formats: `[prometheus_metrics, entry_timeseries]`. Timestamps should be in seconds for `prometheus_metrics` and\n   nanoseconds for `entry_timeseries`, entries must have node information.\n\n   Prometheus metrics data for node attribution.\n\n- `nvlink_metrics`\n\n   Formats: `[prometheus_metrics, entry_timeseries]`. Timestamps should be in seconds for `prometheus_metrics` and\n   nanoseconds for `entry_timeseries`, entries must have node information.\n\n   Prometheus metrics data for nvlink attribution.\n\n- `ib_metrics`\n\n   Not implemented.\n\n- `eth_metrics`\n\n   Not implemented.\n\n- `network_syslog`\n\n   Not implemented.\n\n- `csp_event`\n\n   Formats: `[csp_event_list]`. Timestamps should be in seconds.\n\n   CSP event events indicating infrastructure-level host failures,\n   repairs, or maintenance actions reported by the cloud service provider."
       },
       "SourcedSymptom": {
         "properties": {
@@ -2477,6 +2496,17 @@
         "title": "SymptomStatus",
         "description": "Whether a source still drives attribution, or was demoted to supporting evidence."
       },
+      "TerminalState": {
+        "type": "string",
+        "enum": [
+          "Pass",
+          "Fail",
+          "ExpectedFail",
+          "Cancelled"
+        ],
+        "title": "TerminalState",
+        "description": "What happened to the job. Always present; every outcome maps to at\nleast one of these (possibly more than one, when NVIDIA Attribution can't\nnarrow it down further -- see \"Incomplete Info\" in `_OUTCOME_TABLE`)."
+      },
       "TimeInterval": {
         "properties": {
           "start": {
@@ -2511,6 +2541,15 @@
         ],
         "title": "TimeInterval",
         "description": "The window an observation declares it covers.\n\nBoth keys are required, so a payload that omits one is a validation error rather than unbounded.\nA null bound means unbounded on that side, and only the `entry_timeseries` format accepts one."
+      },
+      "UncertaintyType": {
+        "type": "string",
+        "enum": [
+          "Aleatoric",
+          "Epistemic"
+        ],
+        "title": "UncertaintyType",
+        "description": "NVIDIA Attribution's qualitative classification of the source of uncertainty.\n\nALEATORIC describes ambiguity in the available job evidence, including\ninsufficient data (\"Incomplete Info\"). It does not assert that the job\nbehaved randomly or that better observations could never resolve it.\nEPISTEMIC describes limitations of NVIDIA Attribution itself, such as missing rules or\nbugs (\"Fail Undetermined\"). These are the operational definitions from\nthe compound-outcome RFC, not a general statistical uncertainty model.\n\nNeither value measures likelihood, confidence, severity, or an error rate.\nNone means no uncertainty source is reported, not guaranteed correctness.\nThe source is supplied explicitly, not inferred from the possibility count."
       },
       "UnknownAttributorIdError": {
         "properties": {
@@ -2643,6 +2682,44 @@
             "type": "string",
             "title": "Detail"
           },
+          "terminal_states": {
+            "items": {
+              "$ref": "#/components/schemas/TerminalState"
+            },
+            "type": "array",
+            "minItems": 1,
+            "title": "Terminal States",
+            "description": "Plausible terminal states in NVIDIA Attribution's assessment. Values are alternatives, with no ranking or probabilities; omitted states are ruled out by that assessment. A singleton does not guarantee correctness, and the number of values is not a confidence score."
+          },
+          "failure_domains": {
+            "items": {
+              "$ref": "#/components/schemas/FailureDomain"
+            },
+            "type": "array",
+            "title": "Failure Domains",
+            "description": "Plausible failure domains, conditional on Fail. Values express alternatives, not simultaneous causes or equal probabilities. Empty means failure is absent or its domain is unspecified; consult terminal_states to distinguish these cases.",
+            "default": []
+          },
+          "cancellation_actors": {
+            "items": {
+              "$ref": "#/components/schemas/CancellationActor"
+            },
+            "type": "array",
+            "title": "Cancellation Actors",
+            "description": "Plausible initiators, conditional on Cancelled. Values express alternatives without ranking or probabilities. Empty means cancellation is absent or its actor is unspecified; consult terminal_states to distinguish these cases.",
+            "default": []
+          },
+          "uncertainty_type": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/UncertaintyType"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Qualitative source of uncertainty using NVIDIA Attribution's operational definitions: Aleatoric means ambiguous or insufficient job evidence; Epistemic means limitations of NVIDIA Attribution, such as rule gaps or bugs. This is not a probability, confidence score, or error rate. Null means no source is reported, not guaranteed correctness. The source is not inferred from set size."
+          },
           "decision_graph": {
             "anyOf": [
               {
@@ -2659,7 +2736,8 @@
         "required": [
           "root_symptom",
           "attribution_outcome",
-          "detail"
+          "detail",
+          "terminal_states"
         ],
         "title": "Verdict",
         "description": "Top-level attribution outcome: raw lib outcome, free-form detail, and the driving root-cause symptom if any."

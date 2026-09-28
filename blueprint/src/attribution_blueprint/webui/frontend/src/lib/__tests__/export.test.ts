@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import type { Run } from '@/interfaces/attribution'
+import type { RunDetail } from '@/interfaces/attribution'
 import {
   logToText,
   nodeExportData,
@@ -10,7 +10,7 @@ import {
   utcDateStamp,
 } from '@/lib/export'
 
-function run(overrides: Partial<Run> = {}): Run {
+function run(overrides: Partial<RunDetail> = {}): RunDetail {
   return {
     id: 'run-1',
     jobId: 'team/job',
@@ -29,12 +29,18 @@ function run(overrides: Partial<Run> = {}): Run {
     outcome: 'hardware',
     verdictLabel: 'GPU failure',
     detail: 'A GPU failed.',
+    decisionGraphState: 'absent',
     rootSymptom: { symptom: 'GpuFell', rule: 'gpu_fell', time: '00:30', line: 'Xid 79' },
     symptoms: [{ name: 'GpuFell', sites: 1 }],
     responsibleNodes: ['node-a'],
     pipeline: '1.0',
     service: '2.0',
     log: [],
+    attribution: {
+      rootSymptom: { state: 'absent', data: null },
+      symptomSites: { state: 'absent', data: null },
+      decisionGraph: { state: 'absent', data: null },
+    },
     ...overrides,
   }
 }

@@ -252,6 +252,7 @@ def test_source_format_syslog_mismatch(request, event_manager, job_info):
             ObservationFormat.UNDEFINED,
             ObservationFormat.LOKI_DICT_LIST,
             ObservationFormat.RAW_LOKI_STREAMS,
+            ObservationFormat.ENTRY_TIMESERIES,
         ]
     )
 
@@ -280,7 +281,7 @@ def test_source_format_health_check_mismatch(request, event_manager, job_info):
 def test_source_format_metrics_mismatch(request, event_manager, job_info):
     event_stream = event_manager.create_stream(request.node.name)
     bad_formats = frozenset(ObservationFormat) - frozenset(
-        [ObservationFormat.UNDEFINED, ObservationFormat.PROMETHEUS_METRICS]
+        [ObservationFormat.UNDEFINED, ObservationFormat.PROMETHEUS_METRICS, ObservationFormat.ENTRY_TIMESERIES]
     )
 
     for fmt in bad_formats:

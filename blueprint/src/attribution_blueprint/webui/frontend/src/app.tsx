@@ -17,7 +17,7 @@ function Shell() {
   // Esc returns to fleet from any drill-down — matches the prototype's demo nav.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape' && name !== 'fleet') nav('fleet')
+      if (!e.defaultPrevented && e.key === 'Escape' && name !== 'fleet') nav('fleet')
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)

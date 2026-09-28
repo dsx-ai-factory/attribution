@@ -43,11 +43,12 @@ def test_symptom_declarations_register_during_load(tmp_path):
     rule_file.write_text(
         "\n".join(
             [
-                "from attribution_lib.rules import cascade_symptom, outcome_symptom",
+                "from attribution_lib.rules import SymptomFamily, cascade_symptom, outcome_symptom",
                 "from attribution_lib.symptoms.declarations import CascadeScope, OutcomePriority, SymptomCategory",
                 "",
                 "outcome_symptom(",
                 "    'bus error',",
+                "    family=SymptomFamily(name='network', properties={'kind': 'bus'}),",
                 "    outcome='Fail MultiCategory',",
                 "    category=SymptomCategory.CSP_EVENT,",
                 "    priority=OutcomePriority.LOW_USER,",
@@ -56,6 +57,7 @@ def test_symptom_declarations_register_during_load(tmp_path):
                 ")",
                 "cascade_symptom(",
                 "    'bus error',",
+                "    family=SymptomFamily(name='network', properties={'kind': 'bus'}),",
                 "    cascade_discards=('XID-145',),",
                 "    scope=CascadeScope.NVL_DOMAIN,",
                 ")",
@@ -70,6 +72,9 @@ def test_symptom_declarations_register_during_load(tmp_path):
     assert len(loader.symptom_declarations) == 3
     outcome_decl = loader.symptom_declarations[0]
     assert outcome_decl.prefix == "bus error"
+    assert outcome_decl.family is not None
+    assert outcome_decl.family.name == "network"
+    assert outcome_decl.family.properties == {"kind": "bus"}
     assert outcome_decl.outcome == "Fail MultiCategory"
     assert outcome_decl.priority == OutcomePriority.LOW_USER
     assert outcome_decl.category is SymptomCategory.CSP_EVENT
@@ -80,6 +85,7 @@ def test_symptom_declarations_register_during_load(tmp_path):
 
     domain_decl = loader.symptom_declarations[1]
     assert domain_decl.prefix == "bus error"
+    assert domain_decl.family == outcome_decl.family
     assert domain_decl.cascade_discards == ("XID-145",)
     assert domain_decl.scope is CascadeScope.NVL_DOMAIN
 
@@ -119,9 +125,12 @@ def test_known_symptom_registers_vocabulary_only_declaration(tmp_path):
     rule_file.write_text(
         "\n".join(
             [
-                "from attribution_lib.rules import known_symptom",
+                "from attribution_lib.rules import SymptomFamily, known_symptom",
                 "",
-                "known_symptom('BrokenPipeError')",
+                "known_symptom(",
+                "    'BrokenPipeError',",
+                "    family=SymptomFamily(name='python-exception', properties={'type': 'BrokenPipeError'}),",
+                ")",
             ]
         )
     )
@@ -132,6 +141,9 @@ def test_known_symptom_registers_vocabulary_only_declaration(tmp_path):
     assert len(loader.symptom_declarations) == 1
     declaration = loader.symptom_declarations[0]
     assert declaration.prefix == "BrokenPipeError"
+    assert declaration.family is not None
+    assert declaration.family.name == "python-exception"
+    assert declaration.family.properties == {"type": "BrokenPipeError"}
     assert declaration.outcome is None
     assert declaration.priority is None
     assert declaration.doc is None

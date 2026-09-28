@@ -1806,6 +1806,18 @@ def test_user_task_oom_kill_maps_to_fail_user(source_set_factory):
     assert outcome.root_cause_symptom == "OOM kill of user task"
 
 
+def test_system_out_of_memory_outranks_ib_error_12(source_set_factory):
+    symptoms = SymptomSet()
+    symptoms.add(source_set_factory("System-out of memory"))
+    symptoms.add(source_set_factory("IB Error-12 Vendor-129 (IBV_WC_RETRY_EXC_ERR)"))
+
+    outcome_result = calculate_outcome(symptoms)
+
+    outcome = outcome_result.value()
+    assert outcome.outcome == "Fail User"
+    assert outcome.root_cause_symptom == "System-out of memory"
+
+
 class TestSingleNodeNodeFail:
     """Tests for single-node NODE_FAIL node-level attribution.
 

@@ -63,7 +63,8 @@ def enrich_attribution_result(
     result["tenant_sre_action"] = _action_value(result, "tenant_sre_action")
     result["cloud_operator_sre_action"] = _action_value(result, "cloud_operator_sre_action")
     symptoms = result.get("symptoms")
-    result["symptoms"] = _enrich_symptoms(symptoms if isinstance(symptoms, dict) else {})
+    if isinstance(symptoms, dict):
+        result["symptoms"] = _enrich_symptoms(symptoms)
     _enrich_root_symptom(result)
     return result
 
@@ -83,9 +84,11 @@ def _action_value(result: dict, field: str) -> str:
 def _enrich_symptoms(symptoms: dict) -> dict:
     enriched: dict = {}
     for name, sites in symptoms.items():
-        if sites is None:
-            sites = []
-        enriched[name] = [_enrich_site(site) for site in sites]
+        enriched[name] = (
+            [_enrich_site(site) if isinstance(site, dict) else site for site in sites]
+            if isinstance(sites, list)
+            else sites
+        )
     return enriched
 
 

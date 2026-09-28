@@ -2,7 +2,7 @@
 import type { ReactNode } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen } from '@testing-library/react'
-import type { Run } from '@/interfaces/attribution'
+import type { RunSummary } from '@/interfaces/attribution'
 import type { FleetFilter } from '@/interfaces/filter'
 import { ParetoCard } from '@/routers/fleet/components/pareto'
 import { RunsSection } from '@/routers/fleet/components/runs-section'
@@ -54,7 +54,7 @@ const filter: FleetFilter = {
   metric: 'count',
 }
 
-const run = (overrides: Partial<Run> = {}): Run => ({
+const run = (overrides: Partial<RunSummary> = {}): RunSummary => ({
   id: 'run-1',
   jobId: 'team/job',
   workload: 'team/job',
@@ -72,12 +72,12 @@ const run = (overrides: Partial<Run> = {}): Run => ({
   outcome: 'hardware',
   verdictLabel: 'Hardware',
   detail: '',
+  decisionGraphState: 'absent',
   rootSymptom: { symptom: 'Xid79', rule: 'xid', time: '', line: '' },
   symptoms: [],
   responsibleNodes: ['node-a', 'node-b', 'node-c', 'node-d'],
   pipeline: '1',
   service: '2',
-  log: [],
   ...overrides,
 })
 
@@ -117,6 +117,39 @@ describe('RunsToolbar', () => {
       'application/json',
     )
     expect(screen.getByText('Export visible (1)')).toBeTruthy()
+
+    // Hiding passing runs is a filter like any other, so it gets a clearable chip too.
+    expect(screen.getByText('Passing runs hidden')).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: 'Clear Status filter' }))
+    expect(setFilter).toHaveBeenCalledWith(expect.objectContaining({ status: 'all' }))
+  })
+
+  it('releases the conflicting control when Pass and hide-passing would contradict', () => {
+    const setFilter = vi.fn()
+    const { rerender } = render(
+      <RunsToolbar runs={12} filteredRuns={[run()]} filter={filter} setFilter={setFilter} />,
+    )
+
+    // Picking Pass while passing runs are hidden: the outcome wins, hiding is released.
+    fireEvent.click(screen.getByText('Pass'))
+    expect(setFilter).toHaveBeenCalledWith(
+      expect.objectContaining({ outcome: 'pass', status: 'all' }),
+    )
+
+    // Hiding passing runs while Pass is selected: the checkbox wins, the outcome is cleared.
+    setFilter.mockClear()
+    rerender(
+      <RunsToolbar
+        runs={12}
+        filteredRuns={[run()]}
+        filter={{ ...filter, status: 'all', outcome: 'pass' }}
+        setFilter={setFilter}
+      />,
+    )
+    fireEvent.click(screen.getByRole('checkbox'))
+    expect(setFilter).toHaveBeenCalledWith(
+      expect.objectContaining({ status: 'failed', outcome: undefined }),
+    )
   })
 })
 
@@ -173,7 +206,7 @@ describe('RunsSection', () => {
     rerender(<RunsSection {...common} />)
     expect(screen.getByText('No runs in this view')).toBeTruthy()
     expect(screen.getByText(
-      'Try to uncheck "Failed only" to include passing runs.',
+      'Try to uncheck "Hide passing runs".',
     )).toBeTruthy()
     expect(screen.queryByText(/filter chips above/)).toBeNull()
     expect(screen.queryByText(/widen the date range/)).toBeNull()
@@ -185,8 +218,8 @@ describe('RunsSection', () => {
       />,
     )
     expect(screen.getByText(
-      'Try to clear the active filter chips above, or uncheck "Failed only" to include '
-      + 'passing runs, or widen the date range.',
+      'Try to clear the active filter chips above, or uncheck "Hide passing runs", or '
+      + 'widen the date range.',
     )).toBeTruthy()
   })
 

@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { renderHook } from '@testing-library/react'
-import type { Run } from '@/interfaces/attribution'
+import type { RunSummary } from '@/interfaces/attribution'
 import { useDashboard } from '@/hooks/use-dashboard'
 import { useMeta } from '@/hooks/use-meta'
 import { useNodeRuns } from '@/hooks/use-node-runs'
@@ -24,7 +24,7 @@ vi.mock('@/services/api-context', () => ({ useApi: mocks.useApi }))
 vi.mock('react-router-dom', () => ({ useNavigate: mocks.useNavigate }))
 vi.mock('echarts', () => ({ init: mocks.echartsInit }))
 
-const run = (id: string): Run => ({
+const run = (id: string): RunSummary => ({
   id,
   jobId: id,
   workload: id,
@@ -42,12 +42,12 @@ const run = (id: string): Run => ({
   outcome: 'hardware',
   verdictLabel: 'Hardware',
   detail: '',
+  decisionGraphState: 'absent',
   rootSymptom: { symptom: 'Xid79', rule: 'xid', time: '', line: '' },
   symptoms: [],
   responsibleNodes: ['node-a'],
   pipeline: '1',
   service: '2',
-  log: [],
 })
 
 beforeEach(() => {

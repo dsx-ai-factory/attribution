@@ -45,7 +45,8 @@ class Source(str, Enum):
 
     - `syslog`
 
-        Formats: `[loki_dict_list, raw_loki_streams]`. Timestamps should be in nanoseconds. Host-specifiers required.
+        Formats: `[loki_dict_list, raw_loki_streams, entry_timeseries]`. Timestamps should be in nanoseconds.
+        Host-specifiers required.
 
         Data from dmesg/syslog
 
@@ -57,13 +58,15 @@ class Source(str, Enum):
 
     - `node_metrics`
 
-       Formats: `[prometheus_metrics]`. Timestamps should be in seconds, entries must have node information.
+       Formats: `[prometheus_metrics, entry_timeseries]`. Timestamps should be in seconds for `prometheus_metrics` and
+       nanoseconds for `entry_timeseries`, entries must have node information.
 
        Prometheus metrics data for node attribution.
 
     - `nvlink_metrics`
 
-       Formats: `[prometheus_metrics]`. Timestamps should be in seconds, entries must have node information.
+       Formats: `[prometheus_metrics, entry_timeseries]`. Timestamps should be in seconds for `prometheus_metrics` and
+       nanoseconds for `entry_timeseries`, entries must have node information.
 
        Prometheus metrics data for nvlink attribution.
 
@@ -257,7 +260,7 @@ class Format(str, Enum):
       Details:
       - Each entry object contains:
         - `body` (string): *Required*. Matched verbatim; nothing is parsed out of it except the
-          `applog` fallbacks described below.
+          `applog`, `syslog` and `ufmlog` fallbacks described below.
         - `ts` (int or null): Unix timestamp in **nanoseconds**, or null/absent when the producer
           has no timestamp for this entry. It means "this entry occurred no later than this time".
           Rounded up to microsecond precision internally, since that is all a `datetime` holds. An
@@ -284,6 +287,29 @@ class Format(str, Enum):
           read from the rank-like or node-name text prefix, and declared replicas are kept. A line with
           no usable prefix is recorded against every job resource, never dropped. An explicit
           `"AllJobResources"` skips the prefix parse altogether.
+      - `syslog`:
+        - `ts` is the line's timestamp in nanoseconds. An entry without it is dropped, never
+          parsed out of the body.
+        - A declared node in `resources` is used as-is, so a host specifier in IP form must be
+          resolved by the producer. With `resources` absent or null the node is read out of the
+          syslog line's hostname field instead; a line naming none is dropped.
+        - `body` is the syslog line as received. The declared interval is what the producer meant
+          to cover, typically the selected job record plus whatever slack it admits for terminal
+          events logged just after the record ends.
+      - `ufmlog`:
+        - `ts` is the line's timestamp in nanoseconds. An entry without it is kept, never
+          parsed out of the body, and treated as untimed.
+        - A declared node in `resources` is used as-is and the body is never parsed. With
+          `resources` absent or null the job node is read out of the line instead, which names it
+          either in the link form `(Computer:<node> (<guid>))` or the node form
+          `(<node>) node is Down`; a line naming neither is dropped
+        - `body` is the fabric manager log line as received
+      - `node_metrics` and `nvlink_metrics`:
+        - `ts` is the sample time in nanoseconds. An entry without it is kept, never
+          parsed out of the body, and treated as untimed.
+        - `resources` must name the node the sample is about. An entry that declares no node, or a
+          node that is not in the job, is dropped.
+        - `body` is the line `prometheus_metrics` renders from a metric entry, byte for byte
 
       Example:
       ```json

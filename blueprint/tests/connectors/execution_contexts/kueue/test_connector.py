@@ -312,6 +312,37 @@ def test_failed_workload_deadline_exceeded_normalizes_to_timeout(mocker):
     assert ctx["kueue_state"] == "FINISHED_FAILED"
 
 
+def test_reused_job_name_with_different_uid_is_not_used_as_owner(mocker):
+    """Kubernetes names are reusable after deletion. If the Job the Workload
+    pointed to (`owner-1002`) was deleted and a new, unrelated Job with the
+    same name `llama-7b-pretrain` but a different uid now exists, that new
+    Job must never be treated as this Workload's owner — even though a
+    namespace/name lookup finds it."""
+    jobs = deepcopy(JOBS)
+    job = jobs["items"][1]
+    assert job["metadata"]["name"] == "llama-7b-pretrain"
+    job["metadata"]["uid"] = "owner-1002-REPLACEMENT"
+    job["spec"] = {"activeDeadlineSeconds": 60}
+    job["status"] = {
+        "conditions": [
+            {
+                "type": "Failed",
+                "status": "True",
+                "reason": "DeadlineExceeded",
+                "lastTransitionTime": "2026-05-01T13:30:00Z",
+            }
+        ]
+    }
+    _wire_kubectl(mocker, jobs_payload=jobs)
+
+    ctx = KueueExecutionContextAdapter().discover_by_ids(["team-alpha/job-llama-7b-pretrain-xyz77"])[0]
+
+    # The replacement Job's DeadlineExceeded/time_limit must not leak in.
+    assert ctx["state"] == "FAILED"
+    assert ctx["kueue_state"] == "FINISHED_FAILED"
+    assert "time_limit" not in ctx
+
+
 def test_failed_jobset_child_deadline_exceeded_normalizes_to_timeout(mocker):
     workload = {
         "apiVersion": "kueue.x-k8s.io/v1beta1",
@@ -347,6 +378,7 @@ def test_failed_jobset_child_deadline_exceeded_normalizes_to_timeout(mocker):
             "name": "training-workers-0",
             "namespace": "team-alpha",
             "labels": {"jobset.sigs.k8s.io/jobset-name": "training"},
+            "ownerReferences": [{"kind": "JobSet", "name": "training", "uid": "jobset-uid"}],
         },
         "spec": {"activeDeadlineSeconds": 60},
         "status": {
@@ -372,6 +404,72 @@ def test_failed_jobset_child_deadline_exceeded_normalizes_to_timeout(mocker):
     assert ctx["state"] == "TIMEOUT"
     assert ctx["kueue_state"] == "FINISHED_FAILED"
     assert ctx["time_limit"] == 1
+
+
+def test_reused_jobset_name_with_different_uid_is_not_used_as_owner(mocker):
+    """The child Job is selected by `jobset-name=training`, a reusable name.
+    If it is actually owned by a *replacement* JobSet with a different uid
+    than the one on the Workload's ownerReference, it must not be treated
+    as this Workload's child Job."""
+    workload = {
+        "apiVersion": "kueue.x-k8s.io/v1beta1",
+        "kind": "Workload",
+        "metadata": {
+            "name": "jobset-timeout-abc12",
+            "namespace": "team-alpha",
+            "uid": "workload-jobset-timeout",
+            "creationTimestamp": "2026-05-01T12:00:00Z",
+            "ownerReferences": [{"kind": "JobSet", "name": "training", "uid": "jobset-uid-OLD"}],
+        },
+        "spec": {"podSets": []},
+        "status": {
+            "conditions": [
+                {"type": "Admitted", "status": "True", "lastTransitionTime": "2026-05-01T12:01:00Z"},
+                {
+                    "type": "Finished",
+                    "status": "True",
+                    "reason": "Failed",
+                    "lastTransitionTime": "2026-05-01T12:02:00Z",
+                },
+            ]
+        },
+    }
+    # Same jobset-name label, but owned by a different (replacement) JobSet uid.
+    replacement_child_job = {
+        "apiVersion": "batch/v1",
+        "kind": "Job",
+        "metadata": {
+            "name": "training-workers-0",
+            "namespace": "team-alpha",
+            "labels": {"jobset.sigs.k8s.io/jobset-name": "training"},
+            "ownerReferences": [{"kind": "JobSet", "name": "training", "uid": "jobset-uid-NEW"}],
+        },
+        "spec": {"activeDeadlineSeconds": 60},
+        "status": {
+            "conditions": [
+                {
+                    "type": "Failed",
+                    "status": "True",
+                    "reason": "DeadlineExceeded",
+                    "lastTransitionTime": "2026-05-01T12:02:00Z",
+                }
+            ]
+        },
+    }
+    _wire_kubectl(
+        mocker,
+        workloads_payload={"items": [workload]},
+        pods_payload={"items": []},
+        jobs_payload={"items": [replacement_child_job]},
+    )
+
+    ctx = KueueExecutionContextAdapter().discover_by_ids(["team-alpha/jobset-timeout-abc12"])[0]
+
+    # The replacement JobSet's child evidence (DeadlineExceeded, time_limit)
+    # must not leak into this Workload's attribution.
+    assert ctx["state"] == "FAILED"
+    assert ctx["kueue_state"] == "FINISHED_FAILED"
+    assert "time_limit" not in ctx
 
 
 def _jobset_workload_and_children(*, first_reason: str, second_reason: str) -> tuple[dict, list[dict]]:
@@ -412,6 +510,7 @@ def _jobset_workload_and_children(*, first_reason: str, second_reason: str) -> t
                 "name": name,
                 "namespace": "team-alpha",
                 "labels": {"jobset.sigs.k8s.io/jobset-name": "training"},
+                "ownerReferences": [{"kind": "JobSet", "name": "training", "uid": "jobset-uid"}],
             },
             "spec": {},
             "status": {
@@ -618,6 +717,68 @@ def test_native_requeued_condition_takes_precedence_over_retryable_eviction(mock
 
     assert ctx["state"] == "REQUEUED"
     assert ctx["kueue_state"] == "EVICTED_PODSREADYTIMEOUT"
+
+
+def test_stale_requeued_condition_does_not_override_readmission(mocker):
+    """A workload readmitted after eviction must report RUNNING, not REQUEUED,
+    even though its Requeued=True condition from the earlier eviction is
+    still present (Kueue does not retroactively clear it)."""
+    workloads = deepcopy(WORKLOADS)
+    workload = next(item for item in workloads["items"] if item["metadata"]["name"] == "job-hpl-bench-pp99")
+    workload["status"]["conditions"] = [
+        {"type": "Admitted", "status": "True", "reason": "Admitted", "lastTransitionTime": "2026-05-01T14:10:00Z"},
+        {"type": "PodsReady", "status": "True", "lastTransitionTime": "2026-05-01T14:11:00Z"},
+        {"type": "Evicted", "status": "False", "reason": "Preempted", "lastTransitionTime": "2026-05-01T14:10:00Z"},
+        {
+            "type": "Requeued",
+            "status": "True",
+            "reason": "BackoffFinished",
+            "lastTransitionTime": "2026-05-01T14:06:00Z",
+        },
+    ]
+    _wire_kubectl(mocker, workloads_payload=workloads)
+
+    ctx = KueueExecutionContextAdapter().discover_by_ids(["team-beta/job-hpl-bench-pp99"])[0]
+
+    assert ctx["state"] == "RUNNING"
+    assert ctx["kueue_state"] == "RUNNING"
+
+
+def test_stale_requeued_condition_does_not_override_finished_timeout(mocker):
+    """A workload that later finishes as TIMEOUT must not get stuck on a
+    stale Requeued=True condition from an earlier eviction/readmission
+    cycle."""
+    workloads = deepcopy(WORKLOADS)
+    workload = next(item for item in workloads["items"] if item["metadata"]["name"] == "job-hpl-bench-pp99")
+    workload["status"]["conditions"] = [
+        {"type": "Admitted", "status": "True", "reason": "Admitted", "lastTransitionTime": "2026-05-01T14:10:00Z"},
+        {"type": "Evicted", "status": "False", "reason": "Preempted", "lastTransitionTime": "2026-05-01T14:10:00Z"},
+        {
+            "type": "Requeued",
+            "status": "True",
+            "reason": "BackoffFinished",
+            "lastTransitionTime": "2026-05-01T14:06:00Z",
+        },
+        {"type": "Finished", "status": "True", "reason": "Failed", "lastTransitionTime": "2026-05-01T14:20:00Z"},
+    ]
+    jobs = deepcopy(JOBS)
+    hpl_bench_job = next(item for item in jobs["items"] if item["metadata"]["name"] == "hpl-bench")
+    hpl_bench_job["status"] = {
+        "conditions": [
+            {
+                "type": "Failed",
+                "status": "True",
+                "reason": "DeadlineExceeded",
+                "lastTransitionTime": "2026-05-01T14:19:00Z",
+            }
+        ]
+    }
+    _wire_kubectl(mocker, workloads_payload=workloads, jobs_payload=jobs)
+
+    ctx = KueueExecutionContextAdapter().discover_by_ids(["team-beta/job-hpl-bench-pp99"])[0]
+
+    assert ctx["state"] == "TIMEOUT"
+    assert ctx["kueue_state"] == "FINISHED_FAILED"
 
 
 def test_rejected_admission_check_preserves_native_eviction_state(mocker):
@@ -1093,12 +1254,20 @@ def test_collect_pod_evidence_rejects_unlabelled_and_mismatched_pods():
     any foreign pod that bypassed the server-side label selector."""
     from attribution_blueprint.connectors.execution_contexts.kueue.connector import _collect_pod_evidence
 
+    ns = "team-a"
     pods = [
-        {"metadata": {"labels": {"batch.kubernetes.io/controller-uid": "owner-A"}}, "spec": {"nodeName": "n-good"}},
-        {"metadata": {"labels": {}}, "spec": {"nodeName": "n-unlabelled"}},
-        {"metadata": {"labels": {"batch.kubernetes.io/controller-uid": "owner-B"}}, "spec": {"nodeName": "n-other"}},
+        {
+            "metadata": {"namespace": ns, "labels": {"batch.kubernetes.io/controller-uid": "owner-A"}},
+            "spec": {"nodeName": "n-good"},
+        },
+        {"metadata": {"namespace": ns, "labels": {}}, "spec": {"nodeName": "n-unlabelled"}},
+        {
+            "metadata": {"namespace": ns, "labels": {"batch.kubernetes.io/controller-uid": "owner-B"}},
+            "spec": {"nodeName": "n-other"},
+        },
     ]
-    nodes, failed_node, _ = _collect_pod_evidence(pods, ("batch.kubernetes.io/controller-uid", "owner-A"))
+    selector = (ns, "batch.kubernetes.io/controller-uid", "owner-A")
+    nodes, failed_node, _ = _collect_pod_evidence(pods, selector)
     assert nodes == ["n-good"]
     assert failed_node is None
 
@@ -1192,12 +1361,14 @@ def test_failed_node_is_deterministic_across_pod_orderings():
     among pods that reported a non-zero exit code."""
     from attribution_blueprint.connectors.execution_contexts.kueue.connector import _collect_pod_evidence
 
+    ns = "team-a"
+
     def _pod(node: str, exit_code: int | None) -> dict:
         cs: dict = {}
         if exit_code is not None:
             cs = {"containerStatuses": [{"state": {"terminated": {"exitCode": exit_code}}}]}
         return {
-            "metadata": {"labels": {"batch.kubernetes.io/controller-uid": "owner-A"}},
+            "metadata": {"namespace": ns, "labels": {"batch.kubernetes.io/controller-uid": "owner-A"}},
             "spec": {"nodeName": node},
             "status": cs,
         }
@@ -1208,7 +1379,7 @@ def test_failed_node_is_deterministic_across_pod_orderings():
     pods_b = list(reversed(pods_a))
     pods_c = [_pod("n-b", 2), _pod("n-d", 0), _pod("n-a", 1), _pod("n-c", 137)]
 
-    selector = ("batch.kubernetes.io/controller-uid", "owner-A")
+    selector = (ns, "batch.kubernetes.io/controller-uid", "owner-A")
     _, failed_a, _ = _collect_pod_evidence(pods_a, selector)
     _, failed_b, _ = _collect_pod_evidence(pods_b, selector)
     _, failed_c, _ = _collect_pod_evidence(pods_c, selector)
@@ -1224,6 +1395,72 @@ def test_collect_pod_evidence_returns_empty_for_workload_with_no_owner_job():
 
     pods = [{"metadata": {"labels": {"batch.kubernetes.io/controller-uid": "anything"}}, "spec": {"nodeName": "n"}}]
     assert _collect_pod_evidence(pods, None) == ([], None, [])
+
+
+def test_identically_named_jobsets_in_different_namespaces_do_not_cross_contaminate(mocker):
+    """`jobset.sigs.k8s.io/jobset-name` carries only a name, which is only
+    unique per namespace. Cluster-wide discovery pools pods from every
+    namespace before filtering, so a namespace-unaware match would let
+    team-b's node-loss evidence leak into team-a's identically-named
+    JobSet Workload."""
+
+    def _workload(namespace: str, uid: str) -> dict:
+        return {
+            "apiVersion": "kueue.x-k8s.io/v1beta1",
+            "kind": "Workload",
+            "metadata": {
+                "name": "trainer-wl",
+                "namespace": namespace,
+                "uid": uid,
+                "creationTimestamp": "2026-05-01T12:00:00Z",
+                "ownerReferences": [{"kind": "JobSet", "name": "trainer", "uid": f"jobset-{namespace}"}],
+            },
+            "spec": {"podSets": []},
+            "status": {
+                "conditions": [
+                    {"type": "Admitted", "status": "True", "lastTransitionTime": "2026-05-01T12:01:00Z"},
+                    {"type": "PodsReady", "status": "True", "lastTransitionTime": "2026-05-01T12:02:00Z"},
+                ]
+            },
+        }
+
+    def _pod(namespace: str, name: str, node: str, *, node_lost: bool) -> dict:
+        pod = {
+            "metadata": {
+                "name": name,
+                "namespace": namespace,
+                "labels": {"jobset.sigs.k8s.io/jobset-name": "trainer"},
+            },
+            "spec": {"nodeName": node},
+            "status": {},
+        }
+        if node_lost:
+            pod["status"] = {"phase": "Failed", "reason": "NodeLost"}
+        return pod
+
+    workloads = {"items": [_workload("team-a", "wl-team-a"), _workload("team-b", "wl-team-b")]}
+    pods = {
+        "items": [
+            _pod("team-a", "trainer-a-0", "node-a", node_lost=False),
+            _pod("team-b", "trainer-b-0", "node-b", node_lost=True),
+        ]
+    }
+    _wire_kubectl(mocker, workloads_payload=workloads, pods_payload=pods, jobs_payload={"items": []})
+
+    contexts = {
+        ctx["namespace"]: ctx
+        for ctx in KueueExecutionContextAdapter().discover_by_ids(["team-a/trainer-wl", "team-b/trainer-wl"])
+    }
+
+    assert contexts["team-a"]["state"] != "NODE_FAIL"
+    assert contexts["team-a"]["nodes"] == ["node-a"]
+    assert contexts["team-a"]["pod_names"] == ["trainer-a-0"]
+    assert "failed_node" not in contexts["team-a"]
+
+    assert contexts["team-b"]["state"] == "NODE_FAIL"
+    assert contexts["team-b"]["nodes"] == ["node-b"]
+    assert contexts["team-b"]["pod_names"] == ["trainer-b-0"]
+    assert contexts["team-b"]["failed_node"] == "node-b"
 
 
 def test_discover_by_time_range_rejects_naive_datetimes(mocker):

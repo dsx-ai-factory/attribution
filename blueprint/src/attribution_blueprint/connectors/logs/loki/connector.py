@@ -15,19 +15,23 @@ import requests
 from loguru import logger
 
 from attribution_blueprint.connectors.auth import Auth
+from attribution_blueprint.connectors.logs import log_observation
 from attribution_blueprint.connectors.logs.loki.templates import TEMPLATES
 from attribution_blueprint.connectors.logs.loki.types import LokiSyslogEntry
 from attribution_blueprint.types import (
     ExecutionContext,
     Format,
+    NodeResource,
     Observation,
+    ReplicaResource,
     Source,
+    TimeseriesEntry,
     assert_aware,
 )
 
 _FORMAT_FOR_SOURCE: dict[Source, Format] = {
     Source.SYSLOG: Format.LOKI_DICT_LIST,
-    Source.APPLOG: Format.RAW_LOKI_STREAMS,
+    Source.APPLOG: Format.ENTRY_TIMESERIES,
 }
 
 DEFAULT_LIMIT = 5000
@@ -46,6 +50,39 @@ def _re2_escape(s: str) -> str:
 # Hard cap on paginated requests per template so a pathologically chatty query
 # can't run forever; at DEFAULT_LIMIT=5000 this is up to 100k entries.
 MAX_PAGES = 20
+
+
+def _as_str(value: object) -> str:
+    """Envelope fields come from arbitrary JSON, so only a str is usable downstream."""
+    return value if isinstance(value, str) else ""
+
+
+def _extract_body_and_node(payload: str, node: str | None) -> tuple[str, str | None]:
+    """Pull the log line, and a hostname when the stream had none, out of a JSON-encoded Loki value.
+
+    Handles OTel (`body` + `attributes.hostname`), `message`, and CloudEvents
+    (`data.message` + `data.hostname`) envelopes; anything else is returned verbatim.
+    """
+    try:
+        parsed = json.loads(payload)
+    except json.JSONDecodeError:
+        return payload, node
+    if not isinstance(parsed, dict):
+        return payload, node
+
+    attributes = parsed.get("attributes")
+    if node is None and isinstance(attributes, dict):
+        node = _as_str(attributes.get("hostname")) or None
+    body = _as_str(parsed.get("body")) or _as_str(parsed.get("message"))
+    if body == "":
+        data = parsed.get("data")
+        if isinstance(data, dict):
+            body = _as_str(data.get("message"))
+            if node is None:
+                node = _as_str(data.get("hostname")) or None
+    if body == "":
+        body = payload
+    return body, node
 
 
 class LokiConnector:
@@ -132,17 +169,7 @@ class LokiConnector:
 
         fmt = _FORMAT_FOR_SOURCE[self._source]
         body = self._encode_body(all_streams, fmt)
-        return [
-            {
-                "context": {
-                    "time_interval": {"start": context["start_time"], "end": context["end_time"]},
-                    "source": self._source,
-                    "format": fmt,
-                    "resources": "AllJobResources",
-                },
-                "body": body,
-            }
-        ]
+        return [log_observation(source=self._source, format=fmt, body=body, context=context)]
 
     def _encode_body(self, streams: list[dict], fmt: Format) -> str:
         # Multi-template runs and pagination can produce duplicate streams
@@ -178,21 +205,29 @@ class LokiConnector:
                     f"{self._node_label!r} label (service requires node identity)"
                 )
             return json.dumps(entries)
-        # RAW_LOKI_STREAMS: the connector forwards raw Loki stream objects.
-        # The service-side parser flattens each value into a LokiAppEntry
-        # (see `connectors.logs.loki.types.LokiAppEntry` for the per-entry
-        # shape the flattened payload satisfies). attribution_lib's APPLOG
-        # extractor reads `stream["node_name"]` exclusively, so the
-        # configured `node_label` (default "host_name") is rewritten to
-        # "node_name" here. Without this, every APPLOG entry attributes to
-        # node=None.
-        if self._node_label and self._node_label != "node_name":
-            for stream in streams:
-                labels = stream.get("stream") or {}
-                if self._node_label in labels:
-                    labels["node_name"] = labels.pop(self._node_label)
-                stream["stream"] = labels
-        return json.dumps(streams)
+        # ENTRY_TIMESERIES: one entry per stream value. Node and pod labels ride
+        # along as per-entry resources only when the stream carries them.
+        timeseries: list[TimeseriesEntry] = []
+        for stream in streams:
+            labels = stream.get("stream") or {}
+            stream_node = labels.get(self._node_label) if self._node_label else None
+            replica = labels.get("pod")
+            for ts, line in stream.get("values") or []:
+                try:
+                    timestamp = int(ts)
+                except (TypeError, ValueError):
+                    continue
+                body, node = _extract_body_and_node(line, stream_node)
+                entry: TimeseriesEntry = {"body": body, "ts": timestamp}
+                resources: list[NodeResource | ReplicaResource] = []
+                if node is not None:
+                    resources.append({"kind": "node", "hostname": node})
+                if replica is not None:
+                    resources.append({"kind": "replica", "name": replica})
+                if resources:
+                    entry["resources"] = resources
+                timeseries.append(entry)
+        return json.dumps(timeseries)
 
     @staticmethod
     def _merge_streams(streams: list[dict]) -> list[dict]:

@@ -436,12 +436,19 @@ class SourceProcessingConfig:
 
     time_start: Optional[Callable[[JobInfo], Optional[datetime]]] = None
     time_end: Optional[Callable[[JobInfo], Optional[datetime]]] = None
+    """Legacy formats only: `entry_timeseries` filters on the producer-declared `context.time_interval` instead.
+
+    TODO: drop both once every source accepts only `entry_timeseries`.
+    """
     body_fallbacks: BodyFallbacks = BodyFallbacks()
     """Per line: what an `entry_timeseries` entry may parse out of its body; `year_fallback` is filled per job."""
     fallback_unknown_nodes: bool = False
     """Per line: a node that fails to resolve against the job keeps the line as resource ANY instead of dropping it."""
-    requires_nodes: bool = False
-    """Per job: skip the whole source when `job_info.nodes` is empty."""
+    requires_job_nodes: bool = False
+    """Per job: skip the whole source when `job_info.nodes` is empty, since node checks pass anything then.
+
+    Not `BodyFallbacks.require_node`, which drops a single entry that declares no node.
+    """
 
 
 # Populated by core.py via register_source_config(); keeps rules_engine
@@ -512,6 +519,23 @@ def _apply_pre_filter(
     return False, keywords
 
 
+def _time_filter_reason(
+    entry_time: Optional[datetime],
+    time_start: Optional[datetime],
+    time_end: Optional[datetime],
+    require_timestamp: bool,
+) -> Optional[str]:
+    """Why the time filter drops an entry, or None to keep it."""
+    if entry_time is None:
+        # Keep untimed entries if the source allows it, else drop them.
+        return "no_timestamp" if require_timestamp else None
+    if time_start is not None and entry_time < time_start:
+        return "before_start"
+    if time_end is not None and entry_time > time_end:
+        return "after_end"
+    return None
+
+
 def process_observation_source(
     *,
     event_stream: EventStream,
@@ -541,6 +565,7 @@ def process_observation_source(
         time_start = config.time_start(job_info) if config and config.time_start else None
         time_end = config.time_end(job_info) if config and config.time_end else None
     fallback_unknown_nodes = config.fallback_unknown_nodes if config else False
+    require_timestamp = config.body_fallbacks.require_timestamp if config else False
 
     raw_keywords: set[str] = set()
 
@@ -561,16 +586,10 @@ def process_observation_source(
                 continue
 
         # Time filtering
-        if time_start is not None or time_end is not None:
-            entry_time = entry.time()
-            # An entry with no timestamp is never dropped.
-            if entry_time is not None:
-                if time_start is not None and entry_time < time_start:
-                    log_ignored_time_line(entry, job_info, "before_start", entry.context().source)
-                    continue
-                if time_end is not None and entry_time > time_end:
-                    log_ignored_time_line(entry, job_info, "after_end", entry.context().source)
-                    continue
+        dropped_for = _time_filter_reason(entry.time(), time_start, time_end, require_timestamp)
+        if dropped_for is not None:
+            log_ignored_time_line(entry, job_info, dropped_for, entry.context().source)
+            continue
 
         # Node resolution and source building
         if fallback_unknown_nodes:

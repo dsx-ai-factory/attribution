@@ -16,6 +16,13 @@ from typing import Annotated, Any, Literal, Optional
 from zoneinfo import ZoneInfo
 
 from attribution_lib.attr_types import JobNodeAttributions
+from attribution_lib.compound_outcome import (
+    CancellationActor,
+    FailureDomain,
+    TerminalState,
+    UncertaintyType,
+    compound_outcome_for,
+)
 from attribution_lib.core import AttributionResult
 from attribution_lib.decision_trace import (
     DecisionDAG as LibDecisionDAG,
@@ -348,6 +355,44 @@ class Verdict(BaseModel):
     root_symptom: SourcedSymptom | None
     attribution_outcome: str
     detail: str
+    # Additive compound-outcome fields: a typed decomposition of
+    # attribution_outcome into terminal state / failure domain / cancellation actor /
+    # uncertainty reason. attribution_outcome remains the source of truth and is
+    # unchanged; these are a static translation of it. Field order is not semantically
+    # meaningful; lists are for wire transport, not to imply ranking.
+    terminal_states: list[TerminalState] = Field(
+        min_length=1,
+        description=(
+            "Plausible terminal states in NVIDIA Attribution's assessment. Values are alternatives, with no ranking "
+            "or probabilities; omitted states are ruled out by that assessment. A singleton does not "
+            "guarantee correctness, and the number of values is not a confidence score."
+        ),
+    )
+    failure_domains: list[FailureDomain] = Field(
+        default=[],
+        description=(
+            "Plausible failure domains, conditional on Fail. Values express alternatives, not simultaneous "
+            "causes or equal probabilities. Empty means failure is absent or its domain is unspecified; "
+            "consult terminal_states to distinguish these cases."
+        ),
+    )
+    cancellation_actors: list[CancellationActor] = Field(
+        default=[],
+        description=(
+            "Plausible initiators, conditional on Cancelled. Values express alternatives without ranking "
+            "or probabilities. Empty means cancellation is absent or its actor is unspecified; "
+            "consult terminal_states to distinguish these cases."
+        ),
+    )
+    uncertainty_type: Optional[UncertaintyType] = Field(
+        default=None,
+        description=(
+            "Qualitative source of uncertainty using NVIDIA Attribution's operational definitions: Aleatoric means "
+            "ambiguous or insufficient job evidence; Epistemic means limitations of NVIDIA Attribution, such as rule "
+            "gaps or bugs. This is not a probability, confidence score, or error rate. Null means no "
+            "source is reported, not guaranteed correctness. The source is not inferred from set size."
+        ),
+    )
     # Defaults are not validated, so the sentinel survives as the field's value and is
     # dropped by exclude_if, leaving an explicit None to mean "requested but unavailable".
     decision_graph: Optional[DecisionGraph] = Field(
@@ -462,12 +507,18 @@ class AttributionResponseV2(ResponseModel):
                 catalog_id=outcome.doc,
             )
 
+        compound = compound_outcome_for(outcome.outcome)
+
         # Only pass decision_graph when the caller asked for it: an unset field is omitted
         # from the response, while an explicit None reports a graph we could not supply.
         fields: dict[str, Any] = {
             "root_symptom": root_symptom,
             "attribution_outcome": outcome.outcome,
             "detail": detail,
+            "terminal_states": sorted(compound.terminal_states),
+            "failure_domains": sorted(compound.failure_domains),
+            "cancellation_actors": sorted(compound.cancellation_actors),
+            "uncertainty_type": compound.uncertainty,
         }
         if decision_graph_requested:
             fields["decision_graph"] = _wire_decision_graph(decision_graph)

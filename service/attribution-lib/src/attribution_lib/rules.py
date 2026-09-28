@@ -33,12 +33,14 @@ from attribution_lib.rule_types.registration import (
     filter_def,
     refiner_def,
 )
+from attribution_lib.symptoms.family import SymptomFamily
 from attribution_lib.symptoms.registration import (
     cascade_symptom,
     known_symptom,
     outcome_symptom,
     symptom_predicate,
 )
+from attribution_lib.symptoms.selector import SymptomSelector
 
 __all__ = [
     "CollectorRule",
@@ -54,6 +56,8 @@ __all__ = [
     "RuleLocation",
     "RuleParameters",
     "RuleParamsBase",
+    "SymptomFamily",
+    "SymptomSelector",
     "cascade_symptom",
     "collector_def",
     "const",

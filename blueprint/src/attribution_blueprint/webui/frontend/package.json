@@ -13,10 +13,12 @@
     "test:coverage": "vitest run --coverage --coverage.include='src/**/*.{ts,tsx}' --coverage.reporter=text --coverage.thresholds.statements=82 --coverage.thresholds.branches=72 --coverage.thresholds.functions=83 --coverage.thresholds.lines=84"
   },
   "dependencies": {
+    "@dagrejs/dagre": "^3.1.1",
     "@fontsource-variable/inter": "^5.2.8",
     "@fontsource-variable/jetbrains-mono": "^5.2.8",
     "@monaco-editor/react": "^4.7.0",
     "@tailwindcss/vite": "^4.3.0",
+    "@xyflow/react": "^12.11.6",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "dayjs": "^1.11.20",

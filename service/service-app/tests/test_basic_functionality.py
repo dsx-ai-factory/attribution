@@ -61,12 +61,6 @@ def fake_syslog_observation(body: str) -> Observation:
     return Observation(context=context, body=body)
 
 
-def test_openapi_declares_kueue_workload_type(app):
-    schema = app.openapi()
-
-    assert "kueue" in schema["components"]["schemas"]["WorkloadTypeEnum"]["enum"]
-
-
 def test_v2_accepts_kueue_workload_type(client):
     info = make_up_attributor_info("v2", type="kueue")
 

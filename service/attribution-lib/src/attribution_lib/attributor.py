@@ -86,7 +86,7 @@ class ConsumedObservation:
                 observation, body_fallbacks=body_fallbacks_for(context.source, job_info)
             )
             config = SOURCE_CONFIGS.get(entry_source.context.source)
-            if config is not None and config.requires_nodes and not job_info.nodes:
+            if config is not None and config.requires_job_nodes and not job_info.nodes:
                 pass
             else:
                 source_raw_keywords = process_observation_source(
@@ -459,7 +459,7 @@ def _extract_observations(
 
         source_type = entry_source.context.source
         config = SOURCE_CONFIGS.get(source_type)
-        if config is not None and config.requires_nodes and not job_info.nodes:
+        if config is not None and config.requires_job_nodes and not job_info.nodes:
             continue
 
         raw_keywords.update(
@@ -492,19 +492,20 @@ def _validate_source_format(context: ObservationContext) -> None:
             if context.format not in [
                 ObservationFormat.LOKI_DICT_LIST,
                 ObservationFormat.RAW_LOKI_STREAMS,
+                ObservationFormat.ENTRY_TIMESERIES,
             ]:
                 raise MismatchedSourceAndFormatError(context.source, context.format)
         case ObservationSource.HEALTH_CHECK:
             if context.format not in [ObservationFormat.LOKI_DICT_LIST, ObservationFormat.RAW_LOKI_STREAMS]:
                 raise MismatchedSourceAndFormatError(context.source, context.format)
         case ObservationSource.UFMLOG:
-            if context.format not in [ObservationFormat.UFMLOG]:
+            if context.format not in [ObservationFormat.UFMLOG, ObservationFormat.ENTRY_TIMESERIES]:
                 raise MismatchedSourceAndFormatError(context.source, context.format)
         case ObservationSource.NODE_METRICS:
-            if context.format not in [ObservationFormat.PROMETHEUS_METRICS]:
+            if context.format not in [ObservationFormat.PROMETHEUS_METRICS, ObservationFormat.ENTRY_TIMESERIES]:
                 raise MismatchedSourceAndFormatError(context.source, context.format)
         case ObservationSource.NVLINK_METRICS:
-            if context.format not in [ObservationFormat.PROMETHEUS_METRICS]:
+            if context.format not in [ObservationFormat.PROMETHEUS_METRICS, ObservationFormat.ENTRY_TIMESERIES]:
                 raise MismatchedSourceAndFormatError(context.source, context.format)
         case ObservationSource.CSP_EVENT:
             if context.format not in [ObservationFormat.CSP_EVENT_LIST]:
