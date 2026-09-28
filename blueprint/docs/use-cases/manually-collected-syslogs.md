@@ -79,15 +79,15 @@ they are available. For example:
 ```
 
 The connector reads each file as bytes and decodes it as UTF-8. Invalid UTF-8
-bytes are replaced instead of failing the run. It first creates one `raw_log`
-observation per non-empty file. Before upload, Attribution Blueprint splits the
-body into non-empty lines and converts it to the service-compatible syslog
-format. The node identity comes from the directory name.
+bytes are replaced instead of failing the run. It emits one `entry_timeseries`
+observation per file, with one entry per non-empty line. The node identity comes
+from the directory name and is declared on every entry, so the line text itself
+does not need to name the host.
 
 ### Line Timestamps
 
-Each line is timestamped from the line itself. **If a timestamp cannot be parsed
-from the line, it is dropped.** The recognized forms are:
+Each entry is timestamped from the line itself. **If a timestamp cannot be
+parsed from the line, the line is dropped.** The recognized forms are:
 
 | Form | Example line start | Producer |
 |------|--------------------|----------|
@@ -198,9 +198,9 @@ returns the context defined in the TOML file.
 
 A successful run reports that one execution context succeeded. The SQLite
 database contains the context and returned attribution result. The observation
-dump provides a debug view of the collected `raw_log` body under a
-`body_raw` key. The dump is keyed by context and source, so treat it as a spot
-check rather than a copy of every input file.
+dump provides a debug view of the collected entries under a `body` key. The
+dump is keyed by context and source, so treat it as a spot check rather than a
+copy of every input file.
 
 ## Configure Multiple Static Execution Contexts
 

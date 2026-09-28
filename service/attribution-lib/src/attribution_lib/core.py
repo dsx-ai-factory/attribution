@@ -70,6 +70,9 @@ register_source_config(
     SourceProcessingConfig(
         time_start=_epilog_time_start,
         time_end=lambda ji: ji.interest_end_time + timedelta(minutes=10),
+        # A line declaring no node is read for one and dropped if that fails.
+        # An explicit timestamp is expected, else the entry is dropped.
+        body_fallbacks=BodyFallbacks(parse_node=True, require_node=True, require_timestamp=True),
     ),
 )
 register_source_config(

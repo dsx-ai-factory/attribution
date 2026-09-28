@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// SPDX-License-Identifier: LicenseRef-NvidiaProprietary
+
 "use client"
 
 import * as React from "react"
@@ -33,9 +36,10 @@ function TooltipTrigger({
 function TooltipContent({
   className,
   sideOffset = 0,
+  showArrow = true,
   children,
   ...props
-}: React.ComponentProps<typeof TooltipPrimitive.Content>) {
+}: React.ComponentProps<typeof TooltipPrimitive.Content> & { showArrow?: boolean }) {
   return (
     <TooltipPrimitive.Portal>
       <TooltipPrimitive.Content
@@ -48,7 +52,7 @@ function TooltipContent({
         {...props}
       >
         {children}
-        <TooltipPrimitive.Arrow className="z-50 size-2.5 translate-y-[calc(-50%_-_2px)] rotate-45 rounded-[2px] bg-background-secondary fill-background-secondary" />
+        {showArrow && <TooltipPrimitive.Arrow className="z-50 size-2.5 translate-y-[calc(-50%_-_2px)] rotate-45 rounded-[2px] bg-background-secondary fill-background-secondary" />}
       </TooltipPrimitive.Content>
     </TooltipPrimitive.Portal>
   )

@@ -946,7 +946,12 @@ class TestTimeseriesEntry:
 
 
 METRIC_BODY = "time: 1718452800, metric_name: up, metric_value: 0, threshold: None, cluster: c1, node: x, component: "
-TIMESERIES_SOURCES = [ObservationSource.SYSLOG, ObservationSource.NODE_METRICS, ObservationSource.NVLINK_METRICS]
+TIMESERIES_SOURCES = [
+    ObservationSource.SYSLOG,
+    ObservationSource.NODE_METRICS,
+    ObservationSource.NVLINK_METRICS,
+    ObservationSource.HEALTH_CHECK,
+]
 OPEN_WINDOW = TimeInterval(None, None)
 
 
@@ -997,9 +1002,7 @@ class TestSyslogFallbacks:
             ),
             pytest.param("AllJobResources", LINE_NAMING_JOB_NODE, False, id="declares_all_job_resources"),
             pytest.param(None, LINE_NAMING_JOB_NODE, True, id="line_names_a_job_node"),
-            pytest.param(
-                None, "Jan  5 06:59:25 kernel: no hostname field on this line", False, id="no_node_anywhere"
-            ),
+            pytest.param(None, "Jan  5 06:59:25 kernel: no hostname field on this line", False, id="no_node_anywhere"),
         ],
     )
     def test_resources(self, extract, syslog_job_info, resources, body, kept):
@@ -1080,6 +1083,54 @@ class TestMetricFallbacks:
         )
 
         assert surviving == ([METRIC_BODY] if kept else [])
+
+
+class TestHealthCheckFallbacks:
+    """What a health check record needs to carry, or have parsed out of it, to be kept."""
+
+    BODY = "Not responding"
+
+    @pytest.mark.parametrize(
+        ("resources", "body", "kept"),
+        [
+            pytest.param(NODE_RESOURCE, BODY, True, id="declares_a_job_node"),
+            pytest.param(
+                [{"kind": "node", "hostname": OUT_OF_JOB_NODE}], BODY, False, id="declares_a_host_outside_the_job"
+            ),
+            pytest.param(None, LINE_NAMING_JOB_NODE, True, id="line_names_a_job_node"),
+            pytest.param(None, BODY, False, id="no_node_anywhere"),
+        ],
+    )
+    def test_resources(self, extract, syslog_job_info, resources, body, kept):
+        """A declared job node wins; failing that a syslog hostname field in the body; failing that it is dropped."""
+        surviving = extract(
+            syslog_job_info,
+            ObservationSource.HEALTH_CHECK,
+            ObservationFormat.ENTRY_TIMESERIES,
+            [entry(body, ts=1718452800_000_000_000, resources=resources)],
+            time_interval=OPEN_WINDOW,
+        )
+
+        assert surviving == ([body] if kept else [])
+
+    @pytest.mark.parametrize(
+        ("ts", "kept"),
+        [
+            pytest.param(1718452800_000_000_000, True, id="ts_present"),
+            pytest.param(None, False, id="ts_null"),
+        ],
+    )
+    def test_timestamp(self, extract, syslog_job_info, ts, kept):
+        """Every legacy record carried a timestamp, so an untimed one is dropped rather than kept untimed."""
+        surviving = extract(
+            syslog_job_info,
+            ObservationSource.HEALTH_CHECK,
+            ObservationFormat.ENTRY_TIMESERIES,
+            [entry(self.BODY, ts=ts, resources=NODE_RESOURCE)],
+            time_interval=OPEN_WINDOW,
+        )
+
+        assert surviving == ([self.BODY] if kept else [])
 
 
 # TODO: Legacy tests should be removed once validated in production.

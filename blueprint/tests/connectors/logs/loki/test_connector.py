@@ -66,7 +66,7 @@ def test_returns_empty_when_no_streams(mocker):
     assert conn.collect(_ctx()) == []
 
 
-def test_syslog_body_is_flat_dict_list(mocker):
+def test_syslog_body_is_entry_timeseries_with_stream_node(mocker):
     streams_q1 = [{"stream": {"host_name": "n1"}, "values": [["1", "kernel: oops"]]}]
     streams_q2 = [{"stream": {"host_name": "n2"}, "values": [["2", "imex stop"]]}]
     fake1 = mocker.Mock()
@@ -84,14 +84,15 @@ def test_syslog_body_is_flat_dict_list(mocker):
         query_kwargs={"service_name": "x"},
         templates={Source.SYSLOG: ['{{a="{service_name}"}}', '{{b="{service_name}"}}']},
     )
-    obs = conn.collect(_ctx())
+    ctx = _ctx()
+    obs = conn.collect(ctx)
     assert len(obs) == 1
     o = obs[0]
-    assert o["context"]["format"] == Format.LOKI_DICT_LIST
-    decoded = json.loads(o["body"])
-    assert decoded == [
-        {"timestamp": 1, "body": "kernel: oops", "node": "n1"},
-        {"timestamp": 2, "body": "imex stop", "node": "n2"},
+    assert o["context"]["format"] == Format.ENTRY_TIMESERIES
+    assert o["context"]["time_interval"] == {"start": ctx["start_time"], "end": ctx["end_time"]}
+    assert json.loads(o["body"]) == [
+        {"body": "kernel: oops", "ts": 1, "resources": [{"kind": "node", "hostname": "n1"}]},
+        {"body": "imex stop", "ts": 2, "resources": [{"kind": "node", "hostname": "n2"}]},
     ]
 
 
@@ -404,7 +405,7 @@ def test_streams_merged_and_values_deduped(mocker):
     obs = conn.collect(_ctx())
     body = json.loads(obs[0]["body"])
     # Only the three unique (timestamp, body) pairs survive.
-    assert sorted((e["timestamp"], e["body"]) for e in body) == [(1, "a"), (2, "b"), (3, "c")]
+    assert sorted((e["ts"], e["body"]) for e in body) == [(1, "a"), (2, "b"), (3, "c")]
 
 
 def test_string_template_accepted_for_pdf_compat():
@@ -435,4 +436,4 @@ def test_custom_node_label_filters_and_decodes(mocker):
     )
     obs = conn.collect(_ctx())
     body = json.loads(obs[0]["body"])
-    assert body[0]["node"] == "n1"
+    assert body[0]["resources"] == [{"kind": "node", "hostname": "n1"}]

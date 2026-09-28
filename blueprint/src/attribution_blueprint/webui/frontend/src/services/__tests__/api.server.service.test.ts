@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// SPDX-License-Identifier: LicenseRef-NvidiaProprietary
+
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { RunDetail, RunSummary } from '@/interfaces/attribution'
 import { ApiServerService } from '@/services/api.server.service'

@@ -592,35 +592,6 @@ def test_failing_ingest_does_not_block_other_observations():
     assert attr.get_attribution.call_count == 1
 
 
-def test_raw_syslog_is_adapted_before_service_ingest():
-    contexts = [_make_ctx("1")]
-    eca = MagicMock()
-    eca.discover_by_ids.return_value = contexts
-
-    obs = {
-        "context": {
-            "source": Source.SYSLOG,
-            "format": Format.RAW_LOG,
-            "resources": "node-1-1",
-            "time_interval": {
-                "start": contexts[0]["start_time"],
-                "end": contexts[0]["end_time"],
-            },
-        },
-        "body": "2026-05-01T00:00:03Z node-1-1 kernel\n",
-    }
-    coll = MagicMock(source="SYSLOG")
-    coll.collect.return_value = [obs]
-
-    attr = _make_attribution_mock()
-    pipeline = _make_pipeline(eca, [coll], attribution=attr)
-    pipeline.analyze(ids=["1"])
-
-    ingested = attr.ingest_observation.call_args.args[1]
-    assert obs["context"]["format"] == Format.RAW_LOG
-    assert ingested.context.format == Format.LOKI_DICT_LIST
-
-
 @pytest.mark.parametrize("ids", [["1"], ["1", "2"]])
 def test_analyze_returns_results_in_context_order(ids):
     contexts = [_make_ctx(i) for i in ids]

@@ -269,6 +269,7 @@ def test_source_format_health_check_mismatch(request, event_manager, job_info):
             ObservationFormat.UNDEFINED,
             ObservationFormat.LOKI_DICT_LIST,
             ObservationFormat.RAW_LOKI_STREAMS,
+            ObservationFormat.ENTRY_TIMESERIES,
         ]
     )
 

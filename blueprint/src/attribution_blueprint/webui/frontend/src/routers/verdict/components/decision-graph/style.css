@@ -16,6 +16,30 @@
   outline-offset: 4px;
 }
 
+.decision-canvas .decision-node-related .decision-step {
+  border-color: color-mix(in srgb, var(--color-primary-300) 50%, var(--border));
+}
+
+.decision-canvas .decision-node-muted {
+  opacity: 0.6;
+}
+
+.decision-canvas .decision-node-muted:hover,
+.decision-canvas .decision-node-muted:focus-visible {
+  opacity: 1;
+}
+
+.decision-canvas .react-flow__edge.animated .react-flow__edge-path {
+  animation-duration: 1.2s;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .decision-canvas .react-flow__edge.animated .react-flow__edge-path {
+    animation: none;
+    stroke-dasharray: none;
+  }
+}
+
 .decision-canvas .react-flow__pane {
   touch-action: pan-y;
 }

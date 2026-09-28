@@ -52,7 +52,8 @@ class Source(str, Enum):
 
     - `health_check`
 
-        Formats: `[loki_dict_list, raw_loki_streams]`. Timestamps should be in milliseconds. Host-specifiers required.
+        Formats: `[loki_dict_list, raw_loki_streams, entry_timeseries]`. Timestamps should be in milliseconds for
+        `loki_dict_list`, nanoseconds otherwise. Host-specifiers required.
 
         Data from health checks.
 
@@ -259,57 +260,47 @@ class Format(str, Enum):
 
       Details:
       - Each entry object contains:
-        - `body` (string): *Required*. Matched verbatim; nothing is parsed out of it except the
-          `applog`, `syslog` and `ufmlog` fallbacks described below.
+        - `body` (string): *Required*. Matched verbatim. Parsed only as the per-source fallback
+          described below.
         - `ts` (int or null): Unix timestamp in **nanoseconds**, or null/absent when the producer
           has no timestamp for this entry. It means "this entry occurred no later than this time".
-          Rounded up to microsecond precision internally, since that is all a `datetime` holds. An
-          entry without a timestamp is never dropped by time filtering.
+          May be parsed from body and/or dropped if none given for some sources.
         - `resources` (optional): What this entry is about. Either the exact string `"AllJobResources"`
           or an array naming exactly one `{"kind": "node", "hostname": ...}`, optionally alongside
-          `{"kind": "replica", "name": ...}` objects, which are recorded but not attributed on. Absent,
-          null and `"AllJobResources"` all mean every job resource, so they single out no node. Neither
-          does an array that fails to name exactly one node the job owns — for example `[]`, several
-          nodes, replicas with no node (except under `applog`, see below), or a hostname outside the job.
-          Singling out no node is what decides the entry's fate: a source that requires one drops it, a
-          source that does not records it against every job resource. Either way the rest of the array is still processed.
-      - Any other key in an entry is permitted but ignored.
+          `{"kind": "replica", "name": ...}` objects, which are recorded but not attributed on. An array
+          naming several nodes, or a hostname outside the job, is invalid and handled like an entry naming
+          no node. Node may be parsed from body and/or dropped if none given for some sources.
+      - Any other key in an entry is rejected.
 
       Unlike every other format, entries here are only time-filtered by the observation context's
       `time_interval`. That interval is the producer's declared intent: a null bound means unbounded on
       that side, so an interval of two nulls disables time filtering for the observation entirely.
 
       Key Source Behavior:
+
+      The sources listed below read an entry the same way unless noted; a source not listed requires
+      nothing and parses nothing out of the body.
+      - `ts` is required: an entry without it is dropped.
+      - A declared node is used as-is, so a host specifier in IP form must be resolved by the producer. If
+        no node is declared, the node is parsed out of the body instead, keeping any declared replicas. An
+        entry that still names no node is dropped.
+      - `body` is the line as received.
+
+      Deviations:
       - `applog`:
-        - `ts` absent or null: the body is parsed for a timestamp. Year-less formats resolve it against
-          the workload's `job_end_time`.
-        - `resources` absent, null, or an array naming no node (for example replicas only): the node is
-          read from the rank-like or node-name text prefix, and declared replicas are kept. A line with
-          no usable prefix is recorded against every job resource, never dropped. An explicit
+        - `ts` can be null, in which case the body is parsed for a timestamp. Year-less formats resolve it
+          against the workload's `job_end_time`.
+        - The body node is parsed from the rank-like or node-name text prefix. An entry that still names no node,
+          or names an invalid one, is recorded against every job resource instead of dropped. An explicit
           `"AllJobResources"` skips the prefix parse altogether.
-      - `syslog`:
-        - `ts` is the line's timestamp in nanoseconds. An entry without it is dropped, never
-          parsed out of the body.
-        - A declared node in `resources` is used as-is, so a host specifier in IP form must be
-          resolved by the producer. With `resources` absent or null the node is read out of the
-          syslog line's hostname field instead; a line naming none is dropped.
-        - `body` is the syslog line as received. The declared interval is what the producer meant
-          to cover, typically the selected job record plus whatever slack it admits for terminal
-          events logged just after the record ends.
+      - `syslog` & `health_check`: the node is parsed from the hostname field of the body.
       - `ufmlog`:
-        - `ts` is the line's timestamp in nanoseconds. An entry without it is kept, never
-          parsed out of the body, and treated as untimed.
-        - A declared node in `resources` is used as-is and the body is never parsed. With
-          `resources` absent or null the job node is read out of the line instead, which names it
-          either in the link form `(Computer:<node> (<guid>))` or the node form
-          `(<node>) node is Down`; a line naming neither is dropped
-        - `body` is the fabric manager log line as received
+        - `ts` can be null, in which case the entry is kept and treated as untimed.
+        - The body node is parsed from either the link form `(Computer:<node> (<guid>))` or the node
+          form `(<node>) node is Down`.
       - `node_metrics` and `nvlink_metrics`:
-        - `ts` is the sample time in nanoseconds. An entry without it is kept, never
-          parsed out of the body, and treated as untimed.
-        - `resources` must name the node the sample is about. An entry that declares no node, or a
-          node that is not in the job, is dropped.
-        - `body` is the line `prometheus_metrics` renders from a metric entry, byte for byte
+        - `ts` can be null, in which case the entry is kept and treated as untimed.
+        - `resources` must name the node; the body is never parsed for one.
 
       Example:
       ```json
@@ -320,7 +311,7 @@ class Format(str, Enum):
           "body": "some log message"
         },
         {
-          "body": "a continuation entry the producer could not timestamp"
+          "body": "an untimed entry; kept or dropped per the source rules above"
         }
       ]
       ```

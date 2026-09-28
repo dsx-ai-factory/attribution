@@ -496,7 +496,11 @@ def _validate_source_format(context: ObservationContext) -> None:
             ]:
                 raise MismatchedSourceAndFormatError(context.source, context.format)
         case ObservationSource.HEALTH_CHECK:
-            if context.format not in [ObservationFormat.LOKI_DICT_LIST, ObservationFormat.RAW_LOKI_STREAMS]:
+            if context.format not in [
+                ObservationFormat.LOKI_DICT_LIST,
+                ObservationFormat.RAW_LOKI_STREAMS,
+                ObservationFormat.ENTRY_TIMESERIES,
+            ]:
                 raise MismatchedSourceAndFormatError(context.source, context.format)
         case ObservationSource.UFMLOG:
             if context.format not in [ObservationFormat.UFMLOG, ObservationFormat.ENTRY_TIMESERIES]:

@@ -1,4 +1,7 @@
 // @vitest-environment jsdom
+// SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// SPDX-License-Identifier: LicenseRef-NvidiaProprietary
+
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { HttpError, httpGet } from '@/services/http-client.service'
 
@@ -20,7 +23,7 @@ describe('httpGet', () => {
       failed: false,
       missing: null,
       absent: undefined,
-    }, controller.signal)).resolves.toEqual({ runs: 2 })
+    }, { signal: controller.signal })).resolves.toEqual({ runs: 2 })
 
     expect(fetchMock).toHaveBeenCalledWith(
       'http://localhost:3000/api/v1/runs?page=2&failed=false',
@@ -43,4 +46,29 @@ describe('httpGet', () => {
     })
     await expect(request).rejects.toBeInstanceOf(HttpError)
   })
+
+  it.each(['0', '-1', '9007199254740993', '-6139371663235533333'])(
+    'preserves string observation IDs and numeric quantities in the response: %s',
+    async (observationId) => {
+      const text = `{
+        "root": { "source": { "observation_id": "${observationId}", "pos": 0 } },
+        "sites": [{ "source": { "observation_id": "${observationId}", "pos": null } }],
+        "count": 8,
+        "elapsedH": 0.125,
+        "log": "observation_id: 9007199254740993"
+      }`
+      const response = { ok: true, text: vi.fn(), json: vi.fn().mockImplementation(async () => JSON.parse(text)) }
+      vi.stubGlobal('fetch', vi.fn().mockResolvedValue(response))
+
+      await expect(httpGet('/runs/run')).resolves.toEqual({
+        root: { source: { observation_id: observationId, pos: 0 } },
+        sites: [{ source: { observation_id: observationId, pos: null } }],
+        count: 8,
+        elapsedH: 0.125,
+        log: 'observation_id: 9007199254740993',
+      })
+      expect(response.json).toHaveBeenCalledOnce()
+      expect(response.text).not.toHaveBeenCalled()
+    },
+  )
 })
