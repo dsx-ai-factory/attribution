@@ -64,7 +64,7 @@ class AttributorManager:
         with self.lock:
             try:
                 with self.attributors[id].lock:
-                    del self.attributors[id]
+                    self.attributors.pop(id).close()  # pop first: a failed close still drops it
                 logger.info(f"Deleted attributor with id: {id}. Remaining attributors: {len(self.attributors)}")
             except KeyError:
                 logger.warning(f"Attempted to delete unknown attributor id: {id}")
@@ -82,12 +82,16 @@ class AttributorManager:
 
             if expired_ids:
                 logger.info(f"Found {len(expired_ids)} expired attributors to clean up: {expired_ids}")
+                removed = 0
                 for id in expired_ids:
                     with self.attributors[id].lock:
-                        del self.attributors[id]
-                logger.info(
-                    f"Cleaned up {len(expired_ids)} expired attributors. Remaining attributors: {len(self.attributors)}"
-                )
+                        # A request may have used it between selection and taking the lock.
+                        if datetime.now() - self.attributors[id].last_access_time <= self.expiration_period:
+                            logger.debug(f"Attributor {id} was accessed again during cleanup, skipping removal")
+                            continue
+                        self.attributors.pop(id).close()
+                        removed += 1
+                logger.info(f"Cleaned up {removed} expired attributors. Remaining attributors: {len(self.attributors)}")
             else:
                 logger.debug(
                     f"No expired attributors found during cleanup. Current attributors: {len(self.attributors)}"
