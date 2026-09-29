@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 import atexit
 import contextlib
+import fcntl
 import json
 import os
 import shutil
@@ -317,17 +318,155 @@ _shared_lookup_tmpdir_owner_pid: Optional[int] = None
 # as entries are garbage-collected and would then produce a reused filename
 # for an unrelated rules_engine, colliding with that file's existing schema.
 _shared_lookup_counter = 0
+_SHARED_LOOKUP_PREFIX = "attribution_lib_shared_lookup_"
+# Created inside each shared lookup directory and held under an exclusive
+# `flock` for as long as any process can still reach the directory. The lock
+# is what makes the directory reapable: `atexit` below is only reached on a
+# clean interpreter shutdown. A process that dies on SIGKILL leaves its
+# directory behind forever, and so does one that exits through `os._exit()`,
+# which is how CPython ends a `multiprocessing` worker under the `fork` and
+# `forkserver` start methods before 3.13. Measured: under `fork`, handlers
+# run in none of the workers on 3.11 and 3.12, and in all of them on 3.13
+# and 3.14. Either way nothing else knows the owner is gone. An `flock` is
+# released by the kernel when the last descriptor on it closes, which covers
+# every one of those exits and needs no cooperation from the dying process.
+_SHARED_LOOKUP_LOCK_NAME = ".owner-lock"
+# The lock file is built under this name and renamed into place once it is
+# held, so it is never reachable under the name above while unlocked. See
+# `_get_shared_lookup_tmpdir`.
+_SHARED_LOOKUP_PENDING_LOCK_NAME = f"{_SHARED_LOOKUP_LOCK_NAME}.pending"
+# Descriptor holding that lock. Kept in a module global purely so it stays
+# open for the life of the process; nothing ever reads it back.
+_shared_lookup_tmpdir_lock_fd: Optional[int] = None
+
+
+def _remove_shared_lookup_tmpdir_if_unheld(path: str) -> None:
+    """Remove `path` unless some process still holds its lock.
+
+    The single place that decides a shared lookup directory is finished
+    with. Both callers route through here so they cannot drift apart: the
+    owning process's own `atexit` cleanup, and the reap another process runs
+    over directories it did not create. Keying that decision on the lock
+    rather than on the owning PID is the whole point, see
+    `_reap_orphaned_shared_lookup_tmpdirs`.
+
+    Args:
+        path: A shared lookup directory, this process's own or another's.
+    """
+    try:
+        # Deliberately no O_CREAT: a missing lock file means "not ours to remove".
+        lock_fd = os.open(os.path.join(path, _SHARED_LOOKUP_LOCK_NAME), os.O_RDWR)
+    except OSError:
+        return
+    try:
+        try:
+            fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:
+            return  # Still held by a live process.
+        shutil.rmtree(path, ignore_errors=True)
+    finally:
+        os.close(lock_fd)
 
 
 def _cleanup_shared_lookup_tmpdir() -> None:
-    if _shared_lookup_tmpdir is not None and os.getpid() == _shared_lookup_tmpdir_owner_pid:
-        shutil.rmtree(_shared_lookup_tmpdir, ignore_errors=True)
+    """Remove this process's own shared lookup directory, at interpreter exit.
+
+    Only the owning PID runs this: an `os.fork()`'d child inherits both the
+    global and the `atexit` registration, and must not delete a directory it
+    did not create.
+
+    Being the owner is not on its own enough to delete it, though. A forked
+    child inherits the lock descriptor, and `flock` lives on the open file
+    description, so the child goes on holding the lock after this process
+    exits and may still have EventManagers ATTACHed to files inside. So this
+    drops only its own hold and then asks whether anyone else still has one,
+    which is the same question a reaper in another process asks.
+    """
+    if _shared_lookup_tmpdir is None or os.getpid() != _shared_lookup_tmpdir_owner_pid:
+        return
+    if _shared_lookup_tmpdir_lock_fd is not None:
+        # Releases this process's hold. A descriptor inherited across fork
+        # refers to the same open file description and keeps the lock held,
+        # so the check below then leaves the directory alone.
+        with contextlib.suppress(OSError):
+            os.close(_shared_lookup_tmpdir_lock_fd)
+    _remove_shared_lookup_tmpdir_if_unheld(_shared_lookup_tmpdir)
+
+
+def _reap_orphaned_shared_lookup_tmpdirs(parent: str) -> None:
+    """Remove every shared lookup directory under `parent` whose owner is gone.
+
+    A directory is owned for exactly as long as some process holds the
+    `flock` on its lock file, so taking that lock is the proof of
+    abandonment. Both cases the owning PID cannot cover are handled by
+    asking the kernel instead of the owner:
+
+    - the owner died without reaching `atexit` (SIGKILL, or the `os._exit()`
+      that ends a `multiprocessing` worker under `fork`/`forkserver` before
+      3.13), so no one ever removed the directory;
+    - the owner exited cleanly but an `os.fork()`'d child outlived it and is
+      still ATTACHed to files inside. The child inherited the descriptor, so
+      the lock is still held and the directory is left alone -- the same
+      invariant `_shared_lookup_tmpdir_owner_pid` protects on the exit path,
+      and the reason this is not keyed on the owning PID: that PID is dead
+      in exactly this case, and reaping on it would delete the directory out
+      from under the live child.
+
+    A directory whose lock file is missing is never reaped. That covers a
+    directory written by a build of this module without the lock file, and
+    it covers the whole interval in which a live owner has a directory but
+    no lock yet: the owner does not put the lock file under this name until
+    it already holds the lock, so a lock file that can be opened here has
+    either been locked or been abandoned, never neither.
+
+    Args:
+        parent: Directory the shared lookup directories are created in.
+    """
+    try:
+        names = os.listdir(parent)
+    except OSError:
+        return
+    for name in names:
+        if not name.startswith(_SHARED_LOOKUP_PREFIX):
+            continue
+        _remove_shared_lookup_tmpdir_if_unheld(os.path.join(parent, name))
 
 
 def _get_shared_lookup_tmpdir() -> str:
-    global _shared_lookup_tmpdir, _shared_lookup_tmpdir_owner_pid
+    global _shared_lookup_tmpdir, _shared_lookup_tmpdir_owner_pid, _shared_lookup_tmpdir_lock_fd
     if _shared_lookup_tmpdir is None:
-        _shared_lookup_tmpdir = tempfile.mkdtemp(prefix="attribution_lib_shared_lookup_")
+        parent = tempfile.gettempdir()
+        _reap_orphaned_shared_lookup_tmpdirs(parent)
+        tmpdir = tempfile.mkdtemp(prefix=_SHARED_LOOKUP_PREFIX, dir=parent)
+        # Creating the lock file and locking it are two syscalls, and a
+        # reaper that opens it in between would find it unheld, take it, and
+        # remove this directory while it is being built. So the lock is taken
+        # under a name no reaper looks up and renamed into place afterwards:
+        # `rename` is atomic within a directory, so the name a reaper opens
+        # only ever appears already attached to a locked inode. Nothing else
+        # can be writing in here, since `mkdtemp` just created it 0700 under
+        # a name no other process has seen.
+        # The descriptor is non-inheritable, so an exec'd child drops the lock
+        # and builds its own directory; a plain fork keeps it and the lock.
+        pending_path = os.path.join(tmpdir, _SHARED_LOOKUP_PENDING_LOCK_NAME)
+        lock_fd = None
+        try:
+            lock_fd = os.open(pending_path, os.O_RDWR | os.O_CREAT | os.O_EXCL, 0o600)
+            fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            os.rename(pending_path, os.path.join(tmpdir, _SHARED_LOOKUP_LOCK_NAME))
+        except BaseException:
+            # Failing here would otherwise leak the directory permanently, in
+            # the same shape this whole change exists to fix: it has no lock
+            # file under the name a reaper looks up, so every future reap
+            # ignores it, and the cleanup state below is not published yet, so
+            # `atexit` cannot remove it either. Nothing else can, so undo it.
+            if lock_fd is not None:
+                with contextlib.suppress(OSError):
+                    os.close(lock_fd)
+            shutil.rmtree(tmpdir, ignore_errors=True)
+            raise
+        _shared_lookup_tmpdir_lock_fd = lock_fd
+        _shared_lookup_tmpdir = tmpdir
         _shared_lookup_tmpdir_owner_pid = os.getpid()
         atexit.register(_cleanup_shared_lookup_tmpdir)
     return _shared_lookup_tmpdir
