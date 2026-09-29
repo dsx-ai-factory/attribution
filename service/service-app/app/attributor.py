@@ -38,6 +38,7 @@ from app.exceptions import (
     DuplicateObservationError,
     EventStorageOverflowError,
     IncompatibleObservationSourceFormatError,
+    UnknownAttributorIdError,
 )
 from app.observation import Observation, ObservationId
 from app.util import HashableModel
@@ -221,11 +222,13 @@ class AttributorWrapper:
         event_stream = event_manager.create_stream(str(job_info.id))
 
         self.attributor = Attributor.new(event_stream, job_info)
+        self._event_manager = event_manager
         self._checkpoint_backend = MemoryCheckpointBackend()
         self._timezone = job_info.timezone
         self.parameters = info.parameters
         self.lock = threading.Lock()
         self.last_access_time = datetime.now()
+        self._closed = False
         logger.info(f"Created AttributorWrapper with id: {self.id} for workload: {job_info.id}")
 
     @classmethod
@@ -237,6 +240,8 @@ class AttributorWrapper:
     def ingest(self, observation: Observation) -> ObservationId:
         """Ingest observation into this instance and return ingest_id. Raise DuplicateObservationError if we have seen this already"""
         with self.lock:
+            if self._closed:  # deleted after the caller fetched it
+                raise UnknownAttributorIdError.new(self.id).to_http_exception()
             try:
                 logger.debug(f"Ingesting observation for attributor {self.id}")
                 _id = self.attributor.ingest(observation.to_lib_observation(self._timezone))
@@ -268,6 +273,8 @@ class AttributorWrapper:
             Attribution result context for a versioned API response.
         """
         with self.lock:
+            if self._closed:  # deleted after the caller fetched it
+                raise UnknownAttributorIdError.new(self.id).to_http_exception()
             logger.debug(f"Starting attribution for attributor {self.id}")
             try:
                 recorder = _GuardedRecorder(str(self.attributor.job_info.id)) if include_decision_graph else None
@@ -294,3 +301,8 @@ class AttributorWrapper:
             except Exception as e:
                 logger.error(f"Attribution failed for attributor {self.id}: {str(e)}")
                 raise
+
+    def close(self) -> None:
+        """Release the DuckDB connection now; the EventStream/EventManager cycle would leave it to the GC."""
+        self._closed = True  # before close(): a failed close must still turn waiting requests away
+        self._event_manager.close()

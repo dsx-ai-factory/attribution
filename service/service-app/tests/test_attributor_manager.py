@@ -9,6 +9,7 @@
 # its affiliates is strictly prohibited.
 
 import json
+import threading
 from datetime import datetime, timedelta
 from http import HTTPStatus
 
@@ -17,8 +18,9 @@ from attribution_lib import get_rules_engine
 from attribution_lib.rules import CollectorRule, RuleLocation, RuleParameters, RuleParamsBase
 
 from app.attributor import AttributionParameters
-from app.exceptions import AttributionHTTPException
+from app.exceptions import AttributionHTTPException, UnknownAttributorIdError
 from tests.conftest import make_up_attributor_info
+from tests.test_basic_functionality import fake_applog_observation
 
 
 class TestAttributorExpiration:
@@ -82,6 +84,123 @@ class TestAttributorExpiration:
         # Verify we can still get the attributor
         retrieved_attributor = app.state.aim.get_attributor(attributor.id)
         assert retrieved_attributor.id == attributor.id
+
+
+def _failing_close():
+    raise RuntimeError("boom")
+
+
+def _expire(*wrappers):
+    for wrapper in wrappers:
+        wrapper.last_access_time = datetime.now() - timedelta(hours=25)
+
+
+class TestAttributorCleanupClosesEventManager:
+    """Deleting or expiring an attributor closes its DuckDB connection at once,
+    instead of leaving it to the garbage collector (EventStream <-> EventManager
+    is a reference cycle)."""
+
+    def test_delete_attributor_closes_event_manager(self, app):
+        wrapper = app.state.aim.add_attributor(make_up_attributor_info(id="close-delete"))
+        event_manager = wrapper.attributor.event_stream.mgr
+
+        app.state.aim.delete_attributor(wrapper.id)
+
+        assert event_manager._closed is True
+
+    def test_cleanup_expired_attributors_closes_event_manager(self, app):
+        wrapper = app.state.aim.add_attributor(make_up_attributor_info(id="close-cleanup"))
+        event_manager = wrapper.attributor.event_stream.mgr
+        _expire(wrapper)
+
+        app.state.aim.cleanup_expired_attributors()
+
+        assert event_manager._closed is True
+
+    def test_delete_attributor_removes_entry_even_if_close_raises(self, app, monkeypatch):
+        wrapper = app.state.aim.add_attributor(make_up_attributor_info(id="close-raises"))
+        monkeypatch.setattr(wrapper.attributor.event_stream.mgr, "close", _failing_close)
+
+        with pytest.raises(RuntimeError):
+            app.state.aim.delete_attributor(wrapper.id)
+
+        assert wrapper.id not in app.state.aim.attributors
+
+    def test_cleanup_drops_a_failing_attributor_and_the_next_pass_removes_the_rest(self, app, monkeypatch):
+        broken = app.state.aim.add_attributor(make_up_attributor_info(id="cleanup-broken"))
+        ok = app.state.aim.add_attributor(make_up_attributor_info(id="cleanup-ok"))
+        ok_event_manager = ok.attributor.event_stream.mgr
+        monkeypatch.setattr(broken.attributor.event_stream.mgr, "close", _failing_close)
+        _expire(broken, ok)
+
+        with pytest.raises(RuntimeError):
+            app.state.aim.cleanup_expired_attributors()
+        assert broken.id not in app.state.aim.attributors
+
+        app.state.aim.cleanup_expired_attributors()
+
+        assert ok.id not in app.state.aim.attributors
+        assert ok_event_manager._closed is True
+
+
+@pytest.mark.parametrize("close_raises", [False, True])
+@pytest.mark.parametrize(
+    "call",
+    [
+        lambda wrapper: wrapper.ingest(fake_applog_observation("Example\nLines")),
+        lambda wrapper: wrapper.attribute(),
+    ],
+    ids=["ingest", "attribute"],
+)
+def test_request_on_deleted_attributor_raises_unknown_attributor(app, monkeypatch, call, close_raises):
+    """A request that fetched the wrapper before a delete gets the unknown-id
+    error, not the closed connection, even when closing the connection failed."""
+    wrapper = app.state.aim.add_attributor(make_up_attributor_info(id="closed-in-flight"))
+    if close_raises:
+        monkeypatch.setattr(wrapper.attributor.event_stream.mgr, "close", _failing_close)
+        with pytest.raises(RuntimeError):
+            app.state.aim.delete_attributor(wrapper.id)
+    else:
+        app.state.aim.delete_attributor(wrapper.id)
+
+    with pytest.raises(AttributionHTTPException) as e:
+        call(wrapper)
+
+    assert e.value.status_code == UnknownAttributorIdError.code
+    assert e.value.detail["att_id"] == wrapper.id
+
+
+class _RefreshingLock:
+    """Stand-in for AttributorWrapper.lock that bumps last_access_time on entry.
+
+    Simulates a request ingesting/attributing on this attributor in the gap
+    between cleanup_expired_attributors() selecting it as expired and actually
+    taking its lock.
+    """
+
+    def __init__(self, attributor):
+        self._attributor = attributor
+        self._real = threading.Lock()
+
+    def __enter__(self):
+        self._attributor.last_access_time = datetime.now()
+        return self._real.__enter__()
+
+    def __exit__(self, *exc_info):
+        return self._real.__exit__(*exc_info)
+
+
+class TestCleanupRechecksExpiryUnderLock:
+    def test_wrapper_touched_during_cleanup_survives(self, app):
+        wrapper = app.state.aim.add_attributor(make_up_attributor_info(id="cleanup-race"))
+        event_manager = wrapper.attributor.event_stream.mgr
+        wrapper.last_access_time = datetime.now() - timedelta(hours=25)
+        wrapper.lock = _RefreshingLock(wrapper)
+
+        app.state.aim.cleanup_expired_attributors()
+
+        assert wrapper.id in app.state.aim.attributors
+        assert event_manager._closed is False
 
 
 class _PassthroughParams(RuleParamsBase):

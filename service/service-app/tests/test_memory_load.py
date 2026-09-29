@@ -50,6 +50,25 @@ def _current_rss_mb() -> float:
     return _process.memory_info().rss / (1024 * 1024)
 
 
+def _rss_released(growth: float, peak_growth: float) -> bool:
+    """Whether RSS came back down after cleanup. If the sampled peak never grew,
+    final RSS must not have grown either; otherwise growth must stay under half
+    the peak plus 80MB of allocator slack, and never reach the peak."""
+    if peak_growth <= 0:
+        return growth <= 0
+    return growth < min(0.5 * peak_growth + 80, peak_growth)
+
+
+def test_rss_released_bound():
+    assert _rss_released(0, 0)
+    assert _rss_released(-5, -2)
+    assert not _rss_released(50, 0)
+    assert _rss_released(165, 286)
+    assert not _rss_released(286, 286)
+    assert not _rss_released(100, 100)
+    assert not _rss_released(250, 286)
+
+
 def _run_lifecycle(client, i: int, refs: list, refs_lock: threading.Lock):
     """Mimic one real client: create an attributor, post a realistic-sized
     observation, attribute, then delete -- the same sequence a real caller
@@ -147,7 +166,7 @@ def test_concurrent_load_releases_memory(app, client):
     # the peak. A true leak would leave final_rss close to (or above) peak_rss.
     growth = final_rss - baseline_rss
     peak_growth = peak_rss - baseline_rss
-    assert growth < 0.5 * peak_growth + 20, (
+    assert _rss_released(growth, peak_growth), (
         f"RSS did not come back down after cleanup: baseline={baseline_rss:.1f}MB "
         f"peak={peak_rss:.1f}MB final={final_rss:.1f}MB -- looks like a real leak, not GC lag"
     )
