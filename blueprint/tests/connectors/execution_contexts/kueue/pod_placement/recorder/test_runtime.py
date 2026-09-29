@@ -329,6 +329,66 @@ def test_run_relists_after_expired_watch_and_processes_events(mocker):
     assert recorder.health.ready()
 
 
+def test_watch_requests_bookmarks(mocker):
+    """Bookmarks advance the watch's resourceVersion in a quiet namespace,
+    so a restart doesn't immediately hit a stale-resourceVersion 410."""
+    recorder, _ = _make_recorder(mocker, _resolved())
+    listing = mocker.Mock()
+    listing.metadata.resource_version = "rv-1"
+    listing.items = []
+    recorder.core_api.list_namespaced_pod.return_value = listing
+    mocker.patch.object(recorder, "_enqueue")
+    mocker.patch(
+        "attribution_blueprint.connectors.execution_contexts.kueue.pod_placement.recorder.runtime.threading.Thread"
+    )
+    watcher = mocker.Mock()
+
+    def stop_immediately(*_args, **_kwargs):
+        recorder.stop()
+        return iter(())
+
+    watcher.stream.side_effect = stop_immediately
+    mocker.patch("kubernetes.watch.Watch", return_value=watcher)
+
+    recorder.run()
+
+    assert watcher.stream.call_args.kwargs["allow_watch_bookmarks"] is True
+
+
+def test_readiness_survives_expired_watch_relist(mocker):
+    """SQLite-backed placement records remain readable while the watch is
+    relisting after a 410, so readiness must not flip false mid-relist —
+    only startup and queue saturation should gate it."""
+    recorder, _ = _make_recorder(mocker, _resolved())
+    listing = mocker.Mock()
+    listing.metadata.resource_version = "rv-1"
+    listing.items = []
+    recorder.core_api.list_namespaced_pod.return_value = listing
+    mocker.patch.object(recorder, "_enqueue")
+    mocker.patch(
+        "attribution_blueprint.connectors.execution_contexts.kueue.pod_placement.recorder.runtime.threading.Thread"
+    )
+    watcher = mocker.Mock()
+    readiness_during_relist: list[bool] = []
+    calls = 0
+
+    def stream(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise ApiException(status=410)
+        readiness_during_relist.append(recorder.health.ready())
+        recorder.stop()
+        return iter(())
+
+    watcher.stream.side_effect = stream
+    mocker.patch("kubernetes.watch.Watch", return_value=watcher)
+
+    recorder.run()
+
+    assert readiness_during_relist == [True]
+
+
 class TestRecordCapturesFailureEvidence:
     def test_existing_record_reuses_identity_without_resolving_owner(self, mocker):
         recorder, store = _make_recorder(mocker, _resolved())

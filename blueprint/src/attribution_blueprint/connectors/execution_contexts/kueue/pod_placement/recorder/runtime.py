@@ -213,6 +213,7 @@ class PodPlacementRecorder:
                     namespace=self.namespace,
                     resource_version=resource_version,
                     timeout_seconds=self.watch_timeout_seconds,
+                    allow_watch_bookmarks=True,
                 ):
                     pod = event.get("object")
                     pod_dict = _as_dict(pod)
@@ -224,9 +225,12 @@ class PodPlacementRecorder:
                 backoff = 1.0
             except ApiException as error:
                 if error.status == 410:
+                    # Retained placement records remain readable through a
+                    # relist, so once the initial list has ever completed,
+                    # readiness must not flip false just because the watch's
+                    # resourceVersion expired.
                     logger.warning("Pod watch resourceVersion expired; relisting")
                     resource_version = None
-                    self.health.update(initial_list_complete=False)
                     continue
                 logger.warning(f"Pod watch failed: {error}")
             except Exception:
@@ -264,11 +268,8 @@ class PodPlacementRecorder:
 
     def _record(self, pod: dict) -> None:
         # Checked on every watch event for this Pod (not just the first), so
-        # evidence that only appears later in the Pod's lifecycle — a
-        # DisruptionTarget/NodeLost condition patched on shortly before
-        # deletion, or a container's terminated exit code — is captured
-        # before the Pod is garbage-collected. `store.create` treats this as
-        # an update-in-place on an already-recorded Pod, not a new record.
+        # evidence that only appears later in the Pod's lifecycle is captured
+        # before the Pod is garbage-collected. 
         failure_reason = pod_node_failure_reason(pod) or pod_container_exit_reason(pod)
         metadata = pod.get("metadata") or {}
         pod_uid = metadata.get("uid")
