@@ -413,6 +413,39 @@ class TestRecordCapturesFailureEvidence:
         assert record.owner == existing.owner
         assert record.node_failure_reason == "NodeLost"
 
+    def test_lookup_failure_on_existing_record_path_is_caught(self, mocker):
+        """A store error (e.g. `database is locked`) on the fast path must
+        not escape `_record` — an uncaught exception here would kill the
+        worker thread permanently, since `_worker` has no catch-all around
+        `_record`."""
+        recorder, store = _make_recorder(mocker, _resolved())
+        store.get_by_pod_uid.side_effect = RuntimeError("database is locked")
+
+        recorder._record(_pod())  # must not raise
+
+        recorder.resolver.resolve.assert_not_called()
+        store.create.assert_not_called()
+
+    def test_create_failure_on_existing_record_path_is_caught(self, mocker):
+        """Same as above, but the failure happens on the write instead of
+        the lookup."""
+        recorder, store = _make_recorder(mocker, _resolved())
+        store.get_by_pod_uid.return_value = PlacementRecord(
+            namespace="ns",
+            workload=_resolved()[0],
+            owner=_resolved()[1],
+            pod_name="pod-a",
+            pod_uid="pod-uid-1",
+            node_name="node-a",
+            observed_at="2026-09-14T00:00:00Z",
+            resolver_source="owner-uid",
+        )
+        store.create.side_effect = RuntimeError("database is locked")
+
+        recorder._record(_pod())  # must not raise
+
+        recorder.resolver.resolve.assert_not_called()
+
     def test_healthy_pod_records_no_failure_reason(self, mocker):
         recorder, store = _make_recorder(mocker, _resolved())
         store.create.return_value = CreateResult.CREATED

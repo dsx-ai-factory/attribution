@@ -273,12 +273,21 @@ class PodPlacementRecorder:
         failure_reason = pod_node_failure_reason(pod) or pod_container_exit_reason(pod)
         metadata = pod.get("metadata") or {}
         pod_uid = metadata.get("uid")
-        existing = self.store.get_by_pod_uid(pod_uid) if pod_uid else None
-        if existing is not None:
-            result = self.store.create(replace(existing, node_failure_reason=failure_reason))
-            detail = f" (node_failure_reason={failure_reason})" if result == CreateResult.UPDATED else ""
-            logger.info(f"{result.value}{detail} placement for Pod {self.namespace}/{metadata.get('name')}")
-            return
+        if pod_uid:
+            try:
+                existing = self.store.get_by_pod_uid(pod_uid)
+            except Exception:
+                logger.exception("failed to look up existing Pod placement")
+                return
+            if existing is not None:
+                try:
+                    result = self.store.create(replace(existing, node_failure_reason=failure_reason))
+                except Exception:
+                    logger.exception("failed to record Pod placement")
+                    return
+                detail = f" (node_failure_reason={failure_reason})" if result == CreateResult.UPDATED else ""
+                logger.info(f"{result.value}{detail} placement for Pod {self.namespace}/{metadata.get('name')}")
+                return
 
         for attempt in range(self.max_resolution_attempts):
             try:
