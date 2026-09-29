@@ -102,7 +102,7 @@ def attribute(
         ctx.observation_ids,
         ctx.result,
         ctx.decision_graph,
-        ctx.decision_graph_requested,
+        include_decision_graph,
         include_interesting,
     )
 

@@ -251,6 +251,7 @@ class AttributorWrapper:
     parameters: AttributionParameters
     lock: threading.Lock
     last_access_time: datetime
+    _attribution_context: AttributionContext | None
 
     def __init__(self, info: AttributorInput):
         # This phase acquires no external resources. The manager can own the
@@ -274,6 +275,7 @@ class AttributorWrapper:
         self._checkpoint_backend = MemoryCheckpointBackend()
         self.parameters = info.parameters
         self._closed = False
+        self._attribution_context = None
         logger.info(f"Created AttributorWrapper with id: {self.id} for workload: {job_info.id}")
 
     @classmethod
@@ -294,6 +296,7 @@ class AttributorWrapper:
             try:
                 logger.debug(f"Ingesting observation for attributor {self.id}")
                 _id = self.attributor.ingest(observation.to_lib_observation(self.attributor.job_info))
+                self._attribution_context = None
                 self.last_access_time = datetime.now()
                 logger.debug(f"Successfully ingested observation for attributor {self.id}, returned ingest_id: {_id}")
             except LibDuplicateObservationError as e:
@@ -329,6 +332,10 @@ class AttributorWrapper:
         with self.lock:
             if self._closed:  # deleted after the caller fetched it
                 raise UnknownAttributorIdError.new(self.id).to_http_exception()
+            cached = self._attribution_context
+            if cached is not None and (include_decision_graph is False or cached.decision_graph_requested is True):
+                self.last_access_time = datetime.now()
+                return cached
             logger.debug(f"Starting attribution for attributor {self.id}")
             try:
                 recorder = _GuardedRecorder(str(self.attributor.job_info.id)) if include_decision_graph else None
@@ -347,6 +354,7 @@ class AttributorWrapper:
                     decision_graph_requested=include_decision_graph,
                     decision_graph=decision_graph,
                 )
+                self._attribution_context = ctx
                 logger.info(f"Attribution completed for attributor {self.id}")
                 return ctx
             except LibEventStorageOutOfMemoryError as e:
