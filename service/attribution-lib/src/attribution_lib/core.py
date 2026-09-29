@@ -121,6 +121,9 @@ register_source_config(
     ObservationSource.CSP_EVENT,
     SourceProcessingConfig(
         time_start=lambda ji: ji.job_start_time,
+        # An event is about one host at one moment; the body names neither, so an entry
+        # declaring no node or no timestamp is dropped rather than parsed.
+        body_fallbacks=BodyFallbacks(require_node=True, require_timestamp=True),
         requires_job_nodes=True,
     ),
 )
