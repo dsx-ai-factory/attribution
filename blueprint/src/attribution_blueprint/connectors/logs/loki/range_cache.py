@@ -154,47 +154,57 @@ class LokiRangeCache:
         if end <= start:
             return []
         buckets = self._buckets(start, end)
-        cached: dict[datetime, list[T]] = {}
-        missing: list[tuple[datetime, datetime]] = []
-        missing_start: datetime | None = None
-        for bucket_start, bucket_end in buckets:
+        # Buckets are held by index, never by their start datetime. Two starts
+        # an hour apart in real time can carry the same local time either side
+        # of a fall-back, and an aware datetime compares and hashes on its
+        # local fields alone when the zone matches, so such a pair would
+        # collapse into one dict key and one of the two buckets would be lost.
+        cached: dict[int, list[T]] = {}
+        missing: list[tuple[int, int]] = []
+        missing_start: int | None = None
+        for index, (bucket_start, _bucket_end) in enumerate(buckets):
             value: object | None = None
             if not self._is_hot(bucket_start, now):
                 value = self._store.get(self._bucket_key(query, config, bucket_start))
             if value is not None:
                 if missing_start is not None:
-                    missing.append((missing_start, bucket_start))
+                    missing.append((missing_start, index))
                     missing_start = None
-                cached[bucket_start] = list(self._iter_bucket_entries(value, node_of, None))
+                cached[index] = list(self._iter_bucket_entries(value, node_of, None))
             elif missing_start is None:
-                missing_start = bucket_start
-            if bucket_end == buckets[-1][1] and missing_start is not None:
-                missing.append((missing_start, bucket_end))
-                missing_start = None
+                missing_start = index
+        if missing_start is not None:
+            missing.append((missing_start, len(buckets)))
 
+        # Buckets are uniform, contiguous and increasing on the absolute grid,
+        # so dividing by the width locates each fetched entry's single bucket
+        # instead of rescanning every entry once per bucket. The width is taken
+        # from the first bucket so it cannot drift from what `_buckets` built.
+        first_edge = datetime_to_nanoseconds(buckets[0][0])
+        bucket_ns = datetime_to_nanoseconds(buckets[0][1]) - first_edge
         fetched: list[T] = []
         budget_exceeded = False
-        for range_start, range_end in missing:
+        for first, last in missing:
             try:
-                values = fetch(query, range_start, range_end)
+                values = fetch(query, buckets[first][0], buckets[last - 1][1])
             except LokiQueryBudgetExceeded as exc:
                 fetched.extend(exc.entries)
                 budget_exceeded = True
                 break
             fetched.extend(values)
-            for bucket_start, bucket_end in buckets:
-                if bucket_start < range_start or bucket_end > range_end:
-                    continue
-                bucket_values = [
-                    item
-                    for item in values
-                    if datetime_to_nanoseconds(bucket_start) <= timestamp(item) < datetime_to_nanoseconds(bucket_end)
-                ]
-                self._store_bucket(query, config, bucket_start, list(bucket_values), now=now, node_of=node_of)
+            grouped: dict[int, list[T]] = {}
+            for item in values:
+                index = (timestamp(item) - first_edge) // bucket_ns
+                if first <= index < last:
+                    grouped.setdefault(index, []).append(item)
+            # A missing range always spans whole buckets, so every bucket from
+            # `first` to `last` lies inside the range that was just fetched.
+            for index in range(first, last):
+                self._store_bucket(query, config, buckets[index][0], grouped.get(index, []), now=now, node_of=node_of)
 
         merged: list[T] = []
-        for bucket_start in sorted(cached):
-            merged.extend(cached[bucket_start])
+        for index in sorted(cached):
+            merged.extend(cached[index])
         merged.extend(fetched)
         start_ns = datetime_to_nanoseconds(start)
         end_ns = datetime_to_nanoseconds(end)
@@ -427,15 +437,60 @@ class LokiRangeCache:
         return datetime.fromtimestamp(aligned, tz=value.tzinfo)
 
     def _buckets(self, start: datetime, end: datetime) -> list[tuple[datetime, datetime]]:
+        """Return the buckets covering `[start, end)`, oldest first.
+
+        A bucket is identified by the absolute instant it starts at: `_align`
+        floors Unix seconds and `_bucket_key` keys on them. So the grid is
+        stepped in absolute seconds rather than by adding `self._bucket` to a
+        local datetime, which advances the wall clock and disagrees with that
+        identity across both DST transitions. A spring-forward would resolve
+        the nonexistent local hour at the pre-transition offset, repeating
+        instants the next real hour covers again and running the starts
+        backwards in real time; a fall-back would skip the repeated hour, so
+        its instants fall in no bucket at all. Absolute seconds have neither
+        transition, so the starts stay aligned, contiguous and increasing.
+
+        Args:
+            start: Window start; the bucket containing it comes first.
+            end: Exclusive window end.
+
+        Returns:
+            `(bucket_start, bucket_end)` pairs, each `self._bucket` of real
+            time wide, contiguous and strictly increasing.
+        """
+        bucket_seconds = int(self._bucket.total_seconds())
+        end_seconds = end.timestamp()
         result: list[tuple[datetime, datetime]] = []
-        current = self._align(start)
-        while current < end:
-            result.append((current, current + self._bucket))
-            current += self._bucket
+        edge = int(self._align(start).timestamp())
+        while edge < end_seconds:
+            result.append(
+                (
+                    datetime.fromtimestamp(edge, tz=start.tzinfo),
+                    datetime.fromtimestamp(edge + bucket_seconds, tz=start.tzinfo),
+                )
+            )
+            edge += bucket_seconds
         return result
 
     def _is_hot(self, bucket_start: datetime, now: datetime) -> bool:
-        return bucket_start + self._bucket >= now - self._hot_buffer
+        """Return whether `bucket_start`'s bucket is too recent to cache.
+
+        The bucket end and the buffer are applied in absolute seconds, like the
+        grid itself. Adding `self._bucket` to `bucket_start` would advance the
+        wall clock and put the end an hour from where it is either side of a
+        fall-back: too late and a settled bucket is refetched forever, too
+        early and a bucket still collecting entries is cached incomplete, which
+        every later read then serves.
+
+        Args:
+            bucket_start: Start of the bucket being considered.
+            now: Current time.
+
+        Returns:
+            Whether the bucket ends later than `now` less the hot buffer.
+        """
+        bucket_end = bucket_start.timestamp() + self._bucket.total_seconds()
+        return bucket_end >= now.timestamp() - self._hot_buffer.total_seconds()
 
     @staticmethod
     def _bucket_key(query: str, config: Mapping[str, object], bucket_start: datetime) -> str:
