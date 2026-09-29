@@ -38,7 +38,7 @@ def _record():
 def test_placement_endpoint_returns_scoped_records(tmp_path):
     store = SQLitePlacementStore(str(tmp_path / "placements.db"))
     store.create(_record())
-    server = serve_api(HealthState(), store, 0)
+    server = serve_api(HealthState(), store, 0, "ns")
     try:
         response = requests.get(
             f"http://127.0.0.1:{server.server_port}/v1/placements",
@@ -55,7 +55,7 @@ def test_placement_endpoint_returns_scoped_records(tmp_path):
 
 def test_placement_endpoint_requires_both_selectors(tmp_path):
     store = SQLitePlacementStore(str(tmp_path / "placements.db"))
-    server = serve_api(HealthState(), store, 0)
+    server = serve_api(HealthState(), store, 0, "ns")
     try:
         response = requests.get(
             f"http://127.0.0.1:{server.server_port}/v1/placements",
@@ -67,3 +67,22 @@ def test_placement_endpoint_requires_both_selectors(tmp_path):
         server.server_close()
 
     assert response.status_code == 400
+
+
+def test_placement_endpoint_rejects_other_namespaces(tmp_path):
+    """A recorder installation only watches one namespace. Querying a
+    different namespace must fail explicitly rather than returning an empty
+    list indistinguishable from "no placements recorded yet"."""
+    store = SQLitePlacementStore(str(tmp_path / "placements.db"))
+    server = serve_api(HealthState(), store, 0, "ns")
+    try:
+        response = requests.get(
+            f"http://127.0.0.1:{server.server_port}/v1/placements",
+            params={"namespace": "other-ns", "workload_uid": "wl-uid-1"},
+            timeout=2,
+        )
+    finally:
+        server.shutdown()
+        server.server_close()
+
+    assert response.status_code == 403

@@ -67,7 +67,7 @@ def main() -> None:
         workers=args.workers,
         watch_timeout_seconds=args.watch_timeout_seconds,
     )
-    api_server = serve_api(recorder.health, placement_store, args.health_port)
+    api_server = serve_api(recorder.health, placement_store, args.health_port, args.namespace)
 
     def stop(_signum, _frame):
         logger.info("stopping Kueue Pod placement recorder")

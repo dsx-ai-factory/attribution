@@ -202,9 +202,9 @@ uv run --project blueprint --frozen nvidia-attribution-blueprint --config ./attr
 | `kubectl_path`           | No       | `kubectl`       | Path to the `kubectl` binary.                                                                                     |
 | `kubeconfig`             | No       | kubectl default | Optional kubeconfig path.                                                                                         |
 | `context`                | No       | current context | Optional kubeconfig context name.                                                                                 |
-| `namespace`              | No       | all namespaces  | Optional namespace scope. Also allows bare workload names in `ids` mode.                                          |
+| `namespace`              | No       | all namespaces  | Optional namespace scope. Also allows bare workload names in `ids` mode. Required when `placement_records_enabled` is set. |
 | `timeout_seconds`        | No       | `60`            | Timeout for each `kubectl` command.                                                                               |
-| `placement_records_enabled` | No    | `false`         | Reads retained placement from the configured recorder; discovery fails if the recorder cannot be read.            |
+| `placement_records_enabled` | No    | `false`         | Reads retained placement from the configured recorder; discovery fails if the recorder cannot be read. Requires `namespace`, matching the one namespace the recorder watches. |
 
 
 The baseline Kueue adapter does not require the placement recorder or Prometheus. It

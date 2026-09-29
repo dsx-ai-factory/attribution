@@ -94,6 +94,13 @@ def _build(spec: dict, ctx: dict) -> KueueExecutionContextAdapter:
     recorder_spec = spec.get("placement_recorder")
     if placement_records_enabled and recorder_spec is None:
         raise MCAError("eca.kueue.placement_records_enabled requires eca.kueue.placement_recorder")
+    # A recorder installation watches exactly one namespace (see the Helm
+    # chart's `--namespace={{ .Release.Namespace }}`). Without a configured
+    # namespace, discovery could span namespaces the recorder doesn't watch,
+    # and its "no matching records" response is indistinguishable from "this
+    # namespace isn't covered at all".
+    if placement_records_enabled and not spec.get("namespace"):
+        raise MCAError("eca.kueue.placement_records_enabled requires eca.kueue.namespace")
     placement_reader = _build_placement_recorder(recorder_spec) if placement_records_enabled else None
     event_max_age = spec.get("event_max_age_seconds")
     if event_max_age is None:

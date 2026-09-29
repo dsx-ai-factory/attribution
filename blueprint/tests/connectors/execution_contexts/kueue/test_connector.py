@@ -1636,6 +1636,22 @@ def test_build_with_none_timeout_falls_back_to_default():
     assert adapter.timeout_seconds == 60
 
 
+def test_build_rejects_placement_records_without_namespace():
+    """A recorder installation watches exactly one namespace. Without a
+    configured `namespace`, discovery could span namespaces the recorder
+    doesn't cover, and its response would be indistinguishable from `no
+    placements recorded yet` for a namespace it does watch."""
+    from attribution_blueprint.connectors.execution_contexts.kueue import _build
+    from attribution_blueprint.exceptions import MCAError
+
+    spec = {
+        "placement_records_enabled": True,
+        "placement_recorder": {"endpoint": "http://recorder:8080"},
+    }
+    with pytest.raises(MCAError, match="eca.kueue.namespace"):
+        _build(spec, ctx={"framework": "eca"})
+
+
 def test_discover_by_time_range_intersects_csv_nodelist(mocker):
     """The kueue adapter accepts CSV-separated node names in its nodelist
     argument and intersects them client-side. Moving this parsing from

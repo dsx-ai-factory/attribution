@@ -25,6 +25,7 @@ def serve_api(
     state: HealthState,
     placement_reader: PlacementReader,
     port: int,
+    namespace: str,
 ) -> ThreadingHTTPServer:
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self):
@@ -36,13 +37,21 @@ def serve_api(
                 status, body = (200 if ready else 503), {"status": "ready" if ready else "not-ready"}
             elif parsed.path == "/v1/placements":
                 query = parse_qs(parsed.query)
-                namespace = (query.get("namespace") or [""])[0]
+                requested_namespace = (query.get("namespace") or [""])[0]
                 workload_uid = (query.get("workload_uid") or [""])[0]
-                if not namespace or not workload_uid:
+                if not requested_namespace or not workload_uid:
                     status, body = 400, {"error": "namespace and workload_uid are required"}
+                elif requested_namespace != namespace:
+                    # This recorder installation only watches `namespace`
+                    # (one release per namespace). Returning an empty list
+                    # here would be indistinguishable from "no placements
+                    # recorded yet" for a namespace it does watch.
+                    status, body = 403, {
+                        "error": f"this recorder only serves namespace {namespace!r}, got {requested_namespace!r}"
+                    }
                 else:
                     try:
-                        records = placement_reader.list_for_workload(namespace, workload_uid)
+                        records = placement_reader.list_for_workload(requested_namespace, workload_uid)
                         status, body = 200, {"items": [record.to_resource() for record in records]}
                     except Exception:
                         logger.exception("placement lookup failed")
