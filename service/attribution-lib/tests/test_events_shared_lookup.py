@@ -201,3 +201,47 @@ class TestSharedLookupTmpdirForkSafety:
         # The actual owning process's cleanup must still work.
         finalizer()
         assert not os.path.exists(tmpdir)
+
+
+class TestLockedSharedLookupTmpdirForkSafety:
+    """`_get_shared_lookup_tmpdir()`'s `atexit` cleanup is registered once per
+    process and, along with the module globals it reads, inherited by any
+    `os.fork()`'d child (e.g. a pre-fork server's worker process). A child
+    must not delete the directory on its own exit: it didn't create it, and
+    the parent or sibling workers may still have `EventManager`s ATTACHed to
+    files inside it.
+    """
+
+    def test_forked_child_does_not_delete_shared_tmpdir(self, monkeypatch, tmp_path):
+        import fcntl
+        import os
+
+        import attribution_lib.events as events_module
+
+        fake_tmpdir = str(tmp_path / "shared_lookup")
+        os.makedirs(fake_tmpdir)
+        # Own the directory the way `_get_shared_lookup_tmpdir` does: hold the
+        # lock on its lock file for as long as this process can reach it.
+        lock_fd = os.open(os.path.join(fake_tmpdir, events_module._SHARED_LOOKUP_LOCK_NAME), os.O_RDWR | os.O_CREAT)
+        fcntl.flock(lock_fd, fcntl.LOCK_EX)
+        monkeypatch.setattr(events_module, "_shared_lookup_tmpdir", fake_tmpdir)
+        monkeypatch.setattr(events_module, "_shared_lookup_tmpdir_owner_pid", os.getpid())
+        monkeypatch.setattr(events_module, "_shared_lookup_tmpdir_lock_fd", lock_fd)
+
+        pid = os.fork()
+        if pid == 0:
+            # Child: simulate its inherited atexit handler firing on its own exit.
+            try:
+                events_module._cleanup_shared_lookup_tmpdir()
+            finally:
+                os._exit(0)
+
+        _, status = os.waitpid(pid, 0)
+        assert os.WIFEXITED(status) and os.WEXITSTATUS(status) == 0, f"child exited abnormally: {status}"
+
+        # The child must not have deleted the directory the parent still owns.
+        assert os.path.isdir(fake_tmpdir)
+
+        # The actual owning process's cleanup must still work.
+        events_module._cleanup_shared_lookup_tmpdir()
+        assert not os.path.exists(fake_tmpdir)
