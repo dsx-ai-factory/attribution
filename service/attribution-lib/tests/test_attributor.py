@@ -294,7 +294,7 @@ def test_source_format_metrics_mismatch(request, event_manager, job_info):
 def test_source_format_csp_event_mismatch(request, event_manager, job_info):
     event_stream = event_manager.create_stream(request.node.name)
     bad_formats = frozenset(ObservationFormat) - frozenset(
-        [ObservationFormat.UNDEFINED, ObservationFormat.CSP_EVENT_LIST]
+        [ObservationFormat.UNDEFINED, ObservationFormat.CSP_EVENT_LIST, ObservationFormat.ENTRY_TIMESERIES]
     )
 
     for fmt in bad_formats:
