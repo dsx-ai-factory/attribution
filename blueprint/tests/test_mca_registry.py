@@ -182,6 +182,7 @@ def test_built_schema_has_expected_shape():
         "timeout_seconds",
         "placement_records_enabled",
         "placement_recorder",
+        "event_max_age_seconds",
     }
     assert set(schema["eca"]["_selector"]["kueue"]["placement_recorder"]) == {
         "endpoint",

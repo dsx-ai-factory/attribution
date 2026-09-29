@@ -1219,10 +1219,44 @@ def test_missing_live_pods_are_recovered_from_uid_matched_events(mocker):
     }
     _wire_kubectl(mocker, pods_payload={"items": []}, events_payload=events)
 
-    ctx = KueueExecutionContextAdapter().discover_by_ids(["team-alpha/job-train-mnist-abc12"])[0]
+    # Fixture end_time is fixed in the past; disable the age gate so this
+    # test isn't coupled to wall-clock time.
+    eca = KueueExecutionContextAdapter(event_max_age_seconds=2**31)
+    ctx = eca.discover_by_ids(["team-alpha/job-train-mnist-abc12"])[0]
 
     assert ctx["pod_names"] == ["train-mnist-new"]
     assert ctx["nodes"] == ["node-new"]
+
+
+def test_event_recovery_skipped_for_workloads_older_than_max_age(mocker):
+    """A workload whose end_time is older than `event_max_age_seconds` skips
+    Event recovery entirely (no `kubectl get events` calls), even though
+    recoverable Events exist, since they've almost certainly expired."""
+    events = {
+        "items": [
+            {
+                "metadata": {"creationTimestamp": "2026-05-01T12:00:10Z"},
+                "involvedObject": {
+                    "kind": "Job",
+                    "namespace": "team-alpha",
+                    "name": "train-mnist",
+                    "uid": "owner-1001",
+                },
+                "reason": "SuccessfulCreate",
+                "message": "Created pod: train-mnist-new",
+                "lastTimestamp": "2026-05-01T12:00:10Z",
+            },
+        ]
+    }
+    run_mock = _wire_kubectl(mocker, pods_payload={"items": []}, events_payload=events)
+
+    eca = KueueExecutionContextAdapter(event_max_age_seconds=1)
+    ctx = eca.discover_by_ids(["team-alpha/job-train-mnist-abc12"])[0]
+
+    assert "pod_names" not in ctx
+    assert ctx["nodes"] == []
+    for call in run_mock.call_args_list:
+        assert "events" not in call.args[0]
 
 
 def test_missing_pod_and_node_lists_are_reported_when_events_cannot_recover_them(mocker):

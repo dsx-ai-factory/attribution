@@ -782,6 +782,7 @@ class KueueExecutionContextAdapter:
         timeout_seconds: int = 60,
         placement_records_enabled: bool = False,
         placement_reader: PlacementReader | None = None,
+        event_max_age_seconds: int = 3600,
     ):
         self.kubectl_path = kubectl_path
         self.kubeconfig = kubeconfig
@@ -792,6 +793,7 @@ class KueueExecutionContextAdapter:
             raise ValueError("placement_records_enabled must be a bool")
         self.placement_records_enabled = placement_records_enabled
         self.placement_reader = placement_reader
+        self.event_max_age_seconds = event_max_age_seconds
 
     # --- public protocol ---------------------------------------------------
 
@@ -1036,7 +1038,13 @@ class KueueExecutionContextAdapter:
         `--field-selector` — never a namespace-wide Event list. This keeps
         the RBAC/scale/retention footprint bounded to this one workload
         one `kubectl get events` call per owner Job UID and per pod name.
+        Skips entirely (no calls) once `context["end_time"]` is older than
+        `event_max_age_seconds`.
         """
+        age = datetime.now(tz=timezone.utc) - context["end_time"]
+        if age.total_seconds() > self.event_max_age_seconds:
+            return [], []
+
         namespace = context["namespace"]
         job_uids = _owner_job_uids(workload, owner_jobs)
         if not job_uids:

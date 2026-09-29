@@ -95,6 +95,13 @@ def _build(spec: dict, ctx: dict) -> KueueExecutionContextAdapter:
     if placement_records_enabled and recorder_spec is None:
         raise MCAError("eca.kueue.placement_records_enabled requires eca.kueue.placement_recorder")
     placement_reader = _build_placement_recorder(recorder_spec) if placement_records_enabled else None
+    event_max_age = spec.get("event_max_age_seconds")
+    if event_max_age is None:
+        event_max_age = 3600
+    else:
+        event_max_age = _coerce_int(event_max_age, "eca.kueue.event_max_age_seconds")
+        if event_max_age <= 0:
+            raise MCAError(f"eca.kueue.event_max_age_seconds must be positive, got {event_max_age}")
     return KueueExecutionContextAdapter(
         kubectl_path=spec.get("kubectl_path", "kubectl"),
         kubeconfig=spec.get("kubeconfig"),
@@ -103,6 +110,7 @@ def _build(spec: dict, ctx: dict) -> KueueExecutionContextAdapter:
         timeout_seconds=timeout,
         placement_records_enabled=placement_records_enabled,
         placement_reader=placement_reader,
+        event_max_age_seconds=event_max_age,
     )
 
 
@@ -140,6 +148,9 @@ _registry.register_component(
                 "org_id": _PARAM,
             },
         },
+        # Max age of a Workload's end_time before Event-based recovery is
+        # skipped entirely.
+        "event_max_age_seconds": _PARAM,
     },
     build=_build,
 )
