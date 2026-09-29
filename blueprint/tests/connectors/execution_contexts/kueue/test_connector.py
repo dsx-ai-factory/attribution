@@ -1778,9 +1778,7 @@ class TestMergePlacementRecordsFailedNode:
         assert ctx["state"] == "FAILED"
         assert ctx["failed_node"] == "node-a"
 
-    def test_live_pod_evidence_takes_precedence(self, mocker):
-        """Live-Pod-derived `failed_node` is read at the same moment `state`
-        was classified; a durably-recorded node must not override it."""
+    def test_retained_node_loss_overrides_live_exit_code(self, mocker):
         eca = KueueExecutionContextAdapter()
         mocker.patch.object(
             eca,
@@ -1791,7 +1789,54 @@ class TestMergePlacementRecordsFailedNode:
 
         eca._merge_placement_records(ctx)
 
-        assert ctx["failed_node"] == "node-a"
+        assert ctx["failed_node"] == "node-b"
+        assert ctx["state"] == "NODE_FAIL"
+
+    def test_finalize_prefers_deleted_pod_node_loss_over_surviving_pod_exit(self, mocker):
+        workload = deepcopy(WORKLOADS["items"][0])
+        workload["metadata"]["name"] = "wl-a"
+        workload["metadata"]["uid"] = "workload-uid-1"
+        finished = next(
+            condition
+            for condition in workload["status"]["conditions"]
+            if condition["type"] == "Finished"
+        )
+        finished["reason"] = "Failed"
+
+        surviving_pod = {
+            "metadata": {
+                "namespace": "team-alpha",
+                "name": "pod-a",
+                "uid": "pod-uid-a",
+                "labels": {"batch.kubernetes.io/controller-uid": "owner-1001"},
+            },
+            "spec": {"nodeName": "node-a"},
+            "status": {
+                "containerStatuses": [
+                    {"state": {"terminated": {"exitCode": 137}}},
+                ]
+            },
+        }
+        reader = mocker.Mock()
+        reader.list_for_workload.return_value = [
+            self._record(
+                node_name="node-b",
+                node_failure_reason="NodeLost",
+                pod_uid="pod-uid-b",
+                pod_name="pod-b",
+            )
+        ]
+        eca = KueueExecutionContextAdapter(
+            placement_reader=reader,
+            placement_records_enabled=True,
+        )
+        mocker.patch.object(eca, "_fetch_pods_for", return_value=[surviving_pod])
+        mocker.patch.object(eca, "_fetch_owner_jobs", return_value={})
+
+        [ctx] = eca._finalize([workload])
+
+        assert ctx["state"] == "NODE_FAIL"
+        assert ctx["failed_node"] == "node-b"
 
     def test_node_loss_evidence_outranks_alphabetically_smaller_exit_code_node(self, mocker):
         """Node-loss evidence must win regardless of node-name ordering: a

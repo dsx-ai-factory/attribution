@@ -308,10 +308,7 @@ def _collect_pod_evidence(
     # `failed_node` is the lexicographically smallest node within the
     # strongest evidence tier available, so the result is stable across
     # kubectl response orderings. Node-loss evidence outranks a generic
-    # non-zero exit code — otherwise an unrelated collateral exit on another
-    # node could win alphabetically and get blamed instead of the actually
-    # lost node. Previously both tiers were pooled into one set, so this
-    # could happen.
+    # non-zero exit code.
     if node_loss_nodes:
         failed_node = min(node_loss_nodes)
     elif exit_code_nodes:
@@ -319,6 +316,21 @@ def _collect_pod_evidence(
     else:
         failed_node = None
     return _PodEvidence(sorted(nodes), failed_node, sorted(pod_names), pod_nodes)
+
+
+def _live_node_loss_nodes(
+    pods: list[dict],
+    selector: tuple[str, str, str] | None,
+) -> set[str]:
+    if selector is None:
+        return set()
+    return {
+        node_name
+        for pod in pods
+        if _pod_matches_selector(pod, selector)
+        and (node_name := (pod.get("spec") or {}).get("nodeName"))
+        and _pod_reports_node_failure(pod)
+    }
 
 
 def _live_pod_placements(pods: list[dict], selector: tuple[str, str, str] | None) -> list[PodPlacement]:
@@ -1093,9 +1105,13 @@ class KueueExecutionContextAdapter:
         except Exception as error:
             raise RuntimeError(f"placement recorder lookup failed: {error}") from error
 
-    def _merge_placement_records(self, context: KueueExecutionContext) -> None:
+    def _merge_placement_records(
+        self,
+        context: KueueExecutionContext,
+        live_node_loss_nodes: set[str] | None = None,
+    ) -> None:
         placements: list[PodPlacement] = []
-        node_loss_nodes: set[str] = set()
+        retained_node_loss_nodes: set[str] = set()
         exit_code_nodes: set[str] = set()
         for record in self._fetch_placement_records(context):
             placements.append(
@@ -1108,25 +1124,21 @@ class KueueExecutionContextAdapter:
             )
             reason = record.node_failure_reason
             if reason == "NodeLost" or reason in _NODE_LOSS_DISRUPTION_REASONS:
-                node_loss_nodes.add(record.node_name)
+                retained_node_loss_nodes.add(record.node_name)
             elif reason:
                 exit_code_nodes.add(record.node_name)
         self._merge_placements(context, placements)
         # PlacementRecords are the only post-GC source for Pod status evidence.
-        # Preserve the same precedence as `_service_state`: successful and
-        # preempted workloads outrank Pod node-loss evidence, while
-        # EVICTED_NODEFAILURES is already NODE_FAIL and remains unchanged.
-        if node_loss_nodes and context.get("state") not in {"COMPLETED", "PREEMPTED", "NODE_FAIL"}:
+        # Preserve the same precedence as `_service_state`.
+        if retained_node_loss_nodes and context.get("state") not in {"COMPLETED", "PREEMPTED", "NODE_FAIL"}:
             context["state"] = "NODE_FAIL"
-        # Live-Pod evidence takes precedence when selecting the failed node.
-        # Node-loss evidence outranks a generic non-zero exit code — a
-        # collateral exit on an alphabetically-smaller node must not get
-        # blamed instead of the node that was actually lost.
-        if not context.get("failed_node"):
-            if node_loss_nodes:
-                context["failed_node"] = min(node_loss_nodes)
-            elif exit_code_nodes:
-                context["failed_node"] = min(exit_code_nodes)
+        # Explicit node-loss evidence outranks generic exit-code evidence,
+        # regardless of whether it came from a live Pod or a retained record.
+        node_loss_nodes = set(live_node_loss_nodes or ()) | retained_node_loss_nodes
+        if node_loss_nodes:
+            context["failed_node"] = min(node_loss_nodes)
+        elif exit_code_nodes and not context.get("failed_node"):
+            context["failed_node"] = min(exit_code_nodes)
 
     @staticmethod
     def _merge_placements(context: KueueExecutionContext, additions: list[PodPlacement]) -> None:
@@ -1154,7 +1166,8 @@ class KueueExecutionContextAdapter:
         for wl in workloads:
             ctx = _parse_workload(wl, pods, owner_jobs, now=now)
             if ctx is not None:
-                self._merge_placement_records(ctx)
+                live_node_loss_nodes = _live_node_loss_nodes(pods, _pod_selector_for(wl))
+                self._merge_placement_records(ctx, live_node_loss_nodes)
                 parsed.append((wl, ctx))
 
         missing = [
