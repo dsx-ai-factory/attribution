@@ -30,7 +30,7 @@ from app.attributor import (
 from app.exceptions import ResponseModel
 from app.util import HashableModel, to_zoneinfo
 
-# Legacy V1 `workload.type` values that name a scheduler. 
+# Legacy V1 `workload.type` values that name a scheduler.
 _V1_TYPE_TO_SCHEDULER: dict[WorkloadTypeEnum, Scheduler] = {
     WorkloadTypeEnum.SLURM: Scheduler.SLURM,
     WorkloadTypeEnum.KUEUE: Scheduler.KUEUE,
@@ -97,7 +97,7 @@ class AttributorInfoV1(HashableModel):
             timezone=to_zoneinfo(w.job_start_time),
             node_to_ranks=node_to_ranks,
         )
-        # V1 has no `workload.scheduler` wire field so derive the scheduler from the 
+        # V1 has no `workload.scheduler` wire field so derive the scheduler from the
         # legacy `type` here.
         scheduler = _V1_TYPE_TO_SCHEDULER.get(w.type)
         if scheduler is not None:
@@ -257,15 +257,16 @@ class AttributionResponseV1(ResponseModel):
         bad_nodes.update(node_straggler_results.keys())
         sorted_nodes = sorted(list(bad_nodes))
         for node in sorted_nodes:
+            node_attr = NodeAttribution(node=node, attributions=list())
             if node in result.bad_nodes_attr.my_bad_nodes:
                 node_symptoms = result.bad_nodes_attr.my_bad_nodes[node]
-                node_attr = NodeAttribution.from_lib_node_group(node_symptoms)
-            else:
-                node_attr = NodeAttribution(node=node, attributions=list())
+                if node_symptoms.attributions.has_bad() or node_symptoms.attributions.has_interesting():
+                    node_attr = NodeAttribution.from_lib_node_group(node_symptoms)
 
             if node in node_straggler_results:
                 node_attr.attributions.append(node_straggler_results[node])
-            attributions.append(node_attr)
+            if node_attr.attributions != []:
+                attributions.append(node_attr)
 
         if (outcome_attr := result.outcome_attr) is not None:
             att_class = AttributionClassEnum.from_lib_outcomes(outcome_attr.value().outcome)
