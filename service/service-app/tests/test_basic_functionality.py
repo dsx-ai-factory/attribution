@@ -653,6 +653,18 @@ class TestV2AttributionShape:
         assert any(node["node_type"] == "OUTCOME" for node in graph["nodes"])
         assert isinstance(graph["edges"], list)
 
+    def test_reused_attribution_follows_each_requests_decision_graph_flag(self, client):
+        """A plain read after a graph read reuses that attribution, but not its graph."""
+        att_id = post_attributor(client, make_up_attributor_info("v2"))
+        url = f"/v2/attributor/{att_id}/attribution"
+
+        with_graph = client.get(url, params={"include_decision_graph": True}).json()
+        plain = client.get(url).json()
+
+        assert with_graph["verdict"]["decision_graph"] is not None
+        assert "decision_graph" not in plain["verdict"]
+        assert plain["verdict"]["attribution_outcome"] == with_graph["verdict"]["attribution_outcome"]
+
     @pytest.mark.parametrize(
         "target",
         ["app.attributor.build_decision_graph", "app.v2.models.DecisionGraph.from_lib"],
