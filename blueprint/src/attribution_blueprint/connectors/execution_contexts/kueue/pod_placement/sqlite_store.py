@@ -135,6 +135,17 @@ class SQLitePlacementStore:
             )
             return CreateResult.UPDATED
 
+    def get_by_pod_uid(self, pod_uid: str) -> PlacementRecord | None:
+        with self._connect() as connection:
+            self._prune_expired(connection)
+            row = connection.execute(
+                "SELECT raw_json FROM placement_record WHERE pod_uid = ?",
+                (pod_uid,),
+            ).fetchone()
+        if row is None:
+            return None
+        return PlacementRecord.from_resource(json.loads(row["raw_json"]))
+
     def list_for_workload(self, namespace: str, workload_uid: str) -> list[PlacementRecord]:
         with self._connect() as connection:
             self._prune_expired(connection)

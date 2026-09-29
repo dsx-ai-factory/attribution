@@ -49,6 +49,14 @@ def test_records_survive_store_reopen(tmp_path):
     assert records == [_record()]
 
 
+def test_get_by_pod_uid_returns_stored_record(tmp_path):
+    store = SQLitePlacementStore(str(tmp_path / "placements.db"))
+    store.create(_record())
+
+    assert store.get_by_pod_uid("pod-uid-1") == _record()
+    assert store.get_by_pod_uid("missing") is None
+
+
 def test_duplicate_is_idempotent(tmp_path):
     store = SQLitePlacementStore(str(tmp_path / "placements.db"))
     store.create(_record())

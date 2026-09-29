@@ -13,6 +13,7 @@ from __future__ import annotations
 import queue
 import random
 import threading
+from dataclasses import replace
 from datetime import datetime
 
 from loguru import logger
@@ -269,13 +270,21 @@ class PodPlacementRecorder:
         # before the Pod is garbage-collected. `store.create` treats this as
         # an update-in-place on an already-recorded Pod, not a new record.
         failure_reason = pod_node_failure_reason(pod) or pod_container_exit_reason(pod)
+        metadata = pod.get("metadata") or {}
+        pod_uid = metadata.get("uid")
+        existing = self.store.get_by_pod_uid(pod_uid) if pod_uid else None
+        if existing is not None:
+            result = self.store.create(replace(existing, node_failure_reason=failure_reason))
+            detail = f" (node_failure_reason={failure_reason})" if result == CreateResult.UPDATED else ""
+            logger.info(f"{result.value}{detail} placement for Pod {self.namespace}/{metadata.get('name')}")
+            return
+
         for attempt in range(self.max_resolution_attempts):
             try:
                 workload, owner, source = self.resolver.resolve(pod)
                 result = self.store.create(
                     PlacementRecord.for_pod(pod, workload, owner, source, node_failure_reason=failure_reason)
                 )
-                metadata = pod.get("metadata") or {}
                 detail = f" (node_failure_reason={failure_reason})" if result == CreateResult.UPDATED else ""
                 logger.info(f"{result.value}{detail} placement for Pod {self.namespace}/{metadata.get('name')}")
                 return

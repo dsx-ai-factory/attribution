@@ -35,4 +35,6 @@ class PlacementReader(Protocol):
 
 
 class PlacementStore(PlacementReader, Protocol):
+    def get_by_pod_uid(self, pod_uid: str) -> PlacementRecord | None: ...
+
     def create(self, record: PlacementRecord) -> CreateResult: ...

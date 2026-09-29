@@ -38,6 +38,7 @@ def _make_recorder(mocker, resolve_return):
     resolver = mocker.Mock()
     resolver.resolve.return_value = resolve_return
     store = mocker.Mock()
+    store.get_by_pod_uid.return_value = None
     return PodPlacementRecorder(core_api=mocker.Mock(), resolver=resolver, store=store, namespace="ns"), store
 
 
@@ -329,6 +330,29 @@ def test_run_relists_after_expired_watch_and_processes_events(mocker):
 
 
 class TestRecordCapturesFailureEvidence:
+    def test_existing_record_reuses_identity_without_resolving_owner(self, mocker):
+        recorder, store = _make_recorder(mocker, _resolved())
+        existing = PlacementRecord(
+            namespace="ns",
+            workload=_resolved()[0],
+            owner=_resolved()[1],
+            pod_name="pod-a",
+            pod_uid="pod-uid-1",
+            node_name="node-a",
+            observed_at="2026-09-14T00:00:00Z",
+            resolver_source="owner-uid",
+        )
+        store.get_by_pod_uid.return_value = existing
+        store.create.return_value = CreateResult.UPDATED
+
+        recorder._record(_pod(status={"reason": "NodeLost"}))
+
+        recorder.resolver.resolve.assert_not_called()
+        record = store.create.call_args.args[0]
+        assert record.workload == existing.workload
+        assert record.owner == existing.owner
+        assert record.node_failure_reason == "NodeLost"
+
     def test_healthy_pod_records_no_failure_reason(self, mocker):
         recorder, store = _make_recorder(mocker, _resolved())
         store.create.return_value = CreateResult.CREATED
