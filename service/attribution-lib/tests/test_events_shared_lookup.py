@@ -179,14 +179,20 @@ class TestSharedLookupTmpdirForkSafety:
     """
 
     def test_forked_child_does_not_delete_shared_tmpdir(self, monkeypatch, tmp_path):
+        import fcntl
         import os
 
         import attribution_lib.events as events_module
 
         fake_tmpdir = str(tmp_path / "shared_lookup")
         os.makedirs(fake_tmpdir)
+        # Own the directory the way `_get_shared_lookup_tmpdir` does: hold the
+        # lock on its lock file for as long as this process can reach it.
+        lock_fd = os.open(os.path.join(fake_tmpdir, events_module._SHARED_LOOKUP_LOCK_NAME), os.O_RDWR | os.O_CREAT)
+        fcntl.flock(lock_fd, fcntl.LOCK_EX)
         monkeypatch.setattr(events_module, "_shared_lookup_tmpdir", fake_tmpdir)
         monkeypatch.setattr(events_module, "_shared_lookup_tmpdir_owner_pid", os.getpid())
+        monkeypatch.setattr(events_module, "_shared_lookup_tmpdir_lock_fd", lock_fd)
 
         pid = os.fork()
         if pid == 0:
