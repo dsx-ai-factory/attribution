@@ -279,7 +279,8 @@ def _collect_pod_evidence(
     if not selector:
         return _PodEvidence([], None, [], {})
     nodes: set[str] = set()
-    failed_nodes: set[str] = set()
+    node_loss_nodes: set[str] = set()
+    exit_code_nodes: set[str] = set()
     pod_names: set[str] = set()
     pod_nodes: dict[str, str] = {}
     for pod in pods:
@@ -297,19 +298,26 @@ def _collect_pod_evidence(
                 pod_nodes[pod_name] = node_name
         status = pod.get("status") or {}
         if _pod_reports_node_failure(pod) and node_name:
-            failed_nodes.add(node_name)
+            node_loss_nodes.add(node_name)
         for cs in status.get("containerStatuses") or []:
             terminated = (cs.get("state") or {}).get("terminated") or {}
             exit_code = terminated.get("exitCode")
             if isinstance(exit_code, int) and exit_code != 0 and node_name:
-                failed_nodes.add(node_name)
+                exit_code_nodes.add(node_name)
                 break
-    # `failed_node` is the lexicographically smallest among nodes that
-    # reported a non-zero exit or node-loss signal, so the result is stable
-    # across kubectl response orderings. Previously this picked the first
-    # iteration-order match, which flakes when the API server returns pods in
-    # a different order between runs.
-    failed_node = min(failed_nodes) if failed_nodes else None
+    # `failed_node` is the lexicographically smallest node within the
+    # strongest evidence tier available, so the result is stable across
+    # kubectl response orderings. Node-loss evidence outranks a generic
+    # non-zero exit code — otherwise an unrelated collateral exit on another
+    # node could win alphabetically and get blamed instead of the actually
+    # lost node. Previously both tiers were pooled into one set, so this
+    # could happen.
+    if node_loss_nodes:
+        failed_node = min(node_loss_nodes)
+    elif exit_code_nodes:
+        failed_node = min(exit_code_nodes)
+    else:
+        failed_node = None
     return _PodEvidence(sorted(nodes), failed_node, sorted(pod_names), pod_nodes)
 
 
@@ -1087,8 +1095,8 @@ class KueueExecutionContextAdapter:
 
     def _merge_placement_records(self, context: KueueExecutionContext) -> None:
         placements: list[PodPlacement] = []
-        failed_nodes: set[str] = set()
-        retained_node_loss = False
+        node_loss_nodes: set[str] = set()
+        exit_code_nodes: set[str] = set()
         for record in self._fetch_placement_records(context):
             placements.append(
                 {
@@ -1098,21 +1106,27 @@ class KueueExecutionContextAdapter:
                     "source": "placement_record",
                 }
             )
-            if record.node_failure_reason:
-                failed_nodes.add(record.node_name)
-                retained_node_loss = retained_node_loss or record.node_failure_reason == "NodeLost" or (
-                    record.node_failure_reason in _NODE_LOSS_DISRUPTION_REASONS
-                )
+            reason = record.node_failure_reason
+            if reason == "NodeLost" or reason in _NODE_LOSS_DISRUPTION_REASONS:
+                node_loss_nodes.add(record.node_name)
+            elif reason:
+                exit_code_nodes.add(record.node_name)
         self._merge_placements(context, placements)
         # PlacementRecords are the only post-GC source for Pod status evidence.
         # Preserve the same precedence as `_service_state`: successful and
         # preempted workloads outrank Pod node-loss evidence, while
         # EVICTED_NODEFAILURES is already NODE_FAIL and remains unchanged.
-        if retained_node_loss and context.get("state") not in {"COMPLETED", "PREEMPTED", "NODE_FAIL"}:
+        if node_loss_nodes and context.get("state") not in {"COMPLETED", "PREEMPTED", "NODE_FAIL"}:
             context["state"] = "NODE_FAIL"
         # Live-Pod evidence takes precedence when selecting the failed node.
-        if failed_nodes and not context.get("failed_node"):
-            context["failed_node"] = min(failed_nodes)
+        # Node-loss evidence outranks a generic non-zero exit code — a
+        # collateral exit on an alphabetically-smaller node must not get
+        # blamed instead of the node that was actually lost.
+        if not context.get("failed_node"):
+            if node_loss_nodes:
+                context["failed_node"] = min(node_loss_nodes)
+            elif exit_code_nodes:
+                context["failed_node"] = min(exit_code_nodes)
 
     @staticmethod
     def _merge_placements(context: KueueExecutionContext, additions: list[PodPlacement]) -> None:

@@ -1429,6 +1429,30 @@ def test_failed_node_is_deterministic_across_pod_orderings():
     assert failed_a == failed_b == failed_c == "n-a"
 
 
+def test_collect_pod_evidence_prefers_node_loss_over_alphabetically_smaller_exit_code_node():
+    """Node-loss evidence must outrank a generic non-zero exit code: a
+    collateral exit on an alphabetically-smaller node must not get blamed
+    instead of the node that was actually lost."""
+    from attribution_blueprint.connectors.execution_contexts.kueue.connector import _collect_pod_evidence
+
+    ns = "team-a"
+    node_lost_pod = {
+        "metadata": {"namespace": ns, "labels": {"batch.kubernetes.io/controller-uid": "owner-A"}},
+        "spec": {"nodeName": "node-z"},
+        "status": {"reason": "NodeLost"},
+    }
+    collateral_exit_pod = {
+        "metadata": {"namespace": ns, "labels": {"batch.kubernetes.io/controller-uid": "owner-A"}},
+        "spec": {"nodeName": "node-a"},
+        "status": {"containerStatuses": [{"state": {"terminated": {"exitCode": 137}}}]},
+    }
+    selector = (ns, "batch.kubernetes.io/controller-uid", "owner-A")
+
+    _, failed_node, _, _ = _collect_pod_evidence([node_lost_pod, collateral_exit_pod], selector)
+
+    assert failed_node == "node-z"
+
+
 def test_collect_pod_evidence_returns_empty_for_workload_with_no_owner_job():
     """A Workload without an owner Job (e.g. pending, never-admitted) has no
     pods to attribute. Returning ([], None) avoids accidentally folding
@@ -1769,7 +1793,10 @@ class TestMergePlacementRecordsFailedNode:
 
         assert ctx["failed_node"] == "node-a"
 
-    def test_lexicographically_smallest_node_wins_among_multiple_failures(self, mocker):
+    def test_node_loss_evidence_outranks_alphabetically_smaller_exit_code_node(self, mocker):
+        """Node-loss evidence must win regardless of node-name ordering: a
+        collateral non-zero exit on an alphabetically-smaller node must not
+        get blamed instead of the node that was actually lost."""
         eca = KueueExecutionContextAdapter()
         mocker.patch.object(
             eca,
@@ -1785,7 +1812,8 @@ class TestMergePlacementRecordsFailedNode:
 
         eca._merge_placement_records(ctx)
 
-        assert ctx["failed_node"] == "node-a"
+        assert ctx["failed_node"] == "node-z"
+        assert ctx["state"] == "NODE_FAIL"
 
 
 class TestPlacementReader:
