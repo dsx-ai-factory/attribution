@@ -418,3 +418,19 @@ def test_fallback_catalog_ids_resolve_in_packaged_catalog() -> None:
         if prefix == "NV_ERR_RESET_REQUIRED":
             assert root.catalog_id == "gpu-reset-required"
     assert "NV_ERR_RESET_REQUIRED" in checked
+
+
+class TestV1Models:
+    def test_neutral_only_node_group_is_left_out_of_v1_response(self):
+        """A node whose symptoms are all neutral has nothing to report, and must not fail the response."""
+        from app.v1.models import AttributionResponseV1, NodeAttribution
+
+        result = _empty_result()
+        _add_node_symptom(result, "node-a", "neutral-symptom")
+        _add_node_symptom(result, "node-b", "demoted-symptom", _lib_source("demoted-rule"))
+        _demote_node_symptom(result, "node-b", "demoted-symptom")
+
+        response = AttributionResponseV1.from_lib_attribution(set(), result)
+
+        nodes = [attribution.node for attribution in response.attributions if isinstance(attribution, NodeAttribution)]
+        assert nodes == ["node-b"]
