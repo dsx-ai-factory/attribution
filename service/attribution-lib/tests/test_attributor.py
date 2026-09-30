@@ -10,6 +10,7 @@
 
 from dataclasses import replace
 from datetime import datetime, timedelta
+from unittest.mock import patch
 from zoneinfo import ZoneInfo
 
 import pytest
@@ -19,6 +20,7 @@ from attribution_lib.attributor import (
     Attributor,
     ConsumedObservation,
     IngestedObservation,
+    _extract_observations,
 )
 from attribution_lib.checkpoint_backends import MemoryCheckpointBackend
 from attribution_lib.core import CalcBadNodesAttributionResult
@@ -723,6 +725,69 @@ def test_attribute_batch_retains_prefilter_keywords_during_incremental_extractio
     result = incremental_attributor.attribute(backend)
 
     assert "Python Exception" in result.symptoms
+
+
+def test_incremental_xid140_replaces_poisoned_gsp_and_retains_evidence(request, event_manager, job_info):
+    """Replace a poisoned-GSP diagnosis when XID-140 is appended to cached syslog.
+
+    Args:
+        request: Pytest request used to name the event streams.
+        event_manager: Event manager fixture.
+        job_info: Job information fixture shared by both attribution passes.
+
+    Returns:
+        None.
+    """
+    lines = [
+        "NVRM: kgspServiceFatalHwError_GB100: NV_PGSP_FALCON_IRQSTAT_FATAL_ERROR FB Poison pending (mask: 0x1)",
+        "NVRM: Xid (PCI:0000:06:00): 94, Contained: GSP. RST: Yes, D-RST: No",
+        "NVRM: nvCheckOkFailedNoLog: Check failed: [NV_ERR_RESET_REQUIRED] (0x00000062) @ kernel_gsp.c:100",
+        "NVRM: Xid (PCI:0000:06:00): 140, pid=1234, name=test, Poison error in GSP.",
+    ]
+    context = ObservationContext(
+        time_interval=TimeInterval(job_info.job_start_time, job_info.job_end_time),
+        resources=AllJobResources,
+        source=ObservationSource.SYSLOG,
+        format=ObservationFormat.RAW_LOKI_STREAMS,
+        timezone=job_info.timezone,
+    )
+    base_ns = int((job_info.job_start_time + timedelta(minutes=1)).timestamp() * 1e9)
+    entries = [
+        make_syslog_entry(line, node="node1", timestamp_ns=base_ns + index * 1_000_000)
+        for index, line in enumerate(lines)
+    ]
+    backend = MemoryCheckpointBackend()
+    first_attributor = Attributor.new(event_manager.create_stream(request.node.name), job_info)
+    first_attributor.ingest_batch([InboundObservation(context, entries[:3])], backend)
+    first_result = first_attributor.attribute(backend)
+
+    assert first_result.outcome_attr.value().outcome == "Fail InfraHW"
+    assert first_result.outcome_attr.value().root_cause_symptom == "poisoned gsp"
+    assert set(first_result.symptoms.symptoms()) == {"poisoned gsp"}
+    assert {source.datum for source in first_result.symptoms["poisoned gsp"]} == set(lines[:3])
+
+    incremental_attributor = Attributor.new(event_manager.create_stream(f"{request.node.name}_incremental"), job_info)
+    with patch("attribution_lib.attributor._extract_observations", wraps=_extract_observations) as extract:
+        incremental_attributor.ingest_batch([InboundObservation(context, entries)], backend)
+    extract.assert_called_once()
+    assert [observation.lines for observation in extract.call_args.args[1]] == [entries[3:]]
+    result = incremental_attributor.attribute(backend)
+
+    xid140 = "XID-140-UNRECOVERABLE_ECC_ERROR_ESCAPE"
+    assert result.outcome_attr.value().outcome == "Fail InfraHW"
+    assert result.outcome_attr.value().root_cause_symptom == xid140
+    assert set(result.bad_nodes_attr.my_bad_nodes) == {"node1"}
+    node_symptoms = result.bad_nodes_attr.my_bad_nodes["node1"].attributions
+    for symptoms in [result.symptoms, node_symptoms]:
+        assert set(symptoms.symptoms()) == {xid140, "NV_ERR_RESET_REQUIRED kernel_gsp.c"}
+    for symptom in ["NV_PGSP_FALCON_IRQSTAT_FATAL_ERROR", "XID-94-CONTAINED_ERROR"]:
+        assert node_symptoms[symptom].has_interesting()
+    for symptom, line in zip(
+        ["NV_PGSP_FALCON_IRQSTAT_FATAL_ERROR", "XID-94-CONTAINED_ERROR", "NV_ERR_RESET_REQUIRED kernel_gsp.c", xid140],
+        lines,
+        strict=True,
+    ):
+        assert [source.datum for source in node_symptoms[symptom].all_sources()] == [line]
 
 
 def test_running(request, event_manager):

@@ -1,6 +1,7 @@
-# CLAUDE.md: Notes for agents and integrators
+# Attribution capability and operator guidance
 
-This file is the deeper FAQ surface for agents and integrators. The README's "What it doesn't do" section is the short version. This is the long version. This maintained guide is part of the distributed source tree.
+This guide is the detailed companion to the README's "What it doesn't do"
+section. It is part of the distributed source tree.
 
 ## Capability boundaries
 

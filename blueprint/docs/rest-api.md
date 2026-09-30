@@ -108,8 +108,10 @@ curl --fail-with-body --silent --show-error \
 JSON
 ```
 
-The Blueprint's log connectors send both `applog` and `syslog` observations
-as `entry_timeseries`.
+Every bundled Blueprint connector sends `entry_timeseries`: the log connectors
+for `applog` and `syslog`, and the PromQL connector for `node_metrics`. A
+`node_metrics` entry must declare its node in `resources`; the service never
+parses one out of a metric body.
 
 For the structured formats, `body` is a JSON-encoded string containing the
 format's array or object. The service rejects mismatched source and format

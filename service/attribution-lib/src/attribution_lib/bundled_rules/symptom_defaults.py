@@ -566,6 +566,15 @@ outcome_symptom(
 )
 
 outcome_symptom(
+    "XID-140-",
+    family=_xid_member(140),
+    outcome="Fail InfraHW",
+    priority=OutcomePriority.HIGH_HW,
+    doc="xid-140",
+    hw_cause="Known HW Cause - Node",
+)
+
+outcome_symptom(
     "poisoned gsp",
     outcome="Fail InfraHW",
     priority=OutcomePriority.HIGH_HW,
@@ -2593,6 +2602,11 @@ known_symptom(
 )
 
 known_symptom("XID-137-NVLINK_PRIV_ERR", family=_xid_member(137, mnemonic="NVLINK_PRIV_ERR"))
+
+known_symptom(
+    "XID-140-UNRECOVERABLE_ECC_ERROR_ESCAPE",
+    family=_xid_member(140, mnemonic="UNRECOVERABLE_ECC_ERROR_ESCAPE"),
+)
 
 known_symptom("XID-145-RLW_REMAP-4", family=_xid_member(145, subcode="RLW_REMAP", error_status=4))
 

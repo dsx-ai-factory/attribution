@@ -231,11 +231,10 @@ class AttributionOrchestrator:
             source = obs["context"]["source"]
             source_value = source.value if hasattr(source, "value") else source
             path = self.dump_observations_dir / f"{ctx['id']}.{source_value}.json"
-            # Bundled connector bodies are JSON-encoded (ENTRY_TIMESERIES,
-            # PROMETHEUS_METRICS); a third-party connector may still send plain
-            # text. Preserve a non-JSON body under `body_raw` so the dump
-            # round-trips for any (Source, Format) pair without crashing the
-            # per-context loop.
+            # Bundled connector bodies are JSON-encoded (ENTRY_TIMESERIES); a
+            # third-party connector may still send plain text. Preserve a
+            # non-JSON body under `body_raw` so the dump round-trips for any
+            # (Source, Format) pair without crashing the per-context loop.
             raw_body = obs["body"]
             body_field: dict[str, object]
             try:

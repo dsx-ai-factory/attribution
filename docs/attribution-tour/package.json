@@ -11,5 +11,17 @@
   "devDependencies": {
     "@slidev/cli": "52.19.1",
     "@slidev/theme-default": "0.25.0"
+  },
+  "pnpm": {
+    "overrides": {
+      "dompurify": "3.4.16"
+    },
+    "packageExtensions": {
+      "@devframes/vite@0.9.16": {
+        "optionalDependencies": {
+          "@devframes/hub": "0.9.16"
+        }
+      }
+    }
   }
 }

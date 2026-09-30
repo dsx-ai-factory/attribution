@@ -145,11 +145,11 @@ def test_returns_empty_when_backend_has_no_data(mocker):
     assert conn.collect(_ctx()) == []
 
 
-def test_body_is_flat_prometheus_metric_entries(mocker):
+def test_body_is_one_timeseries_entry_per_sample(mocker):
     series_a = [
         {
             "metric": {"net_host_name": "node001", "s_cluster": "c", "device": "mlx5_0"},
-            "values": [["1744734450", "1"], ["1744734510", "2"]],
+            "values": [["1744734450", "1"], ["1744734510", "6253.417646976346"]],
         }
     ]
     series_b = [
@@ -173,38 +173,37 @@ def test_body_is_flat_prometheus_metric_entries(mocker):
         source=Source.NODE_METRICS,
         templates={Source.NODE_METRICS: {"link_down": "{name}", "up": "{name}"}},
     )
-    obs = conn.collect(_ctx())
+    ctx = _ctx()
+    obs = conn.collect(ctx)
     assert len(obs) == 1
     o = obs[0]
-    assert o["context"]["source"] == Source.NODE_METRICS
-    assert o["context"]["format"] == Format.PROMETHEUS_METRICS
+    assert o["context"] == {
+        "time_interval": {"start": ctx["start_time"], "end": ctx["end_time"]},
+        "source": Source.NODE_METRICS,
+        "format": Format.ENTRY_TIMESERIES,
+    }
     decoded = json.loads(o["body"])
     assert decoded == [
         {
-            "timestamp": 1744734450,
-            "value": "1",
-            "metric": "link_down",
-            "labels": {"net_host_name": "node001", "s_cluster": "c", "device": "mlx5_0"},
-            "node": "node001",
-            "cluster": "c",
-            "component": "mlx5_0",
+            "ts": 1744734450_000_000_000,
+            "resources": [{"kind": "node", "hostname": "node001"}],
+            "body": (
+                "time: 1744734450, metric_name: link_down, metric_value: 1, threshold: None, "
+                "cluster: c, node: node001, component: mlx5_0"
+            ),
         },
         {
-            "timestamp": 1744734510,
-            "value": "2",
-            "metric": "link_down",
-            "labels": {"net_host_name": "node001", "s_cluster": "c", "device": "mlx5_0"},
-            "node": "node001",
-            "cluster": "c",
-            "component": "mlx5_0",
+            "ts": 1744734510_000_000_000,
+            "resources": [{"kind": "node", "hostname": "node001"}],
+            "body": (
+                "time: 1744734510, metric_name: link_down, metric_value: 6253.417646976346, threshold: None, "
+                "cluster: c, node: node001, component: mlx5_0"
+            ),
         },
         {
-            "timestamp": 1744734450,
-            "value": "0",
-            "metric": "up",
-            "labels": {"net_host_name": "node002", "s_cluster": "c"},
-            "node": "node002",
-            "cluster": "c",
+            "ts": 1744734450_000_000_000,
+            "resources": [{"kind": "node", "hostname": "node002"}],
+            "body": "time: 1744734450, metric_name: up, metric_value: 0, threshold: None, cluster: c, node: node002, component: None",
         },
     ]
 
@@ -226,7 +225,7 @@ def test_skips_series_without_node_label(mocker):
     )
     obs = conn.collect(_ctx())
     body = json.loads(obs[0]["body"])
-    assert [e["node"] for e in body] == ["n1"]
+    assert [e["resources"] for e in body] == [[{"kind": "node", "hostname": "n1"}]]
 
 
 def test_mtls_auth_sets_session_cert():
@@ -355,4 +354,4 @@ def test_cluster_falls_back_to_self_cluster_when_label_dropped(mocker):
     obs = conn.collect(_ctx(nodes=("n1",)))
     body = json.loads(obs[0]["body"])
     assert len(body) == 1
-    assert body[0]["cluster"] == "example-cluster"
+    assert "cluster: example-cluster," in body[0]["body"]

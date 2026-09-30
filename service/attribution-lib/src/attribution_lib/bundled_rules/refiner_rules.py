@@ -80,7 +80,8 @@ _SCRUB_ORDER = [
     "SchedulerNodeFailure",
     "SchedulerNotResponding",
     "ScrubBadNodes",
-    # Correlate the GSP evidence per node before aggregation and XID cascades.
+    # Prefer explicit XID-140 before correlating GSP evidence per node.
+    "Xid140Cascade",
     "PoisonedGspComposite",
     # Combine only the scheduler failure and surviving independent epilog
     # non-response evidence after more specific per-node causes are scrubbed.
@@ -719,6 +720,36 @@ def corroborated_node_failure_refiner(context: RefinerContext):
         for source in epilog_sources:
             combined_sources.add(source)
         node_group.add(combined_sources)
+
+
+@refiner_def(
+    name="Xid140Cascade",
+    author="NVIDIA Attribution team",
+    priority=_priority("Xid140Cascade"),
+)
+def xid140_cascade(context: RefinerContext):
+    """Demote fatal GSP and XID-94 evidence on nodes with an active XID-140.
+
+    Run before PoisonedGspComposite so an explicit unrecoverable ECC error
+    supersedes the inferred diagnosis on that node. Keep the original sources
+    as interesting evidence and leave reset-required signals active.
+
+    Args:
+        context: Refiner context containing per-node job evidence.
+
+    Returns:
+        None.
+    """
+    if context.my_bad_nodes is None:
+        return
+
+    for _node, node_group in context.my_bad_nodes.items():
+        symptoms = list(node_group.attributions.symptoms())
+        if not any(symptom.startswith("XID-140-") for symptom in symptoms):
+            continue
+        for symptom in symptoms:
+            if symptom == "NV_PGSP_FALCON_IRQSTAT_FATAL_ERROR" or symptom.startswith("XID-94-"):
+                node_group.discard(symptom)
 
 
 @refiner_def(

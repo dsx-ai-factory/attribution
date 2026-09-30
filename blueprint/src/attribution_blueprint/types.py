@@ -102,8 +102,6 @@ class ObservationContext(TypedDict):
     time_interval: TimeInterval
     source: Source
     format: Format
-    # TODO: retired in favor of per-entry `resources`; still sent by the promql connector.
-    resources: NotRequired[str]
 
 
 class NodeResource(TypedDict):

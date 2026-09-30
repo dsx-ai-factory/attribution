@@ -195,6 +195,66 @@ def _run_scrub(stream, job_info, bad_nodes, recorder=None):
     run_scrub_phase_refiners(stream, job_info, my_bad_nodes=bad_nodes, recorder=recorder)
 
 
+class TestXid140Cascade:
+    _XID140 = "XID-140-UNRECOVERABLE_ECC_ERROR_ESCAPE"
+    _FATAL = "NV_PGSP_FALCON_IRQSTAT_FATAL_ERROR"
+    _XID94 = "XID-94-CONTAINED_ERROR"
+    _RESET = "NV_ERR_RESET_REQUIRED kernel_gsp.c"
+
+    @pytest.mark.parametrize("trigger", [_XID140, "XID-1400-OTHER", "SXID-140-OTHER", None])
+    def test_only_active_xid140_triggers_cleanup(self, stream, obs_ctx, job_info, trigger):
+        """Do not suppress a valid trio for absent, demoted, or similarly named XIDs.
+
+        Args:
+            stream: Registered event stream.
+            obs_ctx: Evidence source context.
+            job_info: Job metadata.
+            trigger: Active signal, or None to use a demoted XID-140.
+
+        Returns:
+            None.
+        """
+        bad_nodes = _make_bad_nodes(
+            obs_ctx, {"node01": [trigger or self._XID140, self._FATAL, self._XID94, self._RESET]}
+        )
+        if trigger is None:
+            bad_nodes["node01"].discard(self._XID140)
+
+        _run_scrub(stream, job_info, bad_nodes)
+
+        assert ("poisoned gsp" in bad_nodes["node01"]) == (trigger != self._XID140)
+        if trigger == self._XID140:
+            assert self._RESET in bad_nodes["node01"]
+
+    def test_cleanup_preserves_unrelated_signals_and_records_provenance(self, stream, obs_ctx, job_info):
+        """Limit cleanup to exact fatal and XID-94 signals while retaining sources.
+
+        Args:
+            stream: Registered event stream.
+            obs_ctx: Evidence source context.
+            job_info: Job metadata.
+
+        Returns:
+            None.
+        """
+        unrelated = [self._FATAL + "_OTHER", "XID-940-OTHER", self._RESET]
+        bad_nodes = _make_bad_nodes(obs_ctx, {"node01": [self._XID140, self._FATAL, self._XID94, *unrelated]})
+        recorder = DecisionRecorder(job_info.id)
+
+        _run_scrub(stream, job_info, bad_nodes, recorder=recorder)
+
+        assert set(bad_nodes["node01"].symptoms()) == {self._XID140, *unrelated}
+        for symptom in [self._FATAL, self._XID94]:
+            assert bad_nodes["node01"].attributions[symptom].has_interesting()
+        demoted = [
+            event for event in recorder.events if event.rule_name == "Xid140Cascade" and event.action is Action.REMOVED
+        ]
+        assert {(event.hostname, event.symptom) for event in demoted} == {
+            ("node01", self._FATAL),
+            ("node01", self._XID94),
+        }
+
+
 class TestPoisonedGspComposite:
     _FATAL = "NV_PGSP_FALCON_IRQSTAT_FATAL_ERROR"
     _XID94 = "XID-94-CONTAINED_ERROR"

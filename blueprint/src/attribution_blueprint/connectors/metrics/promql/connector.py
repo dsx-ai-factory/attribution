@@ -21,6 +21,7 @@ from attribution_blueprint.types import (
     Format,
     Observation,
     Source,
+    TimeseriesEntry,
     assert_aware,
 )
 
@@ -28,6 +29,7 @@ DEFAULT_STEP_SECONDS = 60
 DEFAULT_NODE_LABEL = "net_host_name"
 DEFAULT_CLUSTER_LABEL = "s_cluster"
 DEFAULT_COMPONENT_LABEL = "device"
+_NS = 10**9  # PromQL sample times are unix seconds; `ts` is nanoseconds
 
 # Prometheus and Mimir use RE2 for label-match regexes. Python's re.escape()
 # backslashes too much for RE2, including hyphens (`\-`), which RE2 rejects.
@@ -46,6 +48,48 @@ class PrometheusMetricEntry(TypedDict):
     node: str
     component: NotRequired[str]
     cluster: NotRequired[str]
+
+
+def _render_metric_body(metric: PrometheusMetricEntry) -> str:
+    """Render one sample as the line the service's node-metric rules match.
+
+    The rules read only the `metric_name: <name>, metric_value: <value>` pair; the
+    remaining fields keep the line identical to what other producers emit.
+    """
+    raw_value = metric.get("value", 0)
+    metric_value: int | float
+    if isinstance(raw_value, str):
+        try:
+            metric_value = int(raw_value)
+        except ValueError:
+            metric_value = float(raw_value)
+    else:
+        metric_value = raw_value
+
+    labels = metric.get("labels", {})
+    # Extract component information - preserve empty strings, only None if truly missing
+    component = metric.get("component")
+    if component is None:
+        component = labels.get("device")
+    # Extract cluster information - preserve empty strings, only None if truly missing
+    cluster = metric.get("cluster")
+    if cluster is None:
+        cluster = labels.get("s_cluster")
+
+    return (
+        f"time: {metric['timestamp']}, metric_name: {metric['metric']}, metric_value: {metric_value}, "
+        f"threshold: {metric.get('threshold')}, cluster: {cluster}, node: {metric['node']}, component: {component}"
+    )
+
+
+def _timeseries_entry(sample: PrometheusMetricEntry) -> TimeseriesEntry:
+    return {
+        # `ts` is what the service filters on; the body's `time:` (seconds) is never
+        # parsed, it only keeps the line identical to other producers' output.
+        "ts": sample["timestamp"] * _NS,
+        "resources": [{"kind": "node", "hostname": sample["node"]}],
+        "body": _render_metric_body(sample),
+    }
 
 
 class PromQLMetricsConnector:
@@ -104,7 +148,7 @@ class PromQLMetricsConnector:
         end = assert_aware(context["end_time"], "end_time")
         start_s = int(start.timestamp())
         end_s = int(end.timestamp())
-        entries: list[PrometheusMetricEntry] = []
+        samples: list[PrometheusMetricEntry] = []
         # Each node lands inside a PromQL `=~ "..."` regex on net_host_name,
         # so regex metacharacters in hostnames would silently broaden the
         # match. Escape only RE2 metacharacters so common hyphenated hostnames
@@ -116,19 +160,18 @@ class PromQLMetricsConnector:
             except KeyError as e:
                 logger.warning(f"promql template {name!r} missing kwarg {e}; skipping")
                 continue
-            entries.extend(self._query_range(name, query, start_s, end_s))
+            samples.extend(self._query_range(name, query, start_s, end_s))
 
-        if not entries:
+        if not samples:
             return []
         return [
             {
                 "context": {
                     "time_interval": {"start": context["start_time"], "end": context["end_time"]},
                     "source": self._source,
-                    "format": Format.PROMETHEUS_METRICS,
-                    "resources": "AllJobResources",
+                    "format": Format.ENTRY_TIMESERIES,
                 },
-                "body": json.dumps(entries),
+                "body": json.dumps([_timeseries_entry(sample) for sample in samples]),
             }
         ]
 
@@ -161,9 +204,10 @@ class PromQLMetricsConnector:
             labels = series.get("metric", {}) or {}
             node = labels.get(DEFAULT_NODE_LABEL)
             if not node:
-                # The service requires node identity on every PROMETHEUS_METRICS
-                # entry. Aggregations that drop net_host_name are unattributable;
-                # skip rather than emit unscoped points.
+                # A node_metrics entry must declare its node; the service never
+                # parses one out of a metric body. Aggregations that drop
+                # net_host_name are unattributable; skip rather than emit
+                # unscoped points.
                 continue
             # Templates that aggregate (e.g. `max by (net_host_name) (...)`)
             # drop s_cluster, so fall back to the connector's configured

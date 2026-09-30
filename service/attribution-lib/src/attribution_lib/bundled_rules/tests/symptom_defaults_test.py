@@ -54,6 +54,11 @@ def test_xid_family_represents_declared_identifier_shapes() -> None:
         "number": 94,
         "mnemonic": "CONTAINED_ERROR",
     }
+    assert registry.families["XID-140-"].properties == {"number": 140}
+    assert registry.family_for("XID-140-UNRECOVERABLE_ECC_ERROR_ESCAPE").properties == {
+        "number": 140,
+        "mnemonic": "UNRECOVERABLE_ECC_ERROR_ESCAPE",
+    }
     assert registry.families["XID-13-GR_EXCEPTION /"].properties == {
         "number": 13,
         "mnemonic": "GR_EXCEPTION",
