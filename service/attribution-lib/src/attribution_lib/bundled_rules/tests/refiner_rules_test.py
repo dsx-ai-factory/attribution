@@ -4116,7 +4116,11 @@ class TestOutcomeReclassification:
         result = AttributionResult(event_stream=stream, bad_nodes_attr=bad_nodes_result)
         result.outcome_attr = _make_outcome("Fail User")
 
-        symptoms = _make_symptoms(obs_ctx)
+        # Non-empty and all "job failed": exercises the actual all(symptom ==
+        # "job failed" ...) check. An empty symptom set would make this test
+        # pass vacuously regardless of whether that check is implemented
+        # correctly.
+        symptoms = _make_symptoms(obs_ctx, "job failed")
         _run_post_outcome(stream, ji, symptoms, outcome=result.outcome_attr, attribution_result=result)
         assert result.outcome_attr.value().outcome == "Pass"
         assert result.outcome_attr.value().root_cause_symptom == "SLURM preempted"
