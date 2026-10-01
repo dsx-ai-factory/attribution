@@ -13,7 +13,8 @@ from typing import Annotated, Literal, NamedTuple, Optional, Union
 
 from attribution_lib.attr_types import NodeAttributionGroup
 from attribution_lib.core import AttributionResult
-from attribution_lib.job_info import JobInfo, JobInfoBuilder
+from attribution_lib.job_info import JobInfo, JobInfoBuilder, Scheduler
+from attribution_lib.observation.inbound import Id as ObservationId
 from attribution_lib.outcome import calculate_outcome
 from attribution_lib.sources import SourceSet, SymptomSet
 from loguru import logger
@@ -34,8 +35,13 @@ from app.attributor import (
     WorkloadTypeEnum,
 )
 from app.exceptions import ResponseModel
-from app.observation import ObservationId
 from app.util import HashableModel, to_zoneinfo
+
+# Legacy V1 `workload.type` values that name a scheduler. 
+_V1_TYPE_TO_SCHEDULER: dict[WorkloadTypeEnum, Scheduler] = {
+    WorkloadTypeEnum.SLURM: Scheduler.SLURM,
+    WorkloadTypeEnum.KUEUE: Scheduler.KUEUE,
+}
 
 
 class AttributorWorkloadInfoV1(HashableModel):
@@ -97,6 +103,11 @@ class AttributorInfoV1(HashableModel):
             timezone=to_zoneinfo(w.job_start_time),
             node_to_ranks=node_to_ranks,
         )
+        # V1 has no `workload.scheduler` wire field so derive the scheduler from the 
+        # legacy `type` here.
+        scheduler = _V1_TYPE_TO_SCHEDULER.get(w.type)
+        if scheduler is not None:
+            builder.scheduler(scheduler)
         if w.interest_start_time:
             builder.interest_start_time(w.interest_start_time)
         if w.interest_end_time:

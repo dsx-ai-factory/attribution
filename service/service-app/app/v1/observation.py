@@ -8,27 +8,28 @@
 # without an express license agreement from NVIDIA CORPORATION or
 # its affiliates is strictly prohibited.
 
+"""V1 observation wire model. Accepts every legacy `Format`; kept as-is for existing V1 consumers."""
+
 import json
-from datetime import datetime, timedelta, timezone
-from typing import Any, Optional
+from typing import Any
 from zoneinfo import ZoneInfo
 
 from attribution_lib.observation.inbound import (
     Context as InboundContext,
     Format as ObservationFormat,
-    Id as ObservationId,  # noqa: F401
     Observation as LibObservation,
     Source as ObservationSource,
     TimeInterval as LibTimeInterval,
 )
-from attribution_lib.resources import AllJobResources, ResourceSet
-from pydantic import BaseModel, ConfigDict, Field, RootModel, ValidationError, model_validator
+from attribution_lib.resources import AllJobResources
+from pydantic import BaseModel, RootModel, ValidationError, model_validator
 
+from app.entry_timeseries import decode_timeseries_entries
 from app.exceptions import InvalidObservationBodyError, UnknownObservationFormatError
 from app.util import HashableModel, TimeInterval
 
 
-class ObservationContext(HashableModel):
+class ObservationContextV1(HashableModel):
     """Describes the scope of an observation."""
 
     time_interval: TimeInterval
@@ -38,8 +39,8 @@ class ObservationContext(HashableModel):
     is_prefiltered: bool = False
 
     @model_validator(mode="after")
-    def _only_entry_timeseries_may_declare_an_open_interval(self) -> "ObservationContext":
-        # Every other format has the bounds read out from under it during extraction. 
+    def _only_entry_timeseries_may_declare_an_open_interval(self) -> "ObservationContextV1":
+        # Every other format has the bounds read out from under it during extraction.
         # This validator ensures other formats are silently affected during migration to entry_timeseries.
         if self.format is not ObservationFormat.ENTRY_TIMESERIES and (
             self.time_interval.start is None or self.time_interval.end is None
@@ -72,28 +73,10 @@ class RawLokiStreams(RootModel):
     root: list[RawLokiStream]
 
 
-_TS_NS_MIN = int((datetime.min.replace(tzinfo=timezone.utc) + timedelta(days=1)).timestamp() * 1e9)
-_TS_NS_MAX = int((datetime.max.replace(tzinfo=timezone.utc) - timedelta(days=1)).timestamp() * 1e9)
-
-
-class TimeseriesEntry(BaseModel):
-    """One entry of an `entry_timeseries` body."""
-
-    model_config = ConfigDict(extra="forbid")
-
-    body: str
-    ts: Optional[int] = Field(default=None, ge=_TS_NS_MIN, le=_TS_NS_MAX)
-    resources: Optional[ResourceSet] = None
-
-
-class TimeseriesEntries(RootModel):
-    root: list[TimeseriesEntry]
-
-
-class Observation(HashableModel):
+class ObservationV1(HashableModel):
     """Describes association of some observation data with a context."""
 
-    context: ObservationContext
+    context: ObservationContextV1
     body: str
 
     def to_lib_observation(self, timezone: ZoneInfo) -> LibObservation:
@@ -121,10 +104,7 @@ class Observation(HashableModel):
                 except ValidationError as e:
                     raise InvalidObservationBodyError.new(context.format.value).to_http_exception() from e
             case ObservationFormat.ENTRY_TIMESERIES:
-                try:
-                    body = [entry.model_dump() for entry in TimeseriesEntries.model_validate_json(self.body).root]
-                except ValidationError as e:
-                    raise InvalidObservationBodyError.new(context.format.value).to_http_exception() from e
+                body = decode_timeseries_entries(self.body)
             case _:
                 raise UnknownObservationFormatError.new(context.format.value).to_http_exception()
 

@@ -34,7 +34,7 @@ def test_terminal_rxpipe_after_raw_slurm_timeout_finishes_as_pass(
         nodes=["node01"],
         time_limit=60,
         exit_code_signal=0,
-    )
+    )._replace(type="slurm")
     timeout_time = job_end - timedelta(seconds=97)
     xid_time = job_end - timedelta(seconds=34)
     xid_timestamp_ns = int(xid_time.timestamp() * 1_000_000_000)
@@ -110,7 +110,7 @@ def test_timeout_cascades_and_unused_xid_leave_only_timeout_failure(
         nodes=["test-node-alpha", "test-node-bravo"],
         time_limit=None,
         exit_code_signal=0,
-    )
+    )._replace(type="slurm")
     interval = TimeInterval(job_info.job_start_time, job_info.job_end_time)
 
     syslog = InboundObservation(

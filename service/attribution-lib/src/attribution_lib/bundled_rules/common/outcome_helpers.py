@@ -67,8 +67,17 @@ def apply_outcome_reclassification_rules(
 ) -> None:
     """Apply post-processing outcome reclassification rules."""
 
-    # Reclassify PREEMPTED jobs to Pass
-    if job_info.state is not None and job_info.state.upper() == "PREEMPTED":
+    kueue_has_only_preemption_fallback = all(
+        symptom == "job failed" for symptom in attribution_result.symptoms.symptoms()
+    )
+
+    # Kueue preemption must not mask evidence-backed failures. Other scheduler
+    # types retain their historical PREEMPTED reclassification behavior.
+    if (
+        (job_info.type != "kueue" or kueue_has_only_preemption_fallback)
+        and job_info.state is not None
+        and job_info.state.upper() == "PREEMPTED"
+    ):
         previous_source = attribution_result.outcome_attr.one_source()
 
         if previous_source is None:
@@ -86,13 +95,13 @@ def apply_outcome_reclassification_rules(
         return
 
     # Conditions:
-    # - Cancelled by Timeout (i.e., SLURM timeout) and not user-cancel
+    # - Cancelled by Timeout (i.e., scheduler timeout) and not user-cancel
     # - No other error symptoms
     # - distributed timeout (from applog runtime_args) < job_info.time_limit
     # Reclassify TIMEOUT to Pass when it's the only symptom (no other errors found)
     if job_info.time_limit is not None:
         normalized_symptoms = [s.lower() for s in attribution_result.symptoms.symptoms()]
-        is_slurm_timeout = (
+        is_scheduler_timeout = (
             attribution_result.cancelled_by is not None and attribution_result.cancelled_by.lower() == "timeout"
         )
         has_user_cancel_symptom = any("cancelled by user" in s for s in normalized_symptoms)
@@ -100,7 +109,7 @@ def apply_outcome_reclassification_rules(
             all(s.startswith("cancelled by timeout") for s in normalized_symptoms) or not normalized_symptoms
         )
 
-        if is_slurm_timeout and not has_user_cancel_symptom and has_only_timeout_symptoms:
+        if is_scheduler_timeout and not has_user_cancel_symptom and has_only_timeout_symptoms:
             # Determine root_cause_symptom and derived rule based on pytorch timeout check
             pytorch_timeout_minutes = get_pytorch_timeout_minutes(event_stream)
             if pytorch_timeout_minutes is not None and pytorch_timeout_minutes.value() < float(job_info.time_limit):

@@ -25,10 +25,14 @@ web = [
     "uvicorn>=0.27",
     "pyyaml>=6.0",
 ]
+pod-placement-recorder = [
+    "kubernetes>=34.1",
+]
 
 [project.scripts]
 nvidia-attribution-blueprint = "attribution_blueprint.cli:main"
 nvidia-attribution-blueprint-web = "attribution_blueprint.webui.cli:main"
+pod-placement-recorder = "attribution_blueprint.connectors.execution_contexts.kueue.pod_placement.recorder.cli:main"
 
 [tool.uv.sources]
 nvidia-attribution-client = { path = "../service/service-app/nvidia_attribution_client", editable = false }

@@ -274,6 +274,14 @@ class JobInfoDuplicateFieldError(JobInfoError):
         self.field_name = field_name
 
 
+class JobInfoUnknownSchedulerError(JobInfoError):
+    """Error for when a non-empty scheduler identity is not a recognized `Scheduler` value."""
+
+    def __init__(self, scheduler: str) -> None:
+        super().__init__(scheduler)
+        self.scheduler = scheduler
+
+
 class JobInfoUnevenNodeToRanksError(JobInfoError):
     """Error when participating nodes in node_to_ranks have rank lists of differing lengths.
 

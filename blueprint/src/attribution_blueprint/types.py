@@ -29,16 +29,13 @@ class ExecutionContext(TypedDict):
     # Optional IANA zone used to interpret offsetless evidence timestamps.
     # This preserves regional/DST identity that a numeric UTC offset cannot.
     timezone: NotRequired[str]
-    # Wire-format value sent to the attribution service as `workload.type`.
-    # Constrained by the service's WorkloadTypeEnum ({"", "slurm", "runai"}
-    # today). A connector that has no matching enum member must send "".
+    # Wire-format scheduler identity sent to the attribution service as
+    # `workload.type`.
     workload_type: NotRequired[str]
-    # BP-internal scheduler identity (the ECA component that discovered this
-    # context: "slurm", "kueue", "static", ...). SQLiteOutput reads this for
-    # the `scheduler_type` column so kueue rows are distinguishable from
-    # other UNDEFINED sources even though kueue sends `workload_type=""`.
-    # Decoupling means BP can label its own rows without coordinating
-    # service-side enum changes.
+    # Connector/scheduler identity ("slurm", "kueue", "static", ...).
+    # SQLiteOutput stores it as `scheduler_type` for connector provenance.
+    # The orchestrator forwards only supported scheduler identities as V2
+    # `workload.scheduler`; connector-only values such as "static" stay local.
     scheduler: NotRequired[str]
     # Per-attempt key, scheduler-agnostic. Slurm sets it = sluid; Kueue sets
     # it = the Workload's metadata.uid (a new Workload is created per
@@ -60,6 +57,9 @@ class ExecutionContext(TypedDict):
     cancelled_by: NotRequired[str]
     time_limit: NotRequired[int]
     gpu_count: NotRequired[int]
+    # Per-Pod scheduler placement with source provenance. Kueue populates
+    # this from live Pods and durable PlacementRecords when available.
+    pod_placements: NotRequired[list[dict]]
 
 
 # Wire-format enums. Values mirror the service observation API contract.
@@ -79,22 +79,8 @@ class Source(str, Enum):
     CSP_EVENT = "csp_event"
 
 
-# Wire-format enums. Values mirror the service observation API contract.
-class Format(str, Enum):
-    EMPTY = ""
-    STRING_LIST = "string_list"
-    RAW_LOG = "raw_log"
-    RAW_LOKI_STREAMS = "raw_loki_streams"
-    LOKI_DICT_LIST = "loki_dict_list"
-    CSV_METRIC_RESPONSE = "csv_metric_response"
-    UFMLOG = "ufmlog"
-    PROMETHEUS_METRICS = "prometheus_metrics"
-    CSP_EVENT_LIST = "csp_event_list"
-    ENTRY_TIMESERIES = "entry_timeseries"
-
-
 class TimeInterval(TypedDict):
-    # A None bound is unbounded on that side; the service accepts it only for ENTRY_TIMESERIES.
+    # A None bound is unbounded on that side.
     start: datetime | None
     end: datetime | None
 
@@ -102,9 +88,6 @@ class TimeInterval(TypedDict):
 class ObservationContext(TypedDict):
     time_interval: TimeInterval
     source: Source
-    format: Format
-    # TODO: retired in favor of per-entry `resources`; still sent by the promql connector.
-    resources: NotRequired[str]
 
 
 class NodeResource(TypedDict):
@@ -121,7 +104,7 @@ ResourceSet = Literal["AllJobResources"] | list[NodeResource | ReplicaResource]
 
 
 class TimeseriesEntry(TypedDict):
-    """One element of an ENTRY_TIMESERIES body. The service rejects any other key."""
+    """One element of an observation body. The service rejects any other key."""
 
     body: str
     # Nanoseconds since the epoch. Omit when the producer has no timestamp for the line.
@@ -132,9 +115,7 @@ class TimeseriesEntry(TypedDict):
 
 class Observation(TypedDict):
     context: ObservationContext
-    # `body` is the connector's already-serialized payload (JSON for
-    # ENTRY_TIMESERIES/LOKI_DICT_LIST/PROMETHEUS_METRICS; raw text for
-    # RAW_LOG). The service-side parser branches on `format` to deserialize.
+    # JSON-encoded list of `TimeseriesEntry`.
     body: str
 
 
@@ -152,7 +133,6 @@ def assert_aware(dt: datetime, field: str) -> datetime:
 
 __all__ = [
     "ExecutionContext",
-    "Format",
     "NodeResource",
     "Observation",
     "ObservationContext",

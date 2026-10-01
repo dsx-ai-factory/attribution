@@ -15,7 +15,7 @@ from http import HTTPStatus
 from pathlib import Path
 
 import pytest
-from nvidia_attribution_client import ApiException, AttributorInfoV2, Observation
+from nvidia_attribution_client import ApiException, AttributorInfoV2, ObservationV2
 
 from attribution_blueprint.connectors.attribution import AttributionConnector
 
@@ -63,15 +63,13 @@ def _info(workload_id: str = "ctx-1") -> AttributorInfoV2:
     )
 
 
-def _observation(**context_overrides) -> Observation:
+def _observation(**context_overrides) -> ObservationV2:
     context = {
         "source": "syslog",
-        "format": "loki_dict_list",
-        "resources": "AllJobResources",
         "time_interval": {"start": "2026-05-01T12:00:00+00:00", "end": "2026-05-01T12:30:00+00:00"},
     }
     context.update(context_overrides)
-    return Observation.model_validate({"context": context, "body": "[]"})
+    return ObservationV2.model_validate({"context": context, "body": "[]"})
 
 
 def test_create_attributor_posts_and_returns_id(mocker):

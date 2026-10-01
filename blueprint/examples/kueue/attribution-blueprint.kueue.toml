@@ -21,6 +21,28 @@ kubeconfig = "/CHANGE_ME_PATH/kubeconfig"
 context = "CHANGE_ME_KUBECTL_CONTEXT"
 namespace = "CHANGE_ME_NAMESPACE"
 timeout_seconds = 60
+# Read durable Pod placement when the optional recorder is installed.
+placement_records_enabled = false
+
+# Set placement_records_enabled = true when enabling this recorder client.
+#
+# [eca.kueue.placement_recorder]
+# endpoint = "http://attribution-pod-placement-recorder.CHANGE_ME_NAMESPACE.svc:8080"
+# timeout_seconds = 10
+
+# [eca.kueue.prometheus_metrics]
+# endpoint = "https://CHANGE_ME_PROMETHEUS_HOST"
+# cluster = "CHANGE_ME_CLUSTER"
+# cluster_label = "cluster"
+# lookback_padding_seconds = 300
+# batch_size = 20
+# pod_labels_metric = "kube_pod_labels"
+# pod_controller_uid_label = "label_batch_kubernetes_io_controller_uid"
+
+# [eca.kueue.prometheus_metrics.auth]
+# type = "mtls"
+# cert_path = "/CHANGE_ME_PATH/prometheus-mtls/tls.crt"
+# key_path = "/CHANGE_ME_PATH/prometheus-mtls/tls.key"
 
 [log.applog]
 component = "kubectl_logs"

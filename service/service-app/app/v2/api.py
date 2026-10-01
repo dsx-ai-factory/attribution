@@ -21,13 +21,13 @@ from app.exceptions import (
     UnknownAttributorIdError,
     ValidationErrorResponse,
 )
-from app.observation import Observation
 from app.v2.models import (
     AttributionResponseV2,
     AttributorInfoV2,
     NewResponseV2,
     ObservationResponseV2,
 )
+from app.v2.observation import ObservationV2
 
 router = APIRouter()
 
@@ -63,7 +63,9 @@ def new_attribution(att: AttributorInfoV2, request: Request, response: Response)
         **ValidationErrorResponse.response(),
     },
 )
-def ingest(att_id: AttributorId, obs_data: Observation, request: Request, response: Response) -> ObservationResponseV2:
+def ingest(
+    att_id: AttributorId, obs_data: ObservationV2, request: Request, response: Response
+) -> ObservationResponseV2:
     """Pass observation to specified attributor and return an id that identifies it. It is an error to provide a duplicate observation. When the id is returned, the observation has been successfully ingested."""
     ingested = request.app.state.aim.get_attributor(att_id).ingest(obs_data)
     response.status_code = 201

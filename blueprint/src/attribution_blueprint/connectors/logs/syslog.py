@@ -8,7 +8,7 @@
 # without an express license agreement from NVIDIA CORPORATION or
 # its affiliates is strictly prohibited.
 
-"""Build ENTRY_TIMESERIES entries out of raw syslog text.
+"""Build `entry_timeseries` entries out of raw syslog text.
 
 The service keeps a syslog entry only when it can place it in time, so every
 entry needs a `ts`. It is read from the line itself; a line whose timestamp
@@ -48,7 +48,7 @@ _MONTH_ABBREVS = {
 
 
 def syslog_entries_from_text(text: str, context: ExecutionContext, node: Optional[str] = None) -> list[TimeseriesEntry]:
-    """One ENTRY_TIMESERIES entry per dated, non-empty syslog line.
+    """One `entry_timeseries` entry per dated, non-empty syslog line.
 
     Args:
         text: Raw syslog text, one record per line.

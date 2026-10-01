@@ -14,9 +14,8 @@ cluster (kueue-demo namespace) on 2026-05-21.
 The synthetic fixtures in `tests/fixtures/kueue_*.json` are convenient but
 silently elide shape differences real clusters produce. These tests load the
 captured payloads under `tests/fixtures/kueue_live/` and assert the connector
-behaves the way it did on the live cluster, including a JobSet-attribution
-gap (a JobSet's Workload has `ownerReferences.kind=JobSet`, not `Job`, so
-`_owner_job_uid` returns None and the per-pod evidence path is skipped).
+behaves the way it did on the live cluster, including JobSet child Job and
+pod evidence.
 """
 
 from __future__ import annotations
@@ -40,9 +39,9 @@ def _load(name: str) -> dict:
 def _kubectl_live_router(workloads: list[dict], pods: list[dict], jobs: list[dict]):
     """Dispatch kubectl calls against in-memory lists of captured objects.
 
-    Mirrors the four call shapes the adapter issues (list workloads, get single
-    workload by name, list pods by `batch.kubernetes.io/controller-uid=<uid>`,
-    get single Job by name). The synthetic fixture router lives in
+    Mirrors the call shapes the adapter issues (list workloads, get a single
+    workload, list pods by owner label, get a direct Job, and list JobSet
+    child Jobs). The synthetic fixture router lives in
     `test_connector.py`; this one is intentionally separate so live payloads
     don't bleed into the synthetic tests' shared module-level state.
     """
@@ -114,6 +113,19 @@ def _kubectl_live_router(workloads: list[dict], pods: list[dict], jobs: list[dic
             if obj is None:
                 raise subprocess.CalledProcessError(returncode=1, cmd=cmd, stderr="NotFound")
             payload = obj
+        elif kind == "jobs":
+            items = []
+            if label_selector and "=" in label_selector:
+                lkey, lvalue = label_selector.split("=", 1)
+                for job in jobs:
+                    metadata = job.get("metadata") or {}
+                    labels = metadata.get("labels") or {}
+                    annotations = metadata.get("annotations") or {}
+                    if (not ns or metadata.get("namespace") == ns) and (
+                        labels.get(lkey) == lvalue or annotations.get(lkey) == lvalue
+                    ):
+                        items.append(job)
+            payload = {"apiVersion": "v1", "kind": "List", "items": items}
         else:
             payload = {"items": []}
 
@@ -149,7 +161,8 @@ def test_live_single_job_failure_attributes_failed_node(mocker):
 
     assert len(contexts) == 1
     ctx = contexts[0]
-    assert ctx["state"] == "FINISHED_FAILED"
+    assert ctx["state"] == "FAILED"
+    assert ctx["kueue_state"] == "FINISHED_FAILED"
     assert ctx["nodes"] == ["kueue-demo-worker2"]
     assert ctx["failed_node"] == "kueue-demo-worker2"
     assert ctx["queue_name"] == "dev"
@@ -186,7 +199,8 @@ def test_live_jobset_failure_attributes_failed_node(mocker):
 
     assert len(contexts) == 1
     ctx = contexts[0]
-    assert ctx["state"] == "FINISHED_FAILED"
+    assert ctx["state"] == "FAILED"
+    assert ctx["kueue_state"] == "FINISHED_FAILED"
     # Only the failed pod (rank 1, exit 42 on kueue-demo-worker) survived
     # the JobSet's failurePolicy - the succeeding sibling was torn down by
     # the time fixtures were captured. nodes therefore lists just the one
@@ -250,8 +264,9 @@ def test_live_job_with_deleted_pod_has_no_node_evidence(mocker):
 
     assert len(contexts) == 1
     ctx = contexts[0]
-    # State follows the Workload's Finished=True reason=Succeeded.
-    assert ctx["state"] == "FINISHED_SUCCEEDED"
+    # Service state is normalized while the native Kueue state is preserved.
+    assert ctx["state"] == "COMPLETED"
+    assert ctx["kueue_state"] == "FINISHED_SUCCEEDED"
     assert ctx["nodes"] == []
     assert "failed_node" not in ctx
 

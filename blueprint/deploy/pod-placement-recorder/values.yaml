@@ -1,0 +1,39 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: LicenseRef-NvidiaProprietary
+#
+# NVIDIA CORPORATION, its affiliates and licensors retain all intellectual
+# property and proprietary rights in and to this material, related
+# documentation and any modifications thereto. Any use, reproduction,
+# disclosure or distribution of this material and related documentation
+# without an express license agreement from NVIDIA CORPORATION or
+# its affiliates is strictly prohibited.
+
+image:
+  repository: pod-placement-recorder
+  tag: local
+  pullPolicy: IfNotPresent
+
+queueSize: 1000
+workers: 2
+watchTimeoutSeconds: 60
+workloadVersion: v1beta1
+jobsetVersion: v1alpha2
+retentionDays: 30
+
+storage:
+  sqlite:
+    path: /data/placements.db
+    size: 1Gi
+    accessModes:
+      - ReadWriteOnce
+    storageClassName: ""
+
+nodeSelector: {}
+tolerations: []
+
+resources:
+  requests:
+    cpu: 50m
+    memory: 64Mi
+  limits:
+    memory: 256Mi

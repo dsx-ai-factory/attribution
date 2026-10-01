@@ -1,4 +1,6 @@
 .uv-cache/
+.cursor/
+.claude/
 __pycache__/
 *.pyc
 *.egg-info/

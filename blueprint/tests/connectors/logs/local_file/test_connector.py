@@ -14,7 +14,7 @@ from datetime import datetime, timezone
 import pytest
 
 from attribution_blueprint.connectors.logs.local_file import LocalFileLogConnector, parse_size
-from attribution_blueprint.types import Format, Source
+from attribution_blueprint.types import Source
 
 
 def _text(observation: dict) -> str:
@@ -50,7 +50,6 @@ def test_reads_existing_file_and_emits_one_observation(tmp_path):
     assert len(obs) == 1
     o = obs[0]
     assert o["context"]["source"] == Source.APPLOG
-    assert o["context"]["format"] == Format.ENTRY_TIMESERIES
     assert o["context"]["time_interval"] == {"start": None, "end": None}
     assert json.loads(o["body"]) == [{"body": "line one"}, {"body": "line two"}, {"body": "line three"}, {"body": ""}]
 
@@ -222,7 +221,6 @@ def test_syslog_directory_expands_context_node_directories(tmp_path):
 
     assert len(obs) == 3
     assert all(observation["context"]["source"] == Source.SYSLOG for observation in obs)
-    assert all(observation["context"]["format"] == Format.ENTRY_TIMESERIES for observation in obs)
     assert all(
         observation["context"]["time_interval"] == {"start": ctx["start_time"], "end": ctx["end_time"]}
         for observation in obs

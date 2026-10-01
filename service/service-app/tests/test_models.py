@@ -25,6 +25,7 @@ from attribution_lib.observation.inbound import (
     Context as InboundContext,
     Format,
     Id,
+    Source as ObservationSource,
     TimeInterval,
 )
 from attribution_lib.outcome import OutcomeAttribution
@@ -35,7 +36,6 @@ from attribution_lib.sources import (
 )
 from pydantic import ValidationError
 
-from app.observation import ObservationSource
 from app.v2.models import (
     AttributionResponseV2,
     NodeSource,

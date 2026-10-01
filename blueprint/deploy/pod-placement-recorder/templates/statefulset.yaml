@@ -1,0 +1,81 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: LicenseRef-NvidiaProprietary
+#
+# NVIDIA CORPORATION, its affiliates and licensors retain all intellectual
+# property and proprietary rights in and to this material, related
+# documentation and any modifications thereto. Any use, reproduction,
+# disclosure or distribution of this material and related documentation
+# without an express license agreement from NVIDIA CORPORATION or
+# its affiliates is strictly prohibited.
+
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ .Release.Name }}-pod-placement-recorder
+  namespace: {{ .Release.Namespace }}
+spec:
+  replicas: 1
+  serviceName: {{ .Release.Name }}-pod-placement-recorder
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: pod-placement-recorder
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: pod-placement-recorder
+        app.kubernetes.io/instance: {{ .Release.Name }}
+    spec:
+      serviceAccountName: {{ .Release.Name }}-pod-placement-recorder
+      terminationGracePeriodSeconds: 30
+{{- with .Values.nodeSelector }}
+      nodeSelector:
+{{ toYaml . | indent 8 }}
+{{- end }}
+{{- with .Values.tolerations }}
+      tolerations:
+{{ toYaml . | indent 8 }}
+{{- end }}
+      containers:
+        - name: pod-placement-recorder
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args:
+            - --namespace={{ .Release.Namespace }}
+            - --queue-size={{ .Values.queueSize }}
+            - --workers={{ .Values.workers }}
+            - --watch-timeout-seconds={{ .Values.watchTimeoutSeconds }}
+            - --workload-version={{ .Values.workloadVersion }}
+            - --jobset-version={{ .Values.jobsetVersion }}
+            - --sqlite-path={{ .Values.storage.sqlite.path }}
+            - --retention-days={{ .Values.retentionDays }}
+          ports:
+            - name: health
+              containerPort: 8080
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: health
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /livez
+              port: health
+            periodSeconds: 10
+          resources:
+{{ toYaml .Values.resources | indent 12 }}
+          volumeMounts:
+            - name: data
+              mountPath: {{ dir .Values.storage.sqlite.path }}
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes:
+{{ toYaml .Values.storage.sqlite.accessModes | indent 10 }}
+{{- if .Values.storage.sqlite.storageClassName }}
+        storageClassName: {{ .Values.storage.sqlite.storageClassName | quote }}
+{{- end }}
+        resources:
+          requests:
+            storage: {{ .Values.storage.sqlite.size }}

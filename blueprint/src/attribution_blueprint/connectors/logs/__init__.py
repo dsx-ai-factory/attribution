@@ -14,7 +14,6 @@ from typing import Callable, Optional, Protocol
 from attribution_blueprint import mca_registry as _registry
 from attribution_blueprint.types import (
     ExecutionContext,
-    Format,
     Observation,
     Source,
     TimeInterval,
@@ -30,7 +29,7 @@ class LogConnector(Protocol):
 
 
 def entries_from_text(text: str, node: Optional[str] = None) -> list[TimeseriesEntry]:
-    """One ENTRY_TIMESERIES entry per newline-separated line.
+    """One `entry_timeseries` entry per newline-separated line.
 
     Emits only the body unless `node` is given, in which case every entry declares
     it. Timestamp and any remaining resource parsing is handled by the service.
@@ -64,10 +63,10 @@ def log_observation(
     entries: list[TimeseriesEntry],
     time_interval: Optional[TimeInterval] = None,
 ) -> Observation:
-    """Build an ENTRY_TIMESERIES log Observation, defaulting `time_interval` to the per-source contract.
+    """Build an `entry_timeseries` log Observation, defaulting `time_interval` to the per-source contract.
 
     Args:
-        entries: ENTRY_TIMESERIES entries, serialized into the observation body.
+        entries: `entry_timeseries` entries, serialized into the observation body.
         time_interval: Override for `DEFAULT_TIME_INTERVAL[source]`, e.g. a tighter
             window when the backend returned unwindowed data.
     """
@@ -77,7 +76,6 @@ def log_observation(
         "context": {
             "time_interval": time_interval,
             "source": source,
-            "format": Format.ENTRY_TIMESERIES,
         },
         "body": json.dumps(entries),
     }

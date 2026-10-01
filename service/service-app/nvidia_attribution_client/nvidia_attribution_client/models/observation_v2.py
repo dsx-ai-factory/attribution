@@ -16,19 +16,19 @@ import pprint
 import re  # noqa: F401
 import json
 
-from pydantic import BaseModel, ConfigDict, StrictStr
+from pydantic import BaseModel, ConfigDict, Field, StrictStr
 from typing import Any, ClassVar, Dict, List
-from nvidia_attribution_client.models.observation_context import ObservationContext
+from nvidia_attribution_client.models.observation_context_v2 import ObservationContextV2
 from typing import Optional, Set
 from typing_extensions import Self
 from pydantic_core import to_jsonable_python
 
-class Observation(BaseModel):
+class ObservationV2(BaseModel):
     """
-    Describes association of some observation data with a context.
+    An `entry_timeseries` entry list and the context it was collected in.
     """ # noqa: E501
-    context: ObservationContext
-    body: StrictStr
+    context: ObservationContextV2
+    body: StrictStr = Field(description="JSON-encoded list of entries. Each entry has a `body` string, an optional `ts` (unix nanoseconds; null when the producer has none) and optional `resources` naming what the entry is about. Null handling varies by source.")
     __properties: ClassVar[List[str]] = ["context", "body"]
 
     model_config = ConfigDict(
@@ -49,7 +49,7 @@ class Observation(BaseModel):
 
     @classmethod
     def from_json(cls, json_str: str) -> Optional[Self]:
-        """Create an instance of Observation from a JSON string"""
+        """Create an instance of ObservationV2 from a JSON string"""
         return cls.from_dict(json.loads(json_str))
 
     def to_dict(self) -> Dict[str, Any]:
@@ -77,7 +77,7 @@ class Observation(BaseModel):
 
     @classmethod
     def from_dict(cls, obj: Optional[Dict[str, Any]]) -> Optional[Self]:
-        """Create an instance of Observation from a dict"""
+        """Create an instance of ObservationV2 from a dict"""
         if obj is None:
             return None
 
@@ -85,7 +85,7 @@ class Observation(BaseModel):
             return cls.model_validate(obj)
 
         _obj = cls.model_validate({
-            "context": ObservationContext.from_dict(obj["context"]) if obj.get("context") is not None else None,
+            "context": ObservationContextV2.from_dict(obj["context"]) if obj.get("context") is not None else None,
             "body": obj.get("body")
         })
         return _obj

@@ -179,11 +179,10 @@ class TestSymptomSetLogging:
 
 
 class TestNeverRanJob:
-    """Tests for never-ran-job semantics (empty node_to_ranks)."""
+    """Tests for pre-start jobs with no allocated nodes."""
 
     def test_never_ran_job_emits_didnt_start_symptom(self, event_stream, simple_job_factory):
-        """Empty node_to_ranks short-circuits calculate_symptoms with 'Job didn't start'."""
-        job_info = simple_job_factory(node_to_ranks={}, state="FAILED")
+        job_info = simple_job_factory(node_to_ranks={}, state="PENDING")
 
         result = calculate_symptoms(
             event_stream=event_stream("test-job"),
@@ -194,9 +193,8 @@ class TestNeverRanJob:
         assert "Job didn't start" in result
 
     def test_never_ran_job_suppresses_other_symptoms(self, event_stream, simple_job_factory, source_set_factory):
-        """A job with no nodes reports only 'Job didn't start'; any stray per-node
-        attribution is suppressed (the 0-node path short-circuits before aggregation)."""
-        job_info = simple_job_factory(node_to_ranks={}, state="FAILED")
+        """A pending job with no nodes suppresses stray per-node attribution."""
+        job_info = simple_job_factory(node_to_ranks={}, state="PENDING")
         bad_nodes = JobNodeAttributions()
         bad_nodes.add("test-node-001", source_set_factory("XID-95-UNCONTAINED_ERROR"))
 
@@ -204,6 +202,41 @@ class TestNeverRanJob:
             event_stream=event_stream("test-job"),
             job_info=job_info,
             my_bad_nodes=bad_nodes,
+        )
+
+        assert list(result.symptoms()) == ["Job didn't start"]
+
+    def test_kueue_terminal_failed_job_without_node_evidence_reports_failure(
+        self, event_stream, simple_job_factory
+    ):
+        job_info = simple_job_factory(
+            node_to_ranks={},
+            state="FAILED",
+            job_type="kueue",
+        )
+
+        result = calculate_symptoms(
+            event_stream=event_stream("test-job"),
+            job_info=job_info,
+            my_bad_nodes=JobNodeAttributions(),
+        )
+
+        assert "job failed" in result
+        assert "Job didn't start" not in result
+
+    def test_non_kueue_terminal_failed_job_without_nodes_retains_didnt_start_fallback(
+        self, event_stream, simple_job_factory
+    ):
+        job_info = simple_job_factory(
+            node_to_ranks={},
+            state="FAILED",
+            job_type="runai",
+        )
+
+        result = calculate_symptoms(
+            event_stream=event_stream("test-job"),
+            job_info=job_info,
+            my_bad_nodes=JobNodeAttributions(),
         )
 
         assert list(result.symptoms()) == ["Job didn't start"]
@@ -224,10 +257,27 @@ class TestRunningJob:
 
         assert "running without error" in result
 
-    def test_running_job_suppresses_node_symptoms(self, event_stream, simple_job_factory, source_set_factory):
-        """A RUNNING job returns only 'running without error'; per-node symptoms are
-        suppressed by the short-circuit. Pins current behavior before migration."""
-        job_info = simple_job_factory(state="RUNNING")
+    def test_kueue_running_job_preserves_node_symptoms(
+        self, event_stream, simple_job_factory, source_set_factory
+    ):
+        """A running Kueue workload must not hide collected failure evidence."""
+        job_info = simple_job_factory(state="RUNNING", job_type="kueue")
+        bad_nodes = JobNodeAttributions()
+        bad_nodes.add("test-node-001", source_set_factory("XID-95-UNCONTAINED_ERROR"))
+
+        result = calculate_symptoms(
+            event_stream=event_stream("test-job"),
+            job_info=job_info,
+            my_bad_nodes=bad_nodes,
+        )
+
+        assert "XID-95-UNCONTAINED_ERROR" in result
+        assert "running without error" not in result
+
+    def test_non_kueue_running_job_retains_suppressing_fallback(
+        self, event_stream, simple_job_factory, source_set_factory
+    ):
+        job_info = simple_job_factory(state="RUNNING", job_type="runai")
         bad_nodes = JobNodeAttributions()
         bad_nodes.add("test-node-001", source_set_factory("XID-95-UNCONTAINED_ERROR"))
 
@@ -1787,7 +1837,7 @@ class TestSingleNodeNodeFail:
         return result.my_bad_nodes
 
     def test_single_node_nodefail_no_failed_node_attributes_sole_node(self, event_stream, simple_job_factory):
-        job_info = simple_job_factory(state="NODE_FAIL", nodes=["example-batch-node-00985"])
+        job_info = simple_job_factory(state="NODE_FAIL", nodes=["example-batch-node-00985"], job_type="slurm")
         assert job_info.failed_node is None or job_info.failed_node == ""
 
         my_bad_nodes = self._attributed_bad_nodes(event_stream, job_info)
@@ -1804,6 +1854,7 @@ class TestSingleNodeNodeFail:
             state="NODE_FAIL",
             nodes=["node-a", "node-b"],
             failed_node="node-b",
+            job_type="slurm",
         )
 
         my_bad_nodes = self._attributed_bad_nodes(event_stream, job_info)
@@ -1812,7 +1863,7 @@ class TestSingleNodeNodeFail:
         assert source.rule == "slurm_failed_node_field"
 
     def test_multi_node_nodefail_no_failed_node_does_not_infer(self, event_stream, simple_job_factory):
-        job_info = simple_job_factory(state="NODE_FAIL", nodes=["node-a", "node-b"])
+        job_info = simple_job_factory(state="NODE_FAIL", nodes=["node-a", "node-b"], job_type="slurm")
         assert job_info.failed_node is None or job_info.failed_node == ""
 
         my_bad_nodes = self._attributed_bad_nodes(event_stream, job_info)
@@ -1821,3 +1872,38 @@ class TestSingleNodeNodeFail:
             self._NODE_FAILURE_SYMPTOM not in my_bad_nodes[node].symptoms() for node in my_bad_nodes.attributions
         )
         assert "" not in my_bad_nodes.attributions
+
+    def test_kueue_nodefail_uses_slurm_symptom_and_provenance(
+        self, event_stream, simple_job_factory
+    ):
+        """Kueue uses the same "slurm" symptom/provenance as every other
+        scheduler: a scheduler-specific string here would need to be added
+        to every existing cascade_discards/pattern list that already
+        references "Node failure reported by slurm", which is easy to miss.
+        """
+        job_info = simple_job_factory(
+            state="NODE_FAIL",
+            nodes=["node-a", "node-b"],
+            failed_node="node-b",
+            job_type="kueue",
+        )
+
+        my_bad_nodes = self._attributed_bad_nodes(event_stream, job_info)
+
+        source = next(iter(my_bad_nodes["node-b"].attributions[self._NODE_FAILURE_SYMPTOM]))
+        assert source.rule == "slurm_failed_node_field"
+
+    def test_non_kueue_nodefail_retains_slurm_symptom_and_provenance(
+        self, event_stream, simple_job_factory
+    ):
+        job_info = simple_job_factory(
+            state="NODE_FAIL",
+            nodes=["node-a", "node-b"],
+            failed_node="node-b",
+            job_type="runai",
+        )
+
+        my_bad_nodes = self._attributed_bad_nodes(event_stream, job_info)
+
+        source = next(iter(my_bad_nodes["node-b"].attributions[self._NODE_FAILURE_SYMPTOM]))
+        assert source.rule == "slurm_failed_node_field"

@@ -22,9 +22,9 @@ obtained a verdict and at least one output connector wrote it. Read `outcome`,
 ## Healthy Workload
 
 This example assumes the pod log contains a recognized completion marker such
-as `[rank 0] Main process ended cleanly`. `FINISHED_SUCCEEDED` is preserved as
-the Kueue scheduler state, but the current service rules do not translate that
-state to the `COMPLETED` success fallback.
+as `[rank 0] Main process ended cleanly`. The adapter maps Kueue's
+`FINISHED_SUCCEEDED` state to the service-facing `COMPLETED` state, which also
+provides successful completion evidence when no stronger symptom exists.
 
 ### CLI summary
 
@@ -38,8 +38,9 @@ Attribution complete: 1/1 execution contexts succeeded.
 | Field | Representative value | Meaning |
 |---|---|---|
 | `execution_context.scheduler_type` | `kueue` | The context came from the Kueue adapter. |
-| `execution_context.status` | `FINISHED_SUCCEEDED` | State derived from the successful Kueue terminal condition. |
-| `execution_context.raw_scheduler_json.state` | `FINISHED_SUCCEEDED` | Kueue-derived state preserved in the raw context. |
+| `execution_context.status` | `COMPLETED` | Service-facing state normalized from the successful Kueue terminal condition. |
+| `execution_context.raw_scheduler_json.state` | `COMPLETED` | Service-facing state retained in the raw context. |
+| `execution_context.raw_scheduler_json.kueue_state` | `FINISHED_SUCCEEDED` | Original Kueue state retained independently of service normalization. |
 | `attribution_run.outcome` | `Pass` | The Attribution Service classified the workload as healthy. |
 | `attribution_run.terminal_state` | `pass` | Blueprint-normalized terminal taxonomy. |
 | `attribution_run.sub_domain` | `none` | No failure domain applies. |
@@ -138,8 +139,9 @@ Attribution complete: 1/1 execution contexts succeeded.
 | Field | Representative value | Meaning |
 |---|---|---|
 | `execution_context.scheduler_type` | `kueue` | The context came from the Kueue adapter. |
-| `execution_context.status` | `FINISHED_SUCCEEDED` | The example workload exited successfully from Kubernetes' perspective. |
-| `execution_context.raw_scheduler_json.state` | `FINISHED_SUCCEEDED` | Kueue-derived state preserved in the raw context. |
+| `execution_context.status` | `COMPLETED` | Service-facing state normalized from the successful Kueue terminal condition. |
+| `execution_context.raw_scheduler_json.state` | `COMPLETED` | Service-facing state retained in the raw context. |
+| `execution_context.raw_scheduler_json.kueue_state` | `FINISHED_SUCCEEDED` | Original Kueue state retained independently of service normalization. |
 | `attribution_run.terminal_state` | `fail` | Blueprint-normalized terminal taxonomy. |
 | `attribution_run.sub_domain` | `hardware` | Hardware is the attributed failure domain. |
 | `attribution_run.responsible_nodes_json` | `["example-node-07"]` | Syslog evidence identifies the affected node. |

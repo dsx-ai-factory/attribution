@@ -19,6 +19,7 @@ import json
 from datetime import datetime
 from pydantic import BaseModel, ConfigDict, StrictInt, StrictStr
 from typing import Any, ClassVar, Dict, List, Optional
+from nvidia_attribution_client.models.scheduler import Scheduler
 from typing import Optional, Set
 from typing_extensions import Self
 from pydantic_core import to_jsonable_python
@@ -29,6 +30,7 @@ class AttributorWorkloadInfoV2(BaseModel):
     """ # noqa: E501
     id: StrictStr
     type: StrictStr
+    scheduler: Optional[Scheduler] = None
     srun_cmd: Optional[StrictStr] = None
     job_start_time: datetime
     timezone: StrictStr
@@ -45,7 +47,7 @@ class AttributorWorkloadInfoV2(BaseModel):
     username: StrictStr
     last_tflops_time: Optional[datetime] = None
     framework: StrictStr
-    __properties: ClassVar[List[str]] = ["id", "type", "srun_cmd", "job_start_time", "timezone", "job_end_time", "interest_start_time", "interest_end_time", "exit_code_signal", "cancelled_by", "time_limit", "failed_node", "status", "nodes", "name", "username", "last_tflops_time", "framework"]
+    __properties: ClassVar[List[str]] = ["id", "type", "scheduler", "srun_cmd", "job_start_time", "timezone", "job_end_time", "interest_start_time", "interest_end_time", "exit_code_signal", "cancelled_by", "time_limit", "failed_node", "status", "nodes", "name", "username", "last_tflops_time", "framework"]
 
     model_config = ConfigDict(
         validate_by_name=True,
@@ -86,6 +88,11 @@ class AttributorWorkloadInfoV2(BaseModel):
             exclude=excluded_fields,
             exclude_none=True,
         )
+        # set to None if scheduler (nullable) is None
+        # and model_fields_set contains the field
+        if self.scheduler is None and "scheduler" in self.model_fields_set:
+            _dict['scheduler'] = None
+
         # set to None if srun_cmd (nullable) is None
         # and model_fields_set contains the field
         if self.srun_cmd is None and "srun_cmd" in self.model_fields_set:
@@ -145,6 +152,7 @@ class AttributorWorkloadInfoV2(BaseModel):
         _obj = cls.model_validate({
             "id": obj.get("id"),
             "type": obj.get("type"),
+            "scheduler": obj.get("scheduler"),
             "srun_cmd": obj.get("srun_cmd"),
             "job_start_time": obj.get("job_start_time"),
             "timezone": obj.get("timezone"),

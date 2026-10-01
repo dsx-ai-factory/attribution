@@ -18,7 +18,7 @@ from nvidia_attribution_client import (
     Configuration,
     DefaultApi,
     DuplicateAttributorError,
-    Observation as ServiceObservation,
+    ObservationV2,
 )
 
 # Set to "slightly larger than a multiple of 3" as per
@@ -60,7 +60,7 @@ class AttributionConnector:
             self.delete_attributor(e.data.att_id)
             return self.create_attributor(info)
 
-    def ingest_observation(self, attributor_id: str, observation: ServiceObservation) -> int:
+    def ingest_observation(self, attributor_id: str, observation: ObservationV2) -> int:
         """POST /v2/attributor/{attributor_id}/observation. Returns observation_id."""
         response = self._api.ingest_v2_attributor_att_id_observation_post(
             attributor_id, observation, _request_timeout=self._request_timeout

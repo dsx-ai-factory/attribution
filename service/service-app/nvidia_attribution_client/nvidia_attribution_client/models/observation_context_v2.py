@@ -16,25 +16,22 @@ import pprint
 import re  # noqa: F401
 import json
 
-from pydantic import BaseModel, ConfigDict, StrictBool, StrictStr
+from pydantic import BaseModel, ConfigDict, Field, StrictBool
 from typing import Any, ClassVar, Dict, List, Optional
-from nvidia_attribution_client.models.format import Format
 from nvidia_attribution_client.models.source import Source
-from nvidia_attribution_client.models.time_interval import TimeInterval
+from nvidia_attribution_client.models.time_interval_v2 import TimeIntervalV2
 from typing import Optional, Set
 from typing_extensions import Self
 from pydantic_core import to_jsonable_python
 
-class ObservationContext(BaseModel):
+class ObservationContextV2(BaseModel):
     """
-    Describes the scope of an observation.
+    Describes the scope of an `entry_timeseries` observation.
     """ # noqa: E501
-    time_interval: TimeInterval
-    resources: Optional[StrictStr] = 'AllJobResources'
+    time_interval: TimeIntervalV2 = Field(description="The collection window: the interval the entries were deliberately gathered over. The service filters entries by it; an entry whose timestamp falls outside the window is discarded and never reaches a rule. Specifying `None` for either bound is allowed, and treats the observation as unbounded on that side. `start` must not be later than `end`.")
     source: Source
-    format: Format
     is_prefiltered: Optional[StrictBool] = False
-    __properties: ClassVar[List[str]] = ["time_interval", "resources", "source", "format", "is_prefiltered"]
+    __properties: ClassVar[List[str]] = ["time_interval", "source", "is_prefiltered"]
 
     model_config = ConfigDict(
         validate_by_name=True,
@@ -54,7 +51,7 @@ class ObservationContext(BaseModel):
 
     @classmethod
     def from_json(cls, json_str: str) -> Optional[Self]:
-        """Create an instance of ObservationContext from a JSON string"""
+        """Create an instance of ObservationContextV2 from a JSON string"""
         return cls.from_dict(json.loads(json_str))
 
     def to_dict(self) -> Dict[str, Any]:
@@ -82,7 +79,7 @@ class ObservationContext(BaseModel):
 
     @classmethod
     def from_dict(cls, obj: Optional[Dict[str, Any]]) -> Optional[Self]:
-        """Create an instance of ObservationContext from a dict"""
+        """Create an instance of ObservationContextV2 from a dict"""
         if obj is None:
             return None
 
@@ -90,10 +87,8 @@ class ObservationContext(BaseModel):
             return cls.model_validate(obj)
 
         _obj = cls.model_validate({
-            "time_interval": TimeInterval.from_dict(obj["time_interval"]) if obj.get("time_interval") is not None else None,
-            "resources": obj.get("resources") if obj.get("resources") is not None else 'AllJobResources',
+            "time_interval": TimeIntervalV2.from_dict(obj["time_interval"]) if obj.get("time_interval") is not None else None,
             "source": obj.get("source"),
-            "format": obj.get("format"),
             "is_prefiltered": obj.get("is_prefiltered") if obj.get("is_prefiltered") is not None else False
         })
         return _obj

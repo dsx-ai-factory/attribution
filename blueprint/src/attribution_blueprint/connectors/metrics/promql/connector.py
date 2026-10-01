@@ -11,16 +11,19 @@
 import json
 from typing import NotRequired, TypedDict
 
-import requests
 from loguru import logger
 
 from attribution_blueprint.connectors.auth import Auth
+from attribution_blueprint.connectors.metrics.promql.client import (
+    PrometheusClient,
+    re2_escape,
+)
 from attribution_blueprint.connectors.metrics.promql.templates import TEMPLATES
 from attribution_blueprint.types import (
     ExecutionContext,
-    Format,
     Observation,
     Source,
+    TimeseriesEntry,
     assert_aware,
 )
 
@@ -28,14 +31,7 @@ DEFAULT_STEP_SECONDS = 60
 DEFAULT_NODE_LABEL = "net_host_name"
 DEFAULT_CLUSTER_LABEL = "s_cluster"
 DEFAULT_COMPONENT_LABEL = "device"
-
-# Prometheus and Mimir use RE2 for label-match regexes. Python's re.escape()
-# backslashes too much for RE2, including hyphens (`\-`), which RE2 rejects.
-_RE2_METAS = frozenset(r".\+*?()[]{}|^$")
-
-
-def _re2_escape(s: str) -> str:
-    return "".join("\\" + c if c in _RE2_METAS else c for c in s)
+_NS = 10**9  # PromQL sample times are unix seconds; `ts` is nanoseconds
 
 
 class PrometheusMetricEntry(TypedDict):
@@ -46,6 +42,48 @@ class PrometheusMetricEntry(TypedDict):
     node: str
     component: NotRequired[str]
     cluster: NotRequired[str]
+
+
+def _render_metric_body(metric: PrometheusMetricEntry) -> str:
+    """Render one sample as the line the service's node-metric rules match.
+
+    The rules read only the `metric_name: <name>, metric_value: <value>` pair; the
+    remaining fields keep the line identical to what other producers emit.
+    """
+    raw_value = metric.get("value", 0)
+    metric_value: int | float
+    if isinstance(raw_value, str):
+        try:
+            metric_value = int(raw_value)
+        except ValueError:
+            metric_value = float(raw_value)
+    else:
+        metric_value = raw_value
+
+    labels = metric.get("labels", {})
+    # Extract component information - preserve empty strings, only None if truly missing
+    component = metric.get("component")
+    if component is None:
+        component = labels.get("device")
+    # Extract cluster information - preserve empty strings, only None if truly missing
+    cluster = metric.get("cluster")
+    if cluster is None:
+        cluster = labels.get("s_cluster")
+
+    return (
+        f"time: {metric['timestamp']}, metric_name: {metric['metric']}, metric_value: {metric_value}, "
+        f"threshold: {metric.get('threshold')}, cluster: {cluster}, node: {metric['node']}, component: {component}"
+    )
+
+
+def _timeseries_entry(sample: PrometheusMetricEntry) -> TimeseriesEntry:
+    return {
+        # `ts` is what the service filters on; the body's `time:` (seconds) is never
+        # parsed, it only keeps the line identical to other producers' output.
+        "ts": sample["timestamp"] * _NS,
+        "resources": [{"kind": "node", "hostname": sample["node"]}],
+        "body": _render_metric_body(sample),
+    }
 
 
 class PromQLMetricsConnector:
@@ -77,16 +115,13 @@ class PromQLMetricsConnector:
         self._timeout = timeout_seconds
         self._step = step_seconds
         self._auth = auth
-
-        self._session = requests.Session()
-        if auth is not None:
-            kwargs = auth.request_kwargs()
-            if "headers" in kwargs:
-                self._session.headers.update(kwargs["headers"])
-            if "cert" in kwargs:
-                self._session.cert = kwargs["cert"]
-            if "verify" in kwargs:
-                self._session.verify = kwargs["verify"]
+        self._client = PrometheusClient(
+            endpoint=endpoint,
+            auth=auth,
+            timeout_seconds=timeout_seconds,
+        )
+        # Kept as an alias for callers that inspect the configured session.
+        self._session = self._client.session
 
     @property
     def source(self) -> Source:
@@ -104,66 +139,49 @@ class PromQLMetricsConnector:
         end = assert_aware(context["end_time"], "end_time")
         start_s = int(start.timestamp())
         end_s = int(end.timestamp())
-        entries: list[PrometheusMetricEntry] = []
+        samples: list[PrometheusMetricEntry] = []
         # Each node lands inside a PromQL `=~ "..."` regex on net_host_name,
         # so regex metacharacters in hostnames would silently broaden the
         # match. Escape only RE2 metacharacters so common hyphenated hostnames
         # don't produce invalid regexes.
-        nodes_regex = "|".join(_re2_escape(n) for n in nodes)
+        nodes_regex = "|".join(re2_escape(n) for n in nodes)
         for name, tmpl in self._templates.items():
             try:
                 query = tmpl.format(name=name, cluster=self._cluster, nodes=nodes_regex)
             except KeyError as e:
                 logger.warning(f"promql template {name!r} missing kwarg {e}; skipping")
                 continue
-            entries.extend(self._query_range(name, query, start_s, end_s))
+            samples.extend(self._query_range(name, query, start_s, end_s))
 
-        if not entries:
+        if not samples:
             return []
         return [
             {
                 "context": {
                     "time_interval": {"start": context["start_time"], "end": context["end_time"]},
                     "source": self._source,
-                    "format": Format.PROMETHEUS_METRICS,
-                    "resources": "AllJobResources",
                 },
-                "body": json.dumps(entries),
+                "body": json.dumps([_timeseries_entry(sample) for sample in samples]),
             }
         ]
 
     def _query_range(self, name: str, query: str, start_s: int, end_s: int) -> list[PrometheusMetricEntry]:
-        # POST form-encoded rather than GET: ExecutionContexts with many nodes produce
-        # `net_host_name=~"n1|n2|..."` selectors that easily blow past
-        # Mimir/Cortex default URL limits (~4-8 KB). The Prometheus HTTP API
-        # accepts POST on /api/v1/query_range for exactly this reason and the
-        # response shape is identical.
-        response = self._session.post(
-            f"{self._endpoint}/api/v1/query_range",
-            data={"query": query, "start": start_s, "end": end_s, "step": self._step},
-            timeout=self._timeout,
+        result = self._client.query_range(
+            name=name,
+            query=query,
+            start=start_s,
+            end=end_s,
+            step=self._step,
         )
-        response.raise_for_status()
-        # Prometheus/Mimir returns HTTP 200 with `{"status":"error", "error":...}`
-        # for execution failures (query timeout, sample-limit, parse error).
-        # `raise_for_status` doesn't catch these; verifying status=="success"
-        # surfaces them as a warning instead of silently dropping data.
-        payload = response.json() or {}
-        if payload.get("status") != "success":
-            logger.warning(
-                f"promql query {name!r} returned status={payload.get('status')!r}: "
-                f"{payload.get('error') or payload.get('errorType') or '<no detail>'}"
-            )
-            return []
-        result = payload.get("data", {}).get("result", []) or []
         out: list[PrometheusMetricEntry] = []
         for series in result:
             labels = series.get("metric", {}) or {}
             node = labels.get(DEFAULT_NODE_LABEL)
             if not node:
-                # The service requires node identity on every PROMETHEUS_METRICS
-                # entry. Aggregations that drop net_host_name are unattributable;
-                # skip rather than emit unscoped points.
+                # A node_metrics entry must declare its node; the service never
+                # parses one out of a metric body. Aggregations that drop
+                # net_host_name are unattributable; skip rather than emit
+                # unscoped points.
                 continue
             # Templates that aggregate (e.g. `max by (net_host_name) (...)`)
             # drop s_cluster, so fall back to the connector's configured

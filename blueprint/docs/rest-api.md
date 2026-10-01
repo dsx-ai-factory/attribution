@@ -100,21 +100,21 @@ curl --fail-with-body --silent --show-error \
       "start": null,
       "end": null
     },
-    "source": "applog",
-    "format": "entry_timeseries"
+    "source": "applog"
   },
   "body": "[{\"body\": \"[rank 0] Main process ended cleanly\"}]"
 }
 JSON
 ```
 
-The Blueprint's log connectors send both `applog` and `syslog` observations
-as `entry_timeseries`.
+Every bundled Blueprint connector sends `entry_timeseries`: the log connectors
+for `applog` and `syslog`, and the PromQL connector for `node_metrics`. A
+`node_metrics` entry must declare its node in `resources`; the service never
+parses one out of a metric body.
 
-For the structured formats, `body` is a JSON-encoded string containing the
-format's array or object. The service rejects mismatched source and format
-pairs with HTTP 400. Each distinct observation may be submitted once to an
-attributor, and a duplicate returns HTTP 409.
+`body` is a JSON-encoded string containing the entry array. The service
+rejects an invalid body with HTTP 400. Each distinct observation may be submitted
+once to an attributor, and a duplicate returns HTTP 409.
 
 ## 3. Request attribution
 
@@ -159,7 +159,7 @@ Common responses are:
 |---:|---|
 | 201 | Attributor or observation created. |
 | 204 | Attributor deleted. |
-| 400 | Observation source and format are incompatible. |
+| 400 | Observation body cannot be ingested. |
 | 404 | Attributor ID is unknown or has expired. |
 | 409 | Duplicate attributor or observation. |
 | 422 | Request fields, timestamps, or workload and rule values fail v2 validation. |

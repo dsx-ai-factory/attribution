@@ -70,6 +70,10 @@ flowchart TD
     AttrHTTP <-->|observations,<br/>verdict| Service
 ```
 
+Proposed extensions are documented separately. See the
+[Kueue Pod placement recorder reference](../blueprint/src/attribution_blueprint/connectors/execution_contexts/kueue/pod_placement/recorder/docs/README.md)
+for durable Pod-to-node placement before post-hoc Kueue attribution.
+
 ## End-to-end flow for one workload
 
 1. **Discover.** The Blueprint's execution-context adapter (Slurm shells to `sacct`, Kueue shells to `kubectl`, Static hand-feeds one workload) returns one or more `ExecutionContext` objects.

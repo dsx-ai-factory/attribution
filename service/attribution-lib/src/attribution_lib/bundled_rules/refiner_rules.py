@@ -80,7 +80,8 @@ _SCRUB_ORDER = [
     "SchedulerNodeFailure",
     "SchedulerNotResponding",
     "ScrubBadNodes",
-    # Correlate the GSP evidence per node before aggregation and XID cascades.
+    # Prefer explicit XID-140 before correlating GSP evidence per node.
+    "Xid140Cascade",
     "PoisonedGspComposite",
     # Combine only the scheduler failure and surviving independent epilog
     # non-response evidence after more specific per-node causes are scrubbed.
@@ -722,6 +723,36 @@ def corroborated_node_failure_refiner(context: RefinerContext):
 
 
 @refiner_def(
+    name="Xid140Cascade",
+    author="NVIDIA Attribution team",
+    priority=_priority("Xid140Cascade"),
+)
+def xid140_cascade(context: RefinerContext):
+    """Demote fatal GSP and XID-94 evidence on nodes with an active XID-140.
+
+    Run before PoisonedGspComposite so an explicit unrecoverable ECC error
+    supersedes the inferred diagnosis on that node. Keep the original sources
+    as interesting evidence and leave reset-required signals active.
+
+    Args:
+        context: Refiner context containing per-node job evidence.
+
+    Returns:
+        None.
+    """
+    if context.my_bad_nodes is None:
+        return
+
+    for _node, node_group in context.my_bad_nodes.items():
+        symptoms = list(node_group.attributions.symptoms())
+        if not any(symptom.startswith("XID-140-") for symptom in symptoms):
+            continue
+        for symptom in symptoms:
+            if symptom == "NV_PGSP_FALCON_IRQSTAT_FATAL_ERROR" or symptom.startswith("XID-94-"):
+                node_group.discard(symptom)
+
+
+@refiner_def(
     name="PoisonedGspComposite",
     author="NVIDIA Attribution team",
     priority=_priority("PoisonedGspComposite"),
@@ -768,28 +799,35 @@ def poisoned_gsp_composite(context: RefinerContext):
 
 # Raw-keyword promotion rules
 
+# Kueue terminal results remain authoritative when pod/node evidence has
+# already expired. Other scheduler types retain the historical zero-node
+# behavior until that contract is changed separately.
+_KUEUE_ALLOWED_ZERO_NODE_STATES = frozenset(
+    {"EVICTED", "COMPLETED", "FAILED", "TIMEOUT", "NODE_FAIL", "PREEMPTED", "REQUEUED"}
+)
 
 @refiner_def(name="JobStateFallback", author="NVIDIA Attribution team", priority=_priority("JobStateFallback"))
 def job_state_fallback(context: RefinerContext):
     """Job-lifecycle fallbacks moved out of core.calculate_symptoms.
 
-    A job with no nodes never started; a RUNNING job has no verdict yet. Both cases
-    supersede everything else, so this runs LAST (nothing may add symptoms after it) and
-    clears the aggregated symptom set before emitting its single finding. This preserves
-    the old core early-returns, which short-circuited the whole pipeline (RUNNING
-    intentionally suppresses in-progress per-node symptoms).
+    A job with no nodes never started. A RUNNING job with no symptoms has no
+    failure verdict yet. This runs LAST so these fallbacks cannot obscure
+    evidence added by another refiner.
     """
     symptoms = context.symptoms
     job_info = context.job_info
     if symptoms is None or job_info is None:
         return
     if len(job_info.nodes) == 0:
-        symptoms.discard_all()
-        symptoms.add(job_info.source_value("Job didn't start", None, "none assigned"))
-        return
+        if job_info.type != "kueue" or job_info.state not in _KUEUE_ALLOWED_ZERO_NODE_STATES:
+            symptoms.discard_all()
+            symptoms.add(job_info.source_value("Job didn't start", None, "none assigned"))
+            return
     if job_info.state == "RUNNING":
-        symptoms.discard_all()
-        symptoms.add(job_info.source_value("running without error", None, "no symptoms; status says running"))
+        if job_info.type != "kueue":
+            symptoms.discard_all()
+        if not symptoms:
+            symptoms.add(job_info.source_value("running without error", None, "no symptoms; status says running"))
 
 
 @refiner_def(
@@ -946,9 +984,17 @@ def _is_root_cancellation(job_info: JobInfo) -> bool:
     return job_info.state == "CANCELLED by 0"
 
 
-@refiner_def(name="SlurmStateSymptoms", author="NVIDIA Attribution team", priority=_priority("SlurmStateSymptoms"))
+@refiner_def(
+    name="SlurmStateSymptoms",
+    author="NVIDIA Attribution team",
+    priority=_priority("SlurmStateSymptoms"),
+)
 def slurm_state_symptoms(context: RefinerContext):
-    """Add symptoms based on SLURM job state (CANCELLED, REQUEUED)."""
+    """Add symptoms based on normalized scheduler state.
+
+    The historical Slurm rule and source names are retained because downstream
+    cascades and decision traces use these identifiers as string contracts.
+    """
     symptoms = context.symptoms
     job_info = context.job_info
     if symptoms is None or job_info is None:
@@ -965,6 +1011,21 @@ def slurm_state_symptoms(context: RefinerContext):
             symptoms.add(job_info.source_value("Cancelled by user", job_info.state, "state cancelled"))
     elif job_info.state == "REQUEUED":
         symptoms.add(job_info.source_value("Job requeued", job_info.state, "state requeued"))
+    elif (
+        job_info.state == "NODE_FAIL"
+        and job_info.type == "kueue"
+        and not job_info.failed_node
+        and len(job_info.nodes) != 1
+    ):
+        # Scheduler-level node-loss evidence is still actionable when the
+        # exact failed node cannot be identified.
+        symptoms.add(
+            job_info.source_value(
+                "Node failure reported by slurm",
+                job_info.state,
+                "slurm state",
+            )
+        )
 
 
 @refiner_def(
@@ -1184,6 +1245,7 @@ def slurm_timeout_xid145_cascade(context: RefinerContext):
         symptoms is None
         or my_bad_nodes is None
         or job_info is None
+        or job_info.type == "kueue"
         or job_info.job_end_time is None
         or "Cancelled by Timeout" not in symptoms
         or _XID145_RXPIPE_SYMPTOM not in symptoms
@@ -1815,7 +1877,7 @@ def node_failure_nfs_cleanup(context: RefinerContext):
 
 @refiner_def(name="LastResortSymptoms", author="NVIDIA Attribution team", priority=_priority("LastResortSymptoms"))
 def last_resort_symptoms(context: RefinerContext):
-    """When no meaningful symptoms remain, fall back to SLURM job state."""
+    """When no meaningful symptoms remain, fall back to scheduler job state."""
     symptoms = context.symptoms
     job_info = context.job_info
     if symptoms is None or job_info is None:
@@ -1833,9 +1895,10 @@ def last_resort_symptoms(context: RefinerContext):
             symptoms.add(job_info.source_value("Cancelled by user", job_info.state, "last resort; slurm status"))
         elif job_info.state == "REQUEUED":
             symptoms.add(job_info.source_value("Job requeued", job_info.state, "last resort; slurm status"))
-        elif job_info.state == "RUNNING":
-            symptoms.add(job_info.source_value("Job running", job_info.state, "last resort; running but amiss"))
-        else:
+        elif job_info.state == "EVICTED":
+            # eviction reason preserved in `kueue_state`; empty symptom set resolves to Incomplete Info
+            pass
+        elif job_info.state != "RUNNING":
             symptoms.add(job_info.source_value("job failed", job_info.state, "last resort; slurm status"))
 
 
@@ -2321,9 +2384,18 @@ def outcome_reclassification_refiner(context: RefinerContext):
     nvrx_exit_fields = (job_info.exit_code, job_info.exit_code_signal)
     is_nvrx = NVRX_TAG in job_info.tags
     nvrx_failed = is_nvrx and any(v is not None and v != 0 for v in nvrx_exit_fields)
+    kueue_has_only_preemption_fallback = all(
+        symptom == "job failed" for symptom in attribution_result.symptoms.symptoms()
+    )
 
-    # Reclassify PREEMPTED jobs to Pass (unless NVRx reports a failure)
-    if not nvrx_failed and job_info.state is not None and job_info.state.upper() == "PREEMPTED":
+    # Kueue preemption must not mask evidence-backed failures. Other scheduler
+    # types retain their historical PREEMPTED reclassification behavior.
+    if (
+        not nvrx_failed
+        and (job_info.type != "kueue" or kueue_has_only_preemption_fallback)
+        and job_info.state is not None
+        and job_info.state.upper() == "PREEMPTED"
+    ):
         previous_source = None
         if attribution_result.outcome_attr is not None:
             previous_source = attribution_result.outcome_attr.one_source()
@@ -2345,7 +2417,7 @@ def outcome_reclassification_refiner(context: RefinerContext):
     # Reclassify TIMEOUT to Pass when it's the only symptom (unless NVRx reports a failure)
     if not nvrx_failed and job_info.time_limit is not None:
         normalized_symptoms = [s.lower() for s in attribution_result.symptoms.symptoms()]
-        is_slurm_timeout = (
+        is_scheduler_timeout = (
             attribution_result.cancelled_by is not None
             and bool(attribution_result.cancelled_by)
             and attribution_result.cancelled_by.lower() == "timeout"
@@ -2355,7 +2427,7 @@ def outcome_reclassification_refiner(context: RefinerContext):
             all(s.startswith("cancelled by timeout") for s in normalized_symptoms) or not normalized_symptoms
         )
 
-        if is_slurm_timeout and not has_user_cancel_symptom and has_only_timeout_symptoms:
+        if is_scheduler_timeout and not has_user_cancel_symptom and has_only_timeout_symptoms:
             pytorch_timeout_minutes = get_pytorch_timeout_minutes(event_stream)
             if pytorch_timeout_minutes is not None and pytorch_timeout_minutes.value() < float(job_info.time_limit):
                 root_cause_symptom = "SLURM timeout with shorter user distributed timeout"

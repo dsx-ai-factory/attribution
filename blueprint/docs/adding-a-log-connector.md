@@ -95,7 +95,7 @@ the new connector.
 
 ### Building The Observation
 
-`collect` must emit a list of observations. The `log_observation` helper emits `Format.ENTRY_TIMESERIES`: one entry per log line. Pass
+`collect` must emit a list of observations. The `log_observation` helper emits an entry timeseries: one entry per log line. Pass
 `entries=` built by `entries_from_text`, or by hand when the backend already gives
 structured entries with their own `ts` and `resources`. Whether an entry may omit
 those is a per-source contract of the service: for `applog` it falls back to

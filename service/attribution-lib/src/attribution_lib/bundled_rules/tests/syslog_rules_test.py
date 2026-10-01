@@ -517,6 +517,124 @@ class TestKernelFailureCascade:
         assert "kernel oops" not in attribution.symptoms
 
 
+class TestXid140Outcome:
+    """Exercise XID-140 classification and node-scoped cleanup from raw syslog."""
+
+    _XID140 = "XID-140-UNRECOVERABLE_ECC_ERROR_ESCAPE"
+    _FATAL = "NV_PGSP_FALCON_IRQSTAT_FATAL_ERROR"
+    _LINES = (
+        "NVRM: Xid (PCI:0000:06:00): 140, pid=1234, name=test, Poison error in GSP.",
+        "NVRM: kgspServiceFatalHwError_GB100: NV_PGSP_FALCON_IRQSTAT_FATAL_ERROR FB Poison pending (mask: 0x1)",
+        "NVRM: Xid (PCI:0000:06:00): 94, Contained: GSP. RST: Yes, D-RST: No",
+        "NVRM: nvCheckOkFailedNoLog: Check failed: [NV_ERR_RESET_REQUIRED] (0x00000062) @ kernel_gsp.c:100",
+    )
+
+    @pytest.fixture
+    def attribute(self, request, simple_job_factory, sys_tst_bldr):
+        """Build an attribution from timestamped syslog on two allocated nodes.
+
+        Args:
+            request: Pytest request providing the stream identifier.
+            simple_job_factory: Fixture constructing job metadata.
+            sys_tst_bldr: Fixture running real syslog extraction.
+
+        Returns:
+            Callable accepting node/message pairs and returning an attribution.
+        """
+        job_info = simple_job_factory(
+            state="FAILED",
+            framework="pytorch",
+            ranks_per_node=4,
+            start_timestamp=1746000000,
+            end_timestamp=1746003600,
+            nodes=["test-node-001", "test-node-002"],
+        )
+
+        def run(node_lines):
+            """Attribute supplied syslog through the full pipeline.
+
+            Args:
+                node_lines: Node/message pairs in observation order.
+
+            Returns:
+                Attribution result with outcomes and per-node evidence.
+            """
+            base_ns = int(job_info.job_start_time.timestamp() * 1e9) + 1800 * 10**9
+            entries = [
+                make_syslog_entry(body=line, node=node, timestamp_ns=base_ns + i * 1_000_000)
+                for i, (node, line) in enumerate(node_lines)
+            ]
+            result = sys_tst_bldr(job_info, entries, stream_id=request.node.name)
+            bad_nodes = core.CalcBadNodesAttributionResult()
+            bad_nodes.my_bad_nodes = result.get_node_attributions()
+            return core.attribute(
+                event_stream=result.event_stream,
+                job_info=result.job_info,
+                bad_node_result=bad_nodes,
+                extract_job_metadata_from_logfile=False,
+            )
+
+        return run
+
+    @pytest.mark.parametrize("indices", [(0,), (0, 1), (0, 2), (0, 1, 2), (0, 1, 2, 3), (3, 2, 1, 0), (0, 1, 2, 3) * 2])
+    def test_xid140_is_infra_hw_and_retains_cascade_evidence(self, attribute, indices):
+        """Promote XID-140 and demote its two supporting signals on the same node.
+
+        Args:
+            attribute: Fixture running extraction and attribution.
+            indices: Message sequence, including isolated, reordered and repeated signals.
+
+        Returns:
+            None.
+        """
+        attribution = attribute([("test-node-001", self._LINES[i]) for i in indices])
+
+        outcome = attribution.outcome_attr.value()
+        assert outcome.outcome == "Fail InfraHW"
+        assert outcome.root_cause_symptom == self._XID140
+        match = attribution_lib.get_symptom_registry().outcome_for([self._XID140])
+        assert match.doc == "xid-140"
+        assert match.hw_cause == "Known HW Cause - Node"
+        node_symptoms = attribution.bad_nodes_attr.my_bad_nodes["test-node-001"].attributions
+        for symptoms in [attribution.symptoms, node_symptoms]:
+            assert self._XID140 in symptoms
+            assert "poisoned gsp" not in symptoms
+            assert self._FATAL not in symptoms
+            assert "XID-94-CONTAINED_ERROR" not in symptoms
+        for index, symptom in [(1, self._FATAL), (2, "XID-94-CONTAINED_ERROR")]:
+            if index in indices:
+                assert node_symptoms[symptom].has_interesting()
+                assert len(list(node_symptoms[symptom].all_sources())) == indices.count(index)
+        assert len(list(node_symptoms[self._XID140])) == indices.count(0)
+        if 3 in indices:
+            assert "NV_ERR_RESET_REQUIRED kernel_gsp.c" in node_symptoms
+
+    @pytest.mark.parametrize("with_reset", [False, True])
+    def test_xid140_preserves_other_nodes_evidence(self, attribute, with_reset):
+        """Keep another node's fatal/94 evidence or poisoned-gsp diagnosis intact.
+
+        Args:
+            attribute: Fixture running extraction and attribution.
+            with_reset: Whether the other node has a complete poisoned-gsp trio.
+
+        Returns:
+            None.
+        """
+        other_lines = self._LINES[1:] if with_reset else self._LINES[1:3]
+        attribution = attribute([("test-node-001", self._LINES[0]), *[("test-node-002", line) for line in other_lines]])
+
+        assert attribution.outcome_attr.value().outcome == "Fail InfraHW"
+        other = attribution.bad_nodes_attr.my_bad_nodes["test-node-002"].attributions
+        if with_reset:
+            assert "poisoned gsp" in other
+            assert {source.datum for source in other["poisoned gsp"]} == set(other_lines)
+        else:
+            assert self._FATAL in other
+            assert "XID-94-CONTAINED_ERROR" in other
+            assert self._FATAL in attribution.symptoms
+            assert "XID-94-CONTAINED_ERROR" in attribution.symptoms
+
+
 class TestPoisonedGspOutcome:
     """Exercise the three-signal ECC diagnosis from syslog through attribution."""
 

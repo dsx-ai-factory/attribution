@@ -40,14 +40,17 @@ nvidia_attribution_client/models/new_response_v1.py
 nvidia_attribution_client/models/new_response_v2.py
 nvidia_attribution_client/models/node_attribution.py
 nvidia_attribution_client/models/node_source.py
-nvidia_attribution_client/models/observation.py
-nvidia_attribution_client/models/observation_context.py
+nvidia_attribution_client/models/observation_context_v1.py
+nvidia_attribution_client/models/observation_context_v2.py
 nvidia_attribution_client/models/observation_ingestion_error_response.py
 nvidia_attribution_client/models/observation_response_v1.py
 nvidia_attribution_client/models/observation_response_v2.py
+nvidia_attribution_client/models/observation_v1.py
+nvidia_attribution_client/models/observation_v2.py
 nvidia_attribution_client/models/recommendation_enum.py
 nvidia_attribution_client/models/resourceless_source.py
 nvidia_attribution_client/models/rule_parameters.py
+nvidia_attribution_client/models/scheduler.py
 nvidia_attribution_client/models/single_attribution.py
 nvidia_attribution_client/models/source.py
 nvidia_attribution_client/models/sourced_symptom.py
@@ -58,6 +61,7 @@ nvidia_attribution_client/models/symptom_status.py
 nvidia_attribution_client/models/symptoms_value_inner.py
 nvidia_attribution_client/models/terminal_state.py
 nvidia_attribution_client/models/time_interval.py
+nvidia_attribution_client/models/time_interval_v2.py
 nvidia_attribution_client/models/uncertainty_type.py
 nvidia_attribution_client/models/unknown_attributor_id_error.py
 nvidia_attribution_client/models/unknown_observation_format_error.py

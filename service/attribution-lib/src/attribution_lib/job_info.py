@@ -10,6 +10,7 @@
 
 from collections.abc import Iterable, Mapping, Sequence
 from datetime import datetime, timedelta
+from enum import StrEnum
 from typing import NamedTuple, Optional, TypeVar
 from zoneinfo import ZoneInfo
 
@@ -21,6 +22,7 @@ from attribution_lib.exceptions import (
     JobInfoInvalidTimeLimitError,
     JobInfoNodeNameCollisionError,
     JobInfoUnevenNodeToRanksError,
+    JobInfoUnknownSchedulerError,
     UnidentifiableNodeError,
     UnknownNodeError,
     UnknownNodeExtractionSourceError,
@@ -39,6 +41,44 @@ from attribution_lib.sources import Source, SourceSet
 T = TypeVar("T")
 
 NVRX_TAG = "nvrx"
+
+
+class Scheduler(StrEnum):
+    """Recognized values for `JobInfo.scheduler`.
+
+    Unlike `JobInfo.type`, which is a free-form legacy wire token, every
+    `JobInfo.scheduler` value is one of these members. `UNKNOWN` means "no
+    recognized scheduler identity": callers must not use it to build a
+    rendered ID and should fall back to generic wording. Existing Slurm
+    symptom strings are unchanged.
+    """
+
+    UNKNOWN = ""
+    SLURM = "slurm"
+    KUEUE = "kueue"
+
+
+def normalize_scheduler_identity(raw: "str | None") -> Scheduler:
+    """Normalize a raw scheduler token to a legal `Scheduler` value.
+
+    Args:
+        raw: A raw scheduler token, e.g. from ``workload.scheduler``.
+
+    Returns:
+        The matching `Scheduler` member when `raw` names one (case-insensitive,
+        surrounding whitespace ignored), or `Scheduler.UNKNOWN` when `raw` is
+        empty or None.
+
+    Raises:
+        JobInfoUnknownSchedulerError: If `raw` is non-empty but not a recognized
+            scheduler.
+    """
+    if not raw:
+        return Scheduler.UNKNOWN
+    try:
+        return Scheduler(raw.strip().lower())
+    except ValueError:
+        raise JobInfoUnknownSchedulerError(raw) from None
 
 
 def _coerce_optional_int(raw: "str | int | None") -> Optional[int]:
@@ -70,7 +110,13 @@ class JobInfo(NamedTuple):
     """Container class for parameters extracted from the job system, intended to be given to attribution engines (and not modified)"""
 
     id: str
+    # Legacy workload/category token from the wire (e.g. "slurm", "runai", "",
+    # "interactive"). Preserved verbatim for compatibility with existing
+    # consumers; new code that needs scheduler identity should read
+    # `scheduler` instead.
     type: str
+    # Normalized scheduler identity, set via JobInfoBuilder.scheduler(...).
+    scheduler: Scheduler
     state: str
     cluster: str
     nodes: list[str]
@@ -130,18 +176,22 @@ class JobInfo(NamedTuple):
     def verify_node(self, node: str) -> str:
         """Check that node is part of this job.
 
+        A fully qualified name also matches its short form in the allocation.
+
         Args:
             node: The node name to verify.
 
         Returns:
-            The normalized node name (lowercase).
+            The normalized node name (lowercase), as the allocation lists it.
 
         Raises:
             UnknownNodeError: If the node is not in the job.
         """
         normalized_node = node.lower()
         if len(self.nodes) > 0 and normalized_node not in self.nodes:
-            raise UnknownNodeError(node)
+            normalized_node = utils.convert_hostname_to_short_format(normalized_node)
+            if normalized_node not in self.nodes:
+                raise UnknownNodeError(node)
         return normalized_node
 
     def rank_exists(self, rank: int) -> bool:
@@ -229,6 +279,9 @@ class JobInfo(NamedTuple):
                 source_name="slurmdb",
                 node_to_ranks=node_to_ranks,
             )
+            # This ingestion path is dedicated to Slurm, independent of whatever
+            # `type` happens to carry, so pin the scheduler identity explicitly.
+            .scheduler("slurm")
             .num_gpus(int(slurmdb_job.get("gpus", 0)))
             .srun_cmd(slurmdb_job["srun_cmd"])
             .exit_code_signal(_coerce_optional_int(slurmdb_job.get("exit_code_signal")))
@@ -253,6 +306,7 @@ class JobInfoBuilder:
     _exit_code: Optional[int] = None
     _tags: Optional[frozenset[str]] = None
     _type: str
+    _scheduler: Optional[str] = None
     _cancelled_by: Optional[str] = None
     _state: str
     _failed_node: Optional[str] = None
@@ -379,6 +433,15 @@ class JobInfoBuilder:
         self._tags = in_tags
         return self
 
+    def scheduler(self, in_scheduler: Optional[str]) -> "JobInfoBuilder":
+        """Set the explicit scheduler identity (e.g. "slurm", "kueue").
+        """
+        if self._scheduler is not None:
+            raise JobInfoDuplicateFieldError("scheduler")
+        if in_scheduler:  # Normalize empty/None scheduler to unset, like cancelled_by.
+            self._scheduler = in_scheduler
+        return self
+
     def cancelled_by(self, in_cancelled_by: str) -> "JobInfoBuilder":
         if self._cancelled_by is not None:
             raise JobInfoDuplicateFieldError("cancelled_by")
@@ -467,6 +530,8 @@ class JobInfoBuilder:
 
         node_from_rank: dict[int, str] = {r: n for n, ranks in self._node_to_ranks.items() for r in ranks}
 
+        scheduler = normalize_scheduler_identity(self._scheduler)
+
         return JobInfo(
             id=self._id,
             srun_cmd=self._srun_cmd,
@@ -474,6 +539,7 @@ class JobInfoBuilder:
             exit_code=self._exit_code,
             tags=self._tags if self._tags is not None else frozenset(),
             type=self._type,
+            scheduler=scheduler,
             cancelled_by=self._cancelled_by,
             state=self._state,
             failed_node=self._failed_node,

@@ -48,12 +48,12 @@ run_blueprint() {
         cd "${repository_root}/blueprint"
         if [[ "${coverage_enabled}" == "true" ]]; then
             COVERAGE_FILE="${TMPDIR:-/tmp}/blueprint.coverage" \
-                uv run --frozen --extra dev --extra web pytest tests -q \
+                uv run --frozen --extra dev --extra web --extra pod-placement-recorder pytest tests -q \
                 --cov=attribution_blueprint \
                 --cov-report=term-missing:skip-covered \
                 --cov-fail-under=88
         else
-            uv run --frozen --extra dev --extra web pytest tests -q
+            uv run --frozen --extra dev --extra web --extra pod-placement-recorder pytest tests -q
         fi
     )
 }

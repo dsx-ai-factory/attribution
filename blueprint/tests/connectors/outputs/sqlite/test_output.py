@@ -345,19 +345,14 @@ def test_responsible_nodes_empty_when_symptoms_absent(tmp_path):
     assert json.loads(row[0]) == []
 
 
-def test_kueue_context_lands_with_kueue_scheduler_via_internal_field(tmp_path):
-    """The kueue ECA emits `workload_type=""` (UNDEFINED for the service)
-    AND `scheduler="kueue"` (BP-internal identity). SQLite reads `scheduler`
-    in preference to `workload_type`, so the `scheduler_type` column is
-    `"kueue"` even though the wire payload sends an empty string. This is
-    the decoupling that lets BP label its own rows without coordinating
-    service-side enum changes."""
+def test_kueue_context_lands_with_kueue_scheduler_identity(tmp_path):
+    """Kueue's service and Blueprint scheduler identities persist as Kueue."""
     db = tmp_path / "out.db"
     out = SQLiteOutput(str(db))
     ctx = {
         "id": "wl-uid-1",
-        "workload_type": "",  # wire-format: UNDEFINED for the service
-        "scheduler": "kueue",  # BP-internal: connector identity
+        "workload_type": "kueue",
+        "scheduler": "kueue",
         "attempt_id": "wl-uid-1",
         "job_id": "team-alpha/my-workload",
         "nodes": ["node-k8s-3"],
@@ -460,10 +455,7 @@ def test_slurm_and_kueue_same_job_id_coexist_as_distinct_rows(tmp_path):
     out.write(
         {
             "id": common_attempt,
-            # kueue wire-format value is "" (service enum doesn't know "kueue"),
-            # but the BP-internal `scheduler` is "kueue" - SQLite uses the
-            # latter for the column so the row stays distinguishable.
-            "workload_type": "",
+            "workload_type": "kueue",
             "scheduler": "kueue",
             "attempt_id": common_attempt,
             "job_id": common_job,

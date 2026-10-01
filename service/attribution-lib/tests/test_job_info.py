@@ -17,8 +17,17 @@ from attribution_lib.exceptions import (
     JobInfoDuplicateFieldError,
     JobInfoNodeNameCollisionError,
     JobInfoUnevenNodeToRanksError,
+    JobInfoUnknownSchedulerError,
 )
-from attribution_lib.job_info import JobInfoBuilder, UnknownNodeError, _coerce_optional_int, _coerce_tags
+from attribution_lib.job_info import (
+    JobInfo,
+    JobInfoBuilder,
+    Scheduler,
+    UnknownNodeError,
+    _coerce_optional_int,
+    _coerce_tags,
+    normalize_scheduler_identity,
+)
 
 
 class TestJobInfo:
@@ -36,6 +45,17 @@ class TestJobInfo:
 
         assert job_info.verify_node("node-Name01") == "node-name01"
         assert job_info.verify_node("NODE-NAME01") == "node-name01"
+
+    def test_verify_node_matches_fully_qualified_name_to_short_allocation(self, simple_job_factory):
+        """A fully qualified log hostname maps to the short name in the allocation."""
+        job_info = simple_job_factory(nodes=["node-12"], ranks_per_node=4)
+        line = "3: [2026-01-02 03:04:05] node-12.example.internal:1234567:1234568 [0] NCCL WARN port error(10)"
+
+        assert job_info.verify_node("Node-12.example.internal") == "node-12"
+        assert job_info.applog_extract_node(line) == "node-12"
+        assert simple_job_factory(nodes=["node-12.example.internal"]).verify_node("node-12.example.internal") == (
+            "node-12.example.internal"
+        )
 
     def test_verify_node_raises_for_unknown_node(self, simple_job_factory):
         """verify_node raises UnknownNodeError when node is not in the job at all."""
@@ -306,3 +326,99 @@ class TestJobInfoTags:
     )
     def test_coerce_optional_int(self, raw, expected):
         assert _coerce_optional_int(raw) == expected
+
+
+class TestNormalizeSchedulerIdentity:
+    """The Scheduler-enum normalizer shared by JobInfoBuilder.build()."""
+
+    @pytest.mark.parametrize(
+        "raw,expected",
+        [
+            pytest.param("slurm", Scheduler.SLURM, id="slurm"),
+            pytest.param("kueue", Scheduler.KUEUE, id="kueue"),
+            pytest.param("SLURM", Scheduler.SLURM, id="case-insensitive"),
+            pytest.param(" kueue ", Scheduler.KUEUE, id="trims surrounding whitespace"),
+            pytest.param("", Scheduler.UNKNOWN, id="empty is unknown"),
+            pytest.param(None, Scheduler.UNKNOWN, id="none is unknown"),
+        ],
+    )
+    def test_normalize_scheduler_identity(self, raw, expected):
+        assert normalize_scheduler_identity(raw) is expected
+
+    @pytest.mark.parametrize(
+        "raw",
+        [
+            pytest.param("slurmm", id="typo"),
+            pytest.param("kueue-v1", id="suffixed name"),
+            pytest.param("runai", id="workload type that is not yet a scheduler"),
+            pytest.param("interactive", id="non-scheduler workload type"),
+        ],
+    )
+    def test_unrecognized_scheduler_raises(self, raw):
+        with pytest.raises(JobInfoUnknownSchedulerError) as exc_info:
+            normalize_scheduler_identity(raw)
+
+        assert exc_info.value.scheduler == raw
+
+
+def _end_time(timezone):
+    return datetime.fromtimestamp(1700001000, tz=timezone)
+
+
+class TestJobInfoBuilderScheduler:
+    """JobInfoBuilder.scheduler(...); `scheduler` is never derived from `type`."""
+
+    def test_explicit_scheduler_is_normalized(self, timezone):
+        builder = _builder(timezone, node_to_ranks={}, type="anything")
+        job_info = builder.scheduler("KUEUE").job_end_time(_end_time(timezone)).build()
+
+        assert job_info.scheduler is Scheduler.KUEUE
+        assert job_info.type == "anything"  # `type` is preserved verbatim regardless
+
+    @pytest.mark.parametrize("type_", ["slurm", "kueue", "training", ""])
+    def test_unset_scheduler_is_unknown_regardless_of_type(self, timezone, type_):
+        builder = _builder(timezone, node_to_ranks={}, type=type_)
+        job_info = builder.job_end_time(_end_time(timezone)).build()
+
+        assert job_info.scheduler is Scheduler.UNKNOWN
+        assert job_info.type == type_
+
+    def test_unrecognized_scheduler_fails_build(self, timezone):
+        builder = _builder(timezone, node_to_ranks={}, type="slurm")
+        builder.scheduler("slurmm").job_end_time(_end_time(timezone))
+
+        with pytest.raises(JobInfoUnknownSchedulerError):
+            builder.build()
+
+    def test_scheduler_setter_rejects_duplicate(self, timezone):
+        builder = _builder(timezone, node_to_ranks={})
+        builder.scheduler("slurm")
+        with pytest.raises(JobInfoDuplicateFieldError):
+            builder.scheduler("kueue")
+
+    def test_empty_scheduler_call_does_not_count_as_set(self, timezone):
+        """Calling scheduler("") is a no-op, like cancelled_by(""); the scheduler stays
+        unset and a later real call is not treated as a duplicate."""
+        builder = _builder(timezone, node_to_ranks={}, type="kueue")
+        builder.scheduler("")
+        job_info = builder.scheduler("slurm").job_end_time(_end_time(timezone)).build()
+
+        assert job_info.scheduler is Scheduler.SLURM
+
+    def test_from_slurmdb_pins_scheduler_to_slurm(self, timezone):
+        slurmdb_job = {
+            "id": "job-1",
+            "start_time": "1700000000",
+            "end_time": "1700001000",
+            "nodelist": "None assigned",
+            "state": "COMPLETED",
+            "framework": "pytorch",
+            "type": "anything-else",
+            "srun_cmd": "",
+            "cancelled_by": "",
+        }
+        job_info = JobInfo.from_slurmdb(slurmdb_job=slurmdb_job, cluster="c", RANKS_PER_NODE=8, timezone=timezone)
+
+        assert job_info.scheduler is Scheduler.SLURM
+        assert job_info.type == "anything-else"  # type is untouched even though scheduler is pinned
+        assert isinstance(job_info.job_start_time, datetime)

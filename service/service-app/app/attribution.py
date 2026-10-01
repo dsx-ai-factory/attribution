@@ -12,14 +12,16 @@ from datetime import datetime
 from enum import Enum
 from typing import Literal, Optional, TypeAlias
 
+from attribution_lib.observation.inbound import (
+    Id as ObservationId,
+    Source as ObservationSource,
+)
 from attribution_lib.sources import (
     Source as LibSource,
     SourceSet,
     SymptomSet,
 )
 from pydantic import BaseModel, Field
-
-from app.observation import ObservationId, ObservationSource
 
 
 # TODO: move under app/v1/.

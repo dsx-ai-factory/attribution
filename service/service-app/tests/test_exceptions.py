@@ -15,10 +15,10 @@ from fastapi import HTTPException
 from fastapi.responses import JSONResponse
 
 from app.exceptions import (
-    DuplicateAttributorError,
-    DuplicateObservationError,
     AttributionErrorModel,
     AttributionHTTPException,
+    DuplicateAttributorError,
+    DuplicateObservationError,
     EventStorageOverflowError,
     ResponseModel,
     UnknownAttributorIdError,

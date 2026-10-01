@@ -15,6 +15,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from enum import Enum
 from typing import Any, Optional, Protocol, TypeAlias
+from zoneinfo import ZoneInfo
 
 import attribution_lib
 from attribution_lib.attributor import Attributor
@@ -29,6 +30,10 @@ from attribution_lib.exceptions import (
     MismatchedSourceAndFormatError as LibMismatchedSourceAndFormatError,
 )
 from attribution_lib.job_info import JobInfo
+from attribution_lib.observation.inbound import (
+    Id as ObservationId,
+    Observation as LibObservation,
+)
 from attribution_lib.rules import CollectorRule, RuleId, RuleParameters
 from loguru import logger
 from pydantic import ConfigDict, Field, field_validator
@@ -40,7 +45,6 @@ from app.exceptions import (
     IncompatibleObservationSourceFormatError,
     UnknownAttributorIdError,
 )
-from app.observation import Observation, ObservationId
 from app.util import HashableModel
 
 
@@ -87,6 +91,7 @@ class WorkloadTypeEnum(str, Enum):
 
     UNDEFINED = ""
     SLURM = "slurm"
+    KUEUE = "kueue"
     RUNAI = "runai"
 
 
@@ -198,6 +203,12 @@ class AttributorInput(Protocol):
     def __hash__(self) -> int: ...
 
 
+class ObservationInput(Protocol):
+    """Contract every versioned wire ``Observation`` satisfies."""
+
+    def to_lib_observation(self, timezone: ZoneInfo) -> LibObservation: ...
+
+
 class AttributorWrapper:
     id: AttributorId
     attributor: Attributor
@@ -237,7 +248,7 @@ class AttributorWrapper:
         logger.debug(f"Creating new AttributorWrapper (hash={hash(info)})")
         return cls(info)
 
-    def ingest(self, observation: Observation) -> ObservationId:
+    def ingest(self, observation: ObservationInput) -> ObservationId:
         """Ingest observation into this instance and return ingest_id. Raise DuplicateObservationError if we have seen this already"""
         with self.lock:
             if self._closed:  # deleted after the caller fetched it

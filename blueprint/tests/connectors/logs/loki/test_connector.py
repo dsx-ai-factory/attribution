@@ -15,7 +15,7 @@ import pytest
 
 from attribution_blueprint.connectors.auth import MTLSAuth, TokenAuth
 from attribution_blueprint.connectors.logs.loki import LokiConnector
-from attribution_blueprint.types import Format, Source
+from attribution_blueprint.types import Source
 
 
 def _ctx():
@@ -88,7 +88,6 @@ def test_syslog_body_is_entry_timeseries_with_stream_node(mocker):
     obs = conn.collect(ctx)
     assert len(obs) == 1
     o = obs[0]
-    assert o["context"]["format"] == Format.ENTRY_TIMESERIES
     assert o["context"]["time_interval"] == {"start": ctx["start_time"], "end": ctx["end_time"]}
     assert json.loads(o["body"]) == [
         {"body": "kernel: oops", "ts": 1, "resources": [{"kind": "node", "hostname": "n1"}]},
@@ -116,7 +115,6 @@ def test_applog_body_is_unbounded_entry_timeseries_with_labelled_resources(mocke
 
     obs = _applog_connector().collect(_ctx())
 
-    assert obs[0]["context"]["format"] == Format.ENTRY_TIMESERIES
     assert obs[0]["context"]["time_interval"] == {"start": None, "end": None}
     assert json.loads(obs[0]["body"]) == [
         {

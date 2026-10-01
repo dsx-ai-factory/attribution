@@ -8,7 +8,7 @@
 # without an express license agreement from NVIDIA CORPORATION or
 # its affiliates is strictly prohibited.
 
-from attribution_blueprint.types import Format, Source
+from attribution_blueprint.types import Source
 
 
 def test_source_enum_matches_attribution_service_contract_values():
@@ -49,45 +49,9 @@ def test_source_enum_matches_attribution_service_contract_names():
     }
 
 
-def test_format_enum_matches_attribution_service_contract_values():
-    """Blueprint Format values mirror the service observation API contract."""
-    assert {fmt.value for fmt in Format} == {
-        "",
-        "string_list",
-        "raw_log",
-        "raw_loki_streams",
-        "loki_dict_list",
-        "csv_metric_response",
-        "ufmlog",
-        "prometheus_metrics",
-        "csp_event_list",
-        "entry_timeseries",
-    }
-
-
-def test_format_enum_matches_attribution_service_contract_names():
-    """Blueprint Format names mirror the service observation API contract."""
-    assert set(Format.__members__) == {
-        "EMPTY",
-        "STRING_LIST",
-        "RAW_LOG",
-        "RAW_LOKI_STREAMS",
-        "LOKI_DICT_LIST",
-        "CSV_METRIC_RESPONSE",
-        "UFMLOG",
-        "PROMETHEUS_METRICS",
-        "CSP_EVENT_LIST",
-        "ENTRY_TIMESERIES",
-    }
-
-
 def test_observation_contract_keeps_existing_blueprint_names():
     """Current Blueprint connectors keep their service wire values."""
     assert Source.APPLOG.value == "applog"
     assert Source.SYSLOG.value == "syslog"
     assert Source.NODE_METRICS.value == "node_metrics"
     assert Source.NVLINK_METRICS.value == "nvlink_metrics"
-    assert Format.LOKI_DICT_LIST.value == "loki_dict_list"
-    assert Format.RAW_LOKI_STREAMS.value == "raw_loki_streams"
-    assert Format.RAW_LOG.value == "raw_log"
-    assert Format.PROMETHEUS_METRICS.value == "prometheus_metrics"

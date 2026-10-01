@@ -23,9 +23,10 @@ from nvidia_attribution_client.models.attributor_info_v1 import AttributorInfoV1
 from nvidia_attribution_client.models.attributor_info_v2 import AttributorInfoV2
 from nvidia_attribution_client.models.new_response_v1 import NewResponseV1
 from nvidia_attribution_client.models.new_response_v2 import NewResponseV2
-from nvidia_attribution_client.models.observation import Observation
 from nvidia_attribution_client.models.observation_response_v1 import ObservationResponseV1
 from nvidia_attribution_client.models.observation_response_v2 import ObservationResponseV2
+from nvidia_attribution_client.models.observation_v1 import ObservationV1
+from nvidia_attribution_client.models.observation_v2 import ObservationV2
 
 from nvidia_attribution_client.api_client import ApiClient, RequestSerialized
 from nvidia_attribution_client.api_response import ApiResponse
@@ -2484,7 +2485,7 @@ class DefaultApi:
     def ingest_latest_attributor_att_id_observation_post(
         self,
         att_id: StrictStr,
-        observation: Observation,
+        observation_v2: ObservationV2,
         *,
         _request_timeout: Union[
             None,
@@ -2505,8 +2506,8 @@ class DefaultApi:
 
         :param att_id: (required)
         :type att_id: str
-        :param observation: (required)
-        :type observation: Observation
+        :param observation_v2: (required)
+        :type observation_v2: ObservationV2
         :param _request_timeout: timeout setting for this request. If one
                                  number provided, it will be total request
                                  timeout. It can also be a pair (tuple) of
@@ -2531,7 +2532,7 @@ class DefaultApi:
 
         _param = self._ingest_latest_attributor_att_id_observation_post_serialize(
             att_id=att_id,
-            observation=observation,
+            observation_v2=observation_v2,
             _request_auth=_request_auth,
             _content_type=_content_type,
             _headers=_headers,
@@ -2562,7 +2563,7 @@ class DefaultApi:
     def ingest_latest_attributor_att_id_observation_post_with_http_info(
         self,
         att_id: StrictStr,
-        observation: Observation,
+        observation_v2: ObservationV2,
         *,
         _request_timeout: Union[
             None,
@@ -2583,8 +2584,8 @@ class DefaultApi:
 
         :param att_id: (required)
         :type att_id: str
-        :param observation: (required)
-        :type observation: Observation
+        :param observation_v2: (required)
+        :type observation_v2: ObservationV2
         :param _request_timeout: timeout setting for this request. If one
                                  number provided, it will be total request
                                  timeout. It can also be a pair (tuple) of
@@ -2609,7 +2610,7 @@ class DefaultApi:
 
         _param = self._ingest_latest_attributor_att_id_observation_post_serialize(
             att_id=att_id,
-            observation=observation,
+            observation_v2=observation_v2,
             _request_auth=_request_auth,
             _content_type=_content_type,
             _headers=_headers,
@@ -2640,7 +2641,7 @@ class DefaultApi:
     def ingest_latest_attributor_att_id_observation_post_without_preload_content(
         self,
         att_id: StrictStr,
-        observation: Observation,
+        observation_v2: ObservationV2,
         *,
         _request_timeout: Union[
             None,
@@ -2661,8 +2662,8 @@ class DefaultApi:
 
         :param att_id: (required)
         :type att_id: str
-        :param observation: (required)
-        :type observation: Observation
+        :param observation_v2: (required)
+        :type observation_v2: ObservationV2
         :param _request_timeout: timeout setting for this request. If one
                                  number provided, it will be total request
                                  timeout. It can also be a pair (tuple) of
@@ -2687,7 +2688,7 @@ class DefaultApi:
 
         _param = self._ingest_latest_attributor_att_id_observation_post_serialize(
             att_id=att_id,
-            observation=observation,
+            observation_v2=observation_v2,
             _request_auth=_request_auth,
             _content_type=_content_type,
             _headers=_headers,
@@ -2713,7 +2714,7 @@ class DefaultApi:
     def _ingest_latest_attributor_att_id_observation_post_serialize(
         self,
         att_id,
-        observation,
+        observation_v2,
         _request_auth,
         _content_type,
         _headers,
@@ -2741,8 +2742,8 @@ class DefaultApi:
         # process the header parameters
         # process the form parameters
         # process the body parameter
-        if observation is not None:
-            _body_params = observation
+        if observation_v2 is not None:
+            _body_params = observation_v2
 
 
         # set the HTTP header `Accept`
@@ -2793,7 +2794,7 @@ class DefaultApi:
     def ingest_v1_attributor_att_id_observation_post(
         self,
         att_id: StrictStr,
-        observation: Observation,
+        observation_v1: ObservationV1,
         *,
         _request_timeout: Union[
             None,
@@ -2814,8 +2815,8 @@ class DefaultApi:
 
         :param att_id: (required)
         :type att_id: str
-        :param observation: (required)
-        :type observation: Observation
+        :param observation_v1: (required)
+        :type observation_v1: ObservationV1
         :param _request_timeout: timeout setting for this request. If one
                                  number provided, it will be total request
                                  timeout. It can also be a pair (tuple) of
@@ -2840,7 +2841,7 @@ class DefaultApi:
 
         _param = self._ingest_v1_attributor_att_id_observation_post_serialize(
             att_id=att_id,
-            observation=observation,
+            observation_v1=observation_v1,
             _request_auth=_request_auth,
             _content_type=_content_type,
             _headers=_headers,
@@ -2870,7 +2871,7 @@ class DefaultApi:
     def ingest_v1_attributor_att_id_observation_post_with_http_info(
         self,
         att_id: StrictStr,
-        observation: Observation,
+        observation_v1: ObservationV1,
         *,
         _request_timeout: Union[
             None,
@@ -2891,8 +2892,8 @@ class DefaultApi:
 
         :param att_id: (required)
         :type att_id: str
-        :param observation: (required)
-        :type observation: Observation
+        :param observation_v1: (required)
+        :type observation_v1: ObservationV1
         :param _request_timeout: timeout setting for this request. If one
                                  number provided, it will be total request
                                  timeout. It can also be a pair (tuple) of
@@ -2917,7 +2918,7 @@ class DefaultApi:
 
         _param = self._ingest_v1_attributor_att_id_observation_post_serialize(
             att_id=att_id,
-            observation=observation,
+            observation_v1=observation_v1,
             _request_auth=_request_auth,
             _content_type=_content_type,
             _headers=_headers,
@@ -2947,7 +2948,7 @@ class DefaultApi:
     def ingest_v1_attributor_att_id_observation_post_without_preload_content(
         self,
         att_id: StrictStr,
-        observation: Observation,
+        observation_v1: ObservationV1,
         *,
         _request_timeout: Union[
             None,
@@ -2968,8 +2969,8 @@ class DefaultApi:
 
         :param att_id: (required)
         :type att_id: str
-        :param observation: (required)
-        :type observation: Observation
+        :param observation_v1: (required)
+        :type observation_v1: ObservationV1
         :param _request_timeout: timeout setting for this request. If one
                                  number provided, it will be total request
                                  timeout. It can also be a pair (tuple) of
@@ -2994,7 +2995,7 @@ class DefaultApi:
 
         _param = self._ingest_v1_attributor_att_id_observation_post_serialize(
             att_id=att_id,
-            observation=observation,
+            observation_v1=observation_v1,
             _request_auth=_request_auth,
             _content_type=_content_type,
             _headers=_headers,
@@ -3019,7 +3020,7 @@ class DefaultApi:
     def _ingest_v1_attributor_att_id_observation_post_serialize(
         self,
         att_id,
-        observation,
+        observation_v1,
         _request_auth,
         _content_type,
         _headers,
@@ -3047,8 +3048,8 @@ class DefaultApi:
         # process the header parameters
         # process the form parameters
         # process the body parameter
-        if observation is not None:
-            _body_params = observation
+        if observation_v1 is not None:
+            _body_params = observation_v1
 
 
         # set the HTTP header `Accept`
@@ -3099,7 +3100,7 @@ class DefaultApi:
     def ingest_v2_attributor_att_id_observation_post(
         self,
         att_id: StrictStr,
-        observation: Observation,
+        observation_v2: ObservationV2,
         *,
         _request_timeout: Union[
             None,
@@ -3120,8 +3121,8 @@ class DefaultApi:
 
         :param att_id: (required)
         :type att_id: str
-        :param observation: (required)
-        :type observation: Observation
+        :param observation_v2: (required)
+        :type observation_v2: ObservationV2
         :param _request_timeout: timeout setting for this request. If one
                                  number provided, it will be total request
                                  timeout. It can also be a pair (tuple) of
@@ -3146,7 +3147,7 @@ class DefaultApi:
 
         _param = self._ingest_v2_attributor_att_id_observation_post_serialize(
             att_id=att_id,
-            observation=observation,
+            observation_v2=observation_v2,
             _request_auth=_request_auth,
             _content_type=_content_type,
             _headers=_headers,
@@ -3177,7 +3178,7 @@ class DefaultApi:
     def ingest_v2_attributor_att_id_observation_post_with_http_info(
         self,
         att_id: StrictStr,
-        observation: Observation,
+        observation_v2: ObservationV2,
         *,
         _request_timeout: Union[
             None,
@@ -3198,8 +3199,8 @@ class DefaultApi:
 
         :param att_id: (required)
         :type att_id: str
-        :param observation: (required)
-        :type observation: Observation
+        :param observation_v2: (required)
+        :type observation_v2: ObservationV2
         :param _request_timeout: timeout setting for this request. If one
                                  number provided, it will be total request
                                  timeout. It can also be a pair (tuple) of
@@ -3224,7 +3225,7 @@ class DefaultApi:
 
         _param = self._ingest_v2_attributor_att_id_observation_post_serialize(
             att_id=att_id,
-            observation=observation,
+            observation_v2=observation_v2,
             _request_auth=_request_auth,
             _content_type=_content_type,
             _headers=_headers,
@@ -3255,7 +3256,7 @@ class DefaultApi:
     def ingest_v2_attributor_att_id_observation_post_without_preload_content(
         self,
         att_id: StrictStr,
-        observation: Observation,
+        observation_v2: ObservationV2,
         *,
         _request_timeout: Union[
             None,
@@ -3276,8 +3277,8 @@ class DefaultApi:
 
         :param att_id: (required)
         :type att_id: str
-        :param observation: (required)
-        :type observation: Observation
+        :param observation_v2: (required)
+        :type observation_v2: ObservationV2
         :param _request_timeout: timeout setting for this request. If one
                                  number provided, it will be total request
                                  timeout. It can also be a pair (tuple) of
@@ -3302,7 +3303,7 @@ class DefaultApi:
 
         _param = self._ingest_v2_attributor_att_id_observation_post_serialize(
             att_id=att_id,
-            observation=observation,
+            observation_v2=observation_v2,
             _request_auth=_request_auth,
             _content_type=_content_type,
             _headers=_headers,
@@ -3328,7 +3329,7 @@ class DefaultApi:
     def _ingest_v2_attributor_att_id_observation_post_serialize(
         self,
         att_id,
-        observation,
+        observation_v2,
         _request_auth,
         _content_type,
         _headers,
@@ -3356,8 +3357,8 @@ class DefaultApi:
         # process the header parameters
         # process the form parameters
         # process the body parameter
-        if observation is not None:
-            _body_params = observation
+        if observation_v2 is not None:
+            _body_params = observation_v2
 
 
         # set the HTTP header `Accept`

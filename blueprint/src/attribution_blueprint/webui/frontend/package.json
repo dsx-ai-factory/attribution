@@ -30,7 +30,7 @@
     "react": "^19.2.6",
     "react-day-picker": "^10.0.1",
     "react-dom": "^19.2.6",
-    "react-router-dom": "^7.15.1",
+    "react-router-dom": "^7.18.4",
     "swr": "^2.4.1",
     "tailwind-merge": "^3.6.0",
     "tailwindcss": "^4.3.0",
@@ -43,7 +43,7 @@
     "@types/react": "^19.2.14",
     "@types/react-dom": "^19.2.3",
     "@vitejs/plugin-react": "^6.0.1",
-    "@vitest/coverage-v8": "4.1.8",
+    "@vitest/coverage-v8": "4.1.11",
     "eslint": "^10.3.0",
     "eslint-plugin-react-hooks": "^7.1.1",
     "eslint-plugin-react-refresh": "^0.5.2",
@@ -52,13 +52,13 @@
     "typescript": "~6.0.2",
     "typescript-eslint": "^8.59.2",
     "vite": "^8.1.4",
-    "vitest": "^4.1.8"
+    "vitest": "^4.1.11"
   },
   "pnpm": {
     "overrides": {
-      "brace-expansion": "5.0.7",
-      "dompurify": "3.4.12",
-      "undici": "7.28.0"
+      "brace-expansion": "5.0.12",
+      "dompurify": "3.4.16",
+      "undici": "7.30.0"
     }
   }
 }

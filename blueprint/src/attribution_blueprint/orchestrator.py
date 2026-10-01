@@ -14,18 +14,19 @@ from pathlib import Path
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from loguru import logger
+from nvidia_attribution_client import AttributorInfoV2, ObservationV2, Scheduler
 
-from attribution_blueprint.connectors.attribution import (
-    AttributionConnector,
-    AttributorInfoV2,
-    ServiceObservation,
-)
+from attribution_blueprint.connectors.attribution import AttributionConnector
 from attribution_blueprint.connectors.execution_contexts import ExecutionContextAdapter
 from attribution_blueprint.connectors.logs import LogConnector
 from attribution_blueprint.connectors.metrics import MetricsConnector
 from attribution_blueprint.connectors.outputs import OutputConnector
 from attribution_blueprint.result import ConnectorReport, enrich_attribution_result, service_outcome
 from attribution_blueprint.taxonomy import taxonomy_for_service_value
+
+# Scheduler identities the service accepts on `workload.scheduler`, taken from
+# the generated client so the values are not retyped here.
+_SUPPORTED_WORKLOAD_SCHEDULERS = frozenset(s.value for s in Scheduler if s is not Scheduler.EMPTY)
 
 
 def _service_timezone_name(start: datetime, end: datetime, configured: str | None = None) -> str:
@@ -176,7 +177,7 @@ class AttributionOrchestrator:
 
         for obs in observations:
             try:
-                service_obs = ServiceObservation.model_validate(obs)
+                service_obs = ObservationV2.model_validate(obs)
                 self.attribution.ingest_observation(attributor_id, service_obs)
             except Exception as e:
                 obs_source = obs.get("context", {}).get("source", "?")
@@ -231,11 +232,10 @@ class AttributionOrchestrator:
             source = obs["context"]["source"]
             source_value = source.value if hasattr(source, "value") else source
             path = self.dump_observations_dir / f"{ctx['id']}.{source_value}.json"
-            # Bundled connector bodies are JSON-encoded (ENTRY_TIMESERIES,
-            # PROMETHEUS_METRICS); a third-party connector may still send plain
-            # text. Preserve a non-JSON body under `body_raw` so the dump
-            # round-trips for any (Source, Format) pair without crashing the
-            # per-context loop.
+            # Bundled connector bodies are JSON-encoded (`entry_timeseries`); a
+            # third-party connector may still send plain text. Preserve a
+            # non-JSON body under `body_raw` so the dump round-trips for any
+            # source without crashing the per-context loop.
             raw_body = obs["body"]
             body_field: dict[str, object]
             try:
@@ -245,11 +245,6 @@ class AttributionOrchestrator:
             payload = {
                 "context": {
                     "source": source_value,
-                    "format": (
-                        obs["context"]["format"].value
-                        if hasattr(obs["context"]["format"], "value")
-                        else obs["context"]["format"]
-                    ),
                     "time_interval": {
                         "start": _isoformat_or_none(obs["context"]["time_interval"]["start"]),
                         "end": _isoformat_or_none(obs["context"]["time_interval"]["end"]),
@@ -301,6 +296,13 @@ class AttributionOrchestrator:
             "interest_end_time": ctx["end_time"].isoformat(),
             "nodes": node_to_ranks,
         }
+        # ExecutionContext.scheduler is also used for connector provenance
+        # (for example, "static"). Only actual scheduler identities belong on
+        # the service wire; omitting other values leaves the service's
+        # scheduler unset (`UNKNOWN`).
+        scheduler = ctx.get("scheduler")
+        if scheduler in _SUPPORTED_WORKLOAD_SCHEDULERS:
+            workload["scheduler"] = scheduler
         if "failed_node" in ctx:
             workload["failed_node"] = ctx["failed_node"].lower()
         if "cancelled_by" in ctx:

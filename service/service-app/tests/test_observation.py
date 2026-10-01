@@ -11,24 +11,18 @@
 # TODO: parametrize these tests across v1/v2
 
 import json
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
 import pytest
-from pydantic import ValidationError
+from attribution_lib.observation.inbound import Source as ObservationSource
 
 from app.attributor import (
     AttributorMetadata,
     WorkloadTypeEnum,
 )
-from app.observation import (
-    Observation,
-    ObservationContext,
-    ObservationFormat,
-    ObservationSource,
-    TimeInterval,
-)
+from app.util import TimeInterval
 from app.v1.models import (
     AttributionResponseV1,
     AttributorInfoV1,
@@ -36,8 +30,8 @@ from app.v1.models import (
     GlobalAttribution,
     NodeAttribution,
 )
+from app.v1.observation import ObservationContextV1, ObservationFormat, ObservationV1
 from tests.conftest import make_up_attributor_info, post_attributor
-
 
 JOB_NODE = "node0"
 UNBOUNDED = {"start": None, "end": None}
@@ -74,7 +68,7 @@ def attributor_info() -> AttributorInfoV1:
 
 
 @pytest.fixture
-def raw_loki_obs_applog(attributor_info) -> Observation:
+def raw_loki_obs_applog(attributor_info) -> ObservationV1:
     logroot = Path(__file__).parent / "testdata"
     path = logroot / "applog.json"
     payload = path.read_bytes()
@@ -83,13 +77,13 @@ def raw_loki_obs_applog(attributor_info) -> Observation:
     time_interval = TimeInterval(
         start=attributor_info.workload.job_start_time, end=attributor_info.workload.job_end_time
     )
-    context = ObservationContext(
+    context = ObservationContextV1(
         time_interval=time_interval,
         source=ObservationSource.APPLOG,
         format=ObservationFormat.RAW_LOKI_STREAMS,
     )
 
-    return Observation(context=context, body=payload)
+    return ObservationV1(context=context, body=payload)
 
 
 def test_raw_loki_obs_applog(client, attributor_info, raw_loki_obs_applog):
@@ -118,7 +112,7 @@ def test_raw_loki_obs_applog(client, attributor_info, raw_loki_obs_applog):
 
 
 @pytest.fixture
-def raw_loki_obs(attributor_info) -> Observation:
+def raw_loki_obs(attributor_info) -> ObservationV1:
     logroot = Path(__file__).parent / "testdata"
     path = logroot / "logbody-body.json"
     payload = path.read_bytes()
@@ -127,13 +121,13 @@ def raw_loki_obs(attributor_info) -> Observation:
     time_interval = TimeInterval(
         start=attributor_info.workload.job_start_time, end=attributor_info.workload.job_end_time
     )
-    context = ObservationContext(
+    context = ObservationContextV1(
         time_interval=time_interval,
         source=ObservationSource.SYSLOG,
         format=ObservationFormat.RAW_LOKI_STREAMS,
     )
 
-    return Observation(context=context, body=payload)
+    return ObservationV1(context=context, body=payload)
 
 
 def test_raw_loki_obs(client, attributor_info, raw_loki_obs):
@@ -170,12 +164,12 @@ def prometheus_metrics_obs(attributor_info):
     time_interval = TimeInterval(
         start=attributor_info.workload.job_start_time, end=attributor_info.workload.job_end_time
     )
-    context = ObservationContext(
+    context = ObservationContextV1(
         time_interval=time_interval,
         source=ObservationSource.NODE_METRICS,
         format=ObservationFormat.PROMETHEUS_METRICS,
     )
-    return Observation(context=context, body=payload)
+    return ObservationV1(context=context, body=payload)
 
 
 def test_prometheus_metrics_observation_ingests_successfully(client, attributor_info, prometheus_metrics_obs):
@@ -193,7 +187,7 @@ def test_prometheus_metrics_observation_ingests_successfully(client, attributor_
     assert set([obs_id]) == set(attribution.observation_context)
 
 
-def _string_list_context(**overrides) -> ObservationContext:
+def _string_list_context(**overrides) -> ObservationContextV1:
     """Build a string-list observation context for tests.
 
     Args:
@@ -209,7 +203,7 @@ def _string_list_context(**overrides) -> ObservationContext:
         format=ObservationFormat.STRING_LIST,
     )
     fields.update(overrides)
-    return ObservationContext(**fields)
+    return ObservationContextV1(**fields)
 
 
 def test_context_with_is_prefiltered_true_marks_lib_context_pre_filtered():
@@ -231,9 +225,9 @@ def test_context_without_is_prefiltered_leaves_lib_context_not_pre_filtered():
 
 
 def test_prefiltered_flag_flows_through_to_lib_observation():
-    """Confirm that Observation carries is_prefiltered to the library."""
+    """Confirm that ObservationV1 carries is_prefiltered to the library."""
     context = _string_list_context(is_prefiltered=True)
-    observation = Observation(context=context, body="first\nsecond")
+    observation = ObservationV1(context=context, body="first\nsecond")
 
     lib_observation = observation.to_lib_observation(ZoneInfo("UTC"))
 
@@ -255,7 +249,7 @@ def test_request_body_with_is_prefiltered_true_reaches_lib_context():
         }
     )
 
-    observation = Observation.model_validate_json(body)
+    observation = ObservationV1.model_validate_json(body)
 
     assert observation.to_lib_observation(ZoneInfo("UTC")).context.pre_filtered is True
 
@@ -272,8 +266,8 @@ def test_a_well_formed_body_decodes_to_the_entries_the_library_receives():
             "resources": [{"kind": "node", "hostname": JOB_NODE}, {"kind": "replica", "name": "worker0"}],
         },
     ]
-    observation = Observation(
-        context=ObservationContext(
+    observation = ObservationV1(
+        context=ObservationContextV1(
             time_interval=TimeInterval(start=None, end=None),
             source=ObservationSource.SYSLOG,
             format=ObservationFormat.ENTRY_TIMESERIES,
@@ -302,6 +296,23 @@ def test_a_well_formed_body_decodes_to_the_entries_the_library_receives():
     ]
 
 
+@pytest.mark.parametrize("ts,decoded", [("123", 123), (2.0, 2), (True, 1)])
+def test_a_ts_the_validator_coerces_decodes_to_an_int(ts, decoded):
+    observation = ObservationV1(
+        context=ObservationContextV1(
+            time_interval=TimeInterval(start=None, end=None),
+            source=ObservationSource.SYSLOG,
+            format=ObservationFormat.ENTRY_TIMESERIES,
+        ),
+        body=json.dumps([{"body": "x", "ts": ts}]),
+    )
+
+    (line,) = observation.to_lib_observation(ZoneInfo("UTC")).lines
+
+    assert line == {"body": "x", "ts": decoded, "resources": None}
+    assert type(line["ts"]) is int
+
+
 @pytest.mark.parametrize(
     "body,reason",
     [
@@ -309,6 +320,11 @@ def test_a_well_formed_body_decodes_to_the_entries_the_library_receives():
         ('[{"body": "x", "resources": [{"kind": "planet", "name": "mars"}]}]', "unknown resource kind"),
         ('[{"body": "x", "timestamp": 1744734437830498000}]', "misspelled ts would be silently dropped"),
         ('[{"body": "x", "ts": 1744734437830498000000}]', "timestamp out of datetime range"),
+        ('[{"body": "x", "ts": -1744734437830498000000}]', "timestamp below datetime range"),
+        ('[{"body": "x", "ts": 2.5}]', "fractional timestamp"),
+        ('[{"ts": 1744734437830498000}]', "missing body"),
+        ('[{"body": 5}]', "non-string body"),
+        ('{"body": "x"}', "an entry outside a list"),
     ],
 )
 def test_a_malformed_body_is_rejected_with_a_client_error(client, body, reason):
@@ -319,11 +335,7 @@ def test_a_malformed_body_is_rejected_with_a_client_error(client, body, reason):
         f"/v2/attributor/{att_id}/observation",
         content=json.dumps(
             {
-                "context": {
-                    "time_interval": UNBOUNDED,
-                    "source": ObservationSource.SYSLOG.value,
-                    "format": ObservationFormat.ENTRY_TIMESERIES.value,
-                },
+                "context": {"time_interval": UNBOUNDED, "source": ObservationSource.SYSLOG.value},
                 "body": body,
             }
         ),
@@ -331,4 +343,3 @@ def test_a_malformed_body_is_rejected_with_a_client_error(client, body, reason):
 
     assert response.status_code == 400, reason
     assert response.json()["model_type"] == "InvalidObservationBodyError", reason
-

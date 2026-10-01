@@ -24,7 +24,7 @@ from datetime import datetime, timezone
 import pytest
 
 from attribution_blueprint.connectors.logs.kubectl_logs import KubectlLogsConnector
-from attribution_blueprint.types import Format, Source
+from attribution_blueprint.types import Source
 
 
 def _text(observation: dict) -> str:
@@ -68,7 +68,7 @@ def _stub_logs(mocker, by_pod: dict[str, str], *, errors: set[str] | None = None
 
 def test_emits_one_observation_per_pod(mocker):
     """Happy path: both pods return non-empty stdout → two Observations,
-    body matches kubectl stdout exactly, source/format/resources are set."""
+    body matches kubectl stdout exactly, source/resources are set."""
     _stub_logs(
         mocker,
         {
@@ -85,7 +85,6 @@ def test_emits_one_observation_per_pod(mocker):
     assert any("CUDA error: device-side assert" in b for b in bodies)
     for o in obs:
         assert o["context"]["source"] == Source.APPLOG
-        assert o["context"]["format"] == Format.ENTRY_TIMESERIES
         assert o["context"]["time_interval"] == {"start": None, "end": None}
 
 
@@ -219,7 +218,6 @@ def test_source_can_be_overridden_to_syslog(mocker):
     conn = KubectlLogsConnector(source=Source.SYSLOG)
     obs = conn.collect(_ctx(pod_names=["train-abc-trainer-0-0"]))
     assert obs[0]["context"]["source"] == Source.SYSLOG
-    assert obs[0]["context"]["format"] == Format.ENTRY_TIMESERIES
     assert obs[0]["context"]["time_interval"]["start"] == datetime(2026, 5, 1, 12, 0, 0, tzinfo=timezone.utc)
     assert json.loads(obs[0]["body"]) == [{"body": "2026-05-01T12:00:03Z kernel: oops", "ts": 1777636803000000000}]
 

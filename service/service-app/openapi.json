@@ -106,7 +106,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/Observation"
+                "$ref": "#/components/schemas/ObservationV1"
               }
             }
           }
@@ -382,7 +382,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/Observation"
+                "$ref": "#/components/schemas/ObservationV2"
               }
             }
           }
@@ -716,7 +716,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/Observation"
+                "$ref": "#/components/schemas/ObservationV2"
               }
             }
           }
@@ -1464,6 +1464,16 @@
             "type": "string",
             "title": "Type"
           },
+          "scheduler": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Scheduler"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "srun_cmd": {
             "anyOf": [
               {
@@ -2101,25 +2111,7 @@
         "title": "NodeSource",
         "description": "A source bound to a specific node (e.g. a per-node GPU or NIC symptom)."
       },
-      "Observation": {
-        "properties": {
-          "context": {
-            "$ref": "#/components/schemas/ObservationContext"
-          },
-          "body": {
-            "type": "string",
-            "title": "Body"
-          }
-        },
-        "type": "object",
-        "required": [
-          "context",
-          "body"
-        ],
-        "title": "Observation",
-        "description": "Describes association of some observation data with a context."
-      },
-      "ObservationContext": {
+      "ObservationContextV1": {
         "properties": {
           "time_interval": {
             "$ref": "#/components/schemas/TimeInterval"
@@ -2147,8 +2139,32 @@
           "source",
           "format"
         ],
-        "title": "ObservationContext",
+        "title": "ObservationContextV1",
         "description": "Describes the scope of an observation."
+      },
+      "ObservationContextV2": {
+        "properties": {
+          "time_interval": {
+            "$ref": "#/components/schemas/TimeIntervalV2",
+            "description": "The collection window: the interval the entries were deliberately gathered over. The service filters entries by it; an entry whose timestamp falls outside the window is discarded and never reaches a rule. Specifying `None` for either bound is allowed, and treats the observation as unbounded on that side. `start` must not be later than `end`."
+          },
+          "source": {
+            "$ref": "#/components/schemas/Source"
+          },
+          "is_prefiltered": {
+            "type": "boolean",
+            "title": "Is Prefiltered",
+            "default": false
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "time_interval",
+          "source"
+        ],
+        "title": "ObservationContextV2",
+        "description": "Describes the scope of an `entry_timeseries` observation."
       },
       "ObservationIngestionErrorResponse": {
         "oneOf": [
@@ -2213,6 +2229,44 @@
         "title": "ObservationResponseV2",
         "description": "Response to performing an ingestion."
       },
+      "ObservationV1": {
+        "properties": {
+          "context": {
+            "$ref": "#/components/schemas/ObservationContextV1"
+          },
+          "body": {
+            "type": "string",
+            "title": "Body"
+          }
+        },
+        "type": "object",
+        "required": [
+          "context",
+          "body"
+        ],
+        "title": "ObservationV1",
+        "description": "Describes association of some observation data with a context."
+      },
+      "ObservationV2": {
+        "properties": {
+          "context": {
+            "$ref": "#/components/schemas/ObservationContextV2"
+          },
+          "body": {
+            "type": "string",
+            "title": "Body",
+            "description": "JSON-encoded list of entries. Each entry has a `body` string, an optional `ts` (unix nanoseconds; null when the producer has none) and optional `resources` naming what the entry is about. Null handling varies by source."
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "context",
+          "body"
+        ],
+        "title": "ObservationV2",
+        "description": "An `entry_timeseries` entry list and the context it was collected in."
+      },
       "RankScore": {
         "prefixItems": [
           {
@@ -2274,6 +2328,16 @@
         "type": "object",
         "title": "RuleParameters",
         "description": "Generic envelope for rule parameters."
+      },
+      "Scheduler": {
+        "type": "string",
+        "enum": [
+          "",
+          "slurm",
+          "kueue"
+        ],
+        "title": "Scheduler",
+        "description": "Recognized values for `JobInfo.scheduler`.\n\nUnlike `JobInfo.type`, which is a free-form legacy wire token, every\n`JobInfo.scheduler` value is one of these members. `UNKNOWN` means \"no\nrecognized scheduler identity\": callers must not use it to build a\nrendered ID and should fall back to generic wording. Existing Slurm\nsymptom strings are unchanged."
       },
       "SingleAttribution": {
         "properties": {
@@ -2542,6 +2606,41 @@
         "title": "TimeInterval",
         "description": "The window an observation declares it covers.\n\nBoth keys are required, so a payload that omits one is a validation error rather than unbounded.\nA null bound means unbounded on that side, and only the `entry_timeseries` format accepts one."
       },
+      "TimeIntervalV2": {
+        "properties": {
+          "start": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Start"
+          },
+          "end": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "End"
+          }
+        },
+        "type": "object",
+        "required": [
+          "start",
+          "end"
+        ],
+        "title": "TimeIntervalV2",
+        "description": "The window the entries were collected over. A null bound is unbounded on that side."
+      },
       "UncertaintyType": {
         "type": "string",
         "enum": [
@@ -2780,6 +2879,7 @@
         "enum": [
           "",
           "slurm",
+          "kueue",
           "runai"
         ],
         "title": "WorkloadTypeEnum",
