@@ -487,7 +487,7 @@ def test_collect_batch_returns_empty_lists_for_contexts_without_evidence(mocker)
     assert conn.collect_batch([]) == {}
 
 
-def test_collect_batch_applog_regroups_streams_and_renames_node_label(mocker):
+def test_collect_batch_applog_emits_timeseries_with_node_resources(mocker):
     end = datetime(2026, 5, 1, 12, 0, tzinfo=timezone.utc)
     ns = lambda dt: int(dt.timestamp() * 1e9)  # noqa: E731
     streams = [
@@ -507,12 +507,11 @@ def test_collect_batch_applog_regroups_streams_and_renames_node_label(mocker):
     result = conn.collect_batch([_batch_ctx("a", ["n1"], end=end)])
 
     body = json.loads(result["a"][0]["body"])
-    assert result["a"][0]["context"]["format"] == Format.RAW_LOKI_STREAMS
+    assert result["a"][0]["context"]["format"] == Format.ENTRY_TIMESERIES
+    assert result["a"][0]["context"]["time_interval"] == {"start": None, "end": None}
     assert body == [
-        {
-            "stream": {"app": "train", "node_name": "n1"},
-            "values": [[str(ns(end - timedelta(minutes=2))), "l2"], [str(ns(end - timedelta(minutes=1))), "l1"]],
-        }
+        {"body": "l2", "ts": ns(end - timedelta(minutes=2)), "resources": [{"kind": "node", "hostname": "n1"}]},
+        {"body": "l1", "ts": ns(end - timedelta(minutes=1)), "resources": [{"kind": "node", "hostname": "n1"}]},
     ]
 
 

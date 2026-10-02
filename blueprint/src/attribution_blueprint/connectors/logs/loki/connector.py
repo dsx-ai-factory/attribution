@@ -10,6 +10,7 @@ import requests
 from loguru import logger
 
 from attribution_blueprint.connectors.auth import Auth, credential_identity
+from attribution_blueprint.connectors.logs import log_observation
 from attribution_blueprint.connectors.logs.loki.client import (
     LokiEntry,
     LokiQueryBudgetExceeded,
@@ -20,11 +21,12 @@ from attribution_blueprint.connectors.logs.loki.range_cache import LokiRangeCach
 from attribution_blueprint.connectors.logs.loki.templates import TEMPLATES
 from attribution_blueprint.types import (
     ExecutionContext,
-    NodeResource,
+    Format,
     Observation,
+    NodeResource,
     ReplicaResource,
-    Source,
     TimeseriesEntry,
+    Source,
     assert_aware,
 )
 
@@ -55,6 +57,39 @@ _RE2_METAS = frozenset(r".\+*?()[]{}|^$")
 
 def _re2_escape(s: str) -> str:
     return "".join("\\" + c if c in _RE2_METAS else c for c in s)
+
+
+def _as_str(value: object) -> str:
+    """Envelope fields come from arbitrary JSON, so only a str is usable downstream."""
+    return value if isinstance(value, str) else ""
+
+
+def _extract_body_and_node(payload: str, node: str | None) -> tuple[str, str | None]:
+    """Pull the log line, and a hostname when the stream had none, out of a JSON-encoded Loki value.
+
+    Handles OTel (`body` + `attributes.hostname`), `message`, and CloudEvents
+    (`data.message` + `data.hostname`) envelopes; anything else is returned verbatim.
+    """
+    try:
+        parsed = json.loads(payload)
+    except json.JSONDecodeError:
+        return payload, node
+    if not isinstance(parsed, dict):
+        return payload, node
+
+    attributes = parsed.get("attributes")
+    if node is None and isinstance(attributes, dict):
+        node = _as_str(attributes.get("hostname")) or None
+    body = _as_str(parsed.get("body")) or _as_str(parsed.get("message"))
+    if body == "":
+        data = parsed.get("data")
+        if isinstance(data, dict):
+            body = _as_str(data.get("message"))
+            if node is None:
+                node = _as_str(data.get("hostname")) or None
+    if body == "":
+        body = payload
+    return body, node
 
 
 class LokiConnector:
@@ -167,7 +202,7 @@ class LokiConnector:
         entries = self._query_batch(queries, start, end)
         if not entries:
             return []
-        return [self._observation(entries, context["start_time"], context["end_time"])]
+        return [self._observation(entries, context)]
 
     def collect_batch(self, contexts: Sequence[ExecutionContext]) -> dict[str, list[Observation]]:
         """Fetch one window for the batch and slice it per context.
@@ -215,7 +250,11 @@ class LokiConnector:
                 and entry["node"].lower() in nodes
                 and start_ns <= entry["timestamp"] <= end_ns
             ]
-            result[ctx_id] = [self._observation(selected, window_start, window_end)] if selected else []
+            result[ctx_id] = (
+                [self._observation(selected, {**ctx, "start_time": window_start, "end_time": window_end})]
+                if selected
+                else []
+            )
         return result
 
     def _cached_entries(self, queries: list[str], start: datetime, end: datetime, nodes: set[str]) -> list[LokiEntry]:
@@ -321,7 +360,7 @@ class LokiConnector:
             node_of=_entry_node,
         )
 
-    def _observation(self, entries: list[LokiEntry], start: datetime, end: datetime) -> Observation:
+    def _observation(self, entries: list[LokiEntry], context: ExecutionContext) -> Observation:
         fmt = _FORMAT_FOR_SOURCE[self._source]
         if fmt == Format.LOKI_DICT_LIST:
             # The service's LOKI_DICT_LIST consumer expects a flat list of
@@ -342,32 +381,22 @@ class LokiConnector:
                 )
             body = json.dumps(flat)
         else:
-            # RAW_LOKI_STREAMS: regroup entries by label set. attribution_lib's
-            # APPLOG extractor reads `stream["node_name"]` exclusively, so the
-            # configured `node_label` is rewritten to "node_name".
-            streams: dict[str, dict] = {}
+            # Preserve batch slicing while emitting the shared timeseries format.
+            timeseries: list[TimeseriesEntry] = []
             for entry in entries:
-                key = json.dumps(entry["labels"], sort_keys=True)
-                stream = streams.get(key)
-                if stream is None:
-                    labels = dict(entry["labels"])
-                    if self._node_label and self._node_label in labels:
-                        labels.pop(self._node_label)
-                    if entry["node"] is not None:
-                        labels["node_name"] = entry["node"]
-                    stream = {"stream": labels, "values": []}
-                    streams[key] = stream
-                stream["values"].append([str(entry["timestamp"]), entry["body"]])
-            body = json.dumps(list(streams.values()))
-        return {
-            "context": {
-                "time_interval": {"start": start, "end": end},
-                "source": self._source,
-                "format": fmt,
-                "resources": "AllJobResources",
-            },
-            "body": body,
-        }
+                line, node = _extract_body_and_node(entry["body"], entry["node"])
+                item: TimeseriesEntry = {"body": line, "ts": entry["timestamp"]}
+                resources: list[NodeResource | ReplicaResource] = []
+                if node is not None:
+                    resources.append({"kind": "node", "hostname": node})
+                replica = entry["labels"].get("pod")
+                if replica is not None:
+                    resources.append({"kind": "replica", "name": replica})
+                if resources != []:
+                    item["resources"] = resources
+                timeseries.append(item)
+            body = json.dumps(timeseries)
+        return log_observation(source=self._source, format=fmt, body=body, context=context)
 
     def _inject_node_filter(self, query: str, nodes: list[str]) -> str:
         """Inject `<node_label>=~"<n1|n2|...>"` into every top-level stream
