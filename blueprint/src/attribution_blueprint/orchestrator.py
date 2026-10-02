@@ -2,7 +2,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import json
-from datetime import datetime
+from collections.abc import Mapping
+from datetime import datetime, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
@@ -13,6 +14,11 @@ from attribution_blueprint.connectors.attribution import (
     AttributionConnector,
     AttributorConflictError,
     ObservationConflictError,
+)
+from attribution_blueprint.connectors.batch import (
+    DEFAULT_BATCH_WINDOW_HOURS,
+    supports_batch_collection,
+    time_bounded_batches,
 )
 from attribution_blueprint.connectors.execution_contexts import ExecutionContextAdapter
 from attribution_blueprint.connectors.logs import LogConnector
@@ -98,6 +104,9 @@ class AttributionOrchestrator:
         outputs: list[OutputConnector],
         dump_observations_dir: Path | None = None,
         gpus_per_node: int | None = None,
+        collection_mode: str = "context",
+        batch_window_hours: float = DEFAULT_BATCH_WINDOW_HOURS,
+        batch_max_contexts: int | None = None,
     ):
         self.execution_context_adapters = execution_context_adapters
         self.log_connectors = log_connectors
@@ -106,6 +115,12 @@ class AttributionOrchestrator:
         self.outputs = outputs
         self.dump_observations_dir = dump_observations_dir
         self.gpus_per_node = gpus_per_node
+        # "context" keeps the one-query-per-context flow. "batch" groups the
+        # discovered contexts into time-bounded batches and lets collectors
+        # that implement `collect_batch` fetch each batch once.
+        self.collection_mode = collection_mode
+        self.batch_window_hours = batch_window_hours
+        self.batch_max_contexts = batch_max_contexts
         # Per-run counters surfaced via `last_run_stats` so callers can decide
         # whether to exit non-zero. `succeeded` counts contexts whose verdict
         # reached at least one output sink. `conflicted` counts contexts rejected
@@ -139,40 +154,97 @@ class AttributionOrchestrator:
         self.last_run_stats = {"attempted": len(contexts), "succeeded": 0, "conflicted": 0}
         self.last_run_summaries = []
         try:
-            for ctx in contexts:
-                try:
-                    processed = self._process_one(ctx, collectors)
-                except AttributorConflictError as e:
-                    summary = {
-                        **_summarize_context(ctx),
-                        "status": "conflicted",
-                        "attributor_id": e.attributor_id,
-                    }
-                    self.last_run_stats["conflicted"] += 1
-                    self.last_run_summaries.append(summary)
-                    logger.warning(f"attribution conflict for ctx {summary['context_id']}: {e}")
-                    continue
-                except Exception as e:
-                    logger.warning(f"processing failed for ctx {ctx.get('id', '?')}: {e}")
-                    continue
-                if processed is None:
-                    continue
-                result, output_succeeded = processed
-                results.append(result)
-                self.last_run_summaries.append(_summarize_result(ctx, result))
-                if output_succeeded:
-                    self.last_run_stats["succeeded"] += 1
+            for batch in self.context_batches(contexts):
+                precollected = self.collect_batch(batch, collectors)
+                for ctx in batch:
+                    try:
+                        processed = self._process_one(ctx, collectors, precollected)
+                    except AttributorConflictError as e:
+                        summary = {
+                            **_summarize_context(ctx),
+                            "status": "conflicted",
+                            "attributor_id": e.attributor_id,
+                        }
+                        self.last_run_stats["conflicted"] += 1
+                        self.last_run_summaries.append(summary)
+                        logger.warning(f"attribution conflict for ctx {summary['context_id']}: {e}")
+                        continue
+                    except Exception as e:
+                        logger.warning(f"processing failed for ctx {ctx.get('id', '?')}: {e}")
+                        continue
+                    if processed is None:
+                        continue
+                    result, output_succeeded = processed
+                    results.append(result)
+                    self.last_run_summaries.append(_summarize_result(ctx, result))
+                    if output_succeeded:
+                        self.last_run_stats["succeeded"] += 1
         finally:
             self._close_outputs()
 
         return results
 
-    def _process_one(self, ctx: dict, collectors: list) -> tuple[dict, bool] | None:
+    def context_batches(self, contexts: list[dict]) -> list[list[dict]]:
+        """Split discovered contexts into collection batches.
+
+        Context mode keeps discovery order in one batch. Batch mode orders by
+        end time and bounds each batch by `batch_window_hours` (0 disables the
+        time bound) and `batch_max_contexts`.
+        """
+        if not contexts:
+            return []
+        if self.collection_mode != "batch":
+            return [list(contexts)]
+        window = timedelta(hours=self.batch_window_hours) if self.batch_window_hours > 0 else None
+        batches = time_bounded_batches(contexts, window=window, max_contexts=self.batch_max_contexts)
+        logger.info(f"collection: {len(contexts)} contexts in {len(batches)} batch(es)")
+        return batches
+
+    def collect_batch(self, contexts: list[dict], collectors: list) -> dict[int, Mapping[str, list[dict]] | Exception]:
+        """Run `collect_batch` once per batch-capable collector.
+
+        Returns per-collector results keyed by the collector's position in
+        `collectors`: a mapping of context id to observations, or the exception
+        the collector raised. Collectors without `collect_batch`, and every
+        collector in context mode, are absent and run per context instead.
+        """
+        precollected: dict[int, Mapping[str, list[dict]] | Exception] = {}
+        if self.collection_mode != "batch" or not contexts:
+            return precollected
+        for index, collector in enumerate(collectors):
+            if not supports_batch_collection(collector):
+                continue
+            source = getattr(collector, "source", "?")
+            try:
+                result = collector.collect_batch(list(contexts))
+            except Exception as e:
+                logger.warning(f"batch collector {source} failed for {len(contexts)} contexts: {e}")
+                precollected[index] = e
+                continue
+            precollected[index] = {str(ctx_id): list(observations) for ctx_id, observations in result.items()}
+        return precollected
+
+    def _process_one(
+        self,
+        ctx: dict,
+        collectors: list,
+        precollected: Mapping[int, Mapping[str, list[dict]] | Exception] | None = None,
+    ) -> tuple[dict, bool] | None:
         # Collect before opening a session so collection/dump failures cannot
         # strand a newly created handle. A duplicate may still do this work.
         connector_reports: list[ConnectorReport] = []
         batches: list[tuple[ConnectorReport, list[dict]]] = []
-        for collector in collectors:
+        for index, collector in enumerate(collectors):
+            batch_result = precollected.get(index) if precollected else None
+            if isinstance(batch_result, Exception):
+                connector_reports.append(_connector_report(collector, "error", str(batch_result), 0))
+                batches.append((connector_reports[-1], []))
+                continue
+            if batch_result is not None:
+                collected = list(batch_result.get(str(ctx["id"]), []))
+                connector_reports.append(_connector_report(collector, "ok", "", len(collected)))
+                batches.append((connector_reports[-1], collected))
+                continue
             try:
                 collected = collector.collect(ctx)
             except Exception as e:

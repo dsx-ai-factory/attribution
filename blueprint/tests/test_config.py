@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import json
+from datetime import timedelta
 from pathlib import Path
 
 import pytest
@@ -493,4 +494,133 @@ def test_promql_unset_token_env_raises_mca_error(monkeypatch, tmp_path):
         'type = "token"\ntoken_env = "DOES_NOT_EXIST_PROMQL"\n'
     )
     with pytest.raises(MCAError, match="DOES_NOT_EXIST_PROMQL"):
+        load_config(p)
+
+
+def test_collection_defaults_to_context_mode():
+    cfg = load_config(FIXTURE)
+    assert cfg.collection_mode == "context"
+    assert cfg.batch_window_hours == 2.0
+    assert cfg.batch_max_contexts is None
+
+
+def test_collection_batch_settings_loaded(tmp_path):
+    p = tmp_path / "c.toml"
+    p.write_text(
+        '[attribution]\nservice_url = "http://x"\n'
+        '[eca]\ncomponent = "slurm"\n'
+        '[output.console]\ncomponent = "stdout"\n'
+        '[collection]\nmode = "batch"\nbatch_window_hours = 1.5\nbatch_max_contexts = 250\n'
+    )
+    cfg = load_config(p)
+    assert cfg.collection_mode == "batch"
+    assert cfg.batch_window_hours == 1.5
+    assert cfg.batch_max_contexts == 250
+
+
+@pytest.mark.parametrize(
+    ("section", "match"),
+    [
+        ('[collection]\nmode = "streaming"\n', "collection.mode"),
+        ("[collection]\nbatch_window_hours = -2\n", "batch_window_hours"),
+        ("[collection]\nbatch_max_contexts = 0\n", "batch_max_contexts"),
+    ],
+)
+def test_collection_invalid_settings_raise(tmp_path, section, match):
+    p = tmp_path / "c.toml"
+    p.write_text(
+        '[attribution]\nservice_url = "http://x"\n'
+        '[eca]\ncomponent = "slurm"\n'
+        '[output.console]\ncomponent = "stdout"\n' + section
+    )
+    with pytest.raises(MCAError, match=match):
+        load_config(p)
+
+
+def test_loki_query_client_settings_loaded(monkeypatch, tmp_path):
+    monkeypatch.setenv("ATTRIBUTION_TEST_TOKEN", "x")
+    p = tmp_path / "c.toml"
+    p.write_text(
+        '[attribution]\nservice_url = "http://x"\n'
+        '[eca]\ncomponent = "slurm"\n'
+        '[output.console]\ncomponent = "stdout"\n'
+        '[log.syslog]\ncomponent = "loki"\n'
+        '[log.syslog.loki]\nendpoint = "https://loki.example"\n'
+        "limit = 1000\n"
+        "batch_window_hours = 1.5\nbatch_node_filter = true\nnode_chunk_size = 10\n"
+        f'cache_dir = "{tmp_path / "range-cache"}"\n'
+        '[log.syslog.loki.auth]\ntype = "token"\ntoken_env = "ATTRIBUTION_TEST_TOKEN"\n'
+    )
+    cfg = load_config(p)
+    conn = cfg.log_connectors[0]
+    assert conn._client._limit == 1000
+    assert conn._batch_window == timedelta(hours=1.5)
+    assert conn._batch_node_filter is True
+    assert conn._node_chunk_size == 10
+    assert conn._range_cache is not None
+    assert (tmp_path / "range-cache").is_dir()
+
+
+@pytest.mark.parametrize(
+    ("setting", "match"),
+    [
+        ("max_pages = 0", "max_pages"),
+        ("query_window_minutes = 0", "query_window_minutes"),
+        ("batch_window_hours = -1", "batch_window_hours"),
+        ('batch_node_filter = "sometimes"', "batch_node_filter"),
+        ("node_chunk_size = 0", "node_chunk_size"),
+    ],
+)
+def test_loki_query_client_invalid_settings_raise(monkeypatch, tmp_path, setting, match):
+    monkeypatch.setenv("ATTRIBUTION_TEST_TOKEN", "x")
+    p = tmp_path / "c.toml"
+    p.write_text(
+        '[attribution]\nservice_url = "http://x"\n'
+        '[eca]\ncomponent = "slurm"\n'
+        '[output.console]\ncomponent = "stdout"\n'
+        '[log.syslog]\ncomponent = "loki"\n'
+        f'[log.syslog.loki]\nendpoint = "https://loki.example"\n{setting}\n'
+        '[log.syslog.loki.auth]\ntype = "token"\ntoken_env = "ATTRIBUTION_TEST_TOKEN"\n'
+    )
+    with pytest.raises(MCAError, match=match):
+        load_config(p)
+
+
+def test_promql_query_client_settings_loaded(monkeypatch, tmp_path):
+    p = tmp_path / "c.toml"
+    p.write_text(
+        '[attribution]\nservice_url = "http://x"\n'
+        '[eca]\ncomponent = "slurm"\n'
+        '[output.console]\ncomponent = "stdout"\n'
+        '[metrics.node_metrics]\ncomponent = "promql"\n'
+        '[metrics.node_metrics.promql]\nendpoint = "https://mimir.example"\ncluster = "c"\n'
+        "node_chunk_size = 25\nlookahead_seconds = 120\n"
+        'node_label = "instance"\ncluster_label = "cluster"\n'
+    )
+    cfg = load_config(p)
+    conn = cfg.metrics_connectors[0]
+    assert conn._client._node_label == "instance"
+    assert conn._client._cluster_label == "cluster"
+    assert conn._node_chunk_size == 25
+    assert conn._lookahead == timedelta(seconds=120)
+
+
+@pytest.mark.parametrize(
+    ("setting", "match"),
+    [
+        ("node_chunk_size = 0", "node_chunk_size"),
+        ("lookahead_seconds = -5", "lookahead_seconds"),
+        ('node_label = ""', "node_label"),
+    ],
+)
+def test_promql_query_client_invalid_settings_raise(tmp_path, setting, match):
+    p = tmp_path / "c.toml"
+    p.write_text(
+        '[attribution]\nservice_url = "http://x"\n'
+        '[eca]\ncomponent = "slurm"\n'
+        '[output.console]\ncomponent = "stdout"\n'
+        '[metrics.node_metrics]\ncomponent = "promql"\n'
+        f'[metrics.node_metrics.promql]\nendpoint = "https://mimir.example"\ncluster = "c"\n{setting}\n'
+    )
+    with pytest.raises(MCAError, match=match):
         load_config(p)

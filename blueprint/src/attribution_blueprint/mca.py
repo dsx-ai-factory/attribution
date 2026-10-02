@@ -10,8 +10,8 @@ Three aligned surfaces feed one canonical settings tree:
   TOML   [eca.slurm] ids = "1,5,7"             nested sections (dotted-key sugar accepted)
 
 Frameworks: eca (alias execution_context), log (alias logs) → applog/syslog,
-output, attribution, workload. Selection sets `<framework>.component`; e.g.
-`--connector eca slurm` → eca.component = "slurm".
+metrics, output, attribution, workload, collection. Selection sets
+`<framework>.component`; e.g. `--connector eca slurm` → eca.component = "slurm".
 
 Precedence: CLI > env > TOML > built-in defaults.
 """
@@ -29,6 +29,7 @@ from loguru import logger
 
 from attribution_blueprint import mca_registry as _registry
 from attribution_blueprint.connectors.attribution import AttributionConnector
+from attribution_blueprint.connectors.batch import COLLECTION_MODES, DEFAULT_BATCH_WINDOW_HOURS
 from attribution_blueprint.connectors.logs import LogConnector
 from attribution_blueprint.connectors.metrics import MetricsConnector
 from attribution_blueprint.connectors.outputs import OutputConnector
@@ -51,6 +52,13 @@ if "attribution" not in _registry._FRAMEWORKS:
     )
 if "workload" not in _registry._FRAMEWORKS:
     _registry.register_framework(name="workload", direct_params={"gpus_per_node": _PARAM})
+if "collection" not in _registry._FRAMEWORKS:
+    # How evidence is collected: per context, or once per time-bounded batch
+    # of contexts for collectors that implement `collect_batch`.
+    _registry.register_framework(
+        name="collection",
+        direct_params={"mode": _PARAM, "batch_window_hours": _PARAM, "batch_max_contexts": _PARAM},
+    )
 
 # Auto-discover every connector package under attribution_blueprint.connectors.
 # Each package registers its framework and/or component via side-effect imports
@@ -559,6 +567,9 @@ class Config:
     log_connectors: list[LogConnector]
     metrics_connectors: list[MetricsConnector]
     gpus_per_node: int | None = None
+    collection_mode: str = "context"
+    batch_window_hours: float = DEFAULT_BATCH_WINDOW_HOURS
+    batch_max_contexts: int | None = None
 
 
 def _coerce_int(value: Any, field: str) -> int:
@@ -570,6 +581,17 @@ def _coerce_int(value: Any, field: str) -> int:
         return int(str(value))
     except ValueError as exc:
         raise MCAError(f"{field}={value!r} must be an int") from exc
+
+
+def _coerce_bool(value: Any, field: str) -> bool:
+    if isinstance(value, bool):
+        return value
+    text = str(value).strip().lower()
+    if text in {"1", "true", "yes", "on"}:
+        return True
+    if text in {"0", "false", "no", "off"}:
+        return False
+    raise MCAError(f"{field}={value!r} must be a boolean")
 
 
 def _coerce_float(value: Any, field: str) -> float:
@@ -629,6 +651,21 @@ def build_config(merged: dict) -> Config:
         if gpus_per_node <= 0:
             raise MCAError(f"workload.gpus_per_node must be positive, got {gpus_per_node}")
 
+    collection = merged.get("collection") or {}
+    collection_mode = str(collection.get("mode", "context"))
+    if collection_mode not in COLLECTION_MODES:
+        raise MCAError(f"collection.mode must be one of {', '.join(COLLECTION_MODES)}, got {collection_mode!r}")
+    batch_window_hours = _coerce_float(
+        collection.get("batch_window_hours", DEFAULT_BATCH_WINDOW_HOURS), "collection.batch_window_hours"
+    )
+    if batch_window_hours < 0:
+        raise MCAError(f"collection.batch_window_hours must not be negative, got {batch_window_hours}")
+    batch_max_contexts = collection.get("batch_max_contexts")
+    if batch_max_contexts is not None:
+        batch_max_contexts = _coerce_int(batch_max_contexts, "collection.batch_max_contexts")
+        if batch_max_contexts <= 0:
+            raise MCAError(f"collection.batch_max_contexts must be positive, got {batch_max_contexts}")
+
     return Config(
         attribution=attribution,
         execution_context_adapters=[eca],
@@ -636,6 +673,9 @@ def build_config(merged: dict) -> Config:
         log_connectors=log_connectors,
         metrics_connectors=metrics_connectors,
         gpus_per_node=gpus_per_node,
+        collection_mode=collection_mode,
+        batch_window_hours=batch_window_hours,
+        batch_max_contexts=batch_max_contexts,
     )
 
 

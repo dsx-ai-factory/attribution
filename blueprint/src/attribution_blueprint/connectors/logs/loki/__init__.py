@@ -1,59 +1,44 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-import os
 from typing import Any
 
 from attribution_blueprint import mca_registry as _registry
-from attribution_blueprint.connectors.auth import Auth, MTLSAuth, TokenAuth
+from attribution_blueprint.connectors.auth import AUTH_SCHEMA, build_auth
+from attribution_blueprint.connectors.logs.loki.client import (
+    LokiEntry,
+    LokiQueryBudgetExceeded,
+    LokiQueryClient,
+    node_from_labels,
+)
 from attribution_blueprint.connectors.logs.loki.connector import LokiConnector
+from attribution_blueprint.connectors.logs.loki.range_cache import FileRangeCacheStore, LokiRangeCache
 from attribution_blueprint.connectors.logs.loki.templates import BARE_TEMPLATES, TEMPLATES
 from attribution_blueprint.exceptions import MCAError
 from attribution_blueprint.mca_registry import _PARAM
 from attribution_blueprint.types import Source
 
 
-def _build_auth(spec: dict) -> Auth:
-    atype = spec.get("type")
-    if atype == "token":
-        env_name = spec.get("token_env")
-        if not env_name:
-            raise MCAError("loki.auth type=token requires token_env")
-        if env_name not in os.environ:
-            # Surface as MCAError so the CLI's parser.error path produces a
-            # clean usage message and exit code 2, rather than a Python
-            # traceback from an uncaught KeyError.
-            raise MCAError(f"auth.token_env references unset environment variable: {env_name}")
-        return TokenAuth(token=os.environ[env_name], org_id=spec.get("org_id"))
-    if atype == "mtls":
-        if not spec.get("cert_path") or not spec.get("key_path"):
-            raise MCAError("loki.auth type=mtls requires cert_path and key_path")
-        return MTLSAuth(
-            cert_path=spec["cert_path"],
-            key_path=spec["key_path"],
-            ca_cert_path=spec.get("ca_cert_path"),
-            org_id=spec.get("org_id"),
-        )
-    raise MCAError(f"unknown auth type: {atype!r}")
-
-
 def _build(spec: dict, ctx: dict) -> LokiConnector:
-    from attribution_blueprint.mca import _coerce_float
+    from attribution_blueprint.mca import _coerce_bool, _coerce_float, _coerce_int
 
     source: Source = ctx["source"]
+    prefix = f"log.{source.name.lower()}.loki"
     endpoint = spec.get("endpoint")
     if not endpoint:
-        raise MCAError(f"log.{source.name.lower()}.loki requires endpoint")
+        raise MCAError(f"{prefix} requires endpoint")
     auth_spec = spec.get("auth")
     if not auth_spec:
-        raise MCAError(f"log.{source.name.lower()}.loki requires auth")
-    auth = _build_auth(auth_spec)
+        raise MCAError(f"{prefix} requires auth")
+    auth = build_auth(auth_spec, "loki.auth")
     timeout = _coerce_float(spec.get("timeout_seconds", 60.0), "timeout_seconds")
+
     queries = spec.get("queries")
     if queries is None and "query" in spec:
         queries = [spec["query"]]
     elif isinstance(queries, str):
         queries = [queries]
+
     kwargs: dict[str, Any] = dict(
         endpoint=endpoint,
         auth=auth,
@@ -64,13 +49,31 @@ def _build(spec: dict, ctx: dict) -> LokiConnector:
     if queries is not None:
         kwargs["templates"] = {source: list(queries)}
     # `node_label` controls which Loki stream label the connector reads to
-    # populate the per-entry `node` field and to splice the per-ExecutionContext node
-    # filter into queries. Defaults to "host_name" (the bundled set's
-    # convention); customers whose streams use "hostname" / "instance" /
-    # "kubernetes_pod_node_name" / etc. override here.
+    # populate the per-entry `node` field and to splice the per-ExecutionContext
+    # node filter into queries. Defaults to "host_name" (the bundled set's
+    # convention); deployments whose streams use another label override here.
     if "node_label" in spec:
         kwargs["node_label"] = spec["node_label"]
-    return LokiConnector(**kwargs)
+    for key in ("limit", "node_chunk_size"):
+        if key in spec:
+            value = _coerce_int(spec[key], f"{prefix}.{key}")
+            if value <= 0:
+                raise MCAError(f"{prefix}.{key} must be positive, got {value}")
+            kwargs[key] = value
+    if "batch_window_hours" in spec:
+        hours = _coerce_float(spec["batch_window_hours"], f"{prefix}.batch_window_hours")
+        if hours < 0:
+            raise MCAError(f"{prefix}.batch_window_hours must not be negative, got {hours}")
+        kwargs["batch_window_hours"] = hours
+    if "batch_node_filter" in spec:
+        kwargs["batch_node_filter"] = _coerce_bool(spec["batch_node_filter"], f"{prefix}.batch_node_filter")
+    cache_dir = spec.get("cache_dir")
+    if cache_dir:
+        kwargs["range_cache"] = LokiRangeCache(FileRangeCacheStore(str(cache_dir)))
+    try:
+        return LokiConnector(**kwargs)
+    except ValueError as exc:
+        raise MCAError(f"{prefix}: {exc}") from exc
 
 
 _registry.register_component(
@@ -82,18 +85,26 @@ _registry.register_component(
         "query": _PARAM,
         "queries": _PARAM,
         "node_label": _PARAM,
-        "auth": {
-            "type": _PARAM,
-            "cert_path": _PARAM,
-            "key_path": _PARAM,
-            "ca_cert_path": _PARAM,
-            "token_env": _PARAM,
-            "org_id": _PARAM,
-        },
+        "limit": _PARAM,
+        "batch_window_hours": _PARAM,
+        "batch_node_filter": _PARAM,
+        "node_chunk_size": _PARAM,
+        "cache_dir": _PARAM,
+        "auth": AUTH_SCHEMA,
         "query_kwargs": {"_open": True},
     },
     build=_build,
 )
 
-
-__all__ = ["LokiConnector", "TEMPLATES", "BARE_TEMPLATES"]
+__all__ = [
+    "BARE_TEMPLATES",
+    "FileRangeCacheStore",
+    "LokiConnector",
+    "LokiEntry",
+    "LokiQueryBudgetExceeded",
+    "LokiQueryClient",
+    "LokiRangeCache",
+    "LokiSyslogEntry",
+    "TEMPLATES",
+    "node_from_labels",
+]

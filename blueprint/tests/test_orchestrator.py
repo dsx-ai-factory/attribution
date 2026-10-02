@@ -936,3 +936,143 @@ def test_dump_observations_tolerates_missing_context(tmp_path):
     pipeline.analyze(ids=["dumpme"])
 
     assert (tmp_path / "dumpme.unknown.json").exists()
+
+
+# --- batch collection -------------------------------------------------------
+
+
+class _BatchCollector:
+    """Batch-capable collector that records each `collect_batch` call."""
+
+    source = Source.SYSLOG
+
+    def __init__(self, per_context: dict[str, list[dict]] | None = None, error: Exception | None = None):
+        self.per_context = per_context or {}
+        self.error = error
+        self.batches: list[list[str]] = []
+        self.collect_calls = 0
+
+    def collect(self, context):
+        self.collect_calls += 1
+        return [_make_obs()]
+
+    def collect_batch(self, contexts):
+        self.batches.append([ctx["id"] for ctx in contexts])
+        if self.error is not None:
+            raise self.error
+        return {ctx["id"]: self.per_context.get(ctx["id"], []) for ctx in contexts}
+
+
+def _make_batch_ctx(ctx_id: str, *, end_hours: float) -> dict:
+    ctx = _make_ctx(ctx_id)
+    ctx["end_time"] = datetime(2026, 5, 1, 0, 0, tzinfo=timezone.utc) + timedelta(hours=end_hours)
+    ctx["start_time"] = ctx["end_time"] - timedelta(minutes=30)
+    return ctx
+
+
+def test_batch_mode_collects_once_per_batch_and_slices_per_context():
+    contexts = [_make_batch_ctx("1", end_hours=0), _make_batch_ctx("2", end_hours=1), _make_batch_ctx("3", end_hours=5)]
+    eca = MagicMock()
+    eca.discover_by_ids.return_value = contexts
+    batch_collector = _BatchCollector(per_context={"1": [_make_obs(), _make_obs()], "3": [_make_obs()]})
+    # spec keeps MagicMock from auto-creating `collect_batch`, so this one
+    # stays a per-context collector inside batch mode.
+    per_context = MagicMock(spec=["source", "collect"])
+    per_context.source = "APPLOG"
+    per_context.collect.return_value = [_make_obs(Source.APPLOG)]
+    attr = _make_attribution_mock()
+    pipeline = AttributionOrchestrator(
+        execution_context_adapters=[eca],
+        log_connectors=[batch_collector, per_context],
+        metrics_connectors=[],
+        attribution=attr,
+        outputs=[_ListOutput()],
+        collection_mode="batch",
+        batch_window_hours=2.0,
+    )
+
+    results = pipeline.analyze(ids=["1", "2", "3"])
+
+    assert batch_collector.batches == [["1", "2"], ["3"]]
+    assert batch_collector.collect_calls == 0
+    assert per_context.collect.call_count == 3
+    # 2 + 0 + 1 batch observations plus one per-context APPLOG observation each.
+    assert attr.ingest_observation.call_count == 6
+    reports = {result["connector_reports"][0]["observation_count"] for result in results}
+    assert reports == {2, 0, 1}
+    assert all(result["connector_reports"][0]["status"] == "ok" for result in results)
+    assert all(result["connector_reports"][1]["source"] == "APPLOG" for result in results)
+
+
+def test_batch_mode_reports_batch_failure_for_every_context_in_batch():
+    contexts = [_make_batch_ctx("1", end_hours=0), _make_batch_ctx("2", end_hours=1)]
+    eca = MagicMock()
+    eca.discover_by_ids.return_value = contexts
+    batch_collector = _BatchCollector(error=RuntimeError("loki down"))
+    attr = _make_attribution_mock()
+    pipeline = AttributionOrchestrator(
+        execution_context_adapters=[eca],
+        log_connectors=[batch_collector],
+        metrics_connectors=[],
+        attribution=attr,
+        outputs=[_ListOutput()],
+        collection_mode="batch",
+    )
+
+    results = pipeline.analyze(ids=["1", "2"])
+
+    assert len(results) == 2
+    assert attr.ingest_observation.call_count == 0
+    for result in results:
+        assert result["connector_reports"] == [
+            {
+                "connector": "_BatchCollector",
+                "source": "syslog",
+                "status": "error",
+                "reason": "loki down",
+                "observation_count": 0,
+            }
+        ]
+
+
+def test_context_mode_ignores_collect_batch():
+    contexts = [_make_batch_ctx("1", end_hours=0), _make_batch_ctx("2", end_hours=1)]
+    eca = MagicMock()
+    eca.discover_by_ids.return_value = contexts
+    batch_collector = _BatchCollector()
+    pipeline = _make_pipeline(eca, [batch_collector])
+
+    pipeline.analyze(ids=["1", "2"])
+
+    assert batch_collector.batches == []
+    assert batch_collector.collect_calls == 2
+
+
+def test_batch_mode_orders_results_by_end_time_and_respects_max_contexts():
+    contexts = [
+        _make_batch_ctx("late", end_hours=3),
+        _make_batch_ctx("early", end_hours=0),
+        _make_batch_ctx("mid", end_hours=1),
+    ]
+    eca = MagicMock()
+    eca.discover_by_ids.return_value = contexts
+    attr = _make_attribution_mock()
+    attr.get_attribution.side_effect = lambda attributor_id: {"id": attributor_id}
+    pipeline = AttributionOrchestrator(
+        execution_context_adapters=[eca],
+        log_connectors=[],
+        metrics_connectors=[],
+        attribution=attr,
+        outputs=[_ListOutput()],
+        collection_mode="batch",
+        batch_window_hours=0,
+        batch_max_contexts=2,
+    )
+
+    results = pipeline.analyze(ids=["late", "early", "mid"])
+
+    assert [result["id"] for result in results] == ["attr-early", "attr-mid", "attr-late"]
+    assert [[ctx["id"] for ctx in batch] for batch in pipeline.context_batches(contexts)] == [
+        ["early", "mid"],
+        ["late"],
+    ]

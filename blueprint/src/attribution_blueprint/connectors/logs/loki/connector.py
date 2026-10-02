@@ -2,13 +2,21 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import json
-import re
+from collections.abc import Callable, Sequence
+from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime, timedelta, timezone
 
 import requests
 from loguru import logger
 
-from attribution_blueprint.connectors.auth import Auth
-from attribution_blueprint.connectors.logs import log_observation
+from attribution_blueprint.connectors.auth import Auth, credential_identity
+from attribution_blueprint.connectors.logs.loki.client import (
+    LokiEntry,
+    LokiQueryBudgetExceeded,
+    LokiQueryClient,
+    datetime_to_nanoseconds,
+)
+from attribution_blueprint.connectors.logs.loki.range_cache import LokiRangeCache
 from attribution_blueprint.connectors.logs.loki.templates import TEMPLATES
 from attribution_blueprint.types import (
     ExecutionContext,
@@ -22,6 +30,10 @@ from attribution_blueprint.types import (
 
 DEFAULT_LIMIT = 5000
 DEFAULT_NODE_LABEL = "host_name"
+DEFAULT_NODE_CHUNK_SIZE = 50
+# Concurrent queries per batch; enough to overlap network latency without
+# hammering the backend.
+_MAX_IN_FLIGHT = 4
 
 # RE2 metacharacters (https://github.com/google/re2/wiki/Syntax). Unlike
 # Python re, RE2 rejects unrecognized escape sequences (e.g. `\-`), so
@@ -33,50 +45,19 @@ def _re2_escape(s: str) -> str:
     return "".join("\\" + c if c in _RE2_METAS else c for c in s)
 
 
-# Hard cap on paginated requests per template so a pathologically chatty query
-# can't run forever; at DEFAULT_LIMIT=5000 this is up to 100k entries.
-MAX_PAGES = 20
-
-
-def _as_str(value: object) -> str:
-    """Envelope fields come from arbitrary JSON, so only a str is usable downstream."""
-    return value if isinstance(value, str) else ""
-
-
-def _extract_body_and_node(payload: str, node: str | None) -> tuple[str, str | None]:
-    """Pull the log line, and a hostname when the stream had none, out of a JSON-encoded Loki value.
-
-    Handles OTel (`body` + `attributes.hostname`), `message`, and CloudEvents
-    (`data.message` + `data.hostname`) envelopes; anything else is returned verbatim.
-    """
-    try:
-        parsed = json.loads(payload)
-    except json.JSONDecodeError:
-        return payload, node
-    if not isinstance(parsed, dict):
-        return payload, node
-
-    attributes = parsed.get("attributes")
-    if node is None and isinstance(attributes, dict):
-        node = _as_str(attributes.get("hostname")) or None
-    body = _as_str(parsed.get("body")) or _as_str(parsed.get("message"))
-    if body == "":
-        data = parsed.get("data")
-        if isinstance(data, dict):
-            body = _as_str(data.get("message"))
-            if node is None:
-                node = _as_str(data.get("hostname")) or None
-    if body == "":
-        body = payload
-    return body, node
-
-
 class LokiConnector:
     """Collector that fetches one Source from a Loki backend.
 
     Each instance handles exactly one Source. To serve both SYSLOG and APPLOG
     from the same backend, instantiate twice — failure isolation per Source
     lives at the instance boundary.
+
+    `collect(context)` queries per context. `collect_batch(contexts)` fetches
+    one window for a whole batch and slices the result per context by node and
+    time. Both read through `LokiQueryClient` (bounded, bisected, forward
+    requests), optionally through a `LokiRangeCache` so overlapping windows
+    only fetch the five-minute buckets they lack. The orchestrator uses
+    `collect_batch` when `[collection] mode = "batch"`.
     """
 
     def __init__(
@@ -90,9 +71,19 @@ class LokiConnector:
         timeout_seconds: float = 60.0,
         limit: int = DEFAULT_LIMIT,
         node_label: str | None = DEFAULT_NODE_LABEL,
+        batch_window_hours: float = 0.0,
+        batch_node_filter: bool = False,
+        node_chunk_size: int = DEFAULT_NODE_CHUNK_SIZE,
+        range_cache: LokiRangeCache | None = None,
+        session: requests.Session | None = None,
+        clock: Callable[[], datetime] | None = None,
     ):
         if source not in templates:
             raise ValueError(f"no templates registered for source {source}")
+        if batch_window_hours < 0:
+            raise ValueError(f"batch_window_hours must not be negative, got {batch_window_hours}")
+        if node_chunk_size <= 0:
+            raise ValueError(f"node_chunk_size must be positive, got {node_chunk_size}")
         self._source = source
         # The v1 design spec types templates as dict[Source, str] (one query
         # per source). The blueprint extends this to a list so a single
@@ -102,26 +93,42 @@ class LokiConnector:
         tmpl_val = templates[source]
         self._templates = [tmpl_val] if isinstance(tmpl_val, str) else list(tmpl_val)
         self._query_kwargs = query_kwargs
-        self._endpoint = endpoint.rstrip("/")
-        self._timeout = timeout_seconds
-        self._limit = limit
         # Retained so the CLI override path can inherit endpoint/auth/etc.
         # from a TOML-built instance when only some Loki flags are passed.
+        self._endpoint = endpoint.rstrip("/")
         self._auth = auth
+        self._timeout = timeout_seconds
+        self._limit = limit
         # When set, the connector splices `<node_label>=~"n1|n2|..."` into
         # each query's first label selector to keep per-ExecutionContext
-        # fetches scoped to that ExecutionContext's nodes. Set to None for
-        # cluster-wide queries.
+        # fetches scoped to that ExecutionContext's nodes, and reads each
+        # entry's node from that label. Set to None for cluster-wide queries.
         self._node_label = node_label
-
-        self._session = requests.Session()
-        kwargs = auth.request_kwargs()
-        if "headers" in kwargs:
-            self._session.headers.update(kwargs["headers"])
-        if "cert" in kwargs:
-            self._session.cert = kwargs["cert"]
-        if "verify" in kwargs:
-            self._session.verify = kwargs["verify"]
+        # Batch mode only: a positive value trims each context to its trailing
+        # window before slicing; 0 keeps the whole context window, as
+        # `collect` does.
+        self._batch_window = timedelta(hours=batch_window_hours) if batch_window_hours > 0 else None
+        self._batch_node_filter = batch_node_filter
+        self._node_chunk_size = node_chunk_size
+        self._range_cache = range_cache
+        self._clock = clock if clock is not None else (lambda: datetime.now(timezone.utc))
+        # Query-affecting settings that scope cached buckets; the credential
+        # digest keeps tenants apart without storing secrets.
+        self._cache_config: dict[str, object] = {
+            "endpoint": self._endpoint,
+            "limit": limit,
+            "node_label": node_label,
+            "source": source.value,
+            "credential_identity": credential_identity(auth),
+        }
+        self._client = LokiQueryClient(
+            endpoint=self._endpoint,
+            auth=auth,
+            timeout_seconds=timeout_seconds,
+            limit=limit,
+            node_label=node_label,
+            session=session,
+        )
 
     @property
     def source(self) -> Source:
@@ -132,117 +139,173 @@ class LokiConnector:
         # rather than propagating them into the wire and triggering a 500.
         start = assert_aware(context["start_time"], "start_time")
         end = assert_aware(context["end_time"], "end_time")
-        start_ns = int(start.timestamp() * 1e9)
-        end_ns = int(end.timestamp() * 1e9)
-        nodes = context.get("nodes") or []
-
-        all_streams: list[dict] = []
+        nodes = [node for node in (context.get("nodes") or []) if node]
+        queries: list[str] = []
         for tmpl in self._templates:
             try:
-                query = tmpl.format(
-                    job_id=context.get("id", ""),
-                    **self._query_kwargs,
-                )
+                query = tmpl.format(job_id=context.get("id", ""), **self._query_kwargs)
             except KeyError as e:
                 logger.warning(f"loki template missing kwarg {e}; skipping query")
                 continue
-
-            query = self._inject_node_filter(query, nodes)
-            all_streams.extend(self._query_paginated(query, start_ns, end_ns))
-
-        if not all_streams:
+            queries.append(self._inject_node_filter(query, nodes))
+        entries = self._query_batch(queries, start, end)
+        if not entries:
             return []
+        return [self._observation(entries, context["start_time"], context["end_time"])]
 
-        entries = self._entries(all_streams)
-        return [log_observation(source=self._source, entries=entries, context=context)]
+    def collect_batch(self, contexts: Sequence[ExecutionContext]) -> dict[str, list[Observation]]:
+        """Fetch one window for the batch and slice it per context.
 
-    def _entries(self, streams: list[dict]) -> list[TimeseriesEntry]:
-        # Multi-template runs and pagination can produce duplicate streams
-        # (same labels, overlapping values). Coalesce by label set and dedup
-        # (timestamp, line) pairs before encoding so the service doesn't
-        # double-count.
-        streams = self._merge_streams(streams)
-        # One entry per stream value. Node and pod labels ride along as
-        # per-entry resources only when the stream carries them.
-        timeseries: list[TimeseriesEntry] = []
-        for stream in streams:
-            labels = stream.get("stream") or {}
-            stream_node = labels.get(self._node_label) if self._node_label else None
-            replica = labels.get("pod")
-            for ts, line in stream.get("values") or []:
-                try:
-                    timestamp = int(ts)
-                except (TypeError, ValueError):
-                    continue
-                body, node = _extract_body_and_node(line, stream_node)
-                entry: TimeseriesEntry = {"body": body, "ts": timestamp}
-                resources: list[NodeResource | ReplicaResource] = []
-                if node is not None:
-                    resources.append({"kind": "node", "hostname": node})
-                if replica is not None:
-                    resources.append({"kind": "replica", "name": replica})
-                if resources:
-                    entry["resources"] = resources
-                timeseries.append(entry)
-        return timeseries
-
-    @staticmethod
-    def _merge_streams(streams: list[dict]) -> list[dict]:
-        merged: dict[tuple, dict] = {}
-        seen: dict[tuple, set[tuple]] = {}
-        for stream in streams:
-            labels = stream.get("stream", {}) or {}
-            key = tuple(sorted(labels.items()))
-            if key not in merged:
-                merged[key] = {"stream": dict(labels), "values": []}
-                seen[key] = set()
-            for entry in stream.get("values", []) or []:
-                if len(entry) < 2:
-                    continue
-                pair = (entry[0], entry[1])
-                if pair in seen[key]:
-                    continue
-                seen[key].add(pair)
-                merged[key]["values"].append(entry)
-        return list(merged.values())
-
-    def _query_paginated(self, query: str, start_ns: int, end_ns: int) -> list[dict]:
-        """Walk Loki's query_range backward in time until the result is unsaturated.
-
-        Loki returns entries newest-first and caps at `limit` per response, so a
-        single call silently drops the tail for high-volume windows. We re-issue
-        with `end` set to the oldest returned timestamp minus 1ns, until a page
-        comes back under the cap or we hit MAX_PAGES.
-
-        POST keeps the LogQL out of the URL (Loki's GET path caps at ~8 KiB and
-        a long `host_name=~"n1|n2|..."` regex for multi-node attempts blows past it).
+        Each context receives the lines from its nodes inside its window
+        (trimmed to `batch_window_hours` when set). Templates that reference
+        `{job_id}` cannot share a query, so they fall back to per-context
+        `collect`.
         """
-        out: list[dict] = []
-        cur_end = end_ns
-        for page in range(MAX_PAGES):
-            response = self._session.post(
-                f"{self._endpoint}/loki/api/v1/query_range",
-                data={"query": query, "start": start_ns, "end": cur_end, "limit": self._limit},
-                timeout=self._timeout,
-            )
-            response.raise_for_status()
-            streams = response.json().get("data", {}).get("result", [])
-            entry_count = sum(len(s.get("values", []) or []) for s in streams)
-            if entry_count == 0:
-                break
-            out.extend(streams)
-            if entry_count < self._limit:
-                break
-            oldest_ns = min(int(ts) for s in streams for ts, _ in (s.get("values", []) or []))
-            if oldest_ns <= start_ns:
-                break
-            cur_end = oldest_ns - 1
+        contexts = list(contexts)
+        if not contexts:
+            return {}
+        if any("{job_id}" in tmpl for tmpl in self._templates):
+            return {str(ctx["id"]): self.collect(ctx) for ctx in contexts}
+        windows = {str(ctx["id"]): self._context_window(ctx) for ctx in contexts}
+        fetch_start = min(window[0] for window in windows.values())
+        fetch_end = max(window[1] for window in windows.values())
+        entries = self._query_batch(self._batch_queries(contexts), fetch_start, fetch_end)
+        result: dict[str, list[Observation]] = {}
+        for ctx in contexts:
+            ctx_id = str(ctx["id"])
+            window_start, window_end = windows[ctx_id]
+            nodes = {node.lower() for node in (ctx.get("nodes") or []) if node}
+            start_ns = datetime_to_nanoseconds(window_start)
+            end_ns = datetime_to_nanoseconds(window_end)
+            selected = [
+                entry
+                for entry in entries
+                if entry["node"] is not None
+                and entry["node"].lower() in nodes
+                and start_ns <= entry["timestamp"] <= end_ns
+            ]
+            result[ctx_id] = [self._observation(selected, window_start, window_end)] if selected else []
+        return result
+
+    def _context_window(self, context: ExecutionContext) -> tuple[datetime, datetime]:
+        start = assert_aware(context["start_time"], "start_time")
+        end = assert_aware(context["end_time"], "end_time")
+        if self._batch_window is not None:
+            start = max(start, end - self._batch_window)
+        return start, end
+
+    def _batch_queries(self, contexts: list[ExecutionContext]) -> list[str]:
+        rendered: list[str] = []
+        for tmpl in self._templates:
+            try:
+                rendered.append(tmpl.format(**self._query_kwargs))
+            except KeyError as e:
+                logger.warning(f"loki template missing kwarg {e}; skipping query")
+        if not (self._batch_node_filter and self._node_label):
+            return rendered
+        nodes = sorted({node for ctx in contexts for node in (ctx.get("nodes") or []) if node})
+        chunks = [
+            nodes[offset : offset + self._node_chunk_size] for offset in range(0, len(nodes), self._node_chunk_size)
+        ]
+        return (
+            [self._inject_node_filter(query, chunk) for query in rendered for chunk in chunks] if chunks else rendered
+        )
+
+    def _query_batch(self, queries: list[str], start: datetime, end: datetime) -> list[LokiEntry]:
+        """Run every query over one window; merge, dedup, and order the entries."""
+
+        def run(query: str) -> list[LokiEntry]:
+            try:
+                return self._query_range(query, start, end)
+            except LokiQueryBudgetExceeded as exc:
+                logger.warning(f"loki query {query[:80]!r} truncated: {exc}; keeping {len(exc.entries)} entries")
+                return list(exc.entries)
+
+        if len(queries) <= 1:
+            pages = [run(query) for query in queries]
         else:
-            logger.warning(
-                f"loki: hit MAX_PAGES={MAX_PAGES} for query={query[:80]!r}; "
-                f"older entries before ts={cur_end} may be truncated"
-            )
-        return out
+            with ThreadPoolExecutor(max_workers=min(_MAX_IN_FLIGHT, len(queries))) as executor:
+                pages = list(executor.map(run, queries))
+        seen: set[tuple[str, int, str]] = set()
+        merged: list[LokiEntry] = []
+        for page in pages:
+            for entry in page:
+                key = (json.dumps(entry["labels"], sort_keys=True), entry["timestamp"], entry["body"])
+                if key in seen:
+                    continue
+                seen.add(key)
+                merged.append(entry)
+        merged.sort(key=lambda entry: entry["timestamp"])
+        return merged
+
+    def _query_range(self, query: str, start: datetime, end: datetime) -> list[LokiEntry]:
+        """Read one inclusive window through the range cache when one is configured."""
+        if self._range_cache is None:
+            return self._client.query_range(query, start, end)
+
+        def fetch_missing(rendered: str, range_start: datetime, range_end: datetime) -> list[LokiEntry]:
+            range_end_ns = datetime_to_nanoseconds(range_end)
+            entries = self._client.query_range(rendered, range_start, range_end)
+            return [entry for entry in entries if entry["timestamp"] < range_end_ns]
+
+        return self._range_cache.query(
+            query=query,
+            config=self._cache_config,
+            start=start,
+            end=end + timedelta(microseconds=1),
+            inclusive_end_ns=datetime_to_nanoseconds(end),
+            fetch=fetch_missing,
+            timestamp=lambda entry: entry["timestamp"],
+            now=self._clock(),
+        )
+
+    def _observation(self, entries: list[LokiEntry], start: datetime, end: datetime) -> Observation:
+        fmt = _FORMAT_FOR_SOURCE[self._source]
+        if fmt == Format.LOKI_DICT_LIST:
+            # The service's LOKI_DICT_LIST consumer expects a flat list of
+            # LokiSyslogEntry, not raw Loki streams. Entries without a node
+            # are dropped: attribution_lib's syslog parser passes node into
+            # verify_node() with no None-guard.
+            flat: list[LokiSyslogEntry] = []
+            dropped_no_node = 0
+            for entry in entries:
+                if entry["node"] is None:
+                    dropped_no_node += 1
+                    continue
+                flat.append({"timestamp": entry["timestamp"], "body": entry["body"], "node": entry["node"]})
+            if dropped_no_node:
+                logger.warning(
+                    f"loki SYSLOG: dropped {dropped_no_node} entries with missing "
+                    f"{self._node_label!r} label (service requires node identity)"
+                )
+            body = json.dumps(flat)
+        else:
+            # RAW_LOKI_STREAMS: regroup entries by label set. attribution_lib's
+            # APPLOG extractor reads `stream["node_name"]` exclusively, so the
+            # configured `node_label` is rewritten to "node_name".
+            streams: dict[str, dict] = {}
+            for entry in entries:
+                key = json.dumps(entry["labels"], sort_keys=True)
+                stream = streams.get(key)
+                if stream is None:
+                    labels = dict(entry["labels"])
+                    if self._node_label and self._node_label in labels:
+                        labels.pop(self._node_label)
+                    if entry["node"] is not None:
+                        labels["node_name"] = entry["node"]
+                    stream = {"stream": labels, "values": []}
+                    streams[key] = stream
+                stream["values"].append([str(entry["timestamp"]), entry["body"]])
+            body = json.dumps(list(streams.values()))
+        return {
+            "context": {
+                "time_interval": {"start": start, "end": end},
+                "source": self._source,
+                "format": fmt,
+                "resources": "AllJobResources",
+            },
+            "body": body,
+        }
 
     def _inject_node_filter(self, query: str, nodes: list[str]) -> str:
         """Inject `<node_label>=~"<n1|n2|...>"` into every top-level stream

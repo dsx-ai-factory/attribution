@@ -77,7 +77,7 @@ for durable Pod-to-node placement before post-hoc Kueue attribution.
 ## End-to-end flow for one workload
 
 1. **Discover.** The Blueprint's execution-context adapter (Slurm shells to `sacct`, Kueue shells to `kubectl`, Static hand-feeds one workload) returns one or more `ExecutionContext` objects.
-2. **Collect.** For each context, every configured log and metric collector runs `collect(ctx)` and returns zero or more `Observation` objects. Each `Observation` carries a `Source` enum value (`applog`, `syslog`, `node_metrics`) and an `entry_timeseries` body; the entry shape is in [Observation entry format](https://github.com/dsx-ai-factory/attribution/blob/main/service/service-app/docs/api/observation-format.md).
+2. **Collect.** For each context, every configured log and metric collector runs `collect(ctx)` and returns zero or more `Observation` objects. Each `Observation` carries a `Source` enum value (`applog`, `syslog`, `node_metrics`) and an `entry_timeseries` body; the entry shape is in [Observation entry format](https://github.com/dsx-ai-factory/attribution/blob/main/service/service-app/docs/api/observation-format.md). In batch collection mode (`[collection] mode = "batch"`) the orchestrator first groups the discovered contexts into time-bounded batches and calls `collect_batch(contexts)` once per batch on every collector that implements it; the collector fetches the union once and returns per-context observations. Collectors without `collect_batch` still run per context. See [Batch collection](#batch-collection).
 3. **Open attributor.** `POST /v2/attributor` creates a per-context handle. On a duplicate-session 409, the connector raises `AttributorConflictError` with the original HTTP error as its cause. The Blueprint preserves the existing session, records that context as `conflicted` in the run statistics and summaries, and continues with other contexts. Retry after the existing session's owner finishes and deletes it.
 4. **Submit observations.** Each `Observation` goes via `POST /v2/attributor/{id}/observation`. Individual failures are logged and skipped. A duplicate-observation 409 counts as delivered. Per-connector delivery outcomes land in `ingestion_reports`.
 5. **Get verdict.** `GET /v2/attributor/{id}/attribution` returns the raw verdict.
@@ -116,8 +116,22 @@ The Blueprint's configuration model is patterned on Open MPI's Modular Component
 | output | stdout, sqlite | per-instance component-selector | (none) |
 | attribution | (implicit HTTP client) | flat: service_url, timeout_seconds | (none) |
 | workload | (no components) | flat: gpus_per_node, used to build service v2 node-to-ranks payload | (none) |
+| collection | (no components) | flat: mode, batch_window_hours, batch_max_contexts | (none) |
 
 Three configuration surfaces feed one canonical settings tree: CLI flags (`--connector eca slurm ids "1,5,7"`), env vars (`NVAB_ECA_SLURM_IDS=...`), and TOML (`[eca.slurm]` with `ids = "1,5,7"`). Precedence: CLI > env > TOML > defaults.
+
+Frameworks and components register with `mca_registry` at import time. A deployment can register additional frameworks and components from its own package before building the pipeline. That is how site-specific connectors plug into the same orchestrator without being part of the Blueprint distribution.
+
+### Batch collection
+
+Per-context collection issues one telemetry query per context. A fleet-scale run over a time range discovers hundreds of contexts whose evidence windows overlap, so the same Loki or PromQL range is read again and again. Batch collection reads each window once.
+
+* **Opt-in.** A collector joins batch mode by exposing `collect_batch(contexts) -> {context_id: [Observation, ...]}`; the orchestrator detects it with `supports_batch_collection` (`connectors/batch.py`). Collectors without it keep running per context inside the same batch.
+* **Batches.** With `[collection] mode = "batch"`, the orchestrator orders discovered contexts by `end_time` and cuts a new batch when the end times span more than `batch_window_hours` (default 2, `0` disables the bound) or the batch reaches `batch_max_contexts`. Results are written in batch order.
+* **Reports.** A `collect_batch` failure is recorded as an `error` connector report on every context in the batch, and the other collectors still run. A collector that returns no entry for a context reports `observation_count: 0`.
+* **Loki.** `LokiConnector.collect_batch` fetches one window per template through `LokiQueryClient`: forward `query_range` requests capped at 30 minutes each, bisection of saturated pages so equal timestamps are never dropped, and one page budget per call with the partial result kept when it runs out. Transient HTTP failures are retried by the session. With `cache_dir` set, a five-minute-bucket range cache means overlapping windows only fetch the buckets they lack. Each context receives the lines from its nodes inside its window (`batch_window_hours` trims it when set). Per-context `collect` reads through the same client.
+* **PromQL.** `PromQLMetricsConnector.collect_batch` queries the union of the batch's nodes once per template in `node_chunk_size` chunks, keeps successful chunks when others fail, and slices samples per context by node and by the context window plus `lookahead_seconds`.
+* **Slurm time ranges.** `--connector eca slurm start_time ... end_time ...` with batch mode is the batch-processing path for Slurm: discover every attempt that ended in the range, then collect and attribute it in two-hour batches. See [CONFIGURATION.md](../blueprint/docs/CONFIGURATION.md#collection).
 
 ## Output schema
 

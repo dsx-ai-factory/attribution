@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import json
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
@@ -228,8 +228,8 @@ def test_mtls_auth_sets_session_cert():
         source=Source.NODE_METRICS,
         templates={Source.NODE_METRICS: {"m": "{name}"}},
     )
-    assert conn._session.cert == ("/c", "/k")
-    assert conn._session.verify == "/ca"
+    assert conn._client._session.cert == ("/c", "/k")
+    assert conn._client._session.verify == "/ca"
 
 
 def test_token_auth_sets_authorization_header():
@@ -240,8 +240,8 @@ def test_token_auth_sets_authorization_header():
         source=Source.NODE_METRICS,
         templates={Source.NODE_METRICS: {"m": "{name}"}},
     )
-    assert conn._session.headers["Authorization"] == "Bearer tok"
-    assert conn._session.headers["X-Scope-OrgID"] == "tenant-42"
+    assert conn._client._session.headers["Authorization"] == "Bearer tok"
+    assert conn._client._session.headers["X-Scope-OrgID"] == "tenant-42"
 
 
 def test_auth_is_optional():
@@ -251,8 +251,8 @@ def test_auth_is_optional():
         source=Source.NODE_METRICS,
         templates={Source.NODE_METRICS: {"m": "{name}"}},
     )
-    assert "Authorization" not in conn._session.headers
-    assert "X-Scope-OrgID" not in conn._session.headers
+    assert "Authorization" not in conn._client._session.headers
+    assert "X-Scope-OrgID" not in conn._client._session.headers
 
 
 def test_source_without_templates_raises():
@@ -347,3 +347,123 @@ def test_cluster_falls_back_to_self_cluster_when_label_dropped(mocker):
     body = json.loads(obs[0]["body"])
     assert len(body) == 1
     assert "cluster: example-cluster," in body[0]["body"]
+
+
+# --- batch collection -------------------------------------------------------
+
+
+def _node_and_value(entry: dict) -> tuple[str, str]:
+    return entry["resources"][0]["hostname"], entry["body"].split("metric_value: ", 1)[1].split(",", 1)[0]
+
+
+def _batch_ctx(ctx_id: str, nodes: list[str], *, start: datetime, end: datetime) -> dict:
+    return {"id": ctx_id, "nodes": nodes, "start_time": start, "end_time": end}
+
+
+def _batch_conn(mocker, result, **kwargs):
+    post = _mock_response(mocker, result)
+    defaults = dict(
+        endpoint="https://prom.example",
+        auth=TokenAuth("tok"),
+        cluster="c",
+        source=Source.NODE_METRICS,
+        templates={Source.NODE_METRICS: {"m": '{name}{{s_cluster="{cluster}", net_host_name=~"{nodes}"}}'}},
+        lookahead_seconds=300,
+    )
+    defaults.update(kwargs)
+    return PromQLMetricsConnector(**defaults), post
+
+
+def test_collect_batch_queries_union_of_nodes_once_and_slices_per_context(mocker):
+    t0 = datetime(2026, 5, 1, 12, 0, tzinfo=timezone.utc)
+    ts = lambda minutes: int((t0 + timedelta(minutes=minutes)).timestamp())  # noqa: E731
+    result = [
+        {"metric": {"net_host_name": "n1", "s_cluster": "c"}, "values": [[ts(5), "1"], [ts(40), "2"]]},
+        {"metric": {"net_host_name": "n2", "s_cluster": "c"}, "values": [[ts(63), "3"]]},
+        {"metric": {"net_host_name": "n3", "s_cluster": "c"}, "values": [[ts(10), "4"]]},
+    ]
+    conn, post = _batch_conn(mocker, result)
+    contexts = [
+        _batch_ctx("a", ["n1"], start=t0, end=t0 + timedelta(minutes=30)),
+        _batch_ctx("b", ["n2", "n1"], start=t0 + timedelta(minutes=30), end=t0 + timedelta(hours=1)),
+    ]
+
+    observations = conn.collect_batch(contexts)
+
+    assert post.call_count == 1
+    data = post.call_args.kwargs["data"]
+    assert data["query"] == 'm{s_cluster="c", net_host_name=~"n1|n2"}'
+    assert data["start"] == int(t0.timestamp())
+    assert data["end"] == int((t0 + timedelta(hours=1, minutes=5)).timestamp())
+    body_a = json.loads(observations["a"][0]["body"])
+    assert [_node_and_value(entry) for entry in body_a] == [("n1", "1")]
+    assert observations["a"][0]["context"]["time_interval"] == {"start": t0, "end": t0 + timedelta(minutes=30)}
+    body_b = json.loads(observations["b"][0]["body"])
+    # n1's second sample falls inside b's window; n2's sample sits in the lookahead.
+    assert sorted(_node_and_value(entry) for entry in body_b) == [("n1", "2"), ("n2", "3")]
+
+
+def test_collect_batch_chunks_nodes_and_keeps_successful_chunks(mocker):
+    t0 = datetime(2026, 5, 1, 12, 0, tzinfo=timezone.utc)
+
+    def respond(*_args, **kwargs):
+        fake = mocker.Mock()
+        fake.raise_for_status = mocker.Mock()
+        if "n3" in kwargs["data"]["query"]:
+            fake.raise_for_status.side_effect = RuntimeError("chunk failed")
+            return fake
+        fake.json.return_value = {
+            "status": "success",
+            "data": {"result": [{"metric": {"net_host_name": "n1"}, "values": [[int(t0.timestamp()), "1"]]}]},
+        }
+        return fake
+
+    post = mocker.patch("requests.Session.post", side_effect=respond)
+    conn = PromQLMetricsConnector(
+        endpoint="https://prom.example",
+        auth=TokenAuth("tok"),
+        cluster="c",
+        source=Source.NODE_METRICS,
+        templates={Source.NODE_METRICS: {"m": '{name}{{net_host_name=~"{nodes}"}}'}},
+        node_chunk_size=2,
+    )
+
+    observations = conn.collect_batch([_batch_ctx("a", ["n1", "n2", "n3"], start=t0, end=t0 + timedelta(minutes=5))])
+
+    assert post.call_count == 2
+    assert [json.loads(obs["body"])[0]["resources"][0]["hostname"] for obs in observations["a"]] == ["n1"]
+
+
+def test_collect_batch_raises_when_every_query_fails(mocker):
+    t0 = datetime(2026, 5, 1, 12, 0, tzinfo=timezone.utc)
+    conn, _post = _batch_conn(mocker, [])
+    fake = mocker.Mock()
+    fake.raise_for_status.side_effect = RuntimeError("down")
+    mocker.patch("requests.Session.post", return_value=fake)
+
+    with pytest.raises(RuntimeError, match="down"):
+        conn.collect_batch([_batch_ctx("a", ["n1"], start=t0, end=t0 + timedelta(minutes=5))])
+
+
+def test_collect_batch_without_nodes_or_contexts(mocker):
+    t0 = datetime(2026, 5, 1, 12, 0, tzinfo=timezone.utc)
+    conn, post = _batch_conn(mocker, [])
+
+    assert conn.collect_batch([]) == {}
+    assert conn.collect_batch([_batch_ctx("a", [], start=t0, end=t0 + timedelta(minutes=5))]) == {"a": []}
+    assert post.call_count == 0
+
+
+@pytest.mark.parametrize(
+    "kwargs",
+    [{"step_seconds": 0}, {"node_chunk_size": 0}, {"lookahead_seconds": -1}],
+)
+def test_connector_rejects_invalid_batch_settings(kwargs):
+    with pytest.raises(ValueError):
+        PromQLMetricsConnector(
+            endpoint="https://prom.example",
+            cluster="c",
+            source=Source.NODE_METRICS,
+            templates={Source.NODE_METRICS: {"m": "{name}"}},
+            **kwargs,
+        )

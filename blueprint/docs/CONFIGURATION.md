@@ -523,6 +523,40 @@ gpus_per_node = 8
 For `nodes = ["node-a", "node-b"]`, the service v2 payload contains
 `{"node-a": [0, 1, 2, 3, 4, 5, 6, 7], "node-b": [8, 9, 10, 11, 12, 13, 14, 15]}`.
 
+### `[collection]`
+
+This section selects how evidence is collected.
+
+| Field | Required | Default | Meaning |
+|---|---:|---|---|
+| `mode` | No | `context` | `context` queries telemetry once per execution context. `batch` groups contexts into time-bounded batches and lets collectors that implement `collect_batch` (Loki, PromQL) fetch each batch once, then slice per context. Collectors without batch support keep running per context. |
+| `batch_window_hours` | No | `2.0` | Batch mode only. A new batch starts when the contexts' end times span more than this many hours. `0` disables the time bound. |
+| `batch_max_contexts` | No | unset | Batch mode only. Maximum contexts per batch. |
+
+Batch mode fits scheduled runs over everything that finished recently, for example a cron job that covers the last hour every hour, when the Loki stream is labeled per node and node metrics live in Prometheus, Mimir, or Cortex. For a handful of specific jobs, per-context mode with `--connector eca slurm ids` is simpler and needs no batch settings.
+
+Example: attribute every Slurm attempt that ended in a time range, reading Loki and Mimir once per two-hour batch.
+
+```toml
+[collection]
+mode = "batch"
+batch_window_hours = 2.0
+
+[eca]
+component = "slurm"
+
+[eca.slurm]
+cluster_tz = "UTC"
+```
+
+```bash
+uv run --project blueprint --frozen nvidia-attribution-blueprint --config ./attribution-blueprint.toml \
+  --connector eca slurm start_time "2026-05-01T00:00:00+00:00" \
+  --connector eca slurm end_time "2026-05-01T06:00:00+00:00"
+```
+
+The same settings are available as `--connector collection mode batch`, `--connector collection batch_window_hours 2`, and `NVAB_COLLECTION_MODE=batch`. A batch failure in one collector is reported in every affected context's `connector_reports`; the verdict is still produced from the other collectors.
+
 ### `[output.<name>]`
 
 Outputs are named instances. The instance name is yours, such as `db`, `console`, or `primary`. The name `component` and names starting with `_` are reserved.
@@ -733,21 +767,27 @@ ca_cert_path = "/etc/attribution/ca.crt"
 Fields:
 
 
-| Field               | Required      | Meaning                                                                                                                           |
-| ------------------- | ------------- | --------------------------------------------------------------------------------------------------------------------------------- |
-| `endpoint`          | Yes           | Loki base URL.                                                                                                                    |
-| `auth.type`         | Yes           | `token` or `mtls`.                                                                                                                |
-| `auth.token_env`    | Yes for token | Environment variable that contains the bearer token.                                                                              |
-| `auth.cert_path`    | Yes for mTLS  | Client certificate path.                                                                                                          |
-| `auth.key_path`     | Yes for mTLS  | Client private key path.                                                                                                          |
-| `auth.ca_cert_path` | No            | CA bundle path.                                                                                                                   |
-| `auth.org_id`       | No            | Optional `X-Scope-OrgID` value.                                                                                                   |
-| `query_kwargs`      | Usually       | Label values used by bundled LogQL templates.                                                                                     |
-| `query`             | No            | Single custom LogQL template. Replaces the bundled templates for this source.                                                     |
-| `queries`           | No            | List of custom LogQL templates. Replaces the bundled templates for this source. Takes precedence over `query` when both are set.  |
-| `node_label`        | No            | Loki stream label used as the node name, and spliced into each query to scope it to the context's nodes. Defaults to `host_name`. |
-| `timeout_seconds`   | No            | HTTP timeout. Defaults to `60.0`.                                                                                                 |
+| Field                | Required      | Meaning                                                                                                                                                                                                                                |
+| -------------------- | ------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `endpoint`           | Yes           | Loki base URL.                                                                                                                                                                                                                         |
+| `auth.type`          | Yes           | `token` or `mtls`.                                                                                                                                                                                                                     |
+| `auth.token_env`     | Yes for token | Environment variable that contains the bearer token.                                                                                                                                                                                   |
+| `auth.cert_path`     | Yes for mTLS  | Client certificate path.                                                                                                                                                                                                               |
+| `auth.key_path`      | Yes for mTLS  | Client private key path.                                                                                                                                                                                                               |
+| `auth.ca_cert_path`  | No            | CA bundle path.                                                                                                                                                                                                                        |
+| `auth.org_id`        | No            | Optional `X-Scope-OrgID` value.                                                                                                                                                                                                        |
+| `query_kwargs`       | Usually       | Label values used by bundled LogQL templates.                                                                                                                                                                                          |
+| `query`              | No            | Single custom LogQL template. Replaces the bundled templates for this source.                                                                                                                                                          |
+| `queries`            | No            | List of custom LogQL templates. Replaces the bundled templates for this source. Takes precedence over `query` when both are set.                                                                                                       |
+| `node_label`         | No            | Loki stream label used as the node name, and spliced into each query to scope it to the context's nodes. Defaults to `host_name`.                                                                                                      |
+| `timeout_seconds`    | No            | HTTP timeout. Defaults to `60.0`.                                                                                                                                                                                                      |
+| `limit`              | No            | Entries per `query_range` request. Defaults to `5000`.                                                                                                                                                                                 |
+| `batch_window_hours` | No            | Batch mode only. When set, only lines from the last N hours of a context are attached to it. Defaults to `0`, the whole context window, as in per-context mode.                                                                        |
+| `batch_node_filter`  | No            | `true` splices the batch's node names into the query in `node_chunk_size` chunks instead of one cluster-wide query. Use it when the stream is shared by many clusters. Defaults to `false`.                                            |
+| `node_chunk_size`    | No            | Nodes per query when `batch_node_filter` is on. Defaults to `50`.                                                                                                                                                                      |
+| `cache_dir`          | No            | Directory for the range cache. Completed five-minute buckets are stored per query and configuration for five days, so overlapping windows only fetch the buckets they lack. Buckets ending within ten minutes of now are never cached. |
 
+In batch mode (`[collection] mode = "batch"`) the connector fetches one window per template for the whole batch, resolves each line's node from `node_label`, and attaches to each context the lines from its nodes inside its window. Templates that reference `{job_id}` cannot share a query, so they fall back to per-context collection.
 
 The bundled Loki templates are examples. If your labels are not `service_name`, `app`, or `host_name`, set `query`, `queries`, `query_kwargs`, and `node_label` for your environment.
 
@@ -834,15 +874,21 @@ token_env = "MIMIR_TOKEN"
 Fields:
 
 
-| Field             | Required | Meaning                                                                                                                 |
-| ----------------- | -------- | ----------------------------------------------------------------------------------------------------------------------- |
-| `endpoint`        | Yes      | Prometheus-compatible HTTP API base URL.                                                                                |
-| `cluster`         | Yes      | Cluster label value used by bundled PromQL templates.                                                                   |
-| `auth.type`       | No       | Optional. If present, `token` or `mtls`; same auth fields as Loki. Omit the `auth` block for unauthenticated endpoints. |
-| `step_seconds`    | No       | Query step size. Defaults to `60`.                                                                                      |
-| `timeout_seconds` | No       | HTTP timeout. Defaults to `60.0`.                                                                                       |
-| `queries`         | No       | Custom named PromQL templates. These extend the bundled templates and override bundled templates with the same name.    |
+| Field               | Required | Meaning                                                                                                                 |
+| ------------------- | -------- | ----------------------------------------------------------------------------------------------------------------------- |
+| `endpoint`          | Yes      | Prometheus-compatible HTTP API base URL.                                                                                |
+| `cluster`           | Yes      | Cluster label value used by bundled PromQL templates.                                                                   |
+| `auth.type`         | No       | Optional. If present, `token` or `mtls`; same auth fields as Loki. Omit the `auth` block for unauthenticated endpoints. |
+| `step_seconds`      | No       | Query step size. Defaults to `60`.                                                                                      |
+| `timeout_seconds`   | No       | HTTP timeout. Defaults to `60.0`.                                                                                       |
+| `queries`           | No       | Custom named PromQL templates. These extend the bundled templates and override bundled templates with the same name.    |
+| `node_label`        | No       | Series label carrying the node name. Series without it are skipped. Defaults to `net_host_name`.                        |
+| `cluster_label`     | No       | Series label carrying the cluster name; `cluster` is used when the label is absent. Defaults to `s_cluster`.            |
+| `component_label`   | No       | Series label carrying the device or component. Defaults to `device`.                                                    |
+| `node_chunk_size`   | No       | Batch mode: nodes per query. The union of the batch's nodes is split into chunks of this size. Defaults to `100`.       |
+| `lookahead_seconds` | No       | Batch mode: seconds after each context end included in its slice. Defaults to `300`.                                    |
 
+In batch mode (`[collection] mode = "batch"`) the connector queries the union of the batch's nodes once per template, keeps the chunks that succeed when others fail, and attaches to each context the samples from its nodes inside its window plus lookback and lookahead.
 
 The bundled PromQL templates expect labels such as `s_cluster` and `net_host_name`. If your metrics use different labels, override the relevant query templates.
 
@@ -858,6 +904,7 @@ export NVAB_ECA="slurm"
 export NVAB_ECA_SLURM_CLUSTER_TZ="UTC"
 export NVAB_OUTPUT_DB="sqlite"
 export NVAB_OUTPUT_DB_SQLITE_PATH="./attributions.db"
+export NVAB_COLLECTION_MODE="batch"
 ```
 
 CLI values still win over environment variables.
@@ -880,6 +927,7 @@ uv run --project blueprint --frozen nvidia-attribution-blueprint --connector log
 uv run --project blueprint --frozen nvidia-attribution-blueprint --connector log applog kubectl_logs help
 uv run --project blueprint --frozen nvidia-attribution-blueprint --connector metrics node_metrics promql help
 uv run --project blueprint --frozen nvidia-attribution-blueprint --connector output db sqlite help
+uv run --project blueprint --frozen nvidia-attribution-blueprint --connector collection help
 ```
 
 Smoke-test a config without selecting any jobs:
