@@ -3,14 +3,22 @@
 
 import json
 import re
-from typing import NotRequired, TypedDict
+from collections.abc import Sequence
+from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime, timedelta
 
+import requests
 from loguru import logger
 
 from attribution_blueprint.connectors.auth import Auth
 from attribution_blueprint.connectors.metrics.promql.client import (
-    PrometheusClient,
-    re2_escape,
+    DEFAULT_CLUSTER_LABEL,
+    DEFAULT_COMPONENT_LABEL,
+    DEFAULT_NODE_LABEL,
+    DEFAULT_STEP_SECONDS,
+    PrometheusMetricEntry,
+    PromQLQueryClient,
+    nodes_regex,
 )
 from attribution_blueprint.connectors.metrics.promql.templates import TEMPLATES
 from attribution_blueprint.exceptions import MCAError
@@ -22,22 +30,15 @@ from attribution_blueprint.types import (
     assert_aware,
 )
 
-DEFAULT_STEP_SECONDS = 60
-DEFAULT_NODE_LABEL = "net_host_name"
-DEFAULT_CLUSTER_LABEL = "s_cluster"
-DEFAULT_COMPONENT_LABEL = "device"
+DEFAULT_NODE_CHUNK_SIZE = 100
+DEFAULT_LOOKAHEAD_SECONDS = 300
+# Concurrent queries per batch; enough to overlap network latency without
+# hammering the backend.
+_MAX_IN_FLIGHT = 4
 _NS = 10**9  # PromQL sample times are unix seconds; `ts` is nanoseconds
 _LABEL_IDENTIFIER = re.compile(r"[a-zA-Z_][a-zA-Z0-9_]*")
 
-
-class PrometheusMetricEntry(TypedDict):
-    timestamp: int
-    value: str
-    metric: str
-    labels: dict[str, str]
-    node: str
-    component: NotRequired[str]
-    cluster: NotRequired[str]
+__all__ = ["PrometheusMetricEntry", "PromQLMetricsConnector", "DEFAULT_NODE_LABEL", "DEFAULT_STEP_SECONDS"]
 
 
 def _render_metric_body(metric: PrometheusMetricEntry) -> str:
@@ -89,6 +90,10 @@ class PromQLMetricsConnector:
     backend, instantiate per Source — failure isolation lives at the instance
     boundary. Templates are bundled with the connector; the customer supplies a
     cluster name and (optionally) a templates dict to extend or override.
+
+    `collect(context)` queries per context. `collect_batch(contexts)` queries the
+    union of a batch's nodes once per template (chunked, concurrent, best
+    effort) and slices the samples per context by node and time.
     """
 
     def __init__(
@@ -101,13 +106,23 @@ class PromQLMetricsConnector:
         templates: dict[Source, dict[str, str]] = TEMPLATES,
         timeout_seconds: float = 60.0,
         step_seconds: int = DEFAULT_STEP_SECONDS,
+        node_chunk_size: int = DEFAULT_NODE_CHUNK_SIZE,
+        lookahead_seconds: int = DEFAULT_LOOKAHEAD_SECONDS,
         node_label: str = DEFAULT_NODE_LABEL,
         cluster_label: str = DEFAULT_CLUSTER_LABEL,
+        component_label: str = DEFAULT_COMPONENT_LABEL,
+        session: requests.Session | None = None,
     ):
         if source not in templates:
             raise ValueError(f"no templates registered for source {source}")
+        if step_seconds <= 0:
+            raise ValueError(f"step_seconds must be positive, got {step_seconds}")
+        if node_chunk_size <= 0:
+            raise ValueError(f"node_chunk_size must be positive, got {node_chunk_size}")
+        if lookahead_seconds < 0:
+            raise ValueError("lookahead_seconds must not be negative")
         for setting, label in (("node_label", node_label), ("cluster_label", cluster_label)):
-            if not isinstance(label, str) or not _LABEL_IDENTIFIER.fullmatch(label):
+            if not isinstance(label, str) or _LABEL_IDENTIFIER.fullmatch(label) is None:
                 raise MCAError(f"promql.{setting}={label!r} must match [a-zA-Z_][a-zA-Z0-9_]*")
         self._source = source
         self._templates = templates[source]
@@ -118,13 +133,17 @@ class PromQLMetricsConnector:
         self._timeout = timeout_seconds
         self._step = step_seconds
         self._auth = auth
-        self._client = PrometheusClient(
+        self._node_chunk_size = node_chunk_size
+        self._lookahead = timedelta(seconds=lookahead_seconds)
+        self._client = PromQLQueryClient(
             endpoint=endpoint,
             auth=auth,
             timeout_seconds=timeout_seconds,
+            node_label=node_label,
+            cluster_label=cluster_label,
+            component_label=component_label,
+            session=session,
         )
-        # Kept as an alias for callers that inspect the configured session.
-        self._session = self._client.session
 
     @property
     def source(self) -> Source:
@@ -145,27 +164,96 @@ class PromQLMetricsConnector:
         # into Unix epoch silently anchors to the blueprint host's local TZ.
         start = assert_aware(context["start_time"], "start_time")
         end = assert_aware(context["end_time"], "end_time")
-        start_s = int(start.timestamp())
-        end_s = int(end.timestamp())
-        samples: list[PrometheusMetricEntry] = []
-        # Escape RE2 metacharacters without escaping hyphens. Bundled templates
-        # place this regex in a backtick raw string to preserve its backslashes.
-        nodes_regex = "|".join(re2_escape(n) for n in nodes)
+        entries: list[PrometheusMetricEntry] = []
+        for name, query in self._render(nodes):
+            entries.extend(
+                self._client.query_range(name, query, start, end, step_seconds=self._step, cluster=self._cluster)
+            )
+        return self._observation(context, entries)
+
+    def collect_batch(self, contexts: Sequence[ExecutionContext]) -> dict[str, list[Observation]]:
+        """Query the union of the batch's nodes once per template and slice per context."""
+        contexts = list(contexts)
+        if not contexts:
+            return {}
+        windows = {
+            str(ctx["id"]): (
+                assert_aware(ctx["start_time"], "start_time"),
+                assert_aware(ctx["end_time"], "end_time") + self._lookahead,
+            )
+            for ctx in contexts
+        }
+        nodes = sorted({node for ctx in contexts for node in (ctx.get("nodes") or []) if node})
+        if not nodes:
+            return {str(ctx["id"]): [] for ctx in contexts}
+        start = min(window[0] for window in windows.values())
+        end = max(window[1] for window in windows.values())
+        chunks = [
+            nodes[offset : offset + self._node_chunk_size] for offset in range(0, len(nodes), self._node_chunk_size)
+        ]
+        queries = [(name, query) for chunk in chunks for name, query in self._render(chunk)]
+        entries = self._query_batch(queries, start, end)
+        result: dict[str, list[Observation]] = {}
+        for ctx in contexts:
+            ctx_id = str(ctx["id"])
+            window_start, window_end = windows[ctx_id]
+            ctx_nodes = {node.lower() for node in (ctx.get("nodes") or []) if node}
+            start_s = int(window_start.timestamp())
+            end_s = int(window_end.timestamp())
+            selected = [
+                entry
+                for entry in entries
+                if entry["node"].lower() in ctx_nodes and start_s <= entry["timestamp"] <= end_s
+            ]
+            result[ctx_id] = self._observation(ctx, selected)
+        return result
+
+    def _render(self, nodes: list[str]) -> list[tuple[str, str]]:
+        rendered: list[tuple[str, str]] = []
+        regex = nodes_regex(nodes)
         for name, tmpl in self._templates.items():
             try:
-                query = tmpl.format(
-                    name=name,
-                    cluster=self._cluster,
-                    nodes=nodes_regex,
-                    node_label=self._node_label,
-                    cluster_label=self._cluster_label,
+                rendered.append(
+                    (
+                        name,
+                        tmpl.format(
+                            name=name,
+                            cluster=self._cluster,
+                            nodes=regex,
+                            node_label=self._node_label,
+                            cluster_label=self._cluster_label,
+                        ),
+                    )
                 )
             except KeyError as e:
                 logger.warning(f"promql template {name!r} missing kwarg {e}; skipping")
-                continue
-            samples.extend(self._query_range(name, query, start_s, end_s))
+        return rendered
 
-        if not samples:
+    def _query_batch(
+        self, queries: list[tuple[str, str]], start: datetime, end: datetime
+    ) -> list[PrometheusMetricEntry]:
+        failures: list[Exception] = []
+
+        def run(item: tuple[str, str]) -> list[PrometheusMetricEntry]:
+            name, query = item
+            try:
+                return self._client.query_range(name, query, start, end, step_seconds=self._step, cluster=self._cluster)
+            except Exception as exc:
+                logger.warning(f"promql batch query {name!r} failed: {exc}")
+                failures.append(exc)
+                return []
+
+        if len(queries) <= 1:
+            pages = [run(item) for item in queries]
+        else:
+            with ThreadPoolExecutor(max_workers=min(_MAX_IN_FLIGHT, len(queries))) as executor:
+                pages = list(executor.map(run, queries))
+        if failures and len(failures) == len(queries):
+            raise failures[0]
+        return [entry for page in pages for entry in page]
+
+    def _observation(self, context: ExecutionContext, entries: list[PrometheusMetricEntry]) -> list[Observation]:
+        if not entries:
             return []
         return [
             {
@@ -173,53 +261,6 @@ class PromQLMetricsConnector:
                     "time_interval": {"start": context["start_time"], "end": context["end_time"]},
                     "source": self._source,
                 },
-                "body": json.dumps([_timeseries_entry(sample) for sample in samples]),
+                "body": json.dumps([_timeseries_entry(entry) for entry in entries]),
             }
         ]
-
-    def _query_range(self, name: str, query: str, start_s: int, end_s: int) -> list[PrometheusMetricEntry]:
-        """Fetch and map range samples, skipping missing node labels and invalid timestamps.
-
-        API error statuses and non-list results are logged and skipped by the
-        client; transport, HTTP, JSON and other malformed-data exceptions propagate.
-        """
-        result = self._client.query_range(
-            name=name,
-            query=query,
-            start=start_s,
-            end=end_s,
-            step=self._step,
-        )
-        out: list[PrometheusMetricEntry] = []
-        for series in result:
-            labels = series.get("metric", {}) or {}
-            node = labels.get(self._node_label)
-            if not node:
-                # A node_metrics entry must declare its node; the service never
-                # parses one out of a metric body. Aggregations that drop
-                # the node label are unattributable; skip rather than emit
-                # unscoped points.
-                continue
-            # Templates that aggregate (e.g. `max by (<node label>) (...)`)
-            # drop the cluster label, so fall back to the configured
-            # cluster — the value is known either way.
-            cluster = labels.get(self._cluster_label) or self._cluster
-            component = labels.get(DEFAULT_COMPONENT_LABEL)
-            for ts, val in series.get("values", []) or []:
-                try:
-                    timestamp = int(float(ts))
-                except (TypeError, ValueError):
-                    continue
-                entry: PrometheusMetricEntry = {
-                    "timestamp": timestamp,
-                    "value": str(val),
-                    "metric": name,
-                    "labels": labels,
-                    "node": node,
-                }
-                if cluster:
-                    entry["cluster"] = cluster
-                if component:
-                    entry["component"] = component
-                out.append(entry)
-        return out

@@ -4,7 +4,12 @@
 from typing import Any
 
 from attribution_blueprint import mca_registry as _registry
-from attribution_blueprint.connectors.auth import Auth, build_auth
+from attribution_blueprint.connectors.auth import AUTH_SCHEMA, build_auth
+from attribution_blueprint.connectors.metrics.promql.client import (
+    PrometheusMetricEntry,
+    PromQLQueryClient,
+    nodes_regex,
+)
 from attribution_blueprint.connectors.metrics.promql.connector import (
     DEFAULT_CLUSTER_LABEL,
     DEFAULT_NODE_LABEL,
@@ -16,29 +21,28 @@ from attribution_blueprint.mca_registry import _PARAM
 from attribution_blueprint.types import Source
 
 
-def _build_auth(spec: dict) -> Auth:
-    return build_auth(spec, "promql")
-
-
 def _build(spec: dict, ctx: dict) -> PromQLMetricsConnector:
     from attribution_blueprint.mca import _coerce_float, _coerce_int
 
     source: Source = ctx["source"]
+    prefix = f"metrics.{source.name.lower()}.promql"
     endpoint = spec.get("endpoint")
     if not endpoint:
-        raise MCAError(f"metrics.{source.name.lower()}.promql requires endpoint")
+        raise MCAError(f"{prefix} requires endpoint")
     cluster = spec.get("cluster")
     if not cluster:
-        raise MCAError(f"metrics.{source.name.lower()}.promql requires cluster")
+        raise MCAError(f"{prefix} requires cluster")
     auth_spec = spec.get("auth")
-    auth = _build_auth(auth_spec) if auth_spec is not None else None
+    auth = build_auth(auth_spec, "promql") if auth_spec is not None else None
     timeout = _coerce_float(spec.get("timeout_seconds", 60.0), "timeout_seconds")
     step = _coerce_int(spec.get("step_seconds", 60), "step_seconds")
+
     queries = spec.get("queries") or {}
     if queries:
         templates = {**TEMPLATES, source: {**TEMPLATES.get(source, {}), **queries}}
     else:
         templates = TEMPLATES
+
     kwargs: dict[str, Any] = dict(
         endpoint=endpoint,
         auth=auth,
@@ -50,7 +54,26 @@ def _build(spec: dict, ctx: dict) -> PromQLMetricsConnector:
         timeout_seconds=timeout,
         step_seconds=step,
     )
-    return PromQLMetricsConnector(**kwargs)
+    if "node_chunk_size" in spec:
+        value = _coerce_int(spec["node_chunk_size"], f"{prefix}.node_chunk_size")
+        if value <= 0:
+            raise MCAError(f"{prefix}.node_chunk_size must be positive, got {value}")
+        kwargs["node_chunk_size"] = value
+    if "lookahead_seconds" in spec:
+        value = _coerce_int(spec["lookahead_seconds"], f"{prefix}.lookahead_seconds")
+        if value < 0:
+            raise MCAError(f"{prefix}.lookahead_seconds must not be negative, got {value}")
+        kwargs["lookahead_seconds"] = value
+    for key in ("component_label",):
+        if key in spec:
+            value = str(spec[key])
+            if value == "":
+                raise MCAError(f"{prefix}.{key} must be a nonempty label name")
+            kwargs[key] = value
+    try:
+        return PromQLMetricsConnector(**kwargs)
+    except ValueError as exc:
+        raise MCAError(f"{prefix}: {exc}") from exc
 
 
 _registry.register_component(
@@ -59,22 +82,17 @@ _registry.register_component(
     schema={
         "endpoint": _PARAM,
         "cluster": _PARAM,
-        "node_label": _PARAM,
-        "cluster_label": _PARAM,
         "timeout_seconds": _PARAM,
         "step_seconds": _PARAM,
-        "auth": {
-            "type": _PARAM,
-            "cert_path": _PARAM,
-            "key_path": _PARAM,
-            "ca_cert_path": _PARAM,
-            "token_env": _PARAM,
-            "org_id": _PARAM,
-        },
+        "node_chunk_size": _PARAM,
+        "lookahead_seconds": _PARAM,
+        "node_label": _PARAM,
+        "cluster_label": _PARAM,
+        "component_label": _PARAM,
+        "auth": AUTH_SCHEMA,
         "queries": {"_open": True},
     },
     build=_build,
 )
 
-
-__all__ = ["PromQLMetricsConnector", "TEMPLATES"]
+__all__ = ["PromQLMetricsConnector", "PromQLQueryClient", "PrometheusMetricEntry", "TEMPLATES", "nodes_regex"]
