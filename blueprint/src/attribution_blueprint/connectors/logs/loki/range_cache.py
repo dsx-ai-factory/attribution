@@ -26,6 +26,8 @@ import hashlib
 import json
 import os
 import re
+import stat
+import tempfile
 import time
 from collections.abc import Callable, Iterable, Iterator, Mapping
 from datetime import datetime, timedelta
@@ -41,6 +43,18 @@ TimestampExtractor = Callable[[T], int]
 NodeExtractor = Callable[[T], str]
 
 _KEY_RE = re.compile(r"^[0-9a-f]{64}:\d+$")
+
+
+def _private_directory(path: Path) -> None:
+    """Create `path` if needed and leave it owner-only when this process owns it.
+
+    `mkdir(mode=...)` is masked by the umask and never tightens a directory
+    that already exists, so the mode is checked and fixed afterwards.
+    """
+    path.mkdir(mode=0o700, parents=True, exist_ok=True)
+    info = path.stat()
+    if info.st_uid == os.getuid() and stat.S_IMODE(info.st_mode) != 0o700:
+        path.chmod(0o700)
 
 
 class FileRangeCacheStore:
@@ -59,7 +73,7 @@ class FileRangeCacheStore:
 
     def __init__(self, root: str | Path) -> None:
         self.root = Path(root)
-        self.root.mkdir(mode=0o700, parents=True, exist_ok=True)
+        _private_directory(self.root)
 
     def _path(self, key: str) -> Path:
         if _KEY_RE.match(key) is None:
@@ -86,17 +100,18 @@ class FileRangeCacheStore:
 
     def put(self, key: str, value: list | dict, *, ttl_seconds: float) -> None:
         path = self._path(key)
-        path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        _private_directory(path.parent)
         payload = json.dumps({"expires_at": time.time() + ttl_seconds, "value": value}, separators=(",", ":"))
-        temporary = path.with_name(f"{path.name}.{os.getpid()}.tmp")
-        descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        # mkstemp opens a fresh random name with O_EXCL and mode 0600, so a
+        # planted file or symlink is never followed or reused.
+        descriptor, temporary = tempfile.mkstemp(dir=path.parent, prefix=f"{path.name}.", suffix=".tmp")
         try:
             with os.fdopen(descriptor, "w") as handle:
                 handle.write(payload)
+            os.replace(temporary, path)
         except BaseException:
-            temporary.unlink(missing_ok=True)
+            Path(temporary).unlink(missing_ok=True)
             raise
-        os.replace(temporary, path)
 
 
 class LokiRangeCache:

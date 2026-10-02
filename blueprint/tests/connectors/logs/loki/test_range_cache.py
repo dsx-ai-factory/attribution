@@ -8,6 +8,7 @@
 # without an express license agreement from NVIDIA CORPORATION or
 # its affiliates is strictly prohibited.
 
+import os
 import stat
 from datetime import datetime, timedelta, timezone
 
@@ -231,6 +232,33 @@ def test_file_store_uses_private_permissions_and_expires_files(tmp_path, monkeyp
     current[0] += 31
     assert store.get(key) is None
     assert list(root.glob("*/*.json")) == [root / "aa" / "corrupt.json"]
+
+
+def test_file_store_tightens_existing_directories_and_ignores_planted_temp_symlinks(tmp_path):
+    root = tmp_path / "range-cache"
+    bucket_dir = root / "aa"
+    bucket_dir.mkdir(parents=True)
+    root.chmod(0o755)
+    bucket_dir.chmod(0o777)
+    key = "a" * 64 + ":1700000000"
+    final = bucket_dir / f"{key.replace(':', '_')}.json"
+    victim = tmp_path / "victim"
+    victim.write_text("untouched")
+    victim.chmod(0o644)
+    planted = final.with_name(f"{final.name}.{os.getpid()}.tmp")
+    planted.symlink_to(victim)
+
+    store = FileRangeCacheStore(root)
+    store.put(key, [{"timestamp": 1}], ttl_seconds=30)
+
+    assert stat.S_IMODE(root.stat().st_mode) == 0o700
+    assert stat.S_IMODE(bucket_dir.stat().st_mode) == 0o700
+    assert stat.S_IMODE(final.stat().st_mode) == 0o600
+    assert store.get(key) == [{"timestamp": 1}]
+    assert planted.is_symlink()
+    assert victim.read_text() == "untouched"
+    assert stat.S_IMODE(victim.stat().st_mode) == 0o644
+    assert sorted(path.name for path in bucket_dir.iterdir()) == sorted([final.name, planted.name])
 
 
 def test_file_store_rejects_unexpected_keys(tmp_path):
