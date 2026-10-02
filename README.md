@@ -178,6 +178,9 @@ Contributions open at GA.
 
 ## Support and releases
 
+During Early Access, contact your NVIDIA account team for bug reports, feature
+requests, and support. The support policy below applies from GA.
+
 * Bugs and questions: see the [support policy](SUPPORT.md).
 * Security vulnerabilities: follow the [security policy](SECURITY.md).
 * Versions and release process: see the [release policy](RELEASE.md).
