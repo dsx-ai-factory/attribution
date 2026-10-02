@@ -4,8 +4,8 @@
 
 NVIDIA Attribution components have individual versions that follow [Semantic
 Versioning 2.0.0](https://semver.org/). Component release tags include the
-component name, for example `service-app-vMAJOR.MINOR.PATCH` for the Attribution
-Service.
+component name: `service-app-vMAJOR.MINOR.PATCH` for the Attribution Service and
+`blueprint-vMAJOR.MINOR.PATCH` for the Blueprint.
 
 The Blueprint version is also the top-level release-bundle version. There is no
 separate bundle version. `bundle-manifest.json` records the included components;
