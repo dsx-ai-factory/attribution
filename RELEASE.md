@@ -4,8 +4,10 @@
 
 NVIDIA Attribution components have individual versions that follow [Semantic
 Versioning 2.0.0](https://semver.org/). Component release tags include the
-component name: `service-app-vMAJOR.MINOR.PATCH` for the Attribution Service and
-`blueprint-vMAJOR.MINOR.PATCH` for the Blueprint.
+component name: `service-app-vMAJOR.MINOR.PATCH` for the Attribution Service,
+`attribution-lib-vMAJOR.MINOR.PATCH` for the Attribution Library, and
+`blueprint-vMAJOR.MINOR.PATCH` for the Blueprint. Library source checkouts also
+recognize the legacy `vMAJOR.MINOR.PATCH` and `MAJOR.MINOR.PATCH` tag formats.
 
 The Blueprint version is also the top-level release-bundle version. There is no
 separate bundle version. `bundle-manifest.json` records the included components;
@@ -57,7 +59,8 @@ For each release:
    migration requirements, known limitations, and the supported artifacts.
 4. Have the release changes reviewed and squash-merged to the default branch.
 5. Create the Blueprint and affected component release tags from the reviewed
-   default-branch commit, using each component's version and tag prefix.
+   default-branch commit, using each component's version and tag prefix. Include
+   an `attribution-lib-vMAJOR.MINOR.PATCH` tag when the library version changes.
 6. Publish the authorized source release with its release notes. List any other
    artifacts only when they are available and authorized for publication.
 
