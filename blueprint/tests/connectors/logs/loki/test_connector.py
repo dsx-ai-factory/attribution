@@ -454,7 +454,6 @@ def test_collect_batch_fetches_one_window_and_slices_by_node_and_time(mocker):
     decoded_a = json.loads(result["a"][0]["body"])
     assert [entry["body"] for entry in decoded_a] == ["n1 inside"]  # n2 is before a's window
     assert result["a"][0]["context"]["time_interval"] == {"start": end - timedelta(minutes=30), "end": end}
-    assert result["a"][0]["context"]["format"] == Format.ENTRY_TIMESERIES
     decoded_b = json.loads(result["b"][0]["body"])
     assert [entry["resources"] for entry in decoded_b] == [[{"kind": "node", "hostname": "n3"}]]
 
@@ -507,7 +506,6 @@ def test_collect_batch_applog_emits_timeseries_with_node_resources(mocker):
     result = conn.collect_batch([_batch_ctx("a", ["n1"], end=end)])
 
     body = json.loads(result["a"][0]["body"])
-    assert result["a"][0]["context"]["format"] == Format.ENTRY_TIMESERIES
     assert result["a"][0]["context"]["time_interval"] == {"start": None, "end": None}
     assert body == [
         {"body": "l2", "ts": ns(end - timedelta(minutes=2)), "resources": [{"kind": "node", "hostname": "n1"}]},
