@@ -135,8 +135,8 @@ def test_bundled_query_range_replay(mocker, replay, node_label, cluster_label):
             "timeout": 60.0,
         }
         response.raise_for_status.assert_called_once_with()
-    assert "Authorization" not in connector._session.headers
-    assert "X-Scope-OrgID" not in connector._session.headers
+    assert "Authorization" not in connector._client._session.headers
+    assert "X-Scope-OrgID" not in connector._client._session.headers
 
 
 def test_result_mapping_uses_configured_labels(mocker, replay):
@@ -221,5 +221,5 @@ def test_example_loads_without_auth():
     cfg = load_config(EXAMPLE)
     connector = cfg.metrics_connectors[0]
     assert connector.source == Source.NODE_METRICS
-    assert "Authorization" not in connector._session.headers
-    assert "X-Scope-OrgID" not in connector._session.headers
+    assert "Authorization" not in connector._client._session.headers
+    assert "X-Scope-OrgID" not in connector._client._session.headers

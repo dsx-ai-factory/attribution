@@ -2077,3 +2077,65 @@ def test_run_summary_warns_for_incomplete_scheduler_history(mocker):
     warning.assert_called_once_with(
         "1 of 2 verdicts may have incomplete scheduler history."
     )
+
+
+# --- collection ------------------------------------------------------------
+
+
+def test_collection_batch_mode_propagates_to_pipeline(patched_pipeline, clean_env):
+    rc = cli.main(
+        [
+            "--connector",
+            "eca",
+            "slurm",
+            "ids",
+            "1",
+            "--connector",
+            "collection",
+            "mode",
+            "batch",
+            "--connector",
+            "collection",
+            "batch_window_hours",
+            "1",
+            "--connector",
+            "collection",
+            "batch_max_contexts",
+            "50",
+        ]
+    )
+    assert rc == 0
+    kwargs = patched_pipeline.call_args.kwargs
+    assert kwargs["collection_mode"] == "batch"
+    assert kwargs["batch_window_hours"] == 1.0
+    assert kwargs["batch_max_contexts"] == 50
+
+
+def test_collection_defaults_to_context_mode(patched_pipeline, clean_env):
+    rc = cli.main(["--connector", "eca", "slurm", "ids", "1"])
+    assert rc == 0
+    kwargs = patched_pipeline.call_args.kwargs
+    assert kwargs["collection_mode"] == "context"
+    assert kwargs["batch_window_hours"] == 2.0
+    assert kwargs["batch_max_contexts"] is None
+
+
+def test_collection_mode_from_env(patched_pipeline, clean_env, monkeypatch):
+    monkeypatch.setenv("NVAB_COLLECTION_MODE", "batch")
+    rc = cli.main(["--connector", "eca", "slurm", "ids", "1"])
+    assert rc == 0
+    assert patched_pipeline.call_args.kwargs["collection_mode"] == "batch"
+
+
+def test_collection_invalid_mode_errors(patched_pipeline, clean_env):
+    with pytest.raises(SystemExit):
+        cli.main(["--connector", "eca", "slurm", "ids", "1", "--connector", "collection", "mode", "streaming"])
+
+
+def test_mca_collection_help_lists_keys(capsys, clean_env):
+    rc = cli.main(["--connector", "collection", "help"])
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "MCA help: collection" in out
+    for key in ("mode", "batch_window_hours", "batch_max_contexts"):
+        assert key in out
