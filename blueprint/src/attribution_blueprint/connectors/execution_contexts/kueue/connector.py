@@ -65,13 +65,12 @@ real owner.
 
 from __future__ import annotations
 
-import json
-import subprocess
 from datetime import datetime, timezone
 from typing import NamedTuple, NotRequired, TypedDict
 
 from loguru import logger
 
+from attribution_blueprint.connectors.execution_contexts.kubectl_client import KubectlClient
 from attribution_blueprint.connectors.execution_contexts.kueue.helpers import (
     NODE_LOSS_DISRUPTION_REASONS as _NODE_LOSS_DISRUPTION_REASONS,
     POD_JOBSET_LABEL as _POD_JOBSET_LABEL,
@@ -799,6 +798,12 @@ class KueueExecutionContextAdapter:
         self.context = context
         self.namespace = namespace or ""
         self.timeout_seconds = timeout_seconds
+        self._kubectl = KubectlClient(
+            kubectl_path=kubectl_path,
+            kubeconfig=kubeconfig,
+            context=context,
+            timeout_seconds=timeout_seconds,
+        )
         if not isinstance(placement_records_enabled, bool):
             raise ValueError("placement_records_enabled must be a bool")
         self.placement_records_enabled = placement_records_enabled
@@ -888,65 +893,14 @@ class KueueExecutionContextAdapter:
             return filtered
         return [c for c in filtered if wanted.intersection(c["nodes"])]
 
-    def _kubectl_base(self) -> list[str]:
-        cmd = [self.kubectl_path]
-        if self.kubeconfig:
-            cmd += ["--kubeconfig", self.kubeconfig]
-        if self.context:
-            cmd += ["--context", self.context]
-        return cmd
-
     def _run_json(self, args: list[str], *, required: bool = False) -> dict | None:
-        cmd = self._kubectl_base() + args + ["-o", "json"]
-        try:
-            result = subprocess.run(
-                cmd,
-                check=True,
-                text=True,
-                timeout=self.timeout_seconds,
-                capture_output=True,
-            )
-        except subprocess.CalledProcessError as e:
-            if required:
-                raise RuntimeError(
-                    f"required kubectl query failed with exit {e.returncode}: {(e.stderr or '').strip()}"
-                ) from e
-            logger.warning(f"kubectl exited {e.returncode}: {(e.stderr or '').strip() or '<no stderr>'}")
-            return None
-        except subprocess.TimeoutExpired:
-            if required:
-                raise RuntimeError(f"required kubectl query timed out after {self.timeout_seconds}s")
-            logger.warning(f"kubectl timed out after {self.timeout_seconds}s: {cmd!r}")
-            return None
-        try:
-            return json.loads(result.stdout)
-        except json.JSONDecodeError as e:
-            if required:
-                raise RuntimeError(f"required kubectl query returned invalid JSON: {e}") from e
-            logger.warning(f"kubectl returned invalid JSON: {e}")
-            return None
+        return self._kubectl.run_json(args, required=required)
 
     def _kubectl_get_one(self, kind: str, name: str, *, namespace: str) -> dict | None:
-        args = ["get", kind, name]
-        if namespace:
-            args += ["-n", namespace]
-        return self._run_json(args)
+        return self._kubectl.get_one(kind, name, namespace=namespace)
 
     def _kubectl_list(self, kind: str, *, namespace: str | None, field_selector: str | None = None) -> list[dict]:
-        args = ["get", kind]
-        if field_selector:
-            args += ["--field-selector", field_selector]
-        if namespace:
-            args += ["-n", namespace]
-        else:
-            args += ["-A"]
-        payload = self._run_json(args)
-        if not payload:
-            return []
-        items = payload.get("items")
-        if not isinstance(items, list):
-            return []
-        return items
+        return self._kubectl.list(kind, namespace=namespace, field_selector=field_selector)
 
     def _fetch_pods_for(self, workloads: list[dict]) -> list[dict]:
         """Fetch all pods that might belong to any workload in `workloads`.
