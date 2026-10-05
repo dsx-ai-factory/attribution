@@ -26,7 +26,7 @@ permissions:
 jobs:
   conventional-commits:
     name: conventional-commits
-    runs-on: ubuntu-latest
+    runs-on: linux-amd64-cpu4
     steps:
       # Third-party action, pinned by SHA; checks only the title, not branch commits.
       - uses: amannn/action-semantic-pull-request@48f256284bd46cdaab1048c3721360e808335d50 # v6.1.1
