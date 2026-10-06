@@ -336,6 +336,82 @@ def test_cancelled_by_state_normalized(mocker):
     assert contexts[0]["cancelled_by"] == "9001"
 
 
+def test_cancelled_by_root_uid_resolves_to_root(mocker):
+    """sacct reports `CANCELLED by 0` for an admin scancel; the refiner rules match "root"."""
+    row = (
+        "7003|7003|sluid-cby-7003|CANCELLED by 0|2026-05-01T12:00:00|2026-05-01T13:00:00|"
+        "node300||60|cpu=8|/o|/e|carol|short\n"
+    )
+    _mock_sacct(mocker, row)
+    contexts = SlurmExecutionContextAdapter().discover_by_ids(["7003"])
+    assert contexts[0]["cancelled_by"] == "root"
+
+
+def test_uid0_step_of_timed_out_attempt_resolves_to_timeout(mocker):
+    """slurmctld cancels the steps of a job that hit its time limit as UID 0.
+
+    The step must resolve to `Timeout`, the identity the timeout rules match, not
+    `root`; a root verdict turns an ordinary time-limit kill into Fail User.
+    """
+    rows = (
+        "7004|7004|sluid-cby-7004|TIMEOUT|2026-05-01T12:00:00|2026-05-01T13:00:00|"
+        "node300||60|cpu=8|/o|/e|carol|short\n"
+        "7004.batch|7004.batch|sluid-cby-7004|CANCELLED|2026-05-01T12:00:00|2026-05-01T13:00:00|"
+        "node300||60|cpu=8|||carol|batch\n"
+        "7004.0|7004.0|sluid-cby-7004|CANCELLED by 0|2026-05-01T12:00:05|2026-05-01T13:00:00|"
+        "node300||60|cpu=8|||carol|step0\n"
+    )
+    _mock_sacct(mocker, rows)
+    contexts = SlurmExecutionContextAdapter().discover_by_ids(["7004"])
+    by_id = {c["job_id"]: c for c in contexts}
+    assert by_id["7004"]["state"] == "TIMEOUT"
+    assert "cancelled_by" not in by_id["7004"]
+    assert by_id["7004.0"]["state"] == "CANCELLED"
+    assert by_id["7004.0"]["cancelled_by"] == "Timeout"
+
+
+def test_uid0_step_of_cancelled_attempt_resolves_to_root(mocker):
+    """An operator scancel cancels the head and its steps as UID 0; every row is root."""
+    rows = (
+        "7006|7006|sluid-cby-7006|CANCELLED by 0|2026-05-01T12:00:00|2026-05-01T12:10:00|"
+        "node300||60|cpu=8|/o|/e|carol|short\n"
+        "7006.0|7006.0|sluid-cby-7006|CANCELLED by 0|2026-05-01T12:00:05|2026-05-01T12:10:00|"
+        "node300||60|cpu=8|||carol|step0\n"
+    )
+    _mock_sacct(mocker, rows)
+    contexts = SlurmExecutionContextAdapter().discover_by_ids(["7006"])
+    assert [c["cancelled_by"] for c in contexts] == ["root", "root"]
+
+
+def test_timeout_of_one_requeue_attempt_does_not_leak_to_another(mocker):
+    """TIMEOUT is per attempt (SLUID). A UID 0 step of a different attempt of the same jobid stays root."""
+    rows = (
+        "7007|7007|sluid-cby-7007a|CANCELLED by 0|2026-05-01T12:00:00|2026-05-01T12:10:00|"
+        "node300||60|cpu=8|/o|/e|carol|short\n"
+        "7007.0|7007.0|sluid-cby-7007a|CANCELLED by 0|2026-05-01T12:00:05|2026-05-01T12:10:00|"
+        "node300||60|cpu=8|||carol|step0\n"
+        "7007|7007|sluid-cby-7007b|TIMEOUT|2026-05-01T12:20:00|2026-05-01T13:20:00|"
+        "node301||60|cpu=8|/o|/e|carol|short\n"
+        "7007.0|7007.0|sluid-cby-7007b|CANCELLED by 0|2026-05-01T12:20:05|2026-05-01T13:20:00|"
+        "node301||60|cpu=8|||carol|step0\n"
+    )
+    _mock_sacct(mocker, rows)
+    contexts = SlurmExecutionContextAdapter().discover_by_ids(["7007"])
+    steps = {c["sluid"]: c["cancelled_by"] for c in contexts if c.get("step_id") == "0"}
+    assert steps == {"sluid-cby-7007a": "root", "sluid-cby-7007b": "Timeout"}
+
+
+def test_cancelled_by_nonzero_uid_stays_numeric(mocker):
+    """A non-root canceller UID is left numeric; the Blueprint host may not share the cluster's accounts."""
+    row = (
+        "7005|7005|sluid-cby-7005|CANCELLED by 4243|2026-05-01T12:00:00|2026-05-01T13:00:00|"
+        "node300||60|cpu=8|/o|/e|carol|short\n"
+    )
+    _mock_sacct(mocker, row)
+    contexts = SlurmExecutionContextAdapter().discover_by_ids(["7005"])
+    assert contexts[0]["cancelled_by"] == "4243"
+
+
 def test_array_step_row_decomposes_array_id_and_attempt_index(mocker):
     """An array step row (`<array>_<task>.<step>`) must decompose array_id and attempt_index."""
     # Head row for the array task, then its numeric step.
