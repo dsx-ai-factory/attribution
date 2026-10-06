@@ -6,13 +6,26 @@ NVIDIA Attribution components have individual versions that follow [Semantic
 Versioning 2.0.0](https://semver.org/). Component release tags include the
 component name: `service-app-vMAJOR.MINOR.PATCH` for the Attribution Service,
 `attribution-lib-vMAJOR.MINOR.PATCH` for the Attribution Library, and
-`blueprint-vMAJOR.MINOR.PATCH` for the Blueprint. Library source checkouts also
-recognize the legacy `vMAJOR.MINOR.PATCH` and `MAJOR.MINOR.PATCH` tag formats.
+`blueprint-vMAJOR.MINOR.PATCH` for the Blueprint.
 
-The Blueprint version is also the top-level release-bundle version. There is no
-separate bundle version. `bundle-manifest.json` records the included components;
-their versions do not need to be equal to each other. Release notes identify the
-included component versions.
+Components release independently. A release of one component does not require
+a new version or tag for another component.
+
+The planned version source is the literal `__version__` in each component's
+`__init__.py`:
+
+| Component | Version source |
+| --- | --- |
+| Attribution Service | `service/service-app/app/__init__.py` |
+| Attribution Library | `service/attribution-lib/src/attribution_lib/__init__.py` |
+| Blueprint | `blueprint/src/attribution_blueprint/__init__.py` |
+
+The Service and Blueprint already define version literals. The Library currently
+derives `__version__` from Git; its migration to a literal is follow-up work.
+The planned process does not use `pyproject.toml` or `bundle-manifest.json` as
+the release-version source. Removal of the manifest is also follow-up work.
+Until that migration is complete, existing package metadata and tests remain
+applicable.
 
 Before version 1.0, a minor release can contain breaking changes. After version
 1.0:
@@ -25,10 +38,9 @@ Release notes identify known breaking changes and required migration steps.
 
 ## Release artifacts
 
-The initial release artifact is tagged source for the release bundle. The source
-contains the Attribution Service, Attribution Library, Blueprint reference
-orchestrator, Blueprint web UI, and `blueprint/docker/Dockerfile` to build the
-bundle image. The bundle is tested with the included component versions.
+For the initial process, a component tag on a reviewed default-branch commit is
+the release. The process does not publish packages, prebuilt container images,
+or Helm charts.
 
 Prebuilt container images, including an NGC image, and a public Helm chart are
 planned future artifacts. No publication date is committed for those artifacts.
@@ -43,26 +55,24 @@ Pull requests use squash merges into the default branch. Rebase feature branches
 onto the default branch to keep them current; do not merge the default branch
 into a feature branch.
 
-## Release process
+## Planned release process
 
-For each release:
+CI tagging is not implemented yet. Maintainers must implement and validate it,
+and complete the version-source migration, before the first release under this
+process.
 
-1. Select the Blueprint version and the versions of affected components. Set
-   `project.version` in `blueprint/pyproject.toml` and `version` in
-   `bundle-manifest.json` to the Blueprint version. Update the affected
-   component metadata. Keep `project.version` in
-   `service/attribution-lib/pyproject.toml` equal to `attribution_lib_version`
-   in `bundle-manifest.json`; this library-version requirement does not require
-   all component versions to match.
+For each component release:
+
+1. Change the component's version literal in its `__init__.py` in a pull
+   request. Use that component's version and tag prefix.
 2. Run the complete test gate with `bash .ci/run-tests.sh all`.
 3. Prepare release notes that summarize user-visible changes, compatibility or
-   migration requirements, known limitations, and the supported artifacts.
+   migration requirements, known limitations, and any available artifacts.
 4. Have the release changes reviewed and squash-merged to the default branch.
-5. Create the Blueprint and affected component release tags from the reviewed
-   default-branch commit, using each component's version and tag prefix. Include
-   an `attribution-lib-vMAJOR.MINOR.PATCH` tag when the library version changes.
-6. Publish the authorized source release with its release notes. List any other
-   artifacts only when they are available and authorized for publication.
+5. CI detects the changed version literal and creates the corresponding
+   component tag on that merged commit. Components whose version literals did
+   not change receive no new tag.
 
-Only project maintainers create or publish release tags. Contributors must not
-create release tags for the project.
+Project maintainers review version changes and control the CI release workflow.
+Contributors propose version changes through pull requests. Release tags are
+created by CI; no contributor or maintainer pushes release tags by hand.
