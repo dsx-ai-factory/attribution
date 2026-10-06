@@ -152,11 +152,27 @@ def _resolve_cancellers(contexts: list[SlurmExecutionContext]) -> list[SlurmExec
     result rather than one row at a time. Other UIDs stay numeric: the
     Blueprint host is not guaranteed to share the cluster's account database,
     and a wrong name is worse than a number no rule matches.
+
+    A step whose head row was dropped by ``_parse_row`` cannot be resolved:
+    without the head there is no way to tell a time-limit kill from a scancel.
+    Its canceller is removed rather than guessed, since a retained ``"0"`` or a
+    guessed ``root`` would each produce a definite cancellation verdict.
     """
-    timed_out = {ctx["sluid"] for ctx in contexts if "step_id" not in ctx and ctx["state"] == "TIMEOUT"}
+    heads = {ctx["sluid"]: ctx["state"] for ctx in contexts if "step_id" not in ctx}
     for ctx in contexts:
-        if ctx.get("cancelled_by") == "0":
-            ctx["cancelled_by"] = "Timeout" if ctx["sluid"] in timed_out else "root"
+        if ctx.get("cancelled_by") != "0":
+            continue
+        head_state = heads.get(ctx["sluid"])
+        if head_state is None:
+            logger.warning(
+                f"sacct step {ctx['job_id']} is CANCELLED by UID 0 but its head row was not retained; "
+                "dropping cancelled_by rather than guessing root or Timeout"
+            )
+            del ctx["cancelled_by"]
+        elif head_state == "TIMEOUT":
+            ctx["cancelled_by"] = "Timeout"
+        else:
+            ctx["cancelled_by"] = "root"
     return contexts
 
 
