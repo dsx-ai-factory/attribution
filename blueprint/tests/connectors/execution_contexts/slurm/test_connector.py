@@ -401,6 +401,26 @@ def test_timeout_of_one_requeue_attempt_does_not_leak_to_another(mocker):
     assert steps == {"sluid-cby-7007a": "root", "sluid-cby-7007b": "Timeout"}
 
 
+def test_uid0_step_without_retained_head_drops_canceller(mocker):
+    """A head row with an unparseable Start/End is skipped, leaving its UID 0 step orphaned.
+
+    Without the head there is no way to tell a time-limit kill from a scancel, so the
+    canceller is removed: a retained `0` or a guessed `root` would each turn into a
+    definite cancellation verdict downstream.
+    """
+    rows = (
+        "7008|7008|sluid-cby-7008|TIMEOUT|Unknown|Unknown|"
+        "node300||60|cpu=8|/o|/e|carol|short\n"
+        "7008.0|7008.0|sluid-cby-7008|CANCELLED by 0|2026-05-01T12:00:05|2026-05-01T13:00:00|"
+        "node300||60|cpu=8|||carol|step0\n"
+    )
+    _mock_sacct(mocker, rows)
+    contexts = SlurmExecutionContextAdapter().discover_by_ids(["7008"])
+    assert [c["job_id"] for c in contexts] == ["7008.0"]
+    assert contexts[0]["state"] == "CANCELLED"
+    assert "cancelled_by" not in contexts[0]
+
+
 def test_cancelled_by_nonzero_uid_stays_numeric(mocker):
     """A non-root canceller UID is left numeric; the Blueprint host may not share the cluster's accounts."""
     row = (
