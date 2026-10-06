@@ -1015,7 +1015,7 @@ Use `[log.health_check]` for output from a node health check, such as a Slurm `H
 The source accepts the same `local_file` and `loki` components as `syslog`, with two differences:
 
 - The default collection window is the execution context's interval plus ten minutes, matching the service's own `HEALTH_CHECK` window. A health check that logs a drain a few minutes after the job ends is still collected, and a yearless `Mon DD HH:MM:SS` timestamp on such a line is dated against that extended window rather than the job end.
-- There are no bundled LogQL templates for this source. With `loki`, set `query` or `queries` to the selector your health check logs under; omitting both is a configuration error.
+- There are no bundled LogQL templates for this source. With `loki`, set `query` or `queries` to the selector your health check logs under; omitting both, or setting an empty `queries` list, is a configuration error.
 
 ```toml
 [log.health_check]

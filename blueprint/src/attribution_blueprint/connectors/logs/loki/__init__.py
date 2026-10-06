@@ -40,12 +40,14 @@ def _build(spec: dict, ctx: dict) -> LokiConnector:
         query_kwargs=dict(spec.get("query_kwargs", {})),
         timeout_seconds=timeout,
     )
-    if queries is not None:
+    if queries:
         kwargs["templates"] = {source: list(queries)}
     elif source not in TEMPLATES:
         # Health-check output has no bundled LogQL template: its stream labels
         # are whatever the site's health check logs under, so the site must name
         # the selector rather than hitting the connector's ValueError at build.
+        # An explicitly empty list is the same misconfiguration: the connector
+        # would run no query and return nothing without complaint.
         raise MCAError(
             f"log.{source.name.lower()}.loki requires query or queries; no bundled templates for this source"
         )
