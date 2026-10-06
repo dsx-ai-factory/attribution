@@ -53,6 +53,36 @@ def _load_committed_registry():
     return registry_from_declarations(_load_committed_symptom_defaults())
 
 
+@pytest.mark.parametrize(
+    ("symptoms", "expected"),
+    [
+        (["kernel panic", "ECC Error"], "ECC Error"),
+        (["kernel panic", "XID-79-GPU_HAS_FALLEN_OFF_THE_BUS"], "XID-79-GPU_HAS_FALLEN_OFF_THE_BUS"),
+        (["XID-145-RLW_RXPIPE-8", "XID-145-MultiCategory"], "XID-145-MultiCategory"),
+        (
+            [
+                "kernel panic",
+                "XID-145-RLW_RXPIPE-8",
+                "XID-145-MultiCategory",
+                "Call to ibv_modify_qp failed: eno 22 invalid argument(Mismatched GID)",
+            ],
+            "kernel panic",
+        ),
+    ],
+)
+def test_kernel_panic_priority_preserves_hardware_precedence(symptoms, expected):
+    """Preserve hardware precedence and select panic over XID-145 and error 22.
+
+    Args:
+        symptoms: Synthetic symptoms to classify.
+        expected: Root cause that should retain precedence.
+    """
+    match = _load_committed_registry().outcome_for(symptoms)
+
+    assert match is not None
+    assert match.symptom == expected
+
+
 def test_known_prefixes_from_committed_declarations():
     declarations = _load_committed_symptom_defaults()
 

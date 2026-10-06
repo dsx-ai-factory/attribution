@@ -1029,7 +1029,7 @@ outcome_symptom(
 outcome_symptom(
     "kernel panic",
     outcome="Fail InfraSW",
-    priority=OutcomePriority.MEDIUM_SW,
+    priority=OutcomePriority.HIGH_KERNEL_PANIC,
     doc="kernel-panic",
     hw_cause="Kernel panic",
     cascade_discards=NODE_FAILURE_CASCADE_TARGETS,

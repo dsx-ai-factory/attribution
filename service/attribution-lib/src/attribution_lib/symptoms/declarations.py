@@ -23,7 +23,7 @@ if TYPE_CHECKING:
 class OutcomePriority(IntEnum):
     """Outcome selection priority tiers.
 
-    Lower values win. The 16 values map 1:1 to the ordered outcome tiers that the
+    Lower values win. The values map 1:1 to the ordered outcome tiers that the
     generated registry consumes for outcome selection.
     """
 
@@ -32,6 +32,7 @@ class OutcomePriority(IntEnum):
     CSP = 200
     HIGH = 300
     HIGH_HW = 400
+    HIGH_KERNEL_PANIC = 450
     HIGH_XID145 = 500
     MEDIUM = 600
     MEDIUM_XID = 700
