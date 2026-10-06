@@ -1068,33 +1068,37 @@ class TestIBSymptomCleanup:
         )
 
 
+@pytest.mark.parametrize(
+    "crash_symptom", ["kernel panic", "kernel oops", "kernel invalid memory access", "kernel soft lockup"]
+)
 @pytest.mark.parametrize("xid_node", ["node01", "node02"])
 @pytest.mark.parametrize(
     "classification",
     [None, "InfraHW", "InfraSW", "MultiCategory", "Undetermined"],
 )
-def test_kernel_panic_precedes_xid145(stream, obs_ctx, xid_node, classification):
-    """Select kernel panic while preserving same-node or peer XID evidence.
+def test_kernel_crash_precedes_xid145(stream, obs_ctx, xid_node, classification, crash_symptom):
+    """Select kernel crashes while preserving same-node or peer XID evidence.
 
     Args:
         stream: Event stream used by refiners.
         obs_ctx: Synthetic evidence context.
         xid_node: Node reporting the XID.
         classification: Optional XID-145 classification marker.
+        crash_symptom: Kernel crash variant reported by syslog.
     """
     xid = "XID-145-RLW_RXPIPE-8"
     xid_symptoms = [xid]
     if classification is not None:
         xid_symptoms.append(f"XID-145-{classification}")
-    node_symptoms = {"node01": ["kernel panic"]}
+    node_symptoms = {"node01": [crash_symptom]}
     node_symptoms.setdefault(xid_node, []).extend(xid_symptoms)
-    symptoms = _make_symptoms(obs_ctx, "kernel panic", *xid_symptoms)
+    symptoms = _make_symptoms(obs_ctx, crash_symptom, *xid_symptoms)
     bad_nodes = _make_bad_nodes(obs_ctx, node_symptoms)
 
     _run(stream, _job_info_with(nodes=["node01", "node02"]), symptoms, bad_nodes)
     outcome = calculate_outcome(symptoms).value()
 
-    assert outcome.root_cause_symptom == "kernel panic"
+    assert outcome.root_cause_symptom == crash_symptom
     assert outcome.outcome == "Fail InfraSW"
     assert xid in symptoms
     assert xid in bad_nodes[xid_node].attributions

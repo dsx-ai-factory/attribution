@@ -1002,7 +1002,7 @@ outcome_symptom(
 outcome_symptom(
     "kernel invalid memory access",
     outcome="Fail InfraSW",
-    priority=OutcomePriority.MEDIUM_SW,
+    priority=OutcomePriority.HIGH_KERNEL_PANIC,
     doc="kernel-invalid-memory-access",
     # Same crash also prints the generic "Internal error: Oops"; keep this specific symptom.
     cascade_discards=(*NODE_FAILURE_CASCADE_TARGETS, "kernel oops"),
@@ -1011,7 +1011,7 @@ outcome_symptom(
 outcome_symptom(
     "kernel oops",
     outcome="Fail InfraSW",
-    priority=OutcomePriority.MEDIUM_SW,
+    priority=OutcomePriority.HIGH_KERNEL_PANIC,
     doc="kernel-oops",
     hw_cause="Kernel oops",
     cascade_discards=NODE_FAILURE_CASCADE_TARGETS,
@@ -1020,7 +1020,7 @@ outcome_symptom(
 outcome_symptom(
     "kernel soft lockup",
     outcome="Fail InfraSW",
-    priority=OutcomePriority.MEDIUM_SW,
+    priority=OutcomePriority.HIGH_KERNEL_PANIC,
     doc="kernel-soft-lockup",
     hw_cause="Kernel soft lockup",
     cascade_discards=NODE_FAILURE_CASCADE_TARGETS,
