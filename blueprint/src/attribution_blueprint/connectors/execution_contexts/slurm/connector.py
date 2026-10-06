@@ -140,6 +140,26 @@ def _parse_state(state: str) -> tuple[str, str | None]:
     return state, None
 
 
+def _resolve_cancellers(contexts: list[SlurmExecutionContext]) -> list[SlurmExecutionContext]:
+    """Replace a UID 0 sacct canceller with the identity the refiner rules match.
+
+    sacct reports a cancellation as ``CANCELLED by <uid>``, but the refiner
+    rules key on names: ``root`` for an operator scancel and ``Timeout`` for
+    Slurm enforcing the time limit. UID 0 is ambiguous. slurmctld also cancels
+    every step of a job that hits its time limit as UID 0, so a step whose
+    attempt ended ``TIMEOUT`` was cancelled by the limit, not by root. The
+    attempt's head row carries that state, so this runs over the whole sacct
+    result rather than one row at a time. Other UIDs stay numeric: the
+    Blueprint host is not guaranteed to share the cluster's account database,
+    and a wrong name is worse than a number no rule matches.
+    """
+    timed_out = {ctx["sluid"] for ctx in contexts if "step_id" not in ctx and ctx["state"] == "TIMEOUT"}
+    for ctx in contexts:
+        if ctx.get("cancelled_by") == "0":
+            ctx["cancelled_by"] = "Timeout" if ctx["sluid"] in timed_out else "root"
+    return contexts
+
+
 def _parse_row(row: str, cluster_tz: ZoneInfo | None = None) -> SlurmExecutionContext | None:
     # JobName is the last sacct field and can contain `|` (user-chosen text).
     # With --parsable2 sacct does NOT escape embedded delimiters, so rejoin
@@ -371,7 +391,7 @@ class SlurmExecutionContextAdapter:
             parsed = _parse_row(row, cluster_tz=self.cluster_tz)
             if parsed is not None:
                 contexts.append(parsed)
-        return _assign_attempt_ordinals(contexts)
+        return _resolve_cancellers(_assign_attempt_ordinals(contexts))
 
     def _format_sacct_time(self, dt: datetime) -> str:
         """sacct accepts `YYYY-MM-DD[THH:MM[:SS]]` only — no timezone offset.
