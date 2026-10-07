@@ -8,7 +8,13 @@ from __future__ import annotations
 import json
 import subprocess
 
-from loguru import logger
+
+class KubectlError(RuntimeError):
+    """A kubectl query failed."""
+
+
+class KubectlNotFoundError(KubectlError):
+    """kubectl reported that the requested object does not exist."""
 
 
 class KubectlClient:
@@ -19,9 +25,11 @@ class KubectlClient:
     falls back to its default discovery (KUBECONFIG, ~/.kube/config, or the
     in-cluster service account).
 
-    A failed, timed-out, or malformed query logs a warning and yields
-    `None`/`[]` so one bad lookup cannot sink a whole discovery pass. Pass
-    `required=True` to `run_json` to raise instead.
+    `get_one` returns `None` only for NotFound, and every other failure
+    (Forbidden, timeout, malformed output) raises `KubectlError`, so a failed
+    read is never mistaken for an empty result. `get_one` requires a JSON
+    object and `list` requires an object with an `items` list; any other
+    shape raises.
     """
 
     def __init__(
@@ -44,7 +52,7 @@ class KubectlClient:
             cmd += ["--context", self.context]
         return cmd
 
-    def run_json(self, args: list[str], *, required: bool = False) -> dict | None:
+    def _run_json(self, args: list[str]) -> object:
         cmd = self._base() + args + ["-o", "json"]
         try:
             result = subprocess.run(
@@ -55,43 +63,46 @@ class KubectlClient:
                 capture_output=True,
             )
         except subprocess.CalledProcessError as e:
-            if required:
-                raise RuntimeError(
-                    f"required kubectl query failed with exit {e.returncode}: {(e.stderr or '').strip()}"
-                ) from e
-            logger.warning(f"kubectl exited {e.returncode}: {(e.stderr or '').strip() or '<no stderr>'}")
-            return None
-        except subprocess.TimeoutExpired:
-            if required:
-                raise RuntimeError(f"required kubectl query timed out after {self.timeout_seconds}s")
-            logger.warning(f"kubectl timed out after {self.timeout_seconds}s: {cmd!r}")
-            return None
+            stderr = (e.stderr or "").strip()
+            error_cls = KubectlNotFoundError if "Error from server (NotFound)" in stderr else KubectlError
+            raise error_cls(f"kubectl query failed with exit {e.returncode}: {stderr}") from e
+        except subprocess.TimeoutExpired as e:
+            raise KubectlError(f"kubectl query timed out after {self.timeout_seconds}s") from e
         try:
             return json.loads(result.stdout)
         except json.JSONDecodeError as e:
-            if required:
-                raise RuntimeError(f"required kubectl query returned invalid JSON: {e}") from e
-            logger.warning(f"kubectl returned invalid JSON: {e}")
-            return None
+            raise KubectlError(f"kubectl query returned invalid JSON: {e}") from e
 
     def get_one(self, kind: str, name: str, *, namespace: str) -> dict | None:
         args = ["get", kind, name]
         if namespace:
             args += ["-n", namespace]
-        return self.run_json(args)
+        try:
+            payload = self._run_json(args)
+        except KubectlNotFoundError:
+            return None
+        if not isinstance(payload, dict):
+            raise KubectlError(f"kubectl query returned an unexpected response shape: {args!r}")
+        return payload
 
-    def list(self, kind: str, *, namespace: str | None, field_selector: str | None = None) -> list[dict]:
+    def list(
+        self,
+        kind: str,
+        *,
+        namespace: str | None,
+        field_selector: str | None = None,
+        label_selector: str | None = None,
+    ) -> list[dict]:
         args = ["get", kind]
         if field_selector:
             args += ["--field-selector", field_selector]
+        if label_selector:
+            args += ["-l", label_selector]
         if namespace:
             args += ["-n", namespace]
         else:
             args += ["-A"]
-        payload = self.run_json(args)
-        if not payload:
-            return []
-        items = payload.get("items")
-        if not isinstance(items, list):
-            return []
-        return items
+        payload = self._run_json(args)
+        if not isinstance(payload, dict) or not isinstance(payload.get("items"), list):
+            raise KubectlError(f"kubectl query returned an unexpected response shape: {args!r}")
+        return payload["items"]

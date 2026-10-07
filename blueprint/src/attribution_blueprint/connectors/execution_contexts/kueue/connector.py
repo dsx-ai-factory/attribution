@@ -70,7 +70,7 @@ from typing import NamedTuple, NotRequired, TypedDict
 
 from loguru import logger
 
-from attribution_blueprint.connectors.execution_contexts.kubectl_client import KubectlClient
+from attribution_blueprint.connectors.execution_contexts.kubectl_client import KubectlClient, KubectlError
 from attribution_blueprint.connectors.execution_contexts.kueue.helpers import (
     NODE_LOSS_DISRUPTION_REASONS as _NODE_LOSS_DISRUPTION_REASONS,
     POD_JOBSET_LABEL as _POD_JOBSET_LABEL,
@@ -842,7 +842,7 @@ class KueueExecutionContextAdapter:
                         f"use `<namespace>/<name>` or configure eca.kueue.namespace"
                     )
                 ns, name = self.namespace, ref
-            obj = self._kubectl_get_one("workload", name, namespace=ns)
+            obj = self._kubectl.get_one("workload", name, namespace=ns)
             if obj is not None:
                 workloads.append(obj)
         return self._finalize(workloads)
@@ -868,7 +868,7 @@ class KueueExecutionContextAdapter:
         """
         assert_aware(start, "discover_by_time_range.start")
         assert_aware(end, "discover_by_time_range.end")
-        listing = self._kubectl_list("workloads", namespace=self.namespace or None)
+        listing = self._kubectl.list("workloads", namespace=self.namespace or None)
         # parse only the timestamps each workload object
         # already carries (conditions + creationTimestamp).
         from datetime import timezone
@@ -893,15 +893,6 @@ class KueueExecutionContextAdapter:
             return filtered
         return [c for c in filtered if wanted.intersection(c["nodes"])]
 
-    def _run_json(self, args: list[str], *, required: bool = False) -> dict | None:
-        return self._kubectl.run_json(args, required=required)
-
-    def _kubectl_get_one(self, kind: str, name: str, *, namespace: str) -> dict | None:
-        return self._kubectl.get_one(kind, name, namespace=namespace)
-
-    def _kubectl_list(self, kind: str, *, namespace: str | None, field_selector: str | None = None) -> list[dict]:
-        return self._kubectl.list(kind, namespace=namespace, field_selector=field_selector)
-
     def _fetch_pods_for(self, workloads: list[dict]) -> list[dict]:
         """Fetch all pods that might belong to any workload in `workloads`.
 
@@ -920,17 +911,13 @@ class KueueExecutionContextAdapter:
             if selector is None:
                 continue
             namespace, label_key, label_value = selector
-            args = ["get", "pods", "-l", f"{label_key}={label_value}"]
-            if namespace:
-                args += ["-n", namespace]
-            else:
-                args += ["-A"]
-            payload = self._run_json(args)
-            if not payload:
-                continue
-            items = payload.get("items")
-            if isinstance(items, list):
-                pods.extend(items)
+            pods.extend(
+                self._kubectl.list(
+                    "pods",
+                    namespace=namespace or None,
+                    label_selector=f"{label_key}={label_value}",
+                )
+            )
         return pods
 
     def _fetch_owner_jobs(self, workloads: list[dict]) -> dict[str, dict]:
@@ -955,18 +942,17 @@ class KueueExecutionContextAdapter:
                     continue
                 seen.add(key)
                 if kind == "Job":
-                    job = self._kubectl_get_one("job", name, namespace=ns)
+                    job = self._kubectl.get_one("job", name, namespace=ns)
                     if job is not None:
                         out[f"{ns}/{name}"] = job
                     continue
 
-                args = ["get", "jobs", "-l", f"{_POD_JOBSET_LABEL}={name}"]
-                if ns:
-                    args += ["-n", ns]
-                else:
-                    args += ["-A"]
-                payload = self._run_json(args)
-                for job in (payload or {}).get("items") or []:
+                child_jobs = self._kubectl.list(
+                    "jobs",
+                    namespace=ns or None,
+                    label_selector=f"{_POD_JOBSET_LABEL}={name}",
+                )
+                for job in child_jobs:
                     job_meta = job.get("metadata") or {}
                     job_name = job_meta.get("name")
                     job_namespace = job_meta.get("namespace") or ns
@@ -1000,21 +986,31 @@ class KueueExecutionContextAdapter:
             return [], []
 
         pod_names: set[str] = set()
+        # Events are optional evidence, so a failed query is skipped. Every other
+        # read decides whether a workload exists and raises on failure.
         for job_uid in job_uids:
-            creation_events = self._kubectl_list(
-                "events",
-                namespace=namespace,
-                field_selector=f"involvedObject.uid={job_uid},involvedObject.kind=Job,reason=SuccessfulCreate",
-            )
+            try:
+                creation_events = self._kubectl.list(
+                    "events",
+                    namespace=namespace,
+                    field_selector=f"involvedObject.uid={job_uid},involvedObject.kind=Job,reason=SuccessfulCreate",
+                )
+            except KubectlError as error:
+                logger.warning(f"event lookup for Job {job_uid} failed; skipping: {error}")
+                continue
             pod_names |= _pod_names_from_creation_events(creation_events, context, job_uids)
 
         nodes: set[str] = set()
         for pod_name in pod_names:
-            scheduled_events = self._kubectl_list(
-                "events",
-                namespace=namespace,
-                field_selector=f"involvedObject.name={pod_name},involvedObject.kind=Pod,reason=Scheduled",
-            )
+            try:
+                scheduled_events = self._kubectl.list(
+                    "events",
+                    namespace=namespace,
+                    field_selector=f"involvedObject.name={pod_name},involvedObject.kind=Pod,reason=Scheduled",
+                )
+            except KubectlError as error:
+                logger.warning(f"event lookup for Pod {pod_name} failed; skipping: {error}")
+                continue
             node = _node_from_scheduled_events(scheduled_events, context, namespace, pod_name)
             if node:
                 nodes.add(node)
