@@ -93,7 +93,11 @@ def _kubectl_live_router(workloads: list[dict], pods: list[dict], jobs: list[dic
         elif kind == "workload":
             obj = _by_name(workloads, name, ns)
             if obj is None:
-                raise subprocess.CalledProcessError(returncode=1, cmd=cmd, stderr="NotFound")
+                raise subprocess.CalledProcessError(
+                    returncode=1,
+                    cmd=cmd,
+                    stderr=f'Error from server (NotFound): workloads.kueue.x-k8s.io "{name}" not found',
+                )
             payload = obj
         elif kind == "pods":
             items: list[dict] = []
@@ -104,7 +108,11 @@ def _kubectl_live_router(workloads: list[dict], pods: list[dict], jobs: list[dic
         elif kind == "job":
             obj = _by_name(jobs, name, ns)
             if obj is None:
-                raise subprocess.CalledProcessError(returncode=1, cmd=cmd, stderr="NotFound")
+                raise subprocess.CalledProcessError(
+                    returncode=1,
+                    cmd=cmd,
+                    stderr=f'Error from server (NotFound): jobs.batch "{name}" not found',
+                )
             payload = obj
         elif kind == "jobs":
             items = []
