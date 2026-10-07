@@ -10,7 +10,8 @@
         "namespace": "team-alpha",
         "uid": "uid-pod-1001",
         "creationTimestamp": "2026-05-01T12:00:10Z",
-        "annotations": {"pod-group-name": "pg-train-mnist-1a2b3c4d"}
+        "annotations": {"pod-group-name": "pg-train-mnist-1a2b3c4d"},
+        "ownerReferences": [{"apiVersion": "batch/v1", "kind": "Job", "name": "train-mnist", "uid": "uid-job-1001", "controller": true}]
       },
       "spec": {"nodeName": "node005"},
       "status": {
@@ -28,7 +29,8 @@
         "namespace": "team-alpha",
         "uid": "uid-pod-1002",
         "creationTimestamp": "2026-05-01T12:00:10Z",
-        "annotations": {"pod-group-name": "pg-train-mnist-1a2b3c4d"}
+        "annotations": {"pod-group-name": "pg-train-mnist-1a2b3c4d"},
+        "ownerReferences": [{"apiVersion": "batch/v1", "kind": "Job", "name": "train-mnist", "uid": "uid-job-1001", "controller": true}]
       },
       "spec": {"nodeName": "node006"},
       "status": {
