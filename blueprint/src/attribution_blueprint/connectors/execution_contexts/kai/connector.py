@@ -10,31 +10,31 @@
 
 """KAI Scheduler ExecutionContextAdapter.
 
-This adapter finds PodGroups and emits one workload-level
-context for each.
-
-Field mapping:
+Emits one workload-level context per PodGroup, with these KAI specifics:
 
     ExecutionContext   KAI source
     -----------------  -----------------------------------------------------
-    id / attempt_id    PodGroup.metadata.uid. This identifies one PodGroup
-                       *incarnation* (a PodGroup deleted and recreated with
-                       the same name gets a new uid). This field is NOT a
-                       scheduling attempt.
+    id / attempt_id    PodGroup.metadata.uid. Identifies one PodGroup
+                       incarnation (a recreated PodGroup gets a new uid);
+                       it is not a scheduling attempt.
     job_id             "<namespace>/<name>" of the PodGroup
-    start_time         PodGroup.metadata.creationTimestamp
-    end_time           Latest container finish time once every member Pod has
-                       reached a terminal phase; otherwise now().
+    start_time         Earliest creation time of the PodGroup or a member Pod
+    end_time           Owning Job's completionTime (succeeded) or Failed
+                       condition time (failed); now() while it is active.
+                       Pods never determine it.
     nodes              Union of .spec.nodeName across the member Pods
 
 Member Pods are joined on the `pod-group-name` annotation plus namespace.
-Pods carry that annotation but no scheduler labels, and a PodGroup name is
-only unique within a namespace, so the namespace is always part of the key. A
-Pod created before the PodGroup's creationTimestamp belongs to an earlier
-incarnation that had the same name and is not attributed to this one.
+KAI can create a PodGroup after its Pods, so creation times are not used. A
+Pod is dropped only when its controller and the PodGroup's owner are the same
+kind with different UIDs (an earlier incarnation of the same name).
 
-The workload's owner comes from the `kai.scheduler/top-owner-metadata`
-annotation, falling back to the PodGroup's controller ownerReference.
+The owner comes from the `kai.scheduler/top-owner-metadata` annotation, or
+else the PodGroup's controller ownerReference. Only PodGroups owned by a
+`batch` Job that still exists with the same UID are emitted; the Job is the
+only source of an end time, so every other PodGroup is skipped.
+
+A failed Kubernetes read raises; only NotFound is treated as absence.
 """
 
 from __future__ import annotations
@@ -53,10 +53,7 @@ _POD_GROUP_ANNOTATION = "pod-group-name"
 _TOP_OWNER_ANNOTATION = "kai.scheduler/top-owner-metadata"
 
 _SHAPE_OWNED = "owned"
-_SHAPE_EXTERNAL = "external"
 _SHAPE_HIERARCHICAL = "hierarchical"
-
-_TERMINAL_POD_PHASES = frozenset({"Succeeded", "Failed"})
 
 
 class KaiExecutionContext(TypedDict):
@@ -81,12 +78,12 @@ class KaiExecutionContext(TypedDict):
     namespace: str
     name: str
     podgroup_shape: str
+    owner_kind: str
+    owner_name: str
+    owner_uid: str
 
     queue_name: NotRequired[str]
     min_member: NotRequired[int]
-    owner_kind: NotRequired[str]
-    owner_name: NotRequired[str]
-    owner_uid: NotRequired[str]
     # Raw PodGroup status, preserved unmodified.
     scheduling_conditions: NotRequired[list]
     resources_status: NotRequired[object]
@@ -113,38 +110,29 @@ def _split_csv(value: str) -> list[str]:
     return [piece.strip() for piece in value.split(",") if piece.strip()]
 
 
-def _pod_group_key(pod: dict) -> tuple[str, str] | None:
-    """Return the `(namespace, pod_group_name)` key for a Pod, or None when it
-    has no `pod-group-name` annotation or no namespace."""
-    meta = pod.get("metadata") or {}
-    namespace = meta.get("namespace")
-    pod_group_name = (meta.get("annotations") or {}).get(_POD_GROUP_ANNOTATION)
-    if not namespace or not pod_group_name:
-        return None
-    return (namespace, pod_group_name)
-
-
 def _index_pods_by_pod_group(pods: list[dict]) -> dict[tuple[str, str], list[dict]]:
+    """Group Pods by `(namespace, pod_group_name)`, skipping Pods that have no
+    `pod-group-name` annotation or no namespace."""
     index: dict[tuple[str, str], list[dict]] = {}
     for pod in pods:
-        key = _pod_group_key(pod)
-        if key is not None:
-            index.setdefault(key, []).append(pod)
+        meta = pod.get("metadata") or {}
+        namespace = meta.get("namespace")
+        pod_group_name = (meta.get("annotations") or {}).get(_POD_GROUP_ANNOTATION)
+        if namespace and pod_group_name:
+            index.setdefault((namespace, pod_group_name), []).append(pod)
     return index
 
 
-def _member_pods(podgroup_created: datetime | None, pods: list[dict]) -> list[dict]:
-    """Drop Pods that predate this PodGroup incarnation.
+def _member_pods(owner: dict, pods: list[dict]) -> list[dict]:
+    """Drop Pods that belong to an earlier incarnation of this PodGroup.
 
     A recreated PodGroup reuses its name, so name-and-namespace alone would
     also match Pods left over from the earlier incarnation.
     """
-    if podgroup_created is None:
-        return pods
     members = []
     for pod in pods:
-        pod_created = _parse_dt((pod.get("metadata") or {}).get("creationTimestamp"))
-        if pod_created is not None and pod_created < podgroup_created:
+        controller = _controller_owner(pod.get("metadata") or {})
+        if controller is not None and controller["kind"] == owner["kind"] and controller["uid"] != owner["uid"]:
             continue
         members.append(pod)
     return members
@@ -177,12 +165,8 @@ def _resolve_owner(meta: dict) -> dict | None:
     return _top_owner(meta) or _controller_owner(meta)
 
 
-def _podgroup_shape(spec: dict, owner: dict | None) -> str:
-    if spec.get("subGroups"):
-        return _SHAPE_HIERARCHICAL
-    if owner is None:
-        return _SHAPE_EXTERNAL
-    return _SHAPE_OWNED
+def _podgroup_shape(spec: dict) -> str:
+    return _SHAPE_HIERARCHICAL if spec.get("subGroups") else _SHAPE_OWNED
 
 
 def _non_negative_int(value: object) -> int | None:
@@ -191,36 +175,48 @@ def _non_negative_int(value: object) -> int | None:
     return value
 
 
-def _finished_at(pod: dict) -> datetime | None:
-    finished = []
-    for status in (pod.get("status") or {}).get("containerStatuses") or []:
-        terminated = ((status or {}).get("state") or {}).get("terminated") or {}
-        parsed = _parse_dt(terminated.get("finishedAt"))
-        if parsed is not None:
-            finished.append(parsed)
-    return max(finished) if finished else None
+def _job_end_time(job: dict) -> datetime | None:
+    """Completion time of a finished Job, or None while it is still active."""
+    status = job.get("status") or {}
+    completed = _parse_dt(status.get("completionTime"))
+    if completed is not None:
+        return completed
+    for condition in status.get("conditions") or []:
+        if (condition or {}).get("type") == "Failed" and (condition or {}).get("status") == "True":
+            return _parse_dt(condition.get("lastTransitionTime"))
+    return None
 
 
-def _end_time(pods: list[dict], now: datetime) -> datetime:
-    """Latest container finish time once every member Pod is terminal.
-
-    With no Pods, or any Pod still pending or running, the workload may still
-    be active, so the evidence window ends now.
-    """
-    if not pods:
-        return now
-    if any(((pod.get("status") or {}).get("phase")) not in _TERMINAL_POD_PHASES for pod in pods):
-        return now
-    finishes = [ts for ts in (_finished_at(pod) for pod in pods) if ts is not None]
-    return max(finishes) if finishes else now
+def _is_batch_job(owner: dict) -> bool:
+    if owner["kind"] != "Job":
+        return False
+    group = owner.get("group")
+    api_version = owner.get("apiVersion")
+    if group is None and isinstance(api_version, str) and "/" in api_version:
+        group = api_version.split("/", 1)[0]
+    return group in (None, "batch")
 
 
-def _parse_pod_group(podgroup: dict, pods: list[dict], now: datetime) -> KaiExecutionContext | None:
+def _skip_reason(owner: dict, job: dict | None) -> str | None:
+    """Why the owning Job cannot supply a window, or None when it can."""
+    if job is None:
+        return "owner Job not found"
+    if (job.get("metadata") or {}).get("uid") != owner["uid"]:
+        return "owner Job uid mismatch"
+    return None
+
+
+def _parse_pod_group(
+    podgroup: dict, owner: dict, pods: list[dict], owner_job: dict | None, now: datetime
+) -> KaiExecutionContext | None:
     """Normalize one PodGroup and its member Pods into wire format.
 
+    `owner` is the PodGroup's resolved Job owner and `owner_job` the live Job
+    object when one was found.
+
     Returns None when the PodGroup lacks a uid, name, namespace, or a
-    parseable creationTimestamp; without a start the orchestrator cannot build
-    a valid attributor window.
+    parseable creationTimestamp (without a start the orchestrator cannot build
+    a valid attributor window), or when the owner Job cannot supply an end.
     """
     meta = podgroup.get("metadata") or {}
     uid = meta.get("uid")
@@ -235,7 +231,14 @@ def _parse_pod_group(podgroup: dict, pods: list[dict], now: datetime) -> KaiExec
         logger.warning(f"podgroup {namespace}/{name} has no creationTimestamp; skipping")
         return None
 
-    members = _member_pods(start_time, pods)
+    members = _member_pods(owner, pods)
+    member_starts = [
+        created
+        for pod in members
+        if (created := _parse_dt((pod.get("metadata") or {}).get("creationTimestamp"))) is not None
+    ]
+    if member_starts:
+        start_time = min(start_time, *member_starts)
     pod_nodes = {
         pod_name: node
         for pod in members
@@ -247,12 +250,20 @@ def _parse_pod_group(podgroup: dict, pods: list[dict], now: datetime) -> KaiExec
     )
 
     spec = podgroup.get("spec") or {}
-    owner = _resolve_owner(meta)
-    shape = _podgroup_shape(spec, owner)
+    shape = _podgroup_shape(spec)
     if shape != _SHAPE_OWNED:
         logger.info(f"podgroup {namespace}/{name}: {shape} PodGroup; emitting raw context only")
 
-    end_time = max(_end_time(members, now), start_time)
+    skip_reason = _skip_reason(owner, owner_job)
+    if skip_reason is not None:
+        logger.info(f"podgroup {namespace}/{name}: {skip_reason}; skipping")
+        return None
+    owner_end = _job_end_time(owner_job)
+    if owner_end is None:
+        logger.debug(f"podgroup {namespace}/{name}: owner Job still active; using now() for end_time")
+    end_time = max(owner_end if owner_end is not None else now, start_time)
+    if not pod_nodes:
+        logger.warning(f"podgroup {namespace}/{name}: node list unavailable from member Pods")
 
     ctx: KaiExecutionContext = {
         "id": uid,
@@ -277,10 +288,9 @@ def _parse_pod_group(podgroup: dict, pods: list[dict], now: datetime) -> KaiExec
     if min_member is not None:
         ctx["min_member"] = min_member
 
-    if owner is not None:
-        ctx["owner_kind"] = owner["kind"]
-        ctx["owner_name"] = owner["name"]
-        ctx["owner_uid"] = owner["uid"]
+    ctx["owner_kind"] = owner["kind"]
+    ctx["owner_name"] = owner["name"]
+    ctx["owner_uid"] = owner["uid"]
 
     status = podgroup.get("status") or {}
     conditions = status.get("schedulingConditions")
@@ -313,9 +323,6 @@ class KaiExecutionContextAdapter:
         namespace: str | None = None,
         timeout_seconds: int = 60,
     ):
-        self.kubectl_path = kubectl_path
-        self.kubeconfig = kubeconfig
-        self.context = context
         self.namespace = namespace or ""
         self.timeout_seconds = timeout_seconds
         self._kubectl = KubectlClient(
@@ -337,7 +344,8 @@ class KaiExecutionContextAdapter:
 
     def discover_by_ids(self, ids: list[str]) -> list[KaiExecutionContext]:
         """Look up PodGroups by `<namespace>/<name>` (or bare `<name>` when the
-        adapter is namespace-scoped). Missing PodGroups are skipped."""
+        adapter is namespace-scoped). PodGroups that do not exist are skipped;
+        any other failed lookup raises."""
         podgroups: list[dict] = []
         for ref in ids:
             ns, _, name = ref.partition("/")
@@ -361,21 +369,16 @@ class KaiExecutionContextAdapter:
     ) -> list[KaiExecutionContext]:
         """List PodGroups, then keep those whose window intersects `[start, end]`.
 
-        A PodGroup's end is only known from its Pods, so the listing is first
-        narrowed to PodGroups created no later than `end`, and the window is
-        checked after the member Pods are fetched. `nodelist` entries may be
-        CSVs of plain node names; a PodGroup survives if any member Pod ran on
-        one of them.
+        The window is checked after member Pods and owners are resolved:
+        a member Pod may predate its PodGroup, and the owner supplies the end.
+        A failed list raises.
+        `nodelist` entries may be CSVs of plain node names; a PodGroup
+        survives if any member Pod ran on one of them.
         """
         assert_aware(start, "discover_by_time_range.start")
         assert_aware(end, "discover_by_time_range.end")
         listing = self._kubectl.list(_PODGROUP_RESOURCE, namespace=self.namespace or None)
-        candidates = []
-        for podgroup in listing:
-            created = _parse_dt((podgroup.get("metadata") or {}).get("creationTimestamp"))
-            if created is not None and created <= end:
-                candidates.append(podgroup)
-        contexts = [c for c in self._finalize(candidates) if c["start_time"] <= end and c["end_time"] >= start]
+        contexts = [c for c in self._finalize(listing) if c["start_time"] <= end and c["end_time"] >= start]
         if not nodelist:
             return contexts
         wanted: set[str] = set()
@@ -388,15 +391,36 @@ class KaiExecutionContextAdapter:
     # --- internals ---------------------------------------------------------
 
     def _finalize(self, podgroups: list[dict]) -> list[KaiExecutionContext]:
-        if not podgroups:
-            return []
-        pods_by_key = _index_pods_by_pod_group(self._fetch_pods(podgroups))
-        now = datetime.now(tz=timezone.utc)
-        contexts: list[KaiExecutionContext] = []
+        # Only Job-owned PodGroups can have an end time, so everything else is
+        # dropped before any Pod or Job is fetched.
+        owned: list[tuple[dict, dict]] = []
         for podgroup in podgroups:
             meta = podgroup.get("metadata") or {}
-            key = (meta.get("namespace") or "", meta.get("name") or "")
-            ctx = _parse_pod_group(podgroup, pods_by_key.get(key, []), now)
+            owner = _resolve_owner(meta)
+            if owner is None or not _is_batch_job(owner):
+                logger.info(
+                    f"podgroup {meta.get('namespace')}/{meta.get('name')}: not owned by a batch Job; skipping"
+                )
+                continue
+            owned.append((podgroup, owner))
+        if not owned:
+            return []
+        pods_by_key = _index_pods_by_pod_group(self._fetch_pods([pg for pg, _ in owned]))
+        now = datetime.now(tz=timezone.utc)
+        contexts: list[KaiExecutionContext] = []
+        for podgroup, owner in owned:
+            meta = podgroup.get("metadata") or {}
+            namespace = meta.get("namespace") or ""
+            owner_job = (
+                self._kubectl.get_one("job.batch", owner["name"], namespace=namespace) if namespace else None
+            )
+            ctx = _parse_pod_group(
+                podgroup,
+                owner,
+                pods_by_key.get((namespace, meta.get("name") or ""), []),
+                owner_job,
+                now,
+            )
             if ctx is not None:
                 contexts.append(ctx)
         return contexts
