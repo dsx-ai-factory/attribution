@@ -9,6 +9,7 @@ from pathlib import Path
 
 import pytest
 
+from attribution_blueprint.connectors.execution_contexts.kubectl_client import KubectlError
 from attribution_blueprint.connectors.execution_contexts.kueue import (
     KueueExecutionContextAdapter,
 )
@@ -149,7 +150,11 @@ def _kubectl_router(
         elif kind == "workload":
             obj = _by_name(workloads_payload["items"], name, ns)
             if obj is None:
-                raise subprocess.CalledProcessError(returncode=1, cmd=cmd, stderr="NotFound")
+                raise subprocess.CalledProcessError(
+                    returncode=1,
+                    cmd=cmd,
+                    stderr=f'Error from server (NotFound): workloads.kueue.x-k8s.io "{name}" not found',
+                )
             stdout = json.dumps(obj)
         elif kind == "pods":
             if label_selector and label_selector.startswith("batch.kubernetes.io/controller-uid="):
@@ -952,24 +957,99 @@ def test_unscoped_list_uses_dash_a(mocker):
     assert "-A" in cmd
 
 
-def test_invalid_json_from_kubectl_treated_as_empty(mocker):
+def test_invalid_json_from_kubectl_fails_discovery(mocker):
     completed = subprocess.CompletedProcess(args=[], returncode=0, stdout="not-json{", stderr="")
     mocker.patch("subprocess.run", return_value=completed)
     eca = KueueExecutionContextAdapter()
-    assert (
+    with pytest.raises(KubectlError, match="invalid JSON"):
         eca.discover_by_time_range(
             datetime(2026, 5, 1, tzinfo=timezone.utc),
             datetime(2026, 5, 2, tzinfo=timezone.utc),
         )
-        == []
-    )
 
 
-def test_kubectl_timeout_returns_empty(mocker):
+def test_kubectl_timeout_fails_discovery(mocker):
     err = subprocess.TimeoutExpired(cmd=["kubectl"], timeout=60)
     mocker.patch("subprocess.run", side_effect=err)
     eca = KueueExecutionContextAdapter()
-    assert eca.discover_by_ids(["team-alpha/anything"]) == []
+    with pytest.raises(KubectlError, match="timed out"):
+        eca.discover_by_ids(["team-alpha/anything"])
+
+
+def test_denied_workload_list_fails_discovery(mocker):
+    err = subprocess.CalledProcessError(returncode=1, cmd=["kubectl"], stderr="Error (Forbidden)")
+    mocker.patch("subprocess.run", side_effect=err)
+    eca = KueueExecutionContextAdapter()
+    with pytest.raises(KubectlError, match="Forbidden"):
+        eca.discover_by_time_range(
+            datetime(2026, 5, 1, tzinfo=timezone.utc),
+            datetime(2026, 5, 2, tzinfo=timezone.utc),
+        )
+
+
+def test_missing_workload_is_skipped(mocker):
+    _wire_kubectl(mocker, workloads_payload={"items": []})
+
+    assert KueueExecutionContextAdapter().discover_by_ids(["team-alpha/gone"]) == []
+
+
+def test_denied_owner_job_lookup_fails_discovery(mocker):
+    router = _kubectl_router()
+
+    def _side_effect(cmd, **kwargs):
+        if "job" in cmd:
+            raise subprocess.CalledProcessError(returncode=1, cmd=cmd, stderr="Error (Forbidden): jobs")
+        return router(cmd, **kwargs)
+
+    mocker.patch("subprocess.run", side_effect=_side_effect)
+
+    with pytest.raises(KubectlError, match="Forbidden"):
+        KueueExecutionContextAdapter().discover_by_ids(["team-alpha/job-train-mnist-abc12"])
+
+
+def test_denied_pod_list_fails_discovery(mocker):
+    router = _kubectl_router()
+
+    def _side_effect(cmd, **kwargs):
+        if "pods" in cmd:
+            raise subprocess.CalledProcessError(returncode=1, cmd=cmd, stderr="Error (Forbidden): pods")
+        return router(cmd, **kwargs)
+
+    mocker.patch("subprocess.run", side_effect=_side_effect)
+
+    with pytest.raises(KubectlError, match="Forbidden"):
+        KueueExecutionContextAdapter().discover_by_ids(["team-alpha/job-train-mnist-abc12"])
+
+
+def test_denied_jobset_child_job_list_fails_discovery(mocker):
+    workload = {
+        "metadata": {
+            "name": "jobset-training",
+            "namespace": "team-alpha",
+            "uid": "workload-jobset",
+            "creationTimestamp": "2026-05-01T12:00:00Z",
+            "ownerReferences": [
+                {"kind": "JobSet", "name": "training", "uid": "jobset-uid"},
+            ],
+        },
+        "spec": {},
+        "status": {},
+    }
+    router = _kubectl_router(
+        workloads_payload={"items": [workload]},
+        pods_payload={"items": []},
+        jobs_payload={"items": []},
+    )
+
+    def _side_effect(cmd, **kwargs):
+        if "jobs" in cmd:
+            raise subprocess.CalledProcessError(returncode=1, cmd=cmd, stderr="Error (Forbidden): jobs")
+        return router(cmd, **kwargs)
+
+    mocker.patch("subprocess.run", side_effect=_side_effect)
+
+    with pytest.raises(KubectlError, match="Forbidden"):
+        KueueExecutionContextAdapter().discover_by_ids(["team-alpha/jobset-training"])
 
 
 def test_finished_state_wins_over_earlier_evicted(mocker):
@@ -1219,6 +1299,63 @@ def test_missing_live_pods_are_recovered_from_uid_matched_events(mocker):
 
     assert ctx["pod_names"] == ["train-mnist-new"]
     assert ctx["nodes"] == ["node-new"]
+
+
+@pytest.mark.parametrize(
+    "failing_reason, expected_pods, expected_nodes",
+    [
+        ("SuccessfulCreate", None, []),
+        ("Scheduled", ["train-mnist-new"], []),
+    ],
+    ids=["creation-events-fail", "scheduled-events-fail"],
+)
+def test_failed_event_query_is_skipped_not_fatal(mocker, failing_reason, expected_pods, expected_nodes):
+    """Events are optional evidence: a failed Event query degrades the
+    recovered pods/nodes instead of failing discovery."""
+    events = {
+        "items": [
+            {
+                "metadata": {"creationTimestamp": "2026-05-01T12:00:10Z"},
+                "involvedObject": {
+                    "kind": "Job",
+                    "namespace": "team-alpha",
+                    "name": "train-mnist",
+                    "uid": "owner-1001",
+                },
+                "reason": "SuccessfulCreate",
+                "message": "Created pod: train-mnist-new",
+                "lastTimestamp": "2026-05-01T12:00:10Z",
+            },
+            {
+                "metadata": {"creationTimestamp": "2026-05-01T12:00:11Z"},
+                "involvedObject": {
+                    "kind": "Pod",
+                    "namespace": "team-alpha",
+                    "name": "train-mnist-new",
+                    "uid": "pod-NEW",
+                },
+                "reason": "Scheduled",
+                "message": "Successfully assigned team-alpha/train-mnist-new to node-new",
+                "lastTimestamp": "2026-05-01T12:00:11Z",
+            },
+        ]
+    }
+    router = _kubectl_router(pods_payload={"items": []}, events_payload=events)
+
+    def _side_effect(cmd, **kwargs):
+        if "events" in cmd and any(f"reason={failing_reason}" in str(token) for token in cmd):
+            raise subprocess.CalledProcessError(returncode=1, cmd=cmd, stderr="Error (Forbidden): events")
+        return router(cmd, **kwargs)
+
+    mocker.patch("subprocess.run", side_effect=_side_effect)
+    warning = mocker.patch("attribution_blueprint.connectors.execution_contexts.kueue.connector.logger.warning")
+
+    eca = KueueExecutionContextAdapter(event_max_age_seconds=2**31)
+    ctx = eca.discover_by_ids(["team-alpha/job-train-mnist-abc12"])[0]
+
+    assert ctx.get("pod_names") == expected_pods
+    assert ctx["nodes"] == expected_nodes
+    assert any("event lookup" in str(call.args[0]) for call in warning.call_args_list)
 
 
 def test_event_recovery_skipped_for_workloads_older_than_max_age(mocker):
