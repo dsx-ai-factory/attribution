@@ -15,6 +15,11 @@ Emits one workload-level context per PodGroup, with these KAI specifics:
     end_time           Terminal time of the owning Job or JobSet; now()
                        while the owner is active. Pods never determine it.
     nodes              Union of .spec.nodeName across the member Pods
+    state              From the owning Job or JobSet: COMPLETED, FAILED,
+                       TIMEOUT (a Job failed with DeadlineExceeded), or
+                       RUNNING while the owner has no terminal signal,
+                       including while suspended. `owner_state` keeps the
+                       owner's own wording.
 
 Member Pods are joined on the `pod-group-name` annotation plus namespace,
 then validated against the exact owning Job UID; JobSet members must belong
@@ -74,6 +79,8 @@ class KaiExecutionContext(TypedDict):
     nodes: list[str]
     start_time: datetime
     end_time: datetime
+    # Service-facing state: COMPLETED, FAILED, TIMEOUT or RUNNING.
+    state: str
 
     job_id: str
     pod_group_uid: str
@@ -84,6 +91,9 @@ class KaiExecutionContext(TypedDict):
     owner_kind: str
     owner_name: str
     owner_uid: str
+    # The owner's own state, e.g. "Complete", "Failed:BackoffLimitExceeded",
+    # "Suspended" or "Active".
+    owner_state: str
 
     queue_name: NotRequired[str]
     min_member: NotRequired[int]
@@ -223,25 +233,64 @@ def _owner_resource(owner: dict) -> str | None:
     return None
 
 
-def _jobset_end_time(jobset: dict) -> datetime | None:
-    """Terminal condition time of a finished JobSet, or None while active."""
+def _jobset_terminal(jobset: dict) -> tuple[datetime, str] | None:
+    """Terminal transition time and condition type of a JobSet, or None while active."""
     status = jobset.get("status") or {}
     terminal_state = status.get("terminalState")
     condition_types = {terminal_state} if terminal_state in {"Completed", "Failed"} else {"Completed", "Failed"}
-    times = [
-        transition
+    terminals = [
+        (transition, condition["type"])
         for condition in status.get("conditions") or []
         if (condition or {}).get("type") in condition_types
-        and (condition or {}).get("status") == "True"
+        and condition.get("status") == "True"
         and (transition := _parse_dt(condition.get("lastTransitionTime"))) is not None
     ]
-    return max(times) if times else None
+    return max(terminals) if terminals else None
+
+
+def _jobset_end_time(jobset: dict) -> datetime | None:
+    """Terminal condition time of a finished JobSet, or None while active."""
+    terminal = _jobset_terminal(jobset)
+    return terminal[0] if terminal else None
 
 
 def _owner_end_time(owner: dict, owner_object: dict) -> datetime | None:
     if owner["kind"] == "Job":
         return _job_end_time(owner_object)
     return _jobset_end_time(owner_object)
+
+
+def _condition(owner_object: dict, condition_type: str) -> dict | None:
+    for condition in (owner_object.get("status") or {}).get("conditions") or []:
+        if (condition or {}).get("type") == condition_type and condition.get("status") == "True":
+            return condition
+    return None
+
+
+def _owner_state(owner: dict, owner_object: dict) -> tuple[str, str]:
+    """Return the service-facing state and the native owner state.
+
+    The service state is COMPLETED, FAILED, TIMEOUT or RUNNING. It is derived
+    from the same terminal signal as the end time, so an owner without one is
+    RUNNING, including while suspended. A Job whose Failed condition reports
+    DeadlineExceeded is TIMEOUT. The native state keeps the owner's own
+    wording, including the failure reason.
+    """
+    if _owner_end_time(owner, owner_object) is None:
+        return "RUNNING", "Suspended" if _condition(owner_object, "Suspended") else "Active"
+
+    if owner["kind"] == "Job":
+        completed = _parse_dt((owner_object.get("status") or {}).get("completionTime")) is not None
+        failed = None if completed else _condition(owner_object, "Failed")
+    else:
+        terminal = _jobset_terminal(owner_object)
+        failed = _condition(owner_object, "Failed") if terminal and terminal[1] == "Failed" else None
+    if failed is None:
+        return "COMPLETED", "Complete" if owner["kind"] == "Job" else "Completed"
+
+    reason = (failed.get("reason") or "").strip()
+    native = f"Failed:{reason}" if reason else "Failed"
+    return ("TIMEOUT" if reason == "DeadlineExceeded" else "FAILED"), native
 
 
 def _skip_reason(owner: dict, owner_object: dict | None) -> str | None:
@@ -311,6 +360,7 @@ def _parse_pod_group(
     if owner_end is None:
         logger.debug(f"podgroup {namespace}/{name}: owner {owner['kind']} still active; using now() for end_time")
     end_time = max(owner_end if owner_end is not None else now, start_time)
+    state, owner_state = _owner_state(owner, owner_object)
     if not pod_nodes:
         logger.warning(f"podgroup {namespace}/{name}: node list unavailable from member Pods")
 
@@ -321,6 +371,7 @@ def _parse_pod_group(
         "nodes": sorted(set(pod_nodes.values())),
         "start_time": start_time,
         "end_time": end_time,
+        "state": state,
         "job_id": f"{namespace}/{name}",
         "pod_group_uid": uid,
         # PodGroup incarnation identity, not a scheduling attempt.
@@ -340,6 +391,7 @@ def _parse_pod_group(
     ctx["owner_kind"] = owner["kind"]
     ctx["owner_name"] = owner["name"]
     ctx["owner_uid"] = owner["uid"]
+    ctx["owner_state"] = owner_state
 
     status = podgroup.get("status") or {}
     conditions = status.get("schedulingConditions")
