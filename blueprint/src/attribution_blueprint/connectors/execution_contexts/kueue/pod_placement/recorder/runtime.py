@@ -11,13 +11,13 @@ from datetime import datetime
 
 from loguru import logger
 
+from attribution_blueprint.connectors.execution_contexts.kubernetes_helpers import pod_node_failure_reason
 from attribution_blueprint.connectors.execution_contexts.kueue.helpers import (
     WORKLOAD_ANNOTATION,
     OwnerIdentity,
     controller_owner,
     identities_from,
     pod_container_exit_reason,
-    pod_node_failure_reason,
 )
 from attribution_blueprint.connectors.execution_contexts.kueue.pod_placement.models import PlacementRecord
 from attribution_blueprint.connectors.execution_contexts.kueue.pod_placement.recorder.health import HealthState
