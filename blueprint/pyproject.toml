@@ -16,6 +16,7 @@ dependencies = [
     "requests>=2.31",
     "loguru>=0.7",
     "kubernetes>36.0.0",  # 36.0.0 drops the Authorization header for token-based auth
+    "pyyaml>=6.0",  # KAI adapter parses the kai.scheduler/top-owner-metadata annotation
 ]
 
 [project.optional-dependencies]
