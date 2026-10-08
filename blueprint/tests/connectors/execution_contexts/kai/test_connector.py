@@ -339,6 +339,78 @@ def test_failed_jobset_reports_the_failed_reason(mocker):
     assert ctx["owner_state"] == "Failed:ReachedMaxRestarts"
 
 
+def _lost_pod(name, node):
+    pod = _pod(name, node=node, controller=("Job", "uid-job-uid-pg-a"))
+    pod["status"]["reason"] = "NodeLost"
+    return pod
+
+
+@pytest.mark.parametrize(
+    "owner, state",
+    [
+        (_job("pg-a-job", "uid-job-uid-pg-a"), "NODE_FAIL"),
+        (_job("pg-a-job", "uid-job-uid-pg-a", failed_at="2026-05-01T12:45:00Z"), "NODE_FAIL"),
+        (_job("pg-a-job", "uid-job-uid-pg-a", completed="2026-05-01T13:00:00Z"), "COMPLETED"),
+    ],
+    ids=["active", "failed", "completed"],
+)
+def test_node_loss_on_a_member_pod_sets_node_fail(mocker, owner, state):
+    pods = [_lost_pod("a-0", "node002"), _lost_pod("a-1", "node001")]
+    _wire_kubectl(mocker, [_podgroup()], pods, [owner])
+
+    [ctx] = KaiExecutionContextAdapter().discover_by_ids(["team-alpha/pg-a"])
+
+    assert ctx["state"] == state
+    if state == "NODE_FAIL":
+        assert ctx["failed_node"] == "node001"
+    else:
+        assert "failed_node" not in ctx
+
+
+def test_healthy_pods_leave_no_failed_node(mocker):
+    pod = _pod("a-0", controller=("Job", "uid-job-uid-pg-a"))
+    _wire_kubectl(mocker, [_podgroup()], [pod], [_job("pg-a-job", "uid-job-uid-pg-a")])
+
+    [ctx] = KaiExecutionContextAdapter().discover_by_ids(["team-alpha/pg-a"])
+
+    assert "failed_node" not in ctx
+
+
+def test_podgc_disruption_sets_node_fail(mocker):
+    pod = _pod("a-0", controller=("Job", "uid-job-uid-pg-a"))
+    pod["status"]["conditions"] = [
+        {
+            "type": "DisruptionTarget",
+            "status": "True",
+            "reason": "DeletionByPodGC",
+            "lastTransitionTime": "2026-05-01T12:30:00Z",
+        }
+    ]
+    _wire_kubectl(mocker, [_podgroup()], [pod], [_job("pg-a-job", "uid-job-uid-pg-a")])
+
+    [ctx] = KaiExecutionContextAdapter().discover_by_ids(["team-alpha/pg-a"])
+
+    assert ctx["state"] == "NODE_FAIL"
+    assert ctx["failed_node"] == "node001"
+
+
+def test_node_loss_on_a_stale_jobset_pod_is_ignored(mocker):
+    pg = _podgroup(owner_kind="JobSet")
+    jobs = [
+        _job("current", "uid-current", jobset=("pg-a-job", "uid-job-uid-pg-a")),
+        _job("stale", "uid-stale", jobset=("pg-a-job", "uid-old-jobset")),
+    ]
+    stale = _pod("stale-0", node="node009", controller=("Job", "uid-stale"))
+    stale["status"]["reason"] = "NodeLost"
+    pods = [_pod("current-0", controller=("Job", "uid-current")), stale]
+    _wire_kubectl(mocker, [pg], pods, jobs=jobs)
+
+    [ctx] = KaiExecutionContextAdapter().discover_by_ids(["team-alpha/pg-a"])
+
+    assert ctx["state"] == "RUNNING"
+    assert "failed_node" not in ctx
+
+
 def test_surviving_pods_do_not_change_the_owner_state(mocker):
     pod = _pod("a-0", controller=("Job", "uid-job-uid-pg-a"))
     _wire_kubectl(mocker, [_podgroup()], [pod], [_job("pg-a-job", "uid-job-uid-pg-a")])

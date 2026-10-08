@@ -19,7 +19,9 @@ Emits one workload-level context per PodGroup, with these KAI specifics:
                        TIMEOUT (a Job failed with DeadlineExceeded), or
                        RUNNING while the owner has no terminal signal,
                        including while suspended. `owner_state` keeps the
-                       owner's own wording.
+                       owner's own wording. A member Pod that reports node
+                       loss sets state to NODE_FAIL and sets `failed_node`;
+                       a completed one stays COMPLETED without one.
 
 Member Pods are joined on the `pod-group-name` annotation plus namespace,
 then validated against the exact owning Job UID; JobSet members must belong
@@ -49,6 +51,7 @@ from attribution_blueprint.connectors.execution_contexts.kubernetes_client impor
     KubernetesClient,
     KubernetesClientError,
 )
+from attribution_blueprint.connectors.execution_contexts.kubernetes_helpers import pod_node_failure_reason
 from attribution_blueprint.types import assert_aware
 
 _PODGROUP_RESOURCE = "PodGroup"
@@ -94,6 +97,7 @@ class KaiExecutionContext(TypedDict):
     # The owner's own state, e.g. "Complete", "Failed:BackoffLimitExceeded",
     # "Suspended" or "Active".
     owner_state: str
+    failed_node: NotRequired[str]
 
     queue_name: NotRequired[str]
     min_member: NotRequired[int]
@@ -361,6 +365,11 @@ def _parse_pod_group(
         logger.debug(f"podgroup {namespace}/{name}: owner {owner['kind']} still active; using now() for end_time")
     end_time = max(owner_end if owner_end is not None else now, start_time)
     state, owner_state = _owner_state(owner, owner_object)
+    node_loss_nodes = sorted(
+        {node for pod in members if pod_node_failure_reason(pod) and (node := (pod.get("spec") or {}).get("nodeName"))}
+    )
+    if state != "COMPLETED" and any(pod_node_failure_reason(pod) for pod in members):
+        state = "NODE_FAIL"
     if not pod_nodes:
         logger.warning(f"podgroup {namespace}/{name}: node list unavailable from member Pods")
 
@@ -392,6 +401,8 @@ def _parse_pod_group(
     ctx["owner_name"] = owner["name"]
     ctx["owner_uid"] = owner["uid"]
     ctx["owner_state"] = owner_state
+    if state == "NODE_FAIL" and node_loss_nodes:
+        ctx["failed_node"] = node_loss_nodes[0]
 
     status = podgroup.get("status") or {}
     conditions = status.get("schedulingConditions")
