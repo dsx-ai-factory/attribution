@@ -804,6 +804,7 @@ dependencies = [
     { name = "kubernetes" },
     { name = "loguru" },
     { name = "nvidia-attribution-client" },
+    { name = "pyyaml" },
     { name = "requests" },
 ]
 
@@ -836,6 +837,7 @@ requires-dist = [
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0" },
     { name = "pytest-cov", marker = "extra == 'dev'", specifier = ">=6.0.0" },
     { name = "pytest-mock", marker = "extra == 'dev'", specifier = ">=3.12" },
+    { name = "pyyaml", specifier = ">=6.0" },
     { name = "pyyaml", marker = "extra == 'dev'", specifier = ">=6.0" },
     { name = "pyyaml", marker = "extra == 'web'", specifier = ">=6.0" },
     { name = "requests", specifier = ">=2.31" },
