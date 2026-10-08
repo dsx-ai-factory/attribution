@@ -8,8 +8,6 @@
 # without an express license agreement from NVIDIA CORPORATION or
 # its affiliates is strictly prohibited.
 
-from datetime import datetime
-
 import attribution_lib
 from attribution_lib.attr_types import JobNodeAttributions
 from attribution_lib.core import CalcBadNodesAttributionResult, attribute
@@ -43,7 +41,7 @@ def _source(context: ObservationContext, *, datum: str, line_num: int) -> Source
     )
 
 
-def test_legacy_event_consumption_preserves_string_identity_and_source(
+def test_legacy_event_consumption_handles_mixed_payloads_and_preserves_sources(
     event_stream,
     dummy_ctx,
     simple_job_factory,
@@ -56,6 +54,16 @@ def test_legacy_event_consumption_preserves_string_identity_and_source(
         {"node": "node-001", "symptom": "ECC Error"},
         source,
     )
+    stream.add_event(
+        "Attribution.node.bad",
+        {"node": "node-001", "symptom": "kernel panic"},
+        _source(dummy_ctx, datum="kernel panic evidence", line_num=18),
+    )
+    stream.add_event(
+        "Attribution.node.bad",
+        {"node": "node-001"},
+        _source(dummy_ctx, datum="missing symptom evidence", line_num=19),
+    )
     job_info = simple_job_factory(
         state="FAILED",
         node_to_ranks=make_node_to_ranks(["node-001"], 1),
@@ -64,12 +72,19 @@ def test_legacy_event_consumption_preserves_string_identity_and_source(
     attributions = JobNodeAttributions.from_event_stream(stream, job_info)
 
     group = attributions["node-001"]
-    assert list(group.symptoms()) == ["ECC Error"]
-    stored_source = group.attributions["ECC Error"].one_source()
-    assert stored_source is not None
-    assert stored_source.datum == "ECC evidence"
-    assert stored_source.line_num == 17
-    assert stored_source.rule == "test_rule"
+    assert set(group.symptoms()) == {"ECC Error", "kernel panic"}
+
+    ecc_source = group.attributions["ECC Error"].one_source()
+    assert ecc_source is not None
+    assert ecc_source.datum == "ECC evidence"
+    assert ecc_source.line_num == 17
+    assert ecc_source.rule == "test_rule"
+
+    panic_source = group.attributions["kernel panic"].one_source()
+    assert panic_source is not None
+    assert panic_source.datum == "kernel panic evidence"
+    assert panic_source.line_num == 18
+    assert panic_source.rule == "test_rule"
 
 
 def test_snapshot_preserves_nested_symptom_identity_payload(tmp_path, dummy_ctx):
@@ -147,4 +162,5 @@ def test_attribute_preserves_public_strings_outcome_and_source(
     stored_source = result.bad_nodes_attr.my_bad_nodes["node-001"].attributions["ECC Error"].one_source()
     assert stored_source is not None
     assert stored_source.datum == "double-bit ECC"
+    assert recorder.events
     assert all(event.symptom is None or isinstance(event.symptom, str) for event in recorder.events)
