@@ -11,7 +11,7 @@ component name: `service-app-vMAJOR.MINOR.PATCH` for the Attribution Service,
 Components release independently. A release of one component does not require
 a new version or tag for another component.
 
-The planned version source is the literal `__version__` in each component's
+The release-version source is the literal `__version__` in each component's
 `__init__.py`:
 
 | Component | Version source |
@@ -20,12 +20,12 @@ The planned version source is the literal `__version__` in each component's
 | Attribution Library | `service/attribution-lib/src/attribution_lib/__init__.py` |
 | Blueprint | `blueprint/src/attribution_blueprint/__init__.py` |
 
-The Service and Blueprint already define version literals. The Library currently
-derives `__version__` from Git; its migration to a literal is follow-up work.
-The planned process does not use `pyproject.toml` or `bundle-manifest.json` as
-the release-version source. Removal of the manifest is also follow-up work.
-Until that migration is complete, existing package metadata and tests remain
-applicable.
+The Service, Library, and Blueprint each define this literal. Build-time
+version stamping uses Git history to add local version metadata; it does not
+change the committed release version.
+
+The release process does not use `pyproject.toml` or `bundle-manifest.json` as
+the release-version source. Removal of the manifest is follow-up work.
 
 Before version 1.0, a minor release can contain breaking changes. After version
 1.0:
@@ -57,9 +57,8 @@ into a feature branch.
 
 ## Planned release process
 
-CI tagging is not implemented yet. Maintainers must implement and validate it,
-and complete the version-source migration, before the first release under this
-process.
+CI tagging is not implemented yet. Maintainers must implement and validate it
+before the first release under this process.
 
 For each component release:
 
