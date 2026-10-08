@@ -89,19 +89,31 @@ def _pod(
     return {"metadata": meta, "spec": spec, "status": status}
 
 
-def _job(name, uid, completed=None, failed_at=None, namespace="team-alpha", jobset=None):
+def _job(
+    name,
+    uid,
+    completed=None,
+    failed_at=None,
+    namespace="team-alpha",
+    reason=None,
+    suspended=False,
+    jobset=None,
+):
     status = {}
     if completed:
         status["completionTime"] = completed
     if failed_at:
-        status["conditions"] = [{"type": "Failed", "status": "True", "lastTransitionTime": failed_at}]
+        failed = {"type": "Failed", "status": "True", "lastTransitionTime": failed_at}
+        if reason:
+            failed["reason"] = reason
+        status["conditions"] = [failed]
+    if suspended:
+        status["conditions"] = [{"type": "Suspended", "status": "True"}]
     metadata = {"name": name, "namespace": namespace, "uid": uid}
     if jobset is not None:
         jobset_name, jobset_uid = jobset
         metadata["labels"] = {"jobset.sigs.k8s.io/jobset-name": jobset_name}
-        metadata["ownerReferences"] = [
-            {"kind": "JobSet", "name": jobset_name, "uid": jobset_uid, "controller": True}
-        ]
+        metadata["ownerReferences"] = [{"kind": "JobSet", "name": jobset_name, "uid": jobset_uid, "controller": True}]
     return {"metadata": metadata, "status": status}
 
 
@@ -261,13 +273,79 @@ def test_current_crd_shape_emits_incarnation_keyed_context(mocker, warnings):
     assert ctx["pod_nodes"] == {"train-mnist-0": "node005", "train-mnist-1": "node006"}
 
 
-def test_context_carries_no_state(mocker):
+def test_context_does_not_claim_a_failed_node(mocker):
     _wire_kubectl(mocker, PODGROUPS["items"], PODS["items"])
 
     [ctx] = KaiExecutionContextAdapter().discover_by_ids(["team-alpha/pg-train-mnist-1a2b3c4d"])
 
-    assert "state" not in ctx
     assert "failed_node" not in ctx
+
+
+@pytest.mark.parametrize(
+    "owner, state, owner_state",
+    [
+        (_job("pg-a-job", "uid-job-uid-pg-a", completed="2026-05-01T13:00:00Z"), "COMPLETED", "Complete"),
+        (_job("pg-a-job", "uid-job-uid-pg-a", failed_at="2026-05-01T12:45:00Z"), "FAILED", "Failed"),
+        (
+            _job("pg-a-job", "uid-job-uid-pg-a", failed_at="2026-05-01T12:45:00Z", reason="BackoffLimitExceeded"),
+            "FAILED",
+            "Failed:BackoffLimitExceeded",
+        ),
+        (
+            _job("pg-a-job", "uid-job-uid-pg-a", failed_at="2026-05-01T12:45:00Z", reason="DeadlineExceeded"),
+            "TIMEOUT",
+            "Failed:DeadlineExceeded",
+        ),
+        (_job("pg-a-job", "uid-job-uid-pg-a"), "RUNNING", "Active"),
+        (_job("pg-a-job", "uid-job-uid-pg-a", suspended=True), "RUNNING", "Suspended"),
+    ],
+    ids=["completed", "failed", "backoff-limit", "deadline", "active", "suspended"],
+)
+def test_job_owner_state(mocker, owner, state, owner_state):
+    _wire_kubectl(mocker, [_podgroup()], [], [owner])
+
+    [ctx] = KaiExecutionContextAdapter().discover_by_ids(["team-alpha/pg-a"])
+
+    assert ctx["state"] == state
+    assert ctx["owner_state"] == owner_state
+
+
+@pytest.mark.parametrize(
+    "owner, state, owner_state",
+    [
+        (_jobset("pg-a-job", "uid-job-uid-pg-a", completed_at="2026-05-01T13:00:00Z"), "COMPLETED", "Completed"),
+        (_jobset("pg-a-job", "uid-job-uid-pg-a", failed_at="2026-05-01T12:45:00Z"), "FAILED", "Failed"),
+        (_jobset("pg-a-job", "uid-job-uid-pg-a"), "RUNNING", "Active"),
+    ],
+    ids=["completed", "failed", "active"],
+)
+def test_jobset_owner_state(mocker, owner, state, owner_state):
+    _wire_kubectl(mocker, [_podgroup(owner_kind="JobSet")], [], jobsets=[owner])
+
+    [ctx] = KaiExecutionContextAdapter().discover_by_ids(["team-alpha/pg-a"])
+
+    assert ctx["state"] == state
+    assert ctx["owner_state"] == owner_state
+
+
+def test_failed_jobset_reports_the_failed_reason(mocker):
+    jobset = _jobset("pg-a-job", "uid-job-uid-pg-a", failed_at="2026-05-01T12:45:00Z")
+    jobset["status"]["conditions"][0]["reason"] = "ReachedMaxRestarts"
+    _wire_kubectl(mocker, [_podgroup(owner_kind="JobSet")], [], jobsets=[jobset])
+
+    [ctx] = KaiExecutionContextAdapter().discover_by_ids(["team-alpha/pg-a"])
+
+    assert ctx["state"] == "FAILED"
+    assert ctx["owner_state"] == "Failed:ReachedMaxRestarts"
+
+
+def test_surviving_pods_do_not_change_the_owner_state(mocker):
+    pod = _pod("a-0", controller=("Job", "uid-job-uid-pg-a"))
+    _wire_kubectl(mocker, [_podgroup()], [pod], [_job("pg-a-job", "uid-job-uid-pg-a")])
+
+    [ctx] = KaiExecutionContextAdapter().discover_by_ids(["team-alpha/pg-a"])
+
+    assert ctx["state"] == "RUNNING"
 
 
 def test_current_status_is_preserved_raw(mocker):
@@ -285,7 +363,7 @@ def test_removed_status_fields_are_ignored(mocker):
 
     [ctx] = KaiExecutionContextAdapter().discover_by_ids(["team-alpha/pg-a"])
 
-    assert "state" not in ctx
+    assert ctx["state"] == "RUNNING"
     assert "scheduling_conditions" not in ctx
     assert "resources_status" not in ctx
 
