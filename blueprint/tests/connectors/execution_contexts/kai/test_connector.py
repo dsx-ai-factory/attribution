@@ -34,14 +34,18 @@ def _podgroup(
     created="2026-05-01T12:00:00Z",
     owner=True,
     owner_kind="Job",
+    owner_group=None,
     spec=None,
     status=None,
 ):
     meta = {"name": name, "namespace": namespace, "uid": uid, "creationTimestamp": created}
     if owner:
+        if owner_group is None and owner_kind == "JobSet":
+            owner_group = "jobset.x-k8s.io"
+        group = f"group: {owner_group}\n" if owner_group else ""
         meta["annotations"] = {
             "kai.scheduler/top-owner-metadata": (
-                f"name: {name}-job\nuid: uid-job-{uid}\nkind: {owner_kind}\nversion: v1\n"
+                f"name: {name}-job\nuid: uid-job-{uid}\nkind: {owner_kind}\n{group}version: v1\n"
             )
         }
     pg = {
@@ -78,21 +82,45 @@ def _pod(
     return {"metadata": meta, "spec": spec, "status": status}
 
 
-def _job(name, uid, completed=None, failed_at=None, namespace="team-alpha"):
+def _job(name, uid, completed=None, failed_at=None, namespace="team-alpha", jobset=None):
     status = {}
     if completed:
         status["completionTime"] = completed
     if failed_at:
         status["conditions"] = [{"type": "Failed", "status": "True", "lastTransitionTime": failed_at}]
+    metadata = {"name": name, "namespace": namespace, "uid": uid}
+    if jobset is not None:
+        jobset_name, jobset_uid = jobset
+        metadata["labels"] = {"jobset.sigs.k8s.io/jobset-name": jobset_name}
+        metadata["ownerReferences"] = [
+            {"kind": "JobSet", "name": jobset_name, "uid": jobset_uid, "controller": True}
+        ]
+    return {"metadata": metadata, "status": status}
+
+
+def _jobset(name, uid, completed_at=None, failed_at=None, namespace="team-alpha"):
+    status = {}
+    if completed_at or failed_at:
+        condition_type, transition = ("Completed", completed_at) if completed_at else ("Failed", failed_at)
+        status = {
+            "terminalState": condition_type,
+            "conditions": [
+                {
+                    "type": condition_type,
+                    "status": "True",
+                    "lastTransitionTime": transition,
+                }
+            ],
+        }
     return {"metadata": {"name": name, "namespace": namespace, "uid": uid}, "status": status}
 
 
-def _wire_kubectl(mocker, podgroups=None, pods=None, jobs=None):
-    """Patch `subprocess.run` with a router over PodGroups, Pods and Jobs.
+def _wire_kubectl(mocker, podgroups=None, pods=None, jobs=None, jobsets=None):
+    """Patch `subprocess.run` with a router over PodGroups, Pods and owners.
 
     Honors `-n NS` on lists, and answers `get <resource> <name>` with the
-    object or a NotFound error, like kubectl. When `jobs` is omitted, every
-    Job-owned PodGroup gets a matching active Job; pass `[]` for none.
+    object or a NotFound error, like kubectl. When owner lists are omitted,
+    every supported PodGroup gets a matching active owner; pass `[]` for none.
     """
     podgroups = list(podgroups or [])
     pods = list(pods or [])
@@ -103,11 +131,19 @@ def _wire_kubectl(mocker, podgroups=None, pods=None, jobs=None):
             if (owner := _resolve_owner(pg["metadata"])) is not None and owner["kind"] == "Job"
         ]
     jobs = list(jobs)
+    if jobsets is None:
+        jobsets = [
+            _jobset(owner["name"], owner["uid"], namespace=pg["metadata"]["namespace"])
+            for pg in podgroups
+            if (owner := _resolve_owner(pg["metadata"])) is not None and owner["kind"] == "JobSet"
+        ]
+    jobsets = list(jobsets)
 
     def _side_effect(cmd, **kwargs):
         args = list(cmd)
         positional: list[str] = []
         ns = None
+        label_selector = None
         i = 0
         while i < len(args):
             tok = args[i]
@@ -118,6 +154,10 @@ def _wire_kubectl(mocker, podgroups=None, pods=None, jobs=None):
                 ns = args[i + 1]
                 i += 2
                 continue
+            if tok == "-l":
+                label_selector = args[i + 1]
+                i += 2
+                continue
             if tok == "-A":
                 i += 1
                 continue
@@ -125,8 +165,12 @@ def _wire_kubectl(mocker, podgroups=None, pods=None, jobs=None):
             i += 1
         _binary, _verb, resource, *rest = positional
 
-        def _in_ns(items):
-            return [o for o in items if ns is None or (o.get("metadata") or {}).get("namespace") == ns]
+        def _matches(items):
+            selected = [o for o in items if ns is None or (o.get("metadata") or {}).get("namespace") == ns]
+            if label_selector is None:
+                return selected
+            key, value = label_selector.split("=", 1)
+            return [o for o in selected if ((o.get("metadata") or {}).get("labels") or {}).get(key) == value]
 
         if resource.startswith("podgroups"):
             items = podgroups
@@ -134,15 +178,21 @@ def _wire_kubectl(mocker, podgroups=None, pods=None, jobs=None):
             items = pods
         elif resource == "job.batch":
             items = jobs
+        elif resource == "jobsets.jobset.x-k8s.io":
+            items = jobsets
         else:
             raise AssertionError(f"unexpected resource {resource!r}")
         if rest:
-            match = [o for o in _in_ns(items) if o["metadata"].get("name") == rest[0]]
+            match = [o for o in _matches(items) if o["metadata"].get("name") == rest[0]]
             if not match:
-                raise subprocess.CalledProcessError(returncode=1, cmd=cmd, stderr="NotFound")
+                raise subprocess.CalledProcessError(
+                    returncode=1,
+                    cmd=cmd,
+                    stderr=f'Error from server (NotFound): {resource} "{rest[0]}" not found',
+                )
             payload = match[0]
         else:
-            payload = {"items": _in_ns(items)}
+            payload = {"items": _matches(items)}
         return subprocess.CompletedProcess(args=cmd, returncode=0, stdout=json.dumps(payload), stderr="")
 
     return mocker.patch("subprocess.run", side_effect=_side_effect)
@@ -221,16 +271,20 @@ def test_owner_comes_from_top_owner_annotation(mocker):
     assert ctx["podgroup_shape"] == "owned"
 
 
-def test_owner_falls_back_to_controller_owner_reference(mocker):
+@pytest.mark.parametrize(
+    "api_version, kind",
+    [("batch/v1", "Job"), ("jobset.x-k8s.io/v1alpha2", "JobSet")],
+)
+def test_owner_falls_back_to_controller_owner_reference(mocker, api_version, kind):
     pg = _podgroup(owner=False)
     pg["metadata"]["ownerReferences"] = [
-        {"apiVersion": "batch/v1", "kind": "Job", "name": "j", "uid": "uid-j", "controller": True},
+        {"apiVersion": api_version, "kind": kind, "name": "owner", "uid": "uid-owner", "controller": True},
     ]
     _wire_kubectl(mocker, [pg], [])
 
     [ctx] = KaiExecutionContextAdapter().discover_by_ids(["team-alpha/pg-a"])
 
-    assert (ctx["owner_kind"], ctx["owner_name"], ctx["owner_uid"]) == ("Job", "j", "uid-j")
+    assert (ctx["owner_kind"], ctx["owner_name"], ctx["owner_uid"]) == (kind, "owner", "uid-owner")
     assert ctx["podgroup_shape"] == "owned"
 
 
@@ -243,7 +297,10 @@ def test_malformed_top_owner_annotation_leaves_the_podgroup_unowned(mocker):
 
 
 def test_hierarchical_podgroup_is_emitted_and_flagged(mocker):
-    pg = _podgroup(spec={"queue": "q", "subGroups": [{"name": "decode", "minMember": 1}]})
+    pg = _podgroup(
+        owner_kind="JobSet",
+        spec={"queue": "q", "subGroups": [{"name": "decode", "minMember": 1}]},
+    )
     _wire_kubectl(mocker, [pg], [])
 
     [ctx] = KaiExecutionContextAdapter().discover_by_ids(["team-alpha/pg-a"])
@@ -283,7 +340,7 @@ def test_time_range_uses_a_member_pod_that_predates_its_podgroup(mocker):
     pod = _pod("early-0", created="2026-05-01T11:59:00Z", controller=("Job", "uid-job-uid-pg-a"))
     _wire_kubectl(mocker, [pg], [pod])
 
-    contexts = KaiExecutionContextAdapter().discover_by_time_range(
+    contexts = KaiExecutionContextAdapter(namespace="team-alpha").discover_by_time_range(
         datetime(2026, 5, 1, 11, 58, tzinfo=timezone.utc),
         datetime(2026, 5, 1, 11, 59, 30, tzinfo=timezone.utc),
     )
@@ -291,28 +348,28 @@ def test_time_range_uses_a_member_pod_that_predates_its_podgroup(mocker):
     assert [ctx["id"] for ctx in contexts] == ["uid-pg-a"]
 
 
-def test_different_owner_level_keeps_the_pod(mocker):
+def test_pod_with_a_non_job_controller_is_not_joined(mocker):
     pod = _pod("rs-0", node="node-rs", controller=("ReplicaSet", "uid-rs"))
     pg = _podgroup()
     _wire_kubectl(mocker, [pg], [pod])
 
     [ctx] = KaiExecutionContextAdapter().discover_by_ids(["team-alpha/pg-a"])
 
-    assert ctx["pod_names"] == ["rs-0"]
+    assert "pod_names" not in ctx
 
 
-def test_pod_without_controller_is_kept(mocker):
+def test_pod_without_controller_is_not_joined(mocker):
     _wire_kubectl(mocker, [_podgroup()], [_pod("bare-0")])
 
     [ctx] = KaiExecutionContextAdapter().discover_by_ids(["team-alpha/pg-a"])
 
-    assert ctx["pod_names"] == ["bare-0"]
+    assert "pod_names" not in ctx
 
 
 def test_same_name_in_another_namespace_is_not_joined(mocker):
     pods = [
-        _pod("mine-0", namespace="team-alpha", node="node-a"),
-        _pod("theirs-0", namespace="team-beta", node="node-b"),
+        _pod("mine-0", namespace="team-alpha", node="node-a", controller=("Job", "uid-job-uid-pg-a")),
+        _pod("theirs-0", namespace="team-beta", node="node-b", controller=("Job", "uid-job-uid-pg-a")),
     ]
     _wire_kubectl(mocker, [_podgroup()], pods)
 
@@ -332,10 +389,14 @@ def test_podgroup_deleted_between_list_and_lookup_is_skipped(mocker):
     """The listing saw the PodGroup but a later lookup finds nothing."""
     pg = _podgroup()
     run_mock = _wire_kubectl(mocker, [pg], [])
-    adapter = KaiExecutionContextAdapter()
+    adapter = KaiExecutionContextAdapter(namespace="team-alpha")
     assert len(adapter.discover_by_time_range(START, END)) == 1
 
-    run_mock.side_effect = subprocess.CalledProcessError(returncode=1, cmd=["kubectl"], stderr="NotFound")
+    run_mock.side_effect = subprocess.CalledProcessError(
+        returncode=1,
+        cmd=["kubectl"],
+        stderr='Error from server (NotFound): podgroups.scheduling.run.ai "pg-a" not found',
+    )
 
     assert adapter.discover_by_ids(["team-alpha/pg-a"]) == []
 
@@ -346,7 +407,7 @@ def test_malformed_podgroups_are_skipped(mocker):
     ok = _podgroup(name="pg-c", uid="uid-c")
     _wire_kubectl(mocker, [no_uid, no_created, ok], [])
 
-    contexts = KaiExecutionContextAdapter().discover_by_time_range(START, END)
+    contexts = KaiExecutionContextAdapter(namespace="team-alpha").discover_by_time_range(START, END)
 
     assert [c["id"] for c in contexts] == ["uid-c"]
 
@@ -385,6 +446,53 @@ def test_failed_job_end_is_the_failed_condition_time(mocker, warnings):
     warnings.assert_not_called()
 
 
+@pytest.mark.parametrize(
+    "owner, expected_end",
+    [
+        (_jobset("pg-a-job", "uid-job-uid-pg-a", completed_at="2026-05-01T13:00:00Z"), "2026-05-01T13:00:00Z"),
+        (_jobset("pg-a-job", "uid-job-uid-pg-a", failed_at="2026-05-01T12:45:00Z"), "2026-05-01T12:45:00Z"),
+    ],
+    ids=["completed", "failed"],
+)
+def test_terminal_jobset_condition_supplies_end_time(mocker, owner, expected_end):
+    pg = _podgroup(owner_kind="JobSet")
+    _wire_kubectl(mocker, [pg], [], jobsets=[owner])
+
+    [ctx] = KaiExecutionContextAdapter().discover_by_ids(["team-alpha/pg-a"])
+
+    assert ctx["owner_kind"] == "JobSet"
+    assert ctx["end_time"] == datetime.fromisoformat(expected_end)
+
+
+def test_active_jobset_window_ends_now(mocker):
+    pg = _podgroup(owner_kind="JobSet")
+    _wire_kubectl(mocker, [pg], [])
+
+    before = datetime.now(tz=timezone.utc)
+    [ctx] = KaiExecutionContextAdapter().discover_by_ids(["team-alpha/pg-a"])
+
+    assert ctx["end_time"] >= before
+
+
+def test_jobset_joins_only_pods_from_current_child_jobs(mocker):
+    pg = _podgroup(owner_kind="JobSet")
+    jobset_name = "pg-a-job"
+    jobset_uid = "uid-job-uid-pg-a"
+    jobs = [
+        _job("current", "uid-current", jobset=(jobset_name, jobset_uid)),
+        _job("stale", "uid-stale", jobset=(jobset_name, "uid-old-jobset")),
+    ]
+    pods = [
+        _pod("current-0", controller=("Job", "uid-current")),
+        _pod("stale-0", controller=("Job", "uid-stale")),
+    ]
+    _wire_kubectl(mocker, [pg], pods, jobs=jobs)
+
+    [ctx] = KaiExecutionContextAdapter().discover_by_ids(["team-alpha/pg-a"])
+
+    assert ctx["pod_names"] == ["current-0"]
+
+
 def test_member_without_a_node_contributes_no_node(mocker):
     job = _job("pg-a-job", "uid-job-uid-pg-a", completed="2026-05-01T13:00:00Z")
     pods = [
@@ -400,7 +508,12 @@ def test_member_without_a_node_contributes_no_node(mocker):
 
 
 def test_surviving_terminal_pods_do_not_prove_completion(mocker):
-    pod = _pod("a-0", phase="Succeeded", finished="2026-05-01T12:30:00Z")
+    pod = _pod(
+        "a-0",
+        phase="Succeeded",
+        finished="2026-05-01T12:30:00Z",
+        controller=("Job", "uid-job-uid-pg-a"),
+    )
     _wire_kubectl(mocker, [_podgroup()], [pod], [_job("pg-a-job", "uid-job-uid-pg-a")])
 
     [ctx] = KaiExecutionContextAdapter().discover_by_ids(["team-alpha/pg-a"])
@@ -417,9 +530,10 @@ def _non_batch_job_podgroup():
 @pytest.mark.parametrize(
     "podgroup, jobs, reason",
     [
-        (_podgroup(owner=False), [], "not owned by a batch Job"),
-        (_podgroup(owner_kind="JobSet"), [], "not owned by a batch Job"),
-        (_non_batch_job_podgroup(), [], "not owned by a batch Job"),
+        (_podgroup(owner=False), [], "not owned by a supported Job or JobSet"),
+        (_podgroup(owner_kind="Deployment"), [], "not owned by a supported Job or JobSet"),
+        (_podgroup(owner_kind="JobSet", owner_group="example.com"), [], "not owned by a supported Job or JobSet"),
+        (_non_batch_job_podgroup(), [], "not owned by a supported Job or JobSet"),
         (_podgroup(), [], "owner Job not found"),
         (
             _podgroup(),
@@ -427,7 +541,14 @@ def _non_batch_job_podgroup():
             "owner Job uid mismatch",
         ),
     ],
-    ids=["no-owner", "jobset-owner", "non-batch-job", "job-missing", "job-reused-name"],
+    ids=[
+        "no-owner",
+        "unsupported-kind",
+        "non-jobset-group",
+        "non-batch-job",
+        "job-missing",
+        "job-reused-name",
+    ],
 )
 def test_podgroup_without_a_verified_owner_job_is_skipped(mocker, podgroup, jobs, reason):
     info = mocker.patch("attribution_blueprint.connectors.execution_contexts.kai.connector.logger.info")
@@ -438,11 +559,28 @@ def test_podgroup_without_a_verified_owner_job_is_skipped(mocker, podgroup, jobs
 
 
 def test_unsupported_podgroups_are_not_enriched(mocker):
-    run = _wire_kubectl(mocker, [_podgroup(owner_kind="JobSet")], [])
+    run = _wire_kubectl(mocker, [_podgroup(owner_kind="Deployment")], [])
 
-    KaiExecutionContextAdapter().discover_by_time_range(START, END)
+    KaiExecutionContextAdapter(namespace="team-alpha").discover_by_time_range(START, END)
 
     assert all("pods" not in c.args[0] and "job.batch" not in c.args[0] for c in run.call_args_list[1:])
+
+
+@pytest.mark.parametrize(
+    "jobsets, reason",
+    [
+        ([], "owner JobSet not found"),
+        ([_jobset("pg-a-job", "uid-other", completed_at="2026-05-01T13:00:00Z")], "owner JobSet uid mismatch"),
+    ],
+    ids=["missing", "reused-name"],
+)
+def test_podgroup_without_a_verified_jobset_is_skipped(mocker, jobsets, reason):
+    info = mocker.patch("attribution_blueprint.connectors.execution_contexts.kai.connector.logger.info")
+    pg = _podgroup(owner_kind="JobSet")
+    _wire_kubectl(mocker, [pg], [], jobsets=jobsets)
+
+    assert KaiExecutionContextAdapter().discover_by_ids(["team-alpha/pg-a"]) == []
+    assert any(f"{reason}; skipping" in str(c.args[0]) for c in info.call_args_list)
 
 
 def test_podgroup_without_pods_has_no_nodes(mocker):
@@ -465,7 +603,7 @@ def test_time_range_keeps_only_intersecting_podgroups(mocker):
     ]
     _wire_kubectl(mocker, [inside, later, finished_before], [], jobs)
 
-    contexts = KaiExecutionContextAdapter().discover_by_time_range(START, END)
+    contexts = KaiExecutionContextAdapter(namespace="team-alpha").discover_by_time_range(START, END)
 
     assert [c["id"] for c in contexts] == ["uid-in"]
 
@@ -473,9 +611,12 @@ def test_time_range_keeps_only_intersecting_podgroups(mocker):
 def test_time_range_nodelist_filters_on_member_pod_nodes(mocker):
     a = _podgroup(name="pg-a", uid="uid-a")
     b = _podgroup(name="pg-b", uid="uid-b")
-    pods = [_pod("a-0", podgroup="pg-a", node="node001"), _pod("b-0", podgroup="pg-b", node="node002")]
+    pods = [
+        _pod("a-0", podgroup="pg-a", node="node001", controller=("Job", "uid-job-uid-a")),
+        _pod("b-0", podgroup="pg-b", node="node002", controller=("Job", "uid-job-uid-b")),
+    ]
     _wire_kubectl(mocker, [a, b], pods)
-    adapter = KaiExecutionContextAdapter()
+    adapter = KaiExecutionContextAdapter(namespace="team-alpha")
 
     assert [c["id"] for c in adapter.discover_by_time_range(START, END, nodelist=["node002, node009"])] == ["uid-b"]
     assert len(adapter.discover_by_time_range(START, END, nodelist=[])) == 2
@@ -483,7 +624,7 @@ def test_time_range_nodelist_filters_on_member_pod_nodes(mocker):
 
 def test_time_range_rejects_naive_datetimes():
     with pytest.raises(ValueError):
-        KaiExecutionContextAdapter().discover_by_time_range(datetime(2026, 5, 1), END)
+        KaiExecutionContextAdapter(namespace="team-alpha").discover_by_time_range(datetime(2026, 5, 1), END)
 
 
 def test_pods_are_listed_once_per_namespace(mocker):
@@ -494,7 +635,9 @@ def test_pods_are_listed_once_per_namespace(mocker):
     ]
     run_mock = _wire_kubectl(mocker, pgs, [])
 
-    KaiExecutionContextAdapter().discover_by_time_range(START, END)
+    KaiExecutionContextAdapter().discover_by_ids(
+        ["team-alpha/pg-a", "team-alpha/pg-b", "team-beta/pg-c"]
+    )
 
     pod_lists = [c.args[0] for c in run_mock.call_args_list if "pods" in c.args[0]]
     assert len(pod_lists) == 2
@@ -504,20 +647,19 @@ def test_pods_are_listed_once_per_namespace(mocker):
 def test_podgroups_are_requested_by_full_resource_name(mocker):
     run_mock = _wire_kubectl(mocker, [], [])
 
-    KaiExecutionContextAdapter().discover_by_time_range(START, END)
+    KaiExecutionContextAdapter(namespace="team-alpha").discover_by_time_range(START, END)
 
     assert "podgroups.scheduling.run.ai" in run_mock.call_args_list[0].args[0]
 
 
-def test_namespace_scope_uses_minus_n_and_unscoped_uses_dash_a(mocker):
+def test_time_range_uses_configured_namespace(mocker):
     run_mock = _wire_kubectl(mocker, [], [])
     KaiExecutionContextAdapter(namespace="team-alpha").discover_by_time_range(START, END)
     scoped = run_mock.call_args_list[0].args[0]
     assert "-n" in scoped and "team-alpha" in scoped and "-A" not in scoped
 
-    run_mock.reset_mock()
-    KaiExecutionContextAdapter().discover_by_time_range(START, END)
-    assert "-A" in run_mock.call_args_list[0].args[0]
+    with pytest.raises(ValueError, match="requires eca.kai.namespace"):
+        KaiExecutionContextAdapter().discover_by_time_range(START, END)
 
 
 def test_bare_id_needs_a_namespace():
@@ -550,7 +692,7 @@ def test_failed_podgroup_list_fails_the_pass(mocker):
     mocker.patch("subprocess.run", side_effect=subprocess.TimeoutExpired(cmd=["kubectl"], timeout=60))
 
     with pytest.raises(KubectlError):
-        KaiExecutionContextAdapter().discover_by_time_range(START, END)
+        KaiExecutionContextAdapter(namespace="team-alpha").discover_by_time_range(START, END)
 
 
 def _fail_on(mocker, resource, stderr):
@@ -570,11 +712,31 @@ def test_denied_pod_list_fails_the_pass(mocker):
     _fail_on(mocker, "pods", "Error from server (Forbidden): pods is forbidden")
 
     with pytest.raises(KubectlError, match="Forbidden"):
-        KaiExecutionContextAdapter().discover_by_time_range(START, END)
+        KaiExecutionContextAdapter(namespace="team-alpha").discover_by_time_range(START, END)
 
 
 def test_denied_owner_lookup_fails_the_pass(mocker):
     _fail_on(mocker, "job.batch", "Error from server (Forbidden): jobs.batch is forbidden")
+
+    with pytest.raises(KubectlError, match="Forbidden"):
+        KaiExecutionContextAdapter().discover_by_ids(["team-alpha/pg-a"])
+
+
+def test_denied_jobset_lookup_fails_the_pass(mocker):
+    pg = _podgroup(owner_kind="JobSet")
+    run = _wire_kubectl(mocker, [pg], [])
+    router = run.side_effect
+
+    def _side_effect(cmd, **kwargs):
+        if "jobsets.jobset.x-k8s.io" in cmd:
+            raise subprocess.CalledProcessError(
+                returncode=1,
+                cmd=cmd,
+                stderr="Error from server (Forbidden): jobsets.jobset.x-k8s.io is forbidden",
+            )
+        return router(cmd, **kwargs)
+
+    run.side_effect = _side_effect
 
     with pytest.raises(KubectlError, match="Forbidden"):
         KaiExecutionContextAdapter().discover_by_ids(["team-alpha/pg-a"])
@@ -598,9 +760,7 @@ def test_registered_as_eca_component():
     component = mca_registry.get_component("eca", "kai")
 
     assert component.name == "kai"
-    assert {"ids", "kubectl_path", "kubeconfig", "context", "namespace", "timeout_seconds"} <= set(
-        component.schema
-    )
+    assert {"ids", "kubectl_path", "kubeconfig", "context", "namespace", "timeout_seconds"} <= set(component.schema)
 
 
 def test_builder_defaults_and_validation():
