@@ -13,8 +13,12 @@
 Run with:
     uv run pytest tests/test_typed_symptom_pipeline_benchmark.py \
         --benchmark-only --benchmark-json=.benchmarks/typed-symptom-baseline.json
+
+The memory case records peak Python-tracked memory in the benchmark JSON.
 """
 
+import gc
+import tracemalloc
 from copy import deepcopy
 
 import pytest
@@ -32,6 +36,8 @@ from test_support.helpers import make_node_to_ranks
 EVENT_COUNT = 256
 EVENT_NODE_COUNT = 32
 ATTRIBUTION_NODE_COUNT = 64
+MEMORY_NODE_COUNT = 512
+MEMORY_SOURCES_PER_SYMPTOM = 2
 # One warmup excludes DuckDB query compilation; five measured rounds keep the
 # baseline stable without making the focused benchmark slow.
 BENCHMARK_ROUNDS = 5
@@ -58,12 +64,18 @@ def _source(context: ObservationContext, index: int) -> Source:
     )
 
 
-def _build_bad_nodes(context: ObservationContext, node_names: list[str]) -> JobNodeAttributions:
+def _build_bad_nodes(
+    context: ObservationContext,
+    node_names: list[str],
+    *,
+    sources_per_symptom: int = 1,
+) -> JobNodeAttributions:
     """Build a representative per-node string symptom set.
 
     Args:
         context: Observation context used by all source evidence.
         node_names: Nodes to populate.
+        sources_per_symptom: Number of evidence sources for each symptom.
 
     Returns:
         Per-node attributions with GPU, system, network, and user symptoms.
@@ -78,8 +90,11 @@ def _build_bad_nodes(context: ObservationContext, node_names: list[str]) -> JobN
     bad_nodes = JobNodeAttributions()
     for node_index, node in enumerate(node_names):
         for symptom_index, symptom_id in enumerate(symptom_ids):
-            source_index = node_index * len(symptom_ids) + symptom_index
-            bad_nodes.add([node], SourceSet.new_one(symptom_id, _source(context, source_index)))
+            source_set = SourceSet(symptom_id)
+            first_source_index = (node_index * len(symptom_ids) + symptom_index) * sources_per_symptom
+            for source_offset in range(sources_per_symptom):
+                source_set.add(_source(context, first_source_index + source_offset))
+            bad_nodes.add([node], source_set)
     return bad_nodes
 
 
@@ -222,3 +237,51 @@ def test_attribute_runtime_baseline(benchmark, event_stream, dummy_ctx, simple_j
 
     assert result.outcome_attr.value().outcome == "Fail InfraHW"
     assert all(isinstance(symptom, str) for symptom in result.symptoms.symptoms())
+
+
+@pytest.mark.benchmark
+def test_attribute_peak_memory_baseline(benchmark, event_stream, dummy_ctx, simple_job_factory):
+    stream = event_stream("typed-symptom-memory-benchmark")
+    node_names = [f"node-{index:03d}" for index in range(MEMORY_NODE_COUNT)]
+    job_info = simple_job_factory(
+        state="FAILED",
+        node_to_ranks=make_node_to_ranks(node_names, 1),
+    )
+
+    def measure_peak_memory():
+        """Measure Python allocations while building and attributing the scale fixture.
+
+        Returns:
+            Final outcome and peak Python-tracked bytes.
+        """
+        gc.collect()
+        tracemalloc.start()
+        try:
+            bad_nodes = _build_bad_nodes(
+                dummy_ctx,
+                node_names,
+                sources_per_symptom=MEMORY_SOURCES_PER_SYMPTOM,
+            )
+            result = attribute(
+                event_stream=stream,
+                job_info=job_info,
+                bad_node_result=CalcBadNodesAttributionResult(my_bad_nodes=bad_nodes),
+                extract_job_metadata_from_logfile=False,
+            )
+            _, peak_bytes = tracemalloc.get_traced_memory()
+            return result.outcome_attr.value().outcome, peak_bytes
+        finally:
+            tracemalloc.stop()
+
+    outcome, peak_bytes = benchmark.pedantic(
+        measure_peak_memory,
+        rounds=1,
+        iterations=1,
+    )
+    benchmark.extra_info["peak_python_bytes"] = peak_bytes
+    benchmark.extra_info["nodes"] = MEMORY_NODE_COUNT
+    benchmark.extra_info["symptoms_per_node"] = 5
+    benchmark.extra_info["sources_per_symptom"] = MEMORY_SOURCES_PER_SYMPTOM
+
+    assert outcome == "Fail InfraHW"
+    assert peak_bytes > 0
