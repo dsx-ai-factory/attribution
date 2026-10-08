@@ -74,13 +74,15 @@ from attribution_blueprint.connectors.execution_contexts.kubernetes_client impor
     KubernetesClient,
     KubernetesClientError,
 )
-from attribution_blueprint.connectors.execution_contexts.kueue.helpers import (
+from attribution_blueprint.connectors.execution_contexts.kubernetes_helpers import (
     NODE_LOSS_DISRUPTION_REASONS as _NODE_LOSS_DISRUPTION_REASONS,
+    pod_node_failure_reason as _pod_node_failure_reason,
+)
+from attribution_blueprint.connectors.execution_contexts.kueue.helpers import (
     POD_JOBSET_LABEL as _POD_JOBSET_LABEL,
     jobs_for_workload as _jobs_for_workload,
     owner_job_uids as _owner_job_uids,
     pod_matches_selector as _pod_matches_selector,
-    pod_node_failure_reason as _pod_node_failure_reason,
     pod_selector_for as _pod_selector_for,
 )
 from attribution_blueprint.connectors.execution_contexts.kueue.pod_placement.models import (
@@ -242,7 +244,7 @@ def _condition_time(conditions: list[dict], cond_type: str) -> datetime | None:
 def _pod_reports_node_failure(pod: dict) -> bool:
     """Return whether a Pod carries a node-loss signal.
 
-    Delegates to the shared `helpers.pod_node_failure_reason` so this check
+    Delegates to the shared `kubernetes_helpers.pod_node_failure_reason` so this check
     and the placement recorder's copy (which captures the same evidence
     before Pod GC removes it) can never drift apart.
     """
