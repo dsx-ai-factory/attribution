@@ -73,6 +73,16 @@ to the rules engine as a string. When no stronger evidence exists,
 `COMPLETED` produces the successful fallback symptom. Other unrecognized
 states produce the failed fallback symptom.
 
+`cancelled_by` is a resolved identity, not a raw scheduler field. The bundled
+rules match `root` for an operator cancellation and `Timeout` for the scheduler
+enforcing the time limit; an identity they do not recognize is treated as the
+user who cancelled. Slurm's `sacct` reports `CANCELLED by <uid>`, and the
+Blueprint's Slurm connector resolves UID 0 before it sends the workload (see
+[SLURM Cancellations](SCHEDULER_REQUIREMENTS.md#slurm-cancellations)). A
+client that builds workloads from `sacct` itself must apply the same
+resolution, or a root `scancel` arrives as `cancelled_by: "0"` and is
+attributed to the user.
+
 Creating an identical attributor while the first one still exists returns
 HTTP 409 (`DuplicateAttributorError`). The response's `att_id` identifies the
 existing session; it does not establish that the session is stale or safe to
