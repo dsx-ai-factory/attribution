@@ -38,6 +38,15 @@ EVENT_NODE_COUNT = 32
 ATTRIBUTION_NODE_COUNT = 64
 MEMORY_NODE_COUNT = 512
 MEMORY_SOURCES_PER_SYMPTOM = 2
+# Representative GPU, system, network, and user symptoms used by both
+# attribution benchmarks.
+SYMPTOM_IDS = (
+    "ECC Error",
+    "XID-79-GPU_HAS_FALLEN_OFF_THE_BUS",
+    "kernel panic",
+    "Connection reset by peer",
+    "Python Exception",
+)
 # One warmup excludes DuckDB query compilation; five measured rounds keep the
 # baseline stable without making the focused benchmark slow.
 BENCHMARK_ROUNDS = 5
@@ -80,18 +89,11 @@ def _build_bad_nodes(
     Returns:
         Per-node attributions with GPU, system, network, and user symptoms.
     """
-    symptom_ids = (
-        "ECC Error",
-        "XID-79-GPU_HAS_FALLEN_OFF_THE_BUS",
-        "kernel panic",
-        "Connection reset by peer",
-        "Python Exception",
-    )
     bad_nodes = JobNodeAttributions()
     for node_index, node in enumerate(node_names):
-        for symptom_index, symptom_id in enumerate(symptom_ids):
+        for symptom_index, symptom_id in enumerate(SYMPTOM_IDS):
             source_set = SourceSet(symptom_id)
-            first_source_index = (node_index * len(symptom_ids) + symptom_index) * sources_per_symptom
+            first_source_index = (node_index * len(SYMPTOM_IDS) + symptom_index) * sources_per_symptom
             for source_offset in range(sources_per_symptom):
                 source_set.add(_source(context, first_source_index + source_offset))
             bad_nodes.add([node], source_set)
@@ -254,7 +256,6 @@ def test_attribute_peak_memory_baseline(benchmark, event_stream, dummy_ctx, simp
         Returns:
             Final outcome and peak Python-tracked bytes.
         """
-        gc.collect()
         tracemalloc.start()
         try:
             bad_nodes = _build_bad_nodes(
@@ -273,6 +274,7 @@ def test_attribute_peak_memory_baseline(benchmark, event_stream, dummy_ctx, simp
         finally:
             tracemalloc.stop()
 
+    gc.collect()
     outcome, peak_bytes = benchmark.pedantic(
         measure_peak_memory,
         rounds=1,
@@ -280,7 +282,7 @@ def test_attribute_peak_memory_baseline(benchmark, event_stream, dummy_ctx, simp
     )
     benchmark.extra_info["peak_python_bytes"] = peak_bytes
     benchmark.extra_info["nodes"] = MEMORY_NODE_COUNT
-    benchmark.extra_info["symptoms_per_node"] = 5
+    benchmark.extra_info["symptoms_per_node"] = len(SYMPTOM_IDS)
     benchmark.extra_info["sources_per_symptom"] = MEMORY_SOURCES_PER_SYMPTOM
 
     assert outcome == "Fail InfraHW"
