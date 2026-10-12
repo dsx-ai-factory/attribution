@@ -420,3 +420,13 @@ def test_relative_std_out_is_anchored_to_work_dir(mocker):
     _mock_sacct(mocker, _row("9500", "9500", "s-rel", "COMPLETED", "12:00:00", "13:00:00", "logs/%j.out", "/w/run"))
     contexts = SlurmExecutionContextAdapter().discover_by_ids(["9500"])
     assert contexts[0]["std_out"] == "/w/run/logs/9500.out"
+
+
+def test_step_log_tokens_drop_the_step_suffix(mocker):
+    """%j and %A never carry a step's `.N` suffix; %A of a non-array job is its job id."""
+    rows = _row("9600", "9600", "s-tok", "FAILED", "12:00:00", "13:00:00", "/l/%j-%A.out")
+    rows += _row("9600.1", "9600.1", "s-tok", "FAILED", "12:30:00", "12:40:00", "/l/%j.step%A.out")
+    _mock_sacct(mocker, rows)
+    by_id = {c["id"]: c for c in SlurmExecutionContextAdapter().discover_by_ids(["9600"])}
+    assert by_id["s-tok"]["std_out"] == "/l/9600-9600.out"
+    assert by_id["s-tok.1"]["std_out"] == "/l/9600.step9600.out"
