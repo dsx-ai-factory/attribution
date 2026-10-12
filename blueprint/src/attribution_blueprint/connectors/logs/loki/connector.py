@@ -12,6 +12,7 @@ from loguru import logger
 from attribution_blueprint.connectors.auth import Auth, credential_identity
 from attribution_blueprint.connectors.logs import log_observation
 from attribution_blueprint.connectors.logs.loki.client import (
+    DEFAULT_MAX_PAGES,
     LokiEntry,
     LokiQueryBudgetExceeded,
     LokiQueryClient,
@@ -56,6 +57,13 @@ _RE2_METAS = frozenset(r".\+*?()[]{}|^$")
 
 def _re2_escape(s: str) -> str:
     return "".join("\\" + c if c in _RE2_METAS else c for c in s)
+
+
+# Hard cap on requests per query, across all of its 30-minute windows, so a
+# pathologically chatty query can't run forever. Every request counts, empty
+# windows included, so 500 pages cover 250 hours of a quiet job; at
+# DEFAULT_LIMIT=5000 a chatty one stops after 2.5M entries.
+MAX_PAGES = DEFAULT_MAX_PAGES
 
 
 def _as_str(value: object) -> str:
@@ -176,6 +184,7 @@ class LokiConnector:
             auth=auth,
             timeout_seconds=timeout_seconds,
             limit=limit,
+            max_pages=MAX_PAGES,
             node_label=node_label,
             session=session,
         )
@@ -198,7 +207,9 @@ class LokiConnector:
                 logger.warning(f"loki template missing kwarg {e}; skipping query")
                 continue
             queries.append(self._inject_node_filter(query, nodes))
-        entries = self._query_batch(queries, start, end)
+        # Newest window first, so the page cap drops the oldest entries, not
+        # the end of the job where failures show up.
+        entries = self._query_batch(queries, start, end, newest_first=True)
         if not entries:
             return []
         return [self._observation(entries, context)]
@@ -305,12 +316,14 @@ class LokiConnector:
             [self._inject_node_filter(query, chunk) for query in rendered for chunk in chunks] if chunks else rendered
         )
 
-    def _query_batch(self, queries: list[str], start: datetime, end: datetime) -> list[LokiEntry]:
+    def _query_batch(
+        self, queries: list[str], start: datetime, end: datetime, *, newest_first: bool = False
+    ) -> list[LokiEntry]:
         """Run every query over one window; merge, dedup, and order the entries."""
 
         def run(query: str) -> list[LokiEntry]:
             try:
-                return self._query_range(query, start, end)
+                return self._query_range(query, start, end, newest_first=newest_first)
             except LokiQueryBudgetExceeded as exc:
                 logger.warning(f"loki query {query[:80]!r} truncated: {exc}; keeping {len(exc.entries)} entries")
                 return list(exc.entries)
@@ -337,14 +350,16 @@ class LokiConnector:
         merged.sort(key=lambda entry: entry["timestamp"])
         return merged
 
-    def _query_range(self, query: str, start: datetime, end: datetime) -> list[LokiEntry]:
+    def _query_range(
+        self, query: str, start: datetime, end: datetime, *, newest_first: bool = False
+    ) -> list[LokiEntry]:
         """Read one inclusive window through the range cache when one is configured."""
         if self._range_cache is None:
-            return self._client.query_range(query, start, end)
+            return self._client.query_range(query, start, end, newest_first=newest_first)
 
         def fetch_missing(rendered: str, range_start: datetime, range_end: datetime) -> list[LokiEntry]:
             range_end_ns = datetime_to_nanoseconds(range_end)
-            entries = self._client.query_range(rendered, range_start, range_end)
+            entries = self._client.query_range(rendered, range_start, range_end, newest_first=newest_first)
             return [entry for entry in entries if entry["timestamp"] < range_end_ns]
 
         return self._range_cache.query(

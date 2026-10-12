@@ -753,3 +753,114 @@ def test_bundled_syslog_queries_cover_panic_gsp_reboot_and_link_down():
         r"Link\s+DOWN\b",
     ):
         assert term in queries
+
+
+def test_long_window_is_queried_in_thirty_minute_slices_newest_first(mocker):
+    post = _mock_response(mocker, [])
+    conn = LokiConnector(
+        endpoint="https://loki.example",
+        auth=TokenAuth("tok"),
+        source=Source.SYSLOG,
+        query_kwargs={"service_name": "x"},
+        templates={Source.SYSLOG: ['{{service_name="{service_name}"}}']},
+    )
+    ctx = _ctx()
+    ctx["end_time"] = datetime(2026, 5, 1, 13, 10, 0, tzinfo=timezone.utc)
+    conn.collect(ctx)
+    windows = [(c.kwargs["data"]["start"], c.kwargs["data"]["end"]) for c in post.call_args_list]
+    s = int(ctx["start_time"].timestamp() * 1e9)
+    half_hour = 30 * 60 * 10**9
+    e = int(ctx["end_time"].timestamp() * 1e9)
+    # Newest first, so the page cap drops the oldest entries. Windows do not overlap.
+    assert windows == [(e - half_hour, e), (e - 2 * half_hour - 1, e - half_hour - 1), (s, e - 2 * half_hour - 2)]
+
+
+def test_page_cap_bounds_all_windows_of_a_long_query(mocker):
+    """Every multi-instant response is saturated, so only the overall MAX_PAGES cap stops the walk."""
+    from attribution_blueprint.connectors.logs.loki.connector import MAX_PAGES
+
+    def saturated(url, data, timeout):
+        fake = mocker.Mock()
+        # A single instant comes back unsaturated, so bisection can always finish it.
+        values = [[str(data["end"]), "x"]] if data["start"] < data["end"] else []
+        fake.json.return_value = {"data": {"result": [{"stream": {"host_name": "n1"}, "values": values}]}}
+        return fake
+
+    post = mocker.patch("requests.Session.post", side_effect=saturated)
+    conn = LokiConnector(
+        endpoint="https://loki.example",
+        auth=TokenAuth("tok"),
+        source=Source.SYSLOG,
+        query_kwargs={"service_name": "x"},
+        templates={Source.SYSLOG: ['{{service_name="{service_name}"}}']},
+        limit=1,
+    )
+    ctx = _ctx()
+    ctx["end_time"] = datetime(2026, 5, 8, 12, 0, 0, tzinfo=timezone.utc)  # 7 days = 336 windows
+    conn.collect(ctx)
+    assert post.call_count == MAX_PAGES == 500
+    # The cap spent its budget on the newest entries.
+    assert post.call_args_list[0].kwargs["data"]["end"] == int(ctx["end_time"].timestamp() * 1e9)
+
+
+def test_quiet_week_long_query_visits_every_window_within_budget(mocker):
+    """Empty windows cost a page each; a 7-day job (336 windows) still fits the budget."""
+    post = _mock_response(mocker, [])
+    warning = mocker.patch("attribution_blueprint.connectors.logs.loki.connector.logger.warning")
+    conn = LokiConnector(
+        endpoint="https://loki.example",
+        auth=TokenAuth("tok"),
+        source=Source.SYSLOG,
+        query_kwargs={"service_name": "x"},
+        templates={Source.SYSLOG: ['{{service_name="{service_name}"}}']},
+    )
+    ctx = _ctx()
+    ctx["end_time"] = datetime(2026, 5, 8, 12, 0, 0, tzinfo=timezone.utc)
+    conn.collect(ctx)
+    assert post.call_count == 336
+    assert post.call_args_list[-1].kwargs["data"]["start"] == int(ctx["start_time"].timestamp() * 1e9)
+    warning.assert_not_called()
+
+
+@pytest.mark.parametrize(("cap", "warned"), [(3, False), (2, True)])
+def test_page_cap_warns_only_when_windows_remain(mocker, cap, warned):
+    """Three quiet windows: a cap of exactly 3 finishes cleanly, a cap of 2 truncates."""
+    mocker.patch("attribution_blueprint.connectors.logs.loki.connector.MAX_PAGES", cap)
+    _mock_response(mocker, [])
+    warning = mocker.patch("attribution_blueprint.connectors.logs.loki.connector.logger.warning")
+    conn = LokiConnector(
+        endpoint="https://loki.example",
+        auth=TokenAuth("tok"),
+        source=Source.SYSLOG,
+        query_kwargs={"service_name": "x"},
+        templates={Source.SYSLOG: ['{{service_name="{service_name}"}}']},
+    )
+    ctx = _ctx()
+    ctx["end_time"] = datetime(2026, 5, 1, 13, 30, 0, tzinfo=timezone.utc)  # 90 minutes
+    conn.collect(ctx)
+    assert warning.called == warned
+
+
+def test_page_cap_warns_when_last_window_is_cut_short(mocker):
+    """Running out mid-window is truncation even when no later window remains."""
+    mocker.patch("attribution_blueprint.connectors.logs.loki.connector.MAX_PAGES", 2)
+
+    def saturated(url, data, timeout):
+        fake = mocker.Mock()
+        fake.json.return_value = {
+            "data": {"result": [{"stream": {"host_name": "n1"}, "values": [[str(data["end"]), "x"]]}]}
+        }
+        return fake
+
+    mocker.patch("requests.Session.post", side_effect=saturated)
+    warning = mocker.patch("attribution_blueprint.connectors.logs.loki.connector.logger.warning")
+    conn = LokiConnector(
+        endpoint="https://loki.example",
+        auth=TokenAuth("tok"),
+        source=Source.SYSLOG,
+        query_kwargs={"service_name": "x"},
+        templates={Source.SYSLOG: ['{{service_name="{service_name}"}}']},
+        limit=1,
+    )
+    conn.collect(_ctx())
+    warning.assert_called_once()
