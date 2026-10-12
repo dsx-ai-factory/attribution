@@ -50,6 +50,10 @@ class ExecutionContext(TypedDict):
     cancelled_by: NotRequired[str]
     time_limit: NotRequired[int]
     gpu_count: NotRequired[int]
+    # Enclosing allocation window when it differs from start_time/end_time
+    # (a Slurm step). Sent as the service's job window.
+    job_start_time: NotRequired[datetime]
+    job_end_time: NotRequired[datetime]
     # Per-Pod scheduler placement with source provenance. Kueue populates
     # this from live Pods and durable PlacementRecords when available.
     pod_placements: NotRequired[list[dict]]

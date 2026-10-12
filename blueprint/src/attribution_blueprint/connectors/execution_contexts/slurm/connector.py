@@ -54,6 +54,10 @@ class SlurmExecutionContext(TypedDict):
     std_out: NotRequired[str]
     std_err: NotRequired[str]
     work_dir: NotRequired[str]
+    # Allocation window of a step's head row; the service uses it as the job
+    # window (time-limit checks) while start_time/end_time stay the step's.
+    job_start_time: NotRequired[datetime]
+    job_end_time: NotRequired[datetime]
 
 
 # JobName: needed for %x token. JobIDRaw: internal numeric jobid that Slurm
@@ -328,6 +332,8 @@ def _apply_head_row_context(contexts: list[SlurmExecutionContext]) -> list[Slurm
     """Give each step row the job-level facts sacct records only on its head row.
 
     - Steps without their own StdOut/StdErr inherit the head row's paths.
+    - The head row's allocation window becomes the step's job window when the
+      step starts inside it.
     """
     heads = {ctx["sluid"]: ctx for ctx in contexts if "step_id" not in ctx}
     for step in contexts:
@@ -340,6 +346,9 @@ def _apply_head_row_context(contexts: list[SlurmExecutionContext]) -> list[Slurm
         for field in ("std_out", "std_err"):
             if field not in step and field in head:
                 step[field] = head[field]
+        if head["start_time"] <= step["start_time"] <= head["end_time"]:
+            step["job_start_time"] = head["start_time"]
+            step["job_end_time"] = head["end_time"]
     return contexts
 
 

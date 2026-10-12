@@ -1076,3 +1076,14 @@ def test_batch_mode_orders_results_by_end_time_and_respects_max_contexts():
         ["early", "mid"],
         ["late"],
     ]
+
+
+def test_build_attributor_info_sends_step_allocation_as_job_window():
+    ctx = _make_ctx("step")
+    ctx["job_start_time"] = ctx["start_time"] - timedelta(minutes=5)
+    ctx["job_end_time"] = ctx["end_time"] + timedelta(minutes=5)
+    workload = _make_pipeline(eca=MagicMock(), log_collectors=[])._build_attributor_info(ctx).workload
+    assert workload.job_start_time == ctx["job_start_time"]
+    assert workload.job_end_time == ctx["job_end_time"]
+    assert workload.interest_start_time == ctx["start_time"]
+    assert workload.interest_end_time == ctx["end_time"]
