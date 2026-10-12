@@ -230,6 +230,15 @@ class AttributionOrchestrator:
         collectors: list,
         precollected: Mapping[int, Mapping[str, list[dict]] | Exception] | None = None,
     ) -> tuple[dict, bool] | None:
+        # Scheduler accounting can record an end before the start. Telemetry
+        # cannot be attributed to that window, and swapping or clamping the
+        # bounds would invent one, so skip the context before any collection.
+        if ctx["end_time"] < ctx["start_time"]:
+            logger.error(
+                f"skipping ctx {ctx.get('id', '?')}: end_time {ctx['end_time'].isoformat()} "
+                f"is before start_time {ctx['start_time'].isoformat()}"
+            )
+            return None
         # Collect before opening a session so collection/dump failures cannot
         # strand a newly created handle. A duplicate may still do this work.
         connector_reports: list[ConnectorReport] = []
