@@ -1,6 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
+import pwd
 import re
 import subprocess
 from datetime import datetime
@@ -130,7 +131,7 @@ def _parse_dt(value: str, cluster_tz: ZoneInfo | None = None) -> datetime | None
 
 
 def _parse_state(state: str) -> tuple[str, str | None]:
-    # "CANCELLED by 12345" -> ("CANCELLED", "12345")
+    # "CANCELLED by 0" -> ("CANCELLED", "root"); unknown uids stay numeric.
     # The trailing "+" sacct uses to mark "still cleaning up" (e.g.
     # "CANCELLED+" or "COMPLETING+") is normalized away — it carries
     # liveness signal, not classification signal, and two attribution runs
@@ -138,8 +139,24 @@ def _parse_state(state: str) -> tuple[str, str | None]:
     # finished its bookkeeping when the row was read.
     state = state.rstrip("+")
     if state.startswith("CANCELLED by "):
-        return "CANCELLED", state.removeprefix("CANCELLED by ").strip()
+        return "CANCELLED", _resolve_canceller(state.removeprefix("CANCELLED by ").strip())
     return state, None
+
+
+def _resolve_canceller(token: str) -> str:
+    """Map a sacct canceller uid to its username.
+
+    sacct embeds a numeric uid (`CANCELLED by 0`). The attribution rules key
+    on usernames (for example `root`), so resolve digits through the passwd
+    database. Unknown uids and non-numeric tokens stay unchanged.
+    """
+    if not token.isdigit():
+        return token
+    try:
+        return pwd.getpwuid(int(token)).pw_name
+    except KeyError:
+        logger.warning(f"no passwd entry for cancelled_by uid {token}; keeping numeric form")
+        return token
 
 
 def _anchor(path: str, work_dir: str) -> str:

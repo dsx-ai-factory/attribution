@@ -20,6 +20,7 @@ Run the blueprint on a host where all of the following are true:
 - SLURM accounting history still contains the jobs you want to attribute (see `MaxJobAge` above)
 - `sacct` can return `SLUID`
 - the host can read application log paths returned by `StdOut` and `StdErr` if using local file APPLOG collection. The blueprint joins relative paths to the job's `WorkDir`.
+- the host resolves cluster uids to usernames (for example through NSS or SSSD), so a `CANCELLED by <uid>` state reaches the service as a username such as `root`
 - the host can reach the attribution service URL over HTTP. The blueprint talks to the service over HTTP only; it has no direct dependency on the service's storage layer.
 - the host can reach Loki, Prometheus, or Mimir if those collectors are configured
 
