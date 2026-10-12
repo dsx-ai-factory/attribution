@@ -411,9 +411,11 @@ class AttributionOrchestrator:
             "framework": ctx.get("workload_framework", ""),
             "name": ctx.get("name", ""),
             "username": ctx.get("user_name", ""),
-            "job_start_time": ctx["start_time"].isoformat(),
+            # A Slurm step's job window is its allocation; the interest window
+            # stays the step's own interval.
+            "job_start_time": ctx.get("job_start_time", ctx["start_time"]).isoformat(),
             "timezone": _service_timezone_name(ctx["start_time"], ctx["end_time"], ctx.get("timezone")),
-            "job_end_time": ctx["end_time"].isoformat(),
+            "job_end_time": ctx.get("job_end_time", ctx["end_time"]).isoformat(),
             "interest_start_time": ctx["start_time"].isoformat(),
             "interest_end_time": ctx["end_time"].isoformat(),
             "nodes": node_to_ranks,
