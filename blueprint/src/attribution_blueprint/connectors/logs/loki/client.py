@@ -12,8 +12,9 @@
 
 The client owns the mechanics of reading a complete window from Loki:
 
-* Forward-ordered `query_range` requests capped at `query_window` each, so no
-  single request scans an unbounded range.
+* `query_range` requests capped at `query_window` each, so no single request
+  scans an unbounded range. Windows run oldest first, or newest first with
+  `newest_first=True` so a spent budget drops the oldest entries instead.
 * Bisection of saturated pages (a page that returns exactly `limit` entries
   hides its tail) instead of paging backwards, which keeps equal timestamps.
 * One page budget per `query_range` call. When it runs out the partial
@@ -81,6 +82,11 @@ def node_from_labels(
     return None
 
 
+def _in_time_order(parts: list[list[LokiEntry]], newest_first: bool) -> list[LokiEntry]:
+    """Join parts fetched in read order into timestamp order."""
+    return [entry for part in (reversed(parts) if newest_first else parts) for entry in part]
+
+
 class LokiQueryClient:
     """Fetch complete Loki windows with bounded, bisected, forward requests."""
 
@@ -121,7 +127,7 @@ class LokiQueryClient:
         self._node_label_fallbacks = tuple(node_label_fallbacks)
         self._session = build_session(auth) if session is None else session
 
-    def query_range(self, query: str, start: datetime, end: datetime) -> list[LokiEntry]:
+    def query_range(self, query: str, start: datetime, end: datetime, *, newest_first: bool = False) -> list[LokiEntry]:
         """Return every entry for `query` between `start` and `end`, both inclusive.
 
         Entries are ordered by timestamp. Raises `LokiQueryBudgetExceeded`
@@ -131,26 +137,37 @@ class LokiQueryClient:
         end = assert_aware(end, "end")
         if end < start:
             raise ValueError("end must not precede start")
-        return self._fetch_windows(query, datetime_to_nanoseconds(start), datetime_to_nanoseconds(end))
+        return self._fetch_windows(query, datetime_to_nanoseconds(start), datetime_to_nanoseconds(end), newest_first)
 
-    def _fetch_windows(self, query: str, start_ns: int, end_ns: int) -> list[LokiEntry]:
+    def _fetch_windows(self, query: str, start_ns: int, end_ns: int, newest_first: bool) -> list[LokiEntry]:
         budget = [self._max_pages]
-        entries: list[LokiEntry] = []
-        window_start = start_ns
-        try:
+        span = self._query_window_ns
+        windows: list[tuple[int, int]] = []
+        if newest_first:
+            # Same span per window, anchored at `end_ns` and read newest first.
+            window_end = end_ns
+            while window_end >= start_ns:
+                window_start = start_ns if span is None else max(window_end - span, start_ns)
+                windows.append((window_start, window_end))
+                window_end = window_start - 1
+        else:
+            window_start = start_ns
             while window_start <= end_ns:
-                window_end = (
-                    end_ns if self._query_window_ns is None else min(window_start + self._query_window_ns, end_ns)
-                )
-                entries.extend(self._fetch_interval(query, window_start, window_end, budget))
-                if window_end == end_ns:
-                    break
+                window_end = end_ns if span is None else min(window_start + span, end_ns)
+                windows.append((window_start, window_end))
                 window_start = window_end + 1
+        fetched: list[list[LokiEntry]] = []
+        try:
+            for window_start, window_end in windows:
+                fetched.append(self._fetch_interval(query, window_start, window_end, budget, newest_first))
         except LokiQueryBudgetExceeded as exc:
-            raise LokiQueryBudgetExceeded(entries + exc.entries, str(exc)) from None
-        return entries
+            fetched.append(exc.entries)
+            raise LokiQueryBudgetExceeded(_in_time_order(fetched, newest_first), str(exc)) from None
+        return _in_time_order(fetched, newest_first)
 
-    def _fetch_interval(self, query: str, start_ns: int, end_ns: int, budget: list[int]) -> list[LokiEntry]:
+    def _fetch_interval(
+        self, query: str, start_ns: int, end_ns: int, budget: list[int], newest_first: bool = False
+    ) -> list[LokiEntry]:
         if budget[0] <= 0:
             raise LokiQueryBudgetExceeded(
                 [], f"Loki page budget of {self._max_pages} exhausted before the window was complete"
@@ -164,15 +181,18 @@ class LokiQueryClient:
                 f"Loki pagination cannot split a saturated timestamp {start_ns}: raise limit above {self._limit}"
             )
         midpoint = start_ns + (end_ns - start_ns) // 2
+        halves = [(start_ns, midpoint), (midpoint + 1, end_ns)]
+        if newest_first:
+            halves.reverse()
         try:
-            left = self._fetch_interval(query, start_ns, midpoint, budget)
+            first = self._fetch_interval(query, *halves[0], budget, newest_first)
         except LokiQueryBudgetExceeded as exc:
             raise LokiQueryBudgetExceeded(exc.entries if exc.entries else page, str(exc)) from None
         try:
-            right = self._fetch_interval(query, midpoint + 1, end_ns, budget)
+            second = self._fetch_interval(query, *halves[1], budget, newest_first)
         except LokiQueryBudgetExceeded as exc:
-            raise LokiQueryBudgetExceeded(left + exc.entries, str(exc)) from None
-        return left + right
+            raise LokiQueryBudgetExceeded(_in_time_order([first, exc.entries], newest_first), str(exc)) from None
+        return _in_time_order([first, second], newest_first)
 
     def _fetch_page(self, query: str, start_ns: int, end_ns: int) -> list[LokiEntry]:
         response = self._session.post(
