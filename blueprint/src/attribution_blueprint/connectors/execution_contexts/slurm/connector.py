@@ -211,7 +211,10 @@ def _parse_row(row: str, cluster_tz: ZoneInfo | None = None) -> SlurmExecutionCo
     step_id: str | None = None
     if "." in job_id:
         _, _, suffix = job_id.partition(".")
-        if suffix.isdigit():
+        # Heterogeneous steps render component M of step N as `N+M`; keep the
+        # full suffix so components do not collapse into one context.
+        step, plus, component = suffix.partition("+")
+        if step.isdigit() and (plus == "" or component.isdigit()):
             step_id = suffix
         else:
             # Unknown suffix variant — skip to avoid producing a context with
