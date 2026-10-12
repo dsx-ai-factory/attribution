@@ -98,6 +98,7 @@ def _job(
     reason=None,
     suspended=False,
     jobset=None,
+    deadline_seconds=None,
 ):
     status = {}
     if completed:
@@ -114,7 +115,8 @@ def _job(
         jobset_name, jobset_uid = jobset
         metadata["labels"] = {"jobset.sigs.k8s.io/jobset-name": jobset_name}
         metadata["ownerReferences"] = [{"kind": "JobSet", "name": jobset_name, "uid": jobset_uid, "controller": True}]
-    return {"metadata": metadata, "status": status}
+    spec = {"activeDeadlineSeconds": deadline_seconds} if deadline_seconds is not None else {}
+    return {"metadata": metadata, "spec": spec, "status": status}
 
 
 def _jobset(name, uid, completed_at=None, failed_at=None, namespace="team-alpha"):
@@ -307,6 +309,22 @@ def test_job_owner_state(mocker, owner, state, owner_state):
     assert ctx["owner_state"] == owner_state
 
 
+def test_job_deadline_is_forwarded_in_minutes(mocker):
+    owner = _job(
+        "pg-a-job",
+        "uid-job-uid-pg-a",
+        failed_at="2026-05-01T12:45:00Z",
+        reason="DeadlineExceeded",
+        deadline_seconds=30,
+    )
+    _wire_kubectl(mocker, [_podgroup()], [], [owner])
+
+    [ctx] = KaiExecutionContextAdapter().discover_by_ids(["team-alpha/pg-a"])
+
+    assert ctx["state"] == "TIMEOUT"
+    assert ctx["time_limit"] == 1
+
+
 @pytest.mark.parametrize(
     "owner, state, owner_state",
     [
@@ -334,6 +352,42 @@ def test_failed_jobset_reports_the_failed_reason(mocker):
 
     assert ctx["state"] == "FAILED"
     assert ctx["owner_state"] == "Failed:ReachedMaxRestarts"
+
+
+def test_jobset_uses_verified_child_deadline_and_failure_reason(mocker):
+    jobset = _jobset("pg-a-job", "uid-job-uid-pg-a", failed_at="2026-05-01T12:45:00Z")
+    jobset["status"]["conditions"][0]["reason"] = "ReachedMaxRestarts"
+    children = [
+        _job(
+            "worker-0",
+            "uid-worker-0",
+            failed_at="2026-05-01T12:40:00Z",
+            reason="DeadlineExceeded",
+            jobset=("pg-a-job", "uid-job-uid-pg-a"),
+            deadline_seconds=90,
+        ),
+        _job(
+            "worker-1",
+            "uid-worker-1",
+            jobset=("pg-a-job", "uid-job-uid-pg-a"),
+            deadline_seconds=300,
+        ),
+        _job(
+            "stale-worker",
+            "uid-stale",
+            failed_at="2026-05-01T12:30:00Z",
+            reason="BackoffLimitExceeded",
+            jobset=("pg-a-job", "old-jobset-uid"),
+            deadline_seconds=30,
+        ),
+    ]
+    _wire_kubectl(mocker, [_podgroup(owner_kind="JobSet")], [], children, [jobset])
+
+    [ctx] = KaiExecutionContextAdapter().discover_by_ids(["team-alpha/pg-a"])
+
+    assert ctx["state"] == "TIMEOUT"
+    assert ctx["owner_state"] == "Failed:ReachedMaxRestarts"
+    assert ctx["time_limit"] == 2
 
 
 def _lost_pod(name, node):
@@ -846,9 +900,7 @@ def test_pods_are_listed_once_per_namespace(mocker):
     ]
     fake = _wire_kubectl(mocker, pgs, [])
 
-    KaiExecutionContextAdapter().discover_by_ids(
-        ["team-alpha/pg-a", "team-alpha/pg-b", "team-beta/pg-c"]
-    )
+    KaiExecutionContextAdapter().discover_by_ids(["team-alpha/pg-a", "team-alpha/pg-b", "team-beta/pg-c"])
 
     pod_lists = [call for call in fake.calls if call["op"] == "list" and call["kind"] == "Pod"]
     assert len(pod_lists) == 2
