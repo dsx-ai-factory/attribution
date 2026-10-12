@@ -466,3 +466,15 @@ def test_steps_inherit_head_log_paths(mocker):
     by_id = {c["id"]: c for c in SlurmExecutionContextAdapter().discover_by_ids(["9610"])}
     assert by_id["s-inh.0"]["std_out"] == "/l/9610.out"
     assert by_id["s-inh.1"]["std_out"] == "/l/9610.step.out"
+
+
+def test_step_gets_head_allocation_as_job_window(mocker):
+    rows = _row("9620", "9620", "s-win", "TIMEOUT", "12:00:00", "13:00:00")
+    rows += _row("9620.0", "9620.0", "s-win", "FAILED", "12:00:10", "12:59:00")
+    _mock_sacct(mocker, rows)
+    by_id = {c["id"]: c for c in SlurmExecutionContextAdapter().discover_by_ids(["9620"])}
+    head, step = by_id["s-win"], by_id["s-win.0"]
+    assert step["job_start_time"] == head["start_time"]
+    assert step["job_end_time"] == head["end_time"]
+    assert step["start_time"] != head["start_time"]
+    assert "job_start_time" not in head
