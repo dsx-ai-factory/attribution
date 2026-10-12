@@ -478,3 +478,37 @@ def test_step_gets_head_allocation_as_job_window(mocker):
     assert step["job_end_time"] == head["end_time"]
     assert step["start_time"] != head["start_time"]
     assert "job_start_time" not in head
+
+
+def test_requeued_head_marks_bare_cancelled_step_requeued(mocker):
+    rows = _row("9700", "9700", "s-rq", "REQUEUED", "12:00:00", "13:00:00")
+    rows += _row("9700.0", "9700.0", "s-rq", "CANCELLED", "12:00:10", "13:00:00")
+    rows += _row("9700.1", "9700.1", "s-rq", "CANCELLED by 4243", "12:00:10", "13:00:00")
+    mocker.patch("pwd.getpwuid", side_effect=KeyError(4243))
+    _mock_sacct(mocker, rows)
+    by_id = {c["id"]: c for c in SlurmExecutionContextAdapter().discover_by_ids(["9700"])}
+    assert by_id["s-rq.0"]["state"] == "REQUEUED"
+    # An explicit canceller is not scheduler teardown.
+    assert by_id["s-rq.1"]["state"] == "CANCELLED"
+
+
+def test_timeout_head_marks_its_only_step_timeout(mocker):
+    rows = _row("9800", "9800", "s-to", "TIMEOUT", "12:00:00", "13:00:00")
+    rows += _row("9800.0", "9800.0", "s-to", "CANCELLED", "12:00:10", "13:00:00")
+    _mock_sacct(mocker, rows)
+    by_id = {c["id"]: c for c in SlurmExecutionContextAdapter().discover_by_ids(["9800"])}
+    assert by_id["s-to.0"]["state"] == "TIMEOUT"
+    # With several steps the timeout cannot be pinned on one; the fixture's
+    # TIMEOUT attempt has two COMPLETED steps that stay COMPLETED.
+    _mock_sacct(mocker, FIXTURE.read_text())
+    steps = [c for c in SlurmExecutionContextAdapter().discover_by_ids(["2001"]) if c["sluid"] == "sluid-rq-2001b"]
+    assert {c["state"] for c in steps if "step_id" in c} == {"COMPLETED"}
+
+
+def test_timeout_head_leaves_several_failed_steps_alone(mocker):
+    rows = _row("9810", "9810", "s-to2", "TIMEOUT", "12:00:00", "13:00:00")
+    rows += _row("9810.0", "9810.0", "s-to2", "FAILED", "12:00:10", "12:30:00")
+    rows += _row("9810.1", "9810.1", "s-to2", "CANCELLED", "12:30:10", "13:00:00")
+    _mock_sacct(mocker, rows)
+    steps = [c for c in SlurmExecutionContextAdapter().discover_by_ids(["9810"]) if "step_id" in c]
+    assert sorted(c["state"] for c in steps) == ["CANCELLED", "FAILED"]
