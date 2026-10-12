@@ -1,6 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
+import pwd
 import re
 import subprocess
 from datetime import datetime, timedelta, timezone
@@ -165,9 +166,7 @@ def _resolve_cancellers(contexts: list[SlurmExecutionContext]) -> list[SlurmExec
     attempt ended ``TIMEOUT`` and that was still running at the limit was
     cancelled by the limit, not by root. The attempt's head row carries that
     state, start, and limit, so this runs over the whole sacct result rather
-    than one row at a time. Other UIDs stay numeric: the Blueprint host is not
-    guaranteed to share the cluster's account database, and a wrong name is
-    worse than a number no rule matches.
+    than one row at a time.
 
     Outside a ``TIMEOUT`` attempt, only a head that was itself cancelled by
     UID 0 shows an operator scancel. slurmctld ends steps as UID 0 for other
@@ -207,6 +206,26 @@ def _resolve_cancellers(contexts: list[SlurmExecutionContext]) -> list[SlurmExec
         else:
             # Ended before the limit: an operator cancelled the step, and the job ran on until it timed out.
             ctx["cancelled_by"] = "root"
+    return contexts
+
+
+def _resolve_nonzero_cancellers(contexts: list[SlurmExecutionContext]) -> list[SlurmExecutionContext]:
+    """Resolve nonzero UID cancellers through the local account database.
+
+    Args:
+        contexts: Parsed Slurm contexts after UID 0 resolution.
+
+    Returns:
+        Contexts with known nonzero UIDs replaced by usernames.
+    """
+    for ctx in contexts:
+        token = ctx.get("cancelled_by")
+        if token is None or not token.isdigit() or int(token) == 0:
+            continue
+        try:
+            ctx["cancelled_by"] = pwd.getpwuid(int(token)).pw_name
+        except KeyError:
+            logger.warning(f"no passwd entry for cancelled_by uid {token}; keeping numeric form")
     return contexts
 
 
@@ -452,7 +471,7 @@ class SlurmExecutionContextAdapter:
             parsed = _parse_row(row, cluster_tz=self.cluster_tz)
             if parsed is not None:
                 contexts.append(parsed)
-        return _resolve_cancellers(_assign_attempt_ordinals(contexts))
+        return _resolve_nonzero_cancellers(_resolve_cancellers(_assign_attempt_ordinals(contexts)))
 
     def _format_sacct_time(self, dt: datetime) -> str:
         """sacct accepts `YYYY-MM-DD[THH:MM[:SS]]` only — no timezone offset.

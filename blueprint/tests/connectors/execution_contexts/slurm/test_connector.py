@@ -518,15 +518,13 @@ def test_uid0_step_without_retained_head_keeps_uid0(mocker):
     assert contexts[0]["cancelled_by"] == "0"
 
 
-def test_cancelled_by_nonzero_uid_stays_numeric(mocker):
-    """A non-root canceller UID is left numeric; the Blueprint host may not share the cluster's accounts."""
-    row = (
-        "7005|7005|sluid-cby-7005|CANCELLED by 4243|2026-05-01T12:00:00|2026-05-01T13:00:00|"
-        "node300||60|cpu=8|/o|/e|carol|short\n"
-    )
+def test_cancelled_by_nonzero_uid_resolves_to_username(mocker):
+    """Resolve a nonzero UID through the account database."""
+    mocker.patch("pwd.getpwuid", return_value=mocker.Mock(pw_name="alice"))
+    row = _row("7005", "7005", "sluid-cby-7005", "CANCELLED by 4243", "12:00:00", "13:00:00")
     _mock_sacct(mocker, row)
     contexts = SlurmExecutionContextAdapter().discover_by_ids(["7005"])
-    assert contexts[0]["cancelled_by"] == "4243"
+    assert contexts[0]["cancelled_by"] == "alice"
 
 
 def test_array_step_row_decomposes_array_id_and_attempt_index(mocker):
@@ -621,3 +619,18 @@ def test_step_log_tokens_drop_the_step_suffix(mocker):
     by_id = {c["id"]: c for c in SlurmExecutionContextAdapter().discover_by_ids(["9600"])}
     assert by_id["s-tok"]["std_out"] == "/l/9600-9600.out"
     assert by_id["s-tok.1"]["std_out"] == "/l/9600.step9600.out"
+
+
+def test_cancelled_by_uid_resolves_to_username(mocker):
+    """The attribution rules key root cancellations on the username `root`."""
+    mocker.patch("pwd.getpwuid", side_effect=lambda uid: mocker.Mock(pw_name="root") if uid == 0 else None)
+    _mock_sacct(mocker, _row("9400", "9400", "s-root", "CANCELLED by 0", "12:00:00", "13:00:00"))
+    contexts = SlurmExecutionContextAdapter().discover_by_ids(["9400"])
+    assert contexts[0]["cancelled_by"] == "root"
+
+
+def test_cancelled_by_unknown_uid_stays_numeric(mocker):
+    mocker.patch("pwd.getpwuid", side_effect=KeyError(4242))
+    _mock_sacct(mocker, _row("9401", "9401", "s-uid", "CANCELLED by 4242", "12:00:00", "13:00:00"))
+    contexts = SlurmExecutionContextAdapter().discover_by_ids(["9401"])
+    assert contexts[0]["cancelled_by"] == "4242"
