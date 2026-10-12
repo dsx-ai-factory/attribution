@@ -19,7 +19,7 @@ Run the blueprint on a host where all of the following are true:
 - the user running the blueprint can query the target jobs
 - SLURM accounting history still contains the jobs you want to attribute (see `MaxJobAge` above)
 - `sacct` can return `SLUID`
-- the host can read application log paths returned by `StdOut` and `StdErr` if using local file APPLOG collection
+- the host can read application log paths returned by `StdOut` and `StdErr` if using local file APPLOG collection. The blueprint joins relative paths to the job's `WorkDir`.
 - the host can reach the attribution service URL over HTTP. The blueprint talks to the service over HTTP only; it has no direct dependency on the service's storage layer.
 - the host can reach Loki, Prometheus, or Mimir if those collectors are configured
 
@@ -49,7 +49,7 @@ For job ID mode, the blueprint runs `sacct` with the selected job IDs:
 
 ```bash
 sacct --jobs=123456,123457 \
-  --format=JobID,JobIDRaw,SLUID,State,Start,End,NodeList,FailedNode,TimelimitRaw,AllocTRES,StdOut,StdErr,User,JobName \
+  --format=JobID,JobIDRaw,SLUID,State,Start,End,NodeList,FailedNode,TimelimitRaw,AllocTRES,StdOut,StdErr,User,WorkDir,JobName \
   --parsable2 \
   --noheader \
   --duplicates
@@ -60,7 +60,7 @@ For time-range mode, it runs:
 ```bash
 sacct --starttime=2026-05-25T00:00:00 \
   --endtime=2026-05-25T06:00:00 \
-  --format=JobID,JobIDRaw,SLUID,State,Start,End,NodeList,FailedNode,TimelimitRaw,AllocTRES,StdOut,StdErr,User,JobName \
+  --format=JobID,JobIDRaw,SLUID,State,Start,End,NodeList,FailedNode,TimelimitRaw,AllocTRES,StdOut,StdErr,User,WorkDir,JobName \
   --parsable2 \
   --noheader \
   --duplicates
@@ -85,6 +85,7 @@ sacct --starttime=2026-05-25T00:00:00 \
 | `StdOut` | Application log path for local file APPLOG collection. |
 | `StdErr` | Application error log path for local file APPLOG collection. |
 | `User` | Workload owner metadata. |
+| `WorkDir` | Directory that relative `StdOut` and `StdErr` paths are joined to. |
 | `JobName` | Workload name metadata and output path pattern substitution. |
 
 The adapter filters `.batch` and `.extern` rows and keeps numeric step rows such as `.0` and `.1`. Numeric steps can produce separate attribution contexts because they can have different windows and evidence.
