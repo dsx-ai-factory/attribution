@@ -4,6 +4,7 @@
 import pwd
 import re
 import subprocess
+from collections import Counter
 from datetime import datetime
 from typing import NotRequired, TypedDict
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -334,8 +335,13 @@ def _apply_head_row_context(contexts: list[SlurmExecutionContext]) -> list[Slurm
     - Steps without their own StdOut/StdErr inherit the head row's paths.
     - The head row's allocation window becomes the step's job window when the
       step starts inside it.
+    - A bare CANCELLED step under a REQUEUED head is scheduler teardown, so it
+      takes the REQUEUED state.
+    - The only step of a TIMEOUT head that ended CANCELLED or FAILED takes the
+      TIMEOUT state.
     """
     heads = {ctx["sluid"]: ctx for ctx in contexts if "step_id" not in ctx}
+    step_counts = Counter(ctx["sluid"] for ctx in contexts if "step_id" in ctx)
     for step in contexts:
         head = heads.get(step["sluid"]) if "step_id" in step else None
         if head is None:
@@ -349,6 +355,12 @@ def _apply_head_row_context(contexts: list[SlurmExecutionContext]) -> list[Slurm
         if head["start_time"] <= step["start_time"] <= head["end_time"]:
             step["job_start_time"] = head["start_time"]
             step["job_end_time"] = head["end_time"]
+        if head["state"] == "REQUEUED" and step["state"] == "CANCELLED" and "cancelled_by" not in step:
+            step["state"] = "REQUEUED"
+        elif (
+            head["state"] == "TIMEOUT" and step_counts[step["sluid"]] == 1 and step["state"] in ("CANCELLED", "FAILED")
+        ):
+            step["state"] = "TIMEOUT"
     return contexts
 
 
