@@ -48,7 +48,11 @@ import yaml
 from loguru import logger
 
 from attribution_blueprint.connectors.execution_contexts.kubernetes_client import KubernetesClient
-from attribution_blueprint.connectors.execution_contexts.kubernetes_helpers import pod_node_failure_reason
+from attribution_blueprint.connectors.execution_contexts.kubernetes_helpers import (
+    earliest_job_failure_reason,
+    job_time_limit_minutes,
+    pod_node_failure_reason,
+)
 from attribution_blueprint.types import assert_aware
 
 _PODGROUP_RESOURCE = "PodGroup"
@@ -95,6 +99,7 @@ class KaiExecutionContext(TypedDict):
     # "Suspended" or "Active".
     owner_state: str
     failed_node: NotRequired[str]
+    time_limit: NotRequired[int]
 
     queue_name: NotRequired[str]
     min_member: NotRequired[int]
@@ -157,15 +162,16 @@ def _member_pods(owner_job_uids: set[str], pods: list[dict]) -> list[dict]:
     ]
 
 
-def _jobset_child_job_uids(owner: dict, jobs: list[dict]) -> set[str]:
-    """Return UIDs of Jobs controlled by this exact JobSet incarnation."""
-    child_uids: set[str] = set()
-    for job in jobs:
-        controller = _controller_owner(job.get("metadata") or {})
-        uid = (job.get("metadata") or {}).get("uid")
-        if controller and controller["kind"] == "JobSet" and controller["uid"] == owner["uid"] and uid:
-            child_uids.add(uid)
-    return child_uids
+def _jobset_child_jobs(owner: dict, jobs: list[dict]) -> list[dict]:
+    """Return Jobs controlled by this exact JobSet incarnation."""
+    return [
+        job
+        for job in jobs
+        if (controller := _controller_owner(job.get("metadata") or {})) is not None
+        and controller["kind"] == "JobSet"
+        and controller["uid"] == owner["uid"]
+        and (job.get("metadata") or {}).get("uid")
+    ]
 
 
 def _top_owner(meta: dict) -> dict | None:
@@ -268,7 +274,7 @@ def _condition(owner_object: dict, condition_type: str) -> dict | None:
     return None
 
 
-def _owner_state(owner: dict, owner_object: dict) -> tuple[str, str]:
+def _owner_state(owner: dict, owner_object: dict, owner_jobs: list[dict]) -> tuple[str, str]:
     """Return the service-facing state and the native owner state.
 
     The service state is COMPLETED, FAILED, TIMEOUT or RUNNING. It is derived
@@ -289,9 +295,10 @@ def _owner_state(owner: dict, owner_object: dict) -> tuple[str, str]:
     if failed is None:
         return "COMPLETED", "Complete" if owner["kind"] == "Job" else "Completed"
 
-    reason = (failed.get("reason") or "").strip()
-    native = f"Failed:{reason}" if reason else "Failed"
-    return ("TIMEOUT" if reason == "DeadlineExceeded" else "FAILED"), native
+    owner_reason = (failed.get("reason") or "").strip()
+    native = f"Failed:{owner_reason}" if owner_reason else "Failed"
+    failure_reason = earliest_job_failure_reason(owner_jobs) or owner_reason
+    return ("TIMEOUT" if failure_reason == "DeadlineExceeded" else "FAILED"), native
 
 
 def _skip_reason(owner: dict, owner_object: dict | None) -> str | None:
@@ -306,7 +313,7 @@ def _skip_reason(owner: dict, owner_object: dict | None) -> str | None:
 def _parse_pod_group(
     podgroup: dict,
     owner: dict,
-    owner_job_uids: set[str],
+    owner_jobs: list[dict],
     pods: list[dict],
     owner_object: dict | None,
     now: datetime,
@@ -333,6 +340,7 @@ def _parse_pod_group(
         logger.warning(f"podgroup {namespace}/{name} has no creationTimestamp; skipping")
         return None
 
+    owner_job_uids = {job_uid for job in owner_jobs if (job_uid := (job.get("metadata") or {}).get("uid")) is not None}
     members = _member_pods(owner_job_uids, pods)
     member_starts = [
         created
@@ -361,7 +369,7 @@ def _parse_pod_group(
     if owner_end is None:
         logger.debug(f"podgroup {namespace}/{name}: owner {owner['kind']} still active; using now() for end_time")
     end_time = max(owner_end if owner_end is not None else now, start_time)
-    state, owner_state = _owner_state(owner, owner_object)
+    state, owner_state = _owner_state(owner, owner_object, owner_jobs)
     node_loss_nodes = sorted(
         {node for pod in members if pod_node_failure_reason(pod) and (node := (pod.get("spec") or {}).get("nodeName"))}
     )
@@ -398,6 +406,8 @@ def _parse_pod_group(
     ctx["owner_name"] = owner["name"]
     ctx["owner_uid"] = owner["uid"]
     ctx["owner_state"] = owner_state
+    if (time_limit := job_time_limit_minutes(owner_jobs)) is not None:
+        ctx["time_limit"] = time_limit
     if state == "NODE_FAIL" and node_loss_nodes:
         ctx["failed_node"] = node_loss_nodes[0]
 
@@ -546,19 +556,21 @@ class KaiExecutionContextAdapter:
                 if namespace
                 else None
             )
-            owner_job_uids = {owner["uid"]}
+            owner_jobs = [owner_object] if owner["kind"] == "Job" and owner_object is not None else []
             if owner["kind"] == "JobSet" and _skip_reason(owner, owner_object) is None:
-                child_jobs = self._kubernetes.list(
-                    _JOB_RESOURCE,
-                    namespace=namespace,
-                    label_selector=f"{_JOBSET_NAME_LABEL}={owner['name']}",
-                    api_version=_JOB_API_VERSION,
+                owner_jobs = _jobset_child_jobs(
+                    owner,
+                    self._kubernetes.list(
+                        _JOB_RESOURCE,
+                        namespace=namespace,
+                        label_selector=f"{_JOBSET_NAME_LABEL}={owner['name']}",
+                        api_version=_JOB_API_VERSION,
+                    ),
                 )
-                owner_job_uids = _jobset_child_job_uids(owner, child_jobs)
             ctx = _parse_pod_group(
                 podgroup,
                 owner,
-                owner_job_uids,
+                owner_jobs,
                 pods_by_key.get((namespace, meta.get("name") or ""), []),
                 owner_object,
                 now,
