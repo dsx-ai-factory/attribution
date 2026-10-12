@@ -324,6 +324,25 @@ def _parse_row(row: str, cluster_tz: ZoneInfo | None = None) -> SlurmExecutionCo
     return ctx
 
 
+def _apply_head_row_context(contexts: list[SlurmExecutionContext]) -> list[SlurmExecutionContext]:
+    """Give each step row the job-level facts sacct records only on its head row.
+
+    - Steps without their own StdOut/StdErr inherit the head row's paths.
+    """
+    heads = {ctx["sluid"]: ctx for ctx in contexts if "step_id" not in ctx}
+    for step in contexts:
+        head = heads.get(step["sluid"]) if "step_id" in step else None
+        if head is None:
+            continue
+        # ponytail: copies the head's resolved path, so a `%N` token uses the
+        # head's first node. Resolve the raw template per step if a site
+        # writes per-node step logs.
+        for field in ("std_out", "std_err"):
+            if field not in step and field in head:
+                step[field] = head[field]
+    return contexts
+
+
 def _assign_attempt_ordinals(
     contexts: list[SlurmExecutionContext],
 ) -> list[SlurmExecutionContext]:
@@ -403,7 +422,7 @@ class SlurmExecutionContextAdapter:
             parsed = _parse_row(row, cluster_tz=self.cluster_tz)
             if parsed is not None:
                 contexts.append(parsed)
-        return _assign_attempt_ordinals(contexts)
+        return _assign_attempt_ordinals(_apply_head_row_context(contexts))
 
     def _format_sacct_time(self, dt: datetime) -> str:
         """sacct accepts `YYYY-MM-DD[THH:MM[:SS]]` only — no timezone offset.
