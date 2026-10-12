@@ -52,15 +52,18 @@ class SlurmExecutionContext(TypedDict):
     alloc_tres: NotRequired[str]
     std_out: NotRequired[str]
     std_err: NotRequired[str]
+    work_dir: NotRequired[str]
 
 
 # JobName: needed for %x token. JobIDRaw: internal numeric jobid that Slurm
 # substitutes for %j at filename-write time. For array tasks, JobID is the
 # spec form ("1113288_265") but JobIDRaw is the unique numeric ("1117669")
-# — and that's what's in the actual filesystem path.
+# — and that's what's in the actual filesystem path. WorkDir anchors relative
+# StdOut/StdErr paths. JobName stays last because it may contain `|`.
 SACCT_FORMAT = (
-    "JobID,JobIDRaw,SLUID,State,Start,End,NodeList,FailedNode,TimelimitRaw,AllocTRES,StdOut,StdErr,User,JobName"
+    "JobID,JobIDRaw,SLUID,State,Start,End,NodeList,FailedNode,TimelimitRaw,AllocTRES,StdOut,StdErr,User,WorkDir,JobName"
 )
+_SACCT_FIELD_COUNT = SACCT_FORMAT.count(",") + 1
 
 # Array job notation: "1113288_265" → array_id=1113288, task_id=265.
 # Heterogeneous job notation ("12345+3") and step IDs ("12345.batch") are
@@ -139,17 +142,25 @@ def _parse_state(state: str) -> tuple[str, str | None]:
     return state, None
 
 
+def _anchor(path: str, work_dir: str) -> str:
+    """Join a relative log path to the job's WorkDir, as Slurm does."""
+    if path == "" or work_dir == "" or path.startswith("/"):
+        return path
+    return f"{work_dir.rstrip('/')}/{path}"
+
+
 def _parse_row(row: str, cluster_tz: ZoneInfo | None = None) -> SlurmExecutionContext | None:
     # JobName is the last sacct field and can contain `|` (user-chosen text).
     # With --parsable2 sacct does NOT escape embedded delimiters, so rejoin
     # any overflow into the trailing JobName slot rather than dropping the
-    # row or truncating with fields[:14].
+    # row or truncating it.
     fields = row.split("|")
-    if len(fields) < 14:
-        logger.warning(f"sacct row has {len(fields)} fields, expected at least 14: {row!r}")
+    n = _SACCT_FIELD_COUNT
+    if len(fields) < n:
+        logger.warning(f"sacct row has {len(fields)} fields, expected at least {n}: {row!r}")
         return None
-    if len(fields) > 14:
-        fields = fields[:13] + ["|".join(fields[13:])]
+    if len(fields) > n:
+        fields = fields[: n - 1] + ["|".join(fields[n - 1 :])]
 
     (
         job_id,
@@ -165,8 +176,9 @@ def _parse_row(row: str, cluster_tz: ZoneInfo | None = None) -> SlurmExecutionCo
         std_out,
         std_err,
         user_name,
+        work_dir,
         job_name,
-    ) = fields[:14]
+    ) = fields
 
     # `<jobid>.batch` and `<jobid>.extern` are Slurm-internal wrappers (the
     # batch script container and the extern-handler step). They carry no
@@ -276,6 +288,8 @@ def _parse_row(row: str, cluster_tz: ZoneInfo | None = None) -> SlurmExecutionCo
         ctx["alloc_tres"] = alloc_tres
     if user_name:
         ctx["user_name"] = user_name
+    if work_dir:
+        ctx["work_dir"] = work_dir
     # std_out/std_err may still carry Slurm filename patterns (`%j`, `%x`,
     # `${SLURM_JOBID}`, ...) depending on the slurmctld configuration —
     # sacct returns the literal template, not always the resolved path.
@@ -284,9 +298,9 @@ def _parse_row(row: str, cluster_tz: ZoneInfo | None = None) -> SlurmExecutionCo
     # log connector then only has to handle generic `{X}` placeholders and
     # never needs to know about Slurm token syntax.
     if std_out:
-        ctx["std_out"] = filename_patterns.substitute(std_out, ctx)
+        ctx["std_out"] = _anchor(filename_patterns.substitute(std_out, ctx), work_dir)
     if std_err:
-        ctx["std_err"] = filename_patterns.substitute(std_err, ctx)
+        ctx["std_err"] = _anchor(filename_patterns.substitute(std_err, ctx), work_dir)
     return ctx
 
 

@@ -59,7 +59,9 @@ def test_parses_fixture(mocker):
 def test_slurm_pre_2511_row_is_skipped(mocker):
     # SLURM 25.11+ is required; rows without SLUID are skipped with a warning
     # rather than fabricating an `id` from job_id.
-    row = "9100|9100||COMPLETED|2026-05-01T15:00:00|2026-05-01T15:30:00|node[001,003,005]||60|cpu=8|/o|/e|alice|train\n"
+    row = (
+        "9100|9100||COMPLETED|2026-05-01T15:00:00|2026-05-01T15:30:00|node[001,003,005]||60|cpu=8|/o|/e|alice||train\n"
+    )
     _mock_sacct(mocker, row)
     contexts = SlurmExecutionContextAdapter().discover_by_ids(["9100"])
     assert contexts == []
@@ -274,7 +276,7 @@ def test_cluster_tz_anchors_naive_sacct_timestamps(mocker):
 
     row = (
         "5001|5001|sluid-tz-5001|COMPLETED|2026-05-01T12:00:00|2026-05-01T13:00:00|"
-        "node100||60|cpu=8|/o|/e|alice|train\n"
+        "node100||60|cpu=8|/o|/e|alice||train\n"
     )
     _mock_sacct(mocker, row)
     contexts = SlurmExecutionContextAdapter(cluster_tz="America/Los_Angeles").discover_by_ids(["5001"])
@@ -297,10 +299,10 @@ def test_cluster_tz_invalid_zone_raises():
 
 def test_jobname_with_embedded_pipe_preserved(mocker):
     """sacct --parsable2 does not escape | inside JobName; the connector must rejoin."""
-    # 15 fields: JobName is "etl|stage1|finalize" (3 pieces) split into 3 columns.
+    # 17 fields: JobName is "etl|stage1|finalize" (3 pieces) split into 3 columns.
     row = (
         "6001|6001|sluid-pn-6001|COMPLETED|2026-05-01T12:00:00|2026-05-01T13:00:00|"
-        "node200||60|cpu=8|/o|/e|bob|etl|stage1|finalize\n"
+        "node200||60|cpu=8|/o|/e|bob||etl|stage1|finalize\n"
     )
     _mock_sacct(mocker, row)
     contexts = SlurmExecutionContextAdapter().discover_by_ids(["6001"])
@@ -316,7 +318,7 @@ def test_cancelled_plus_state_normalized(mocker):
     """sacct's transient `+` suffix on a CANCELLED state must not split downstream verdicts."""
     row = (
         "7001|7001|sluid-cx-7001|CANCELLED+|2026-05-01T12:00:00|2026-05-01T13:00:00|"
-        "node300||60|cpu=8|/o|/e|carol|short\n"
+        "node300||60|cpu=8|/o|/e|carol||short\n"
     )
     _mock_sacct(mocker, row)
     contexts = SlurmExecutionContextAdapter().discover_by_ids(["7001"])
@@ -328,7 +330,7 @@ def test_cancelled_by_state_normalized(mocker):
     `+` suffix path) so we lock down both branches of _parse_state."""
     row = (
         "7002|7002|sluid-cby-7002|CANCELLED by 9001|2026-05-01T12:00:00|2026-05-01T13:00:00|"
-        "node300||60|cpu=8|/o|/e|carol|short\n"
+        "node300||60|cpu=8|/o|/e|carol||short\n"
     )
     _mock_sacct(mocker, row)
     contexts = SlurmExecutionContextAdapter().discover_by_ids(["7002"])
@@ -341,11 +343,11 @@ def test_array_step_row_decomposes_array_id_and_attempt_index(mocker):
     # Head row for the array task, then its numeric step.
     head = (
         "8000_5|8123|sluid-arr-8000-5|COMPLETED|2026-05-01T12:00:00|2026-05-01T12:30:00|"
-        "node400||60|cpu=8|/o|/e|dora|train-array\n"
+        "node400||60|cpu=8|/o|/e|dora||train-array\n"
     )
     step = (
         "8000_5.0|8123|sluid-arr-8000-5|COMPLETED|2026-05-01T12:01:00|2026-05-01T12:29:00|"
-        "node400||60|cpu=8|/o|/e|dora|train-array\n"
+        "node400||60|cpu=8|/o|/e|dora||train-array\n"
     )
     _mock_sacct(mocker, head + step)
     contexts = SlurmExecutionContextAdapter().discover_by_ids(["8000_5"])
@@ -368,13 +370,13 @@ def test_std_out_path_with_slurm_tokens_is_resolved_at_ctx_boundary(mocker):
     token syntax. Verifies architectural rule 3: Slurm-specific parsing
     lives inside the Slurm connector, not in cross-cutting code."""
     # sacct row with StdOut/StdErr templates that carry Slurm tokens.
-    # 14-field --parsable2 row: JobID|JobIDRaw|SLUID|State|Start|End|NodeList|
-    # FailedNode|TimelimitRaw|AllocTRES|StdOut|StdErr|User|JobName
+    # 15-field --parsable2 row: JobID|JobIDRaw|SLUID|State|Start|End|NodeList|
+    # FailedNode|TimelimitRaw|AllocTRES|StdOut|StdErr|User|WorkDir|JobName
     row = (
         "9100|9100|sluid-9100|COMPLETED|2026-05-01T12:00:00|2026-05-01T12:30:00"
         "|node005||60|cpu=8,mem=32G|"
         "/path/to/logs/%u/%x/%j.out|/path/to/logs/${SLURM_JOB_NAME}/${SLURM_JOBID}.err|"
-        "alice|train-mnist"
+        "alice||train-mnist"
     )
     _mock_sacct(mocker, row)
     contexts = SlurmExecutionContextAdapter().discover_by_ids(["9100"])
@@ -395,7 +397,7 @@ def test_std_out_with_array_tokens_resolves_at_ctx_boundary(mocker):
         "8200_3|8201|sluid-8201|COMPLETED|2026-05-01T12:00:00|2026-05-01T12:30:00"
         "|node005||60|cpu=8|"
         "/path/to/logs/%A_%a.out|/path/to/logs/${SLURM_ARRAY_JOB_ID}_${SLURM_ARRAY_TASK_ID}.err|"
-        "alice|x"
+        "alice||x"
     )
     _mock_sacct(mocker, row)
     contexts = SlurmExecutionContextAdapter().discover_by_ids(["8200_3"])
@@ -405,3 +407,16 @@ def test_std_out_with_array_tokens_resolves_at_ctx_boundary(mocker):
     assert ctx["attempt_index"] == 3
     assert ctx["std_out"] == "/path/to/logs/8200_3.out"
     assert ctx["std_err"] == "/path/to/logs/8200_3.err"
+
+
+def _row(job_id, job_id_raw, sluid, state, start, end, std_out="", work_dir=""):
+    return (
+        f"{job_id}|{job_id_raw}|{sluid}|{state}|2026-05-01T{start}|2026-05-01T{end}|node001||60|cpu=8|"
+        f"{std_out}||alice|{work_dir}|train\n"
+    )
+
+
+def test_relative_std_out_is_anchored_to_work_dir(mocker):
+    _mock_sacct(mocker, _row("9500", "9500", "s-rel", "COMPLETED", "12:00:00", "13:00:00", "logs/%j.out", "/w/run"))
+    contexts = SlurmExecutionContextAdapter().discover_by_ids(["9500"])
+    assert contexts[0]["std_out"] == "/w/run/logs/9500.out"
