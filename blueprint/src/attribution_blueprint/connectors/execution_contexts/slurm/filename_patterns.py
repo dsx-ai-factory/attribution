@@ -21,10 +21,10 @@ generic Python-format `{X}` placeholders against cross-cutting
 `ExecutionContext` fields.
 
 Token resolution rules:
-- `%j` / `${SLURM_JOBID}` / `${SLURM_JOB_ID}` → ctx["job_id_raw"] or ctx["job_id"]
+- `%j` / `${SLURM_JOBID}` / `${SLURM_JOB_ID}` → ctx["job_id_raw"] or ctx["job_id"], without a step suffix
 - `%x` / `${SLURM_JOB_NAME}` → ctx["name"]
 - `%u` → ctx["user_name"]
-- `%A` / `${SLURM_ARRAY_JOB_ID}` → ctx["array_id"] or ctx["job_id"]
+- `%A` / `${SLURM_ARRAY_JOB_ID}` → ctx["array_id"] or ctx["job_id"], without a step suffix
 - `%a` / `${SLURM_ARRAY_TASK_ID}` → ctx["attempt_index"] (else "0")
 - `%n` / `%t` / `%s` → "0" (rank/node/step proxy; pick rank-0 as the single-file proxy)
 - `%N` → first hostname in ctx["nodes"]
@@ -66,8 +66,10 @@ def substitute(path: str, ctx: dict[str, Any]) -> str:
     # `%j` and `${SLURM_JOBID}` resolve to the unique numeric jobid Slurm
     # wrote at filename-creation time, NOT the array-spec form. For array
     # tasks `job_id` is "1113288_265" but the file on disk is "1117669.out".
-    job_id_for_path = ctx.get("job_id_raw") or ctx.get("job_id", "") or ""
-    array_id = ctx.get("array_id") or ctx.get("job_id", "")
+    # Step rows carry a `.N` suffix that is never part of a %j or %A value.
+    job_id_for_path = (ctx.get("job_id_raw") or ctx.get("job_id", "") or "").partition(".")[0]
+    # %A of a non-array job is its job id.
+    array_id = ctx.get("array_id") or (ctx.get("job_id", "") or "").partition(".")[0]
     attempt_index = ctx.get("attempt_index")
     env_values: dict[str, str] = {
         "name": ctx.get("name", "") or "",
