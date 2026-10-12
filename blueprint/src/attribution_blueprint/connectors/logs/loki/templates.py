@@ -33,14 +33,19 @@ TEMPLATES: dict[Source, list[str]] = {
     Source.SYSLOG: [
         '{{service_name="{service_name}", level!=`INFO`, appName=`kernel`}} '
         "|~ `LustreError|connection2:0: ping timeout|detected conn error|Xid|"
-        "GspRmAlloc failed|NV_ERR_|NV_WARN_|NMI watchdog|general protection|"
+        "GspRmAlloc failed|NV_PGSP_FALCON_IRQSTAT_FATAL_ERROR|NV_ERR_|NV_WARN_|NMI watchdog|general protection|"
         "frame pointer|Failed to collect nvlink status info!|"
         "Failed to update Rx Detect Link mask!|"
         "Abrupt nvidia-imex daemon shutdown detected, robust channel recovery invoked!|"
-        "Unable to handle kernel|not responding, still trying|"
+        "Unable to handle kernel|Kernel panic|not responding, still trying|"
         "Out of memory: Killed process`",
         '{{service_name="{service_name}", appName=`systemd`}} |~ `Stopping nvidia-imex.service`',
         '{{service_name="{service_name}", level!=`INFO`, appName=`systemd-logind`}} |~ `power`',
+        # The two queries below have no level filter because these lines are
+        # usually logged at INFO.
+        '{{service_name="{service_name}", appName=`systemd-logind`}} |~ `System(?: userspace)? is rebooting(?: with kexec)?`',
+        '{{service_name="{service_name}", appName=`kernel`}} '
+        r"|~ `mlx5_core\s+[0-9a-fA-F:.]+\s+mlx5_[0-9]+:\s+Port:\s+[0-9]+\s+Link\s+DOWN\b`",
     ],
     Source.APPLOG: [
         '{{service_name="{service_name}", app="{app}"}} | slurm_job_id = `{job_id}`',

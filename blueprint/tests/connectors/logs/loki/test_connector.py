@@ -740,3 +740,16 @@ def test_every_exported_name_is_importable():
     import attribution_blueprint.connectors.logs.loki as loki
 
     assert [name for name in loki.__all__ if not hasattr(loki, name)] == []
+
+
+def test_bundled_syslog_queries_cover_panic_gsp_reboot_and_link_down():
+    from attribution_blueprint.connectors.logs.loki.templates import TEMPLATES
+
+    queries = "\n".join(TEMPLATES[Source.SYSLOG])
+    for term in (
+        "Kernel panic",
+        "NV_PGSP_FALCON_IRQSTAT_FATAL_ERROR",
+        "is rebooting(?: with kexec)?",
+        r"Link\s+DOWN\b",
+    ):
+        assert term in queries
