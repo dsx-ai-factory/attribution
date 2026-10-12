@@ -1087,3 +1087,16 @@ def test_build_attributor_info_sends_step_allocation_as_job_window():
     assert workload.job_end_time == ctx["job_end_time"]
     assert workload.interest_start_time == ctx["start_time"]
     assert workload.interest_end_time == ctx["end_time"]
+
+
+def test_reversed_window_is_skipped_before_collection():
+    ctx = _make_ctx("rev")
+    ctx["end_time"] = ctx["start_time"] - timedelta(seconds=1)
+    eca = MagicMock()
+    eca.discover_by_ids.return_value = [ctx]
+    collector = MagicMock()
+    attribution = _make_attribution_mock()
+    pipeline = _make_pipeline(eca=eca, log_collectors=[collector], attribution=attribution)
+    assert pipeline.analyze(ids=["rev"]) == []
+    collector.collect.assert_not_called()
+    attribution.create_attributor.assert_not_called()
