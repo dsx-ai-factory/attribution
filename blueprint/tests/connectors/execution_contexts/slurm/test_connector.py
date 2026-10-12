@@ -445,3 +445,13 @@ def test_cancelled_by_unknown_uid_stays_numeric(mocker):
     _mock_sacct(mocker, _row("9401", "9401", "s-uid", "CANCELLED by 4242", "12:00:00", "13:00:00"))
     contexts = SlurmExecutionContextAdapter().discover_by_ids(["9401"])
     assert contexts[0]["cancelled_by"] == "4242"
+
+
+def test_heterogeneous_step_components_stay_distinct(mocker):
+    """Slurm renders component M of step N as `.N+M`; both components are attributed."""
+    rows = _row("9300", "9300", "s-het", "FAILED", "12:00:00", "13:00:00")
+    rows += _row("9300.0+0", "9300.0+0", "s-het", "FAILED", "12:00:10", "13:00:00")
+    rows += _row("9300.0+1", "9300.0+1", "s-het", "COMPLETED", "12:00:10", "13:00:00")
+    _mock_sacct(mocker, rows)
+    contexts = SlurmExecutionContextAdapter().discover_by_ids(["9300"])
+    assert sorted(c["id"] for c in contexts) == ["s-het", "s-het.0+0", "s-het.0+1"]
