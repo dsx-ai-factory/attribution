@@ -10,7 +10,11 @@
 
 import pytest
 
-from attribution_blueprint.connectors.execution_contexts.kubernetes_helpers import pod_node_failure_reason
+from attribution_blueprint.connectors.execution_contexts.kubernetes_helpers import (
+    earliest_job_failure_reason,
+    job_time_limit_minutes,
+    pod_node_failure_reason,
+)
 
 
 def _pod(status=None):
@@ -91,3 +95,48 @@ class TestPodNodeFailureReason:
             }
         )
         assert pod_node_failure_reason(pod) == "DeletionByPodGC"
+
+
+def test_earliest_job_failure_reason():
+    jobs = [
+        {
+            "status": {
+                "conditions": [
+                    {
+                        "type": "Failed",
+                        "status": "True",
+                        "reason": "BackoffLimitExceeded",
+                        "lastTransitionTime": "2026-05-01T00:05:00Z",
+                    }
+                ]
+            }
+        },
+        {
+            "status": {
+                "conditions": [
+                    {
+                        "type": "FailureTarget",
+                        "status": "True",
+                        "reason": "DeadlineExceeded",
+                        "lastTransitionTime": "2026-05-01T00:01:00Z",
+                    }
+                ]
+            }
+        },
+    ]
+
+    assert earliest_job_failure_reason(jobs) == "DeadlineExceeded"
+
+
+@pytest.mark.parametrize(
+    "deadlines, expected",
+    [
+        ([30], 1),
+        ([61, 120], 2),
+        ([None, 0, -1, True], None),
+    ],
+)
+def test_job_time_limit_minutes(deadlines, expected):
+    jobs = [{"spec": {"activeDeadlineSeconds": deadline}} for deadline in deadlines]
+
+    assert job_time_limit_minutes(jobs) == expected
