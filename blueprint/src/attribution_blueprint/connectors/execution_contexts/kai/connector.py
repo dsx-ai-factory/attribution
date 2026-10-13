@@ -37,12 +37,15 @@ from typing import NotRequired, TypedDict
 import yaml
 from loguru import logger
 
-from attribution_blueprint.connectors.execution_contexts.kubectl_client import KubectlClient
+from attribution_blueprint.connectors.execution_contexts.kubernetes_client import KubernetesClient
 from attribution_blueprint.types import assert_aware
 
-_PODGROUP_RESOURCE = "podgroups.scheduling.run.ai"
-_JOB_RESOURCE = "job.batch"
-_JOBSET_RESOURCE = "jobsets.jobset.x-k8s.io"
+_PODGROUP_RESOURCE = "PodGroup"
+_PODGROUP_GROUP = "scheduling.run.ai"
+_JOB_RESOURCE = "Job"
+_JOB_API_VERSION = "batch/v1"
+_JOBSET_RESOURCE = "JobSet"
+_JOBSET_GROUP = "jobset.x-k8s.io"
 _POD_GROUP_ANNOTATION = "pod-group-name"
 _TOP_OWNER_ANNOTATION = "kai.scheduler/top-owner-metadata"
 _JOBSET_NAME_LABEL = "jobset.sigs.k8s.io/jobset-name"
@@ -343,16 +346,15 @@ def _parse_pod_group(
 
 
 class KaiExecutionContextAdapter:
-    """ExecutionContextAdapter that discovers KAI PodGroups via kubectl.
+    """ExecutionContextAdapter that discovers KAI PodGroups via Kubernetes.
 
-    `kubectl_path`, `kubeconfig`, and `context` configure the shared kubectl
-    runner. `namespace` selects the namespace used for time-range discovery;
-    ID discovery can instead carry a namespace in each ID.
+    `kubeconfig` and `context` configure the shared persistent API client.
+    `namespace` selects the namespace used for time-range discovery; ID
+    discovery can instead carry a namespace in each ID.
     """
 
     def __init__(
         self,
-        kubectl_path: str = "kubectl",
         kubeconfig: str | None = None,
         context: str | None = None,
         namespace: str | None = None,
@@ -360,8 +362,7 @@ class KaiExecutionContextAdapter:
     ):
         self.namespace = namespace or ""
         self.timeout_seconds = timeout_seconds
-        self._kubectl = KubectlClient(
-            kubectl_path=kubectl_path,
+        self._kubernetes = KubernetesClient(
             kubeconfig=kubeconfig,
             context=context,
             timeout_seconds=timeout_seconds,
@@ -391,7 +392,12 @@ class KaiExecutionContextAdapter:
                         f"use `<namespace>/<name>` or configure eca.kai.namespace"
                     )
                 ns, name = self.namespace, ref
-            obj = self._kubectl.get_one(_PODGROUP_RESOURCE, name, namespace=ns)
+            obj = self._kubernetes.get_one(
+                _PODGROUP_RESOURCE,
+                name,
+                namespace=ns,
+                group=_PODGROUP_GROUP,
+            )
             if obj is not None:
                 podgroups.append(obj)
         return self._finalize(podgroups)
@@ -414,7 +420,11 @@ class KaiExecutionContextAdapter:
         assert_aware(end, "discover_by_time_range.end")
         if not self.namespace:
             raise ValueError("kai ECA time-range discovery requires eca.kai.namespace")
-        listing = self._kubectl.list(_PODGROUP_RESOURCE, namespace=self.namespace)
+        listing = self._kubernetes.list(
+            _PODGROUP_RESOURCE,
+            namespace=self.namespace,
+            group=_PODGROUP_GROUP,
+        )
         contexts = [c for c in self._finalize(listing) if c["start_time"] <= end and c["end_time"] >= start]
         if not nodelist:
             return contexts
@@ -450,15 +460,28 @@ class KaiExecutionContextAdapter:
         for podgroup, owner, owner_resource in owned:
             meta = podgroup.get("metadata") or {}
             namespace = meta.get("namespace") or ""
+            owner_options = (
+                {"api_version": _JOB_API_VERSION}
+                if owner_resource == _JOB_RESOURCE
+                else {"group": _JOBSET_GROUP}
+            )
             owner_object = (
-                self._kubectl.get_one(owner_resource, owner["name"], namespace=namespace) if namespace else None
+                self._kubernetes.get_one(
+                    owner_resource,
+                    owner["name"],
+                    namespace=namespace,
+                    **owner_options,
+                )
+                if namespace
+                else None
             )
             owner_job_uids = {owner["uid"]}
             if owner["kind"] == "JobSet" and _skip_reason(owner, owner_object) is None:
-                child_jobs = self._kubectl.list(
+                child_jobs = self._kubernetes.list(
                     _JOB_RESOURCE,
                     namespace=namespace,
                     label_selector=f"{_JOBSET_NAME_LABEL}={owner['name']}",
+                    api_version=_JOB_API_VERSION,
                 )
                 owner_job_uids = _jobset_child_job_uids(owner, child_jobs)
             ctx = _parse_pod_group(
@@ -476,12 +499,12 @@ class KaiExecutionContextAdapter:
     def _fetch_pods(self, podgroups: list[dict]) -> list[dict]:
         """List Pods once per distinct namespace.
 
-        Pods carry the PodGroup only as an annotation, which kubectl cannot
-        select on, so the join is done client-side after a namespace-scoped
-        list.
+        Pods carry the PodGroup only as an annotation, which Kubernetes field
+        and label selectors cannot select on, so the join is done client-side
+        after a namespace-scoped list.
         """
         namespaces = sorted({ns for pg in podgroups if (ns := (pg.get("metadata") or {}).get("namespace"))})
         pods: list[dict] = []
         for ns in namespaces:
-            pods.extend(self._kubectl.list("pods", namespace=ns))
+            pods.extend(self._kubernetes.list("Pod", namespace=ns, api_version="v1"))
         return pods

@@ -14,8 +14,8 @@ def _build(spec: dict, ctx: dict) -> KaiExecutionContextAdapter:
     from attribution_blueprint.mca import _coerce_int
 
     # A literal `null` arrives as None and must fall back to the default;
-    # otherwise None would reach `subprocess.run(timeout=None)` and silently
-    # disable the timeout.
+    # otherwise None would reach the Kubernetes client and silently disable
+    # the request timeout.
     timeout = spec.get("timeout_seconds")
     if timeout is None:
         timeout = 60
@@ -24,7 +24,6 @@ def _build(spec: dict, ctx: dict) -> KaiExecutionContextAdapter:
         if timeout <= 0:
             raise MCAError(f"eca.kai.timeout_seconds must be positive, got {timeout}")
     return KaiExecutionContextAdapter(
-        kubectl_path=spec.get("kubectl_path", "kubectl"),
         kubeconfig=spec.get("kubeconfig"),
         context=spec.get("context"),
         namespace=spec.get("namespace"),
@@ -40,15 +39,14 @@ _registry.register_component(
         "start_time": _PARAM,
         "end_time": _PARAM,
         "nodelist": _PARAM,
-        "kubectl_path": _PARAM,
-        # Optional path to a kubeconfig file. When unset, kubectl falls back
+        # Optional path to a kubeconfig file. When unset, the client falls back
         # to its default discovery (KUBECONFIG, ~/.kube/config, or the
         # in-cluster service account).
         "kubeconfig": _PARAM,
         # Optional context name within the resolved kubeconfig.
         "context": _PARAM,
         # Optional namespace scope. The empty string (or unset) queries every
-        # namespace via `-A`.
+        # namespace.
         "namespace": _PARAM,
         "timeout_seconds": _PARAM,
     },
