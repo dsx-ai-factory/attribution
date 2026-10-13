@@ -167,6 +167,9 @@ the Kubernetes Python API client, reads Kueue Workload objects, follows owner
 references to Job or JobSet pods, and normalizes the result into execution
 contexts.
 
+Kueue no longer accepts `kubectl_path`. Remove that key from existing
+`[eca.kueue]` configuration; it remains valid only for `kubectl_logs`.
+
 Example:
 
 ```toml
@@ -200,7 +203,7 @@ uv run --project blueprint --frozen nvidia-attribution-blueprint --config ./attr
 | `start_time`             | Per run  | none            | ISO-8601 time for time-range mode.                                                                                |
 | `end_time`               | Per run  | none            | ISO-8601 time for time-range mode. Required with `start_time`.                                                    |
 | `nodelist`               | Per run  | none            | Optional comma-separated Kubernetes node names for time-range mode.                                               |
-| `kubeconfig`             | No       | client default  | Optional kubeconfig path. Falls back to in-cluster credentials, then the default kubeconfig.                     |
+| `kubeconfig`             | No       | client default  | Optional kubeconfig path. Falls back to `KUBECONFIG` or `~/.kube/config`, then in-cluster credentials.           |
 | `context`                | No       | current context | Optional kubeconfig context name.                                                                                 |
 | `namespace`              | No       | all namespaces  | Optional namespace scope. Also allows bare workload names in `ids` mode. Required when `placement_records_enabled` is set. |
 | `timeout_seconds`        | No       | `60`            | Timeout for each Kubernetes API request.                                                                          |

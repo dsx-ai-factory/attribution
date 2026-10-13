@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import os
 import threading
 
 
@@ -145,19 +146,36 @@ class KubernetesClient:
         from kubernetes import client, config
         from kubernetes.dynamic import DynamicClient
 
+        configuration = client.Configuration()
         if self.kubeconfig or self.context:
-            api_client = config.new_client_from_config(
+            config.load_kube_config(
                 config_file=self.kubeconfig,
                 context=self.context,
+                client_configuration=configuration,
             )
         else:
             try:
-                config.load_incluster_config()
+                config.load_kube_config(client_configuration=configuration)
             except config.ConfigException:
-                api_client = config.new_client_from_config()
-            else:
-                api_client = client.ApiClient()
+                if os.environ.get("KUBECONFIG"):
+                    raise
+                configuration = client.Configuration()
+                config.load_incluster_config(client_configuration=configuration)
+        api_client = client.ApiClient(configuration)
+        _set_default_request_timeout(api_client, self.timeout_seconds)
         return DynamicClient(api_client)
+
+
+def _set_default_request_timeout(api_client, timeout_seconds: float) -> None:
+    """Apply a timeout to calls, including dynamic discovery requests."""
+    call_api = api_client.call_api
+
+    def call_api_with_timeout(*args, **kwargs):
+        if kwargs.get("_request_timeout") is None:
+            kwargs["_request_timeout"] = timeout_seconds
+        return call_api(*args, **kwargs)
+
+    api_client.call_api = call_api_with_timeout
 
 
 def _wrap(error: Exception) -> KubernetesClientError:
