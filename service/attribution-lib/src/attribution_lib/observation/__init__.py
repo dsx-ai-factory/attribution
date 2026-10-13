@@ -39,7 +39,9 @@ class Context(InboundContext):
 
         return cls(
             time_interval=time_interval,
-            resources=validate_resource_set(data.get("resources") or "AllJobResources"),
+            resources=validate_resource_set(
+                data["resources"] if data.get("resources") is not None else "AllJobResources"
+            ),
             source=obs_source,
             format=obs_format,
             timezone=timezone,

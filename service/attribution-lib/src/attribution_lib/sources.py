@@ -72,7 +72,9 @@ class Source(NamedTuple):
             line_num=data.get("line_num"),
             datum=data["datum"],
             time=time,
-            resources=validate_resource_set(data.get("resources") or "AllJobResources"),
+            resources=validate_resource_set(
+                data["resources"] if data.get("resources") is not None else "AllJobResources"
+            ),
             rule=data.get("rule"),
             declared_node=data.get("declared_node"),
         )

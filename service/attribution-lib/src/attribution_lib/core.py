@@ -285,10 +285,11 @@ def calculate_symptoms(
     bad_node_result: Optional["CalcBadNodesAttributionResult"] = None,
     recorder: Optional[DecisionRecorder] = None,
 ) -> SymptomSet[str]:
-    """Calculate job-level symptoms from per-node attributions and raw keywords.
+    """Calculate job-level symptoms from attributions and raw keywords.
 
-    Aggregates all per-node symptoms into a job-level SymptomSet, then runs
-    refiner rules (including DAG cascade pruning as the final refiner).
+    Aggregates per-node symptoms and application symptoms with unknown node
+    identity into a job-level SymptomSet, then runs refiner rules (including
+    DAG cascade pruning as the final refiner).
     """
     raw_keywords = raw_keywords or SymptomSet()
 

@@ -18,11 +18,11 @@ from attribution_lib.job_info import JobInfo
 from attribution_lib.observation.inbound import (
     Source as ObservationSource,
 )
+from attribution_lib.serialization import serialize
 from attribution_lib.sources import (
     Source,
     SourceSet,
     SymptomSet,
-    json_helper,
 )
 
 # NCCL log lines embed a PID in hostnames (``host<pid>``), sometimes with
@@ -245,7 +245,10 @@ class JobNodeAttributions:
         return res
 
     def to_dict(self) -> dict[str, Any]:
-        return {"attributions": json_helper(self.attributions)}
+        result = {"attributions": serialize(self.attributions)}
+        if not self.job_level.is_void():
+            result["job_level"] = serialize(self.job_level)
+        return result
 
     def add(self, nodes: Iterable[str], attribution: SourceSet[str]) -> None:
         for node in nodes:

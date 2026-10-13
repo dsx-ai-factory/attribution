@@ -194,6 +194,21 @@ class TestNodeAttributionGroup:
 
 
 class TestJobNodeAttributions:
+    def test_unassigned_sources_survive_merge_and_demotion(self, full_context):
+        base = Source(full_context, 1, "test datum", datetime.now(), AllJobResources, "test_rule")
+        original = JobNodeAttributions()
+        original.job_level.add(SourceSet("symptom").add(base))
+        merged = JobNodeAttributions().update(original)
+
+        assert merged.num_nodes() == 0
+        assert list(merged.job_level["symptom"]) == [base]
+        assert "job_level" in merged.to_dict()
+        merged.clear()
+        assert not merged.job_level.has_bad()
+        assert merged.job_level.has_interesting()
+        assert original.job_level.has_bad()
+        assert "job_level" in merged.to_dict()
+
     def test_attribute_and_update(self, full_context):
         job_attrs = JobNodeAttributions()
         now = datetime.now()

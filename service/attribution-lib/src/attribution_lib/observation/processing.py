@@ -24,6 +24,7 @@ from attribution_lib.observation.inbound import (
     Format,
     NodeStr,
     RawLogLine,
+    Source as ObservationSource,
     TimeseriesEntry,
 )
 from attribution_lib.resources import get_single_node
@@ -83,6 +84,10 @@ class BodyFallbacks:
     - `require_node` only: the entry is dropped
     - `parse_node` only: the node is read from the body if possible, else ANY
     - both: the node is read from the body, else the entry is dropped
+
+    Application logs retain unknown identity as an empty resource set instead
+    of ANY. An explicitly empty application-log declaration also disables body
+    node inference. Only explicit `AllJobResources` applies to every job node.
 
     `parse_timestamp` and `require_timestamp` pair the same way. When `ts` is null:
 
@@ -362,14 +367,24 @@ class TimeseriesEntryObj(EntryBase):
     def _verified_resources(self, job_info: JobInfo) -> ResourceSet:
         """The declared resources, with the declared node checked against the job.
 
-        ANY when `AllJobResources` was declared, or when nothing was declared, nothing could be parsed
-        with `parse_node`, and `require_node` is off. Replicas ride along unread.
+        ANY when `AllJobResources` was declared, or for non-application sources
+        when nothing could be parsed and `require_node` is off. Application logs
+        preserve unknown identity as an empty set. Replicas ride along unread.
 
         Raises UnidentifiableNodeError when `require_node` finds no node, or when anything other than
         exactly one node was declared; UnknownNodeError when that node is not in the job.
         """
         if self._resources == ResourceSetClass.ANY:
             return ResourceSetClass.ANY
+
+        # An explicitly empty application-log resource set declares unknown
+        # identity. Do not reinterpret the body as a replacement declaration.
+        if (
+            self._context.source == ObservationSource.APPLOG
+            and self._resources is not None
+            and len(self._resources) == 0
+        ):
+            return self._resources
 
         verified: list[ResourceBase] = []
         node_count = 0
@@ -391,6 +406,8 @@ class TimeseriesEntryObj(EntryBase):
         if len(verified) == 0:
             if self._body_fallbacks.require_node:
                 raise UnidentifiableNodeError(self.body())
+            if self._context.source == ObservationSource.APPLOG:
+                return ResourceSetClass()
             return ResourceSetClass.ANY
 
         # Potentially relaxable later; for now this matches every other format's one node per entry.
@@ -417,6 +434,10 @@ class TimeseriesEntryObj(EntryBase):
 
     def resources(self, job_info: Optional[JobInfo] = None) -> ResourceSet:
         if job_info is None:
+            # Application-log errors with invalid or conflicting declarations
+            # remain job-level evidence, without acquiring every job node.
+            if self._context.source == ObservationSource.APPLOG and self._resources != ResourceSetClass.ANY:
+                return ResourceSetClass()
             return ResourceSetClass.ANY
         return self._verified_resources(job_info)
 

@@ -184,7 +184,8 @@ def applog_extract_node_rank(line: str) -> tuple[Optional[str], Optional[int]]:
         #   what():  [PG 13 Rank 6] NCCL watchdog thread terminated with exception: CUDA error: device-side assert triggered
         # CUDA kernel errors might be asynchronously reported at some other API call, so the stacktrace below might be incorrect.
         #
-        rank = 0
+        # These messages carry no observed node or rank.
+        rank = None
     elif line.startswith("[rank"):
         # extract 4 from
         # [rank4]:   File \"/usr/lib/python3.10/runpy.py\", line 196, in _run_module_as_main\n",
@@ -196,7 +197,7 @@ def applog_extract_node_rank(line: str) -> tuple[Optional[str], Optional[int]]:
         try:
             if " " in rank_or_node:
                 # if it's not a valid node name
-                rank = 0
+                rank = None
             else:
                 rank = int(rank_or_node)
         except ValueError:
@@ -206,7 +207,7 @@ def applog_extract_node_rank(line: str) -> tuple[Optional[str], Optional[int]]:
     # Every NCCL prefix includes [cudaDev]; skip impossible matches cheaply.
     if "[" in line and (nccl := NCCL_HOST_PID_TID_REGEX.search(line)) is not None:
         node = nccl.group("node")
-        # Wipe timestamp-driven rank 0; keep a real srun / [rankN] prefix.
+        # Keep only a real srun / [rankN] rank alongside the NCCL hostname.
         rank = _leading_explicit_applog_rank(line)
     return node, rank
 

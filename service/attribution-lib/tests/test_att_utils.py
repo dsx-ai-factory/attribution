@@ -213,11 +213,13 @@ class TestApplogExtractNodeRank:
             "wandb: error occurred",
             "Writing temporary files back into original files",
             "invalid rank: error",
+            "(Worker pid=123, ip=192.0.2.1) NET/IB: Got completion from peer 192.0.2.2",
+            "[2026-01-02 03:04:05] RuntimeError: training stopped",
         ],
     )
-    def test_special_cases_return_rank_zero(self, log_line):
-        """Test that special cases return rank 0."""
-        assert applog_extract_node_rank(log_line) == (None, 0)
+    def test_unidentified_prefixes_preserve_unknown_rank(self, log_line):
+        """Neither message content nor a producer IP establishes a rank."""
+        assert applog_extract_node_rank(log_line) == (None, None)
 
     def test_empty_string(self):
         """Test empty string handling."""
