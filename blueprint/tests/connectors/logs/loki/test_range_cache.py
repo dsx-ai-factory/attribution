@@ -261,6 +261,14 @@ def test_file_store_tightens_existing_directories_and_ignores_planted_temp_symli
     assert sorted(path.name for path in bucket_dir.iterdir()) == sorted([final.name, planted.name])
 
 
+def test_file_store_refuses_directory_owned_by_another_user(tmp_path, monkeypatch):
+    root = tmp_path / "cache"
+    root.mkdir()
+    monkeypatch.setattr(os, "getuid", lambda: root.stat().st_uid + 1)
+    with pytest.raises(PermissionError, match="owned by uid"):
+        FileRangeCacheStore(root)
+
+
 def test_file_store_rejects_unexpected_keys(tmp_path):
     store = FileRangeCacheStore(tmp_path)
     with pytest.raises(ValueError):
