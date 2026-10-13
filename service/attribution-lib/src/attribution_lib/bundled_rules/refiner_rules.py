@@ -488,6 +488,9 @@ def _remove_connection_closed_cascade(symptoms, my_bad_nodes) -> None:
 def _handle_link_down_time_proximity(symptoms, my_bad_nodes, event_stream: EventStream) -> None:
     """Handle link down(east-west) without IB errors using watchdog time-proximity."""
     link_down = "link down(east-west)"
+    # This is job-level time correlation, not a same-node composite. Unknown
+    # source identity must not hide a timestamped link-down observation.
+    evidence_groups = [group for _, group in my_bad_nodes.symptom_groups()]
 
     watchdog_cancellation_timestamp = None
     for watchdog_symptom in _WATCHDOG_SYMPTOMS:
@@ -504,8 +507,7 @@ def _handle_link_down_time_proximity(symptoms, my_bad_nodes, event_stream: Event
         threshold = timeout_seconds + buffer_seconds
 
         keep_link_down_in_symptoms = False
-        for _node, node_group in my_bad_nodes.items():
-            errors = node_group.attributions
+        for errors in evidence_groups:
             if link_down in errors:
                 node_link_down_set = errors[link_down]
                 to_discard = []
@@ -530,8 +532,7 @@ def _handle_link_down_time_proximity(symptoms, my_bad_nodes, event_stream: Event
             _discard_ib_cascade(symptoms)
     else:
         symptoms.discard(link_down)
-        for _node, node_group in my_bad_nodes.items():
-            errors = node_group.attributions
+        for errors in evidence_groups:
             if link_down in errors:
                 errors.discard(link_down)
 
@@ -1600,8 +1601,9 @@ def ib_symptom_cleanup(context: RefinerContext):
 
     if has_ib_error:
         if "link down(east-west)" in symptoms:
-            for _node, node_group in my_bad_nodes.items():
-                errors = node_group.attributions
+            # IB corroboration is also job-level; it does not establish which
+            # node emitted an unassigned link-down entry.
+            for _, errors in my_bad_nodes.symptom_groups():
                 if "link down(east-west)" in errors:
                     symptoms.add(errors["link down(east-west)"])
                     errors.add(errors["link down(east-west)"])

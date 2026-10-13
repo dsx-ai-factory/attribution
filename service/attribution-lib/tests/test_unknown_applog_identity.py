@@ -5,6 +5,7 @@
 
 import json
 from collections import defaultdict
+from datetime import timedelta
 
 import pytest
 
@@ -106,3 +107,52 @@ def test_unknown_emitter_preserves_timeout_reason(request, event_manager, simple
     assert attributions.num_nodes() == 0
     sources = attributions.job_level["Cancelled by Timeout"]
     assert any(source.datum == body and not source.resources for source in sources)
+
+
+@pytest.mark.parametrize("identity", ["timestamp_prefix", "explicit_unknown", "explicit_rank"])
+def test_link_down_watchdog_keeps_hardware_outcome_without_inventing_node(
+    request, event_manager, simple_job_factory, timezone, identity
+):
+    """Exercise ingestion through refinement for timestamped port-error evidence."""
+    job = simple_job_factory(nodes=["node-a", "node-b"], state="FAILED", exit_code_signal=1)
+    stream = event_manager.create_stream(request.node.name)
+    attributor = Attributor.new(stream, job)
+    port_time = job.job_start_time + timedelta(seconds=60)
+    watchdog_time = port_time + timedelta(seconds=600)
+    prefix = f"{port_time:%Y-%m-%dT%H%M%S%z} 0: " if identity == "timestamp_prefix" else "0: "
+    port_entry = {"body": f"{prefix}[{port_time:%Y-%m-%d %H:%M:%S}] NCCL WARN NET/IB : mlx5_0 port error"}
+    if identity == "explicit_unknown":
+        port_entry["resources"] = []
+    watchdog_entry = {
+        "body": (
+            f"0: [E{watchdog_time:%m%d %H:%M:%S}.000000 ProcessGroupNCCL.cpp:685] [Rank 0] "
+            "Watchdog caught collective operation timeout: WorkNCCL(SeqNum=123, OpType=ALLREDUCE, "
+            "Timeout(ms)=600000) ran for 600000 milliseconds before timing out."
+        )
+    }
+    attributor.ingest(
+        Observation(
+            Context(
+                TimeInterval(job.job_start_time, job.job_end_time),
+                AllJobResources,
+                Source.APPLOG,
+                Format.ENTRY_TIMESERIES,
+                timezone,
+            ),
+            [port_entry, watchdog_entry],
+        )
+    )
+
+    result = attributor.attribute()
+
+    assert result.outcome_attr.value().outcome == "Fail InfraHW"
+    assert "link down(east-west)" in result.symptoms
+    assert "PyTorch NCCL watchdog" not in result.symptoms
+    bad, interesting, epilog = (defaultdict(set) for _ in range(3))
+    result.bad_nodes_attr.my_bad_nodes.extract_bad_interesting_epilog(bad, interesting, epilog)
+    assert set(bad) & set(job.nodes) == ({"node-a"} if identity == "explicit_rank" else set())
+    if identity != "explicit_rank":
+        # The explicitly ranked watchdog can remain interesting on node-a;
+        # the unassigned port error must not become that node's evidence.
+        assert all("link down(east-west)" not in group for _, group in result.bad_nodes_attr.my_bad_nodes.items())
+        assert all(not source.resources for source in result.symptoms["link down(east-west)"])
