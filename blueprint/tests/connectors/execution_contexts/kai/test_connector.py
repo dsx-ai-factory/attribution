@@ -2,7 +2,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import json
-import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -11,7 +10,7 @@ import pytest
 from attribution_blueprint import mca_registry
 from attribution_blueprint.connectors.execution_contexts.kai import KaiExecutionContextAdapter
 from attribution_blueprint.connectors.execution_contexts.kai.connector import _resolve_owner
-from attribution_blueprint.connectors.execution_contexts.kubectl_client import KubectlError
+from attribution_blueprint.connectors.execution_contexts.kubernetes_client import KubernetesClientError
 from attribution_blueprint.exceptions import MCAError
 
 FIXTURES = Path(__file__).parent.parent.parent.parent / "fixtures"
@@ -108,87 +107,105 @@ def _jobset(name, uid, completed_at=None, failed_at=None, namespace="team-alpha"
     return {"metadata": {"name": name, "namespace": namespace, "uid": uid}, "status": status}
 
 
-def _wire_kubectl(mocker, podgroups=None, pods=None, jobs=None, jobsets=None):
-    """Patch `subprocess.run` with a router over PodGroups, Pods and owners.
+class _FakeKubernetesClient:
+    def __init__(self, podgroups=None, pods=None, jobs=None, jobsets=None):
+        self.podgroups = list(podgroups or [])
+        self.pods = list(pods or [])
+        if jobs is None:
+            jobs = [
+                _job(owner["name"], owner["uid"], namespace=pg["metadata"]["namespace"])
+                for pg in self.podgroups
+                if (owner := _resolve_owner(pg["metadata"])) is not None and owner["kind"] == "Job"
+            ]
+        self.jobs = list(jobs)
+        if jobsets is None:
+            jobsets = [
+                _jobset(owner["name"], owner["uid"], namespace=pg["metadata"]["namespace"])
+                for pg in self.podgroups
+                if (owner := _resolve_owner(pg["metadata"])) is not None and owner["kind"] == "JobSet"
+            ]
+        self.jobsets = list(jobsets)
+        self.calls: list[dict] = []
+        self.failures: dict[str, Exception] = {}
 
-    Honors `-n NS` on lists, and answers `get <resource> <name>` with the
-    object or a NotFound error, like kubectl. When owner lists are omitted,
-    every supported PodGroup gets a matching active owner; pass `[]` for none.
-    """
-    podgroups = list(podgroups or [])
-    pods = list(pods or [])
-    if jobs is None:
-        jobs = [
-            _job(owner["name"], owner["uid"], namespace=pg["metadata"]["namespace"])
-            for pg in podgroups
-            if (owner := _resolve_owner(pg["metadata"])) is not None and owner["kind"] == "Job"
+    def _items(self, kind):
+        return {
+            "PodGroup": self.podgroups,
+            "Pod": self.pods,
+            "Job": self.jobs,
+            "JobSet": self.jobsets,
+        }[kind]
+
+    def _selected(self, kind, namespace, label_selector=None):
+        selected = [
+            item
+            for item in self._items(kind)
+            if namespace is None or (item.get("metadata") or {}).get("namespace") == namespace
         ]
-    jobs = list(jobs)
-    if jobsets is None:
-        jobsets = [
-            _jobset(owner["name"], owner["uid"], namespace=pg["metadata"]["namespace"])
-            for pg in podgroups
-            if (owner := _resolve_owner(pg["metadata"])) is not None and owner["kind"] == "JobSet"
-        ]
-    jobsets = list(jobsets)
-
-    def _side_effect(cmd, **kwargs):
-        args = list(cmd)
-        positional: list[str] = []
-        ns = None
-        label_selector = None
-        i = 0
-        while i < len(args):
-            tok = args[i]
-            if tok in ("--kubeconfig", "--context", "-o"):
-                i += 2
-                continue
-            if tok == "-n":
-                ns = args[i + 1]
-                i += 2
-                continue
-            if tok == "-l":
-                label_selector = args[i + 1]
-                i += 2
-                continue
-            if tok == "-A":
-                i += 1
-                continue
-            positional.append(tok)
-            i += 1
-        _binary, _verb, resource, *rest = positional
-
-        def _matches(items):
-            selected = [o for o in items if ns is None or (o.get("metadata") or {}).get("namespace") == ns]
-            if label_selector is None:
-                return selected
+        if label_selector:
             key, value = label_selector.split("=", 1)
-            return [o for o in selected if ((o.get("metadata") or {}).get("labels") or {}).get(key) == value]
+            selected = [
+                item
+                for item in selected
+                if ((item.get("metadata") or {}).get("labels") or {}).get(key) == value
+            ]
+        return selected
 
-        if resource.startswith("podgroups"):
-            items = podgroups
-        elif resource == "pods":
-            items = pods
-        elif resource == "job.batch":
-            items = jobs
-        elif resource == "jobsets.jobset.x-k8s.io":
-            items = jobsets
-        else:
-            raise AssertionError(f"unexpected resource {resource!r}")
-        if rest:
-            match = [o for o in _matches(items) if o["metadata"].get("name") == rest[0]]
-            if not match:
-                raise subprocess.CalledProcessError(
-                    returncode=1,
-                    cmd=cmd,
-                    stderr=f'Error from server (NotFound): {resource} "{rest[0]}" not found',
-                )
-            payload = match[0]
-        else:
-            payload = {"items": _matches(items)}
-        return subprocess.CompletedProcess(args=cmd, returncode=0, stdout=json.dumps(payload), stderr="")
+    def get_one(self, kind, name, *, namespace, group=None, api_version=None):
+        self.calls.append(
+            {
+                "op": "get_one",
+                "kind": kind,
+                "name": name,
+                "namespace": namespace,
+                "group": group,
+                "api_version": api_version,
+            }
+        )
+        if kind in self.failures:
+            raise self.failures[kind]
+        return next(
+            (
+                item
+                for item in self._selected(kind, namespace)
+                if (item.get("metadata") or {}).get("name") == name
+            ),
+            None,
+        )
 
-    return mocker.patch("subprocess.run", side_effect=_side_effect)
+    def list(
+        self,
+        kind,
+        *,
+        namespace,
+        field_selector=None,
+        label_selector=None,
+        group=None,
+        api_version=None,
+    ):
+        self.calls.append(
+            {
+                "op": "list",
+                "kind": kind,
+                "namespace": namespace,
+                "field_selector": field_selector,
+                "label_selector": label_selector,
+                "group": group,
+                "api_version": api_version,
+            }
+        )
+        if kind in self.failures:
+            raise self.failures[kind]
+        return self._selected(kind, namespace, label_selector)
+
+
+def _wire_kubectl(mocker, podgroups=None, pods=None, jobs=None, jobsets=None):
+    fake = _FakeKubernetesClient(podgroups, pods, jobs, jobsets)
+    mocker.patch(
+        "attribution_blueprint.connectors.execution_contexts.kai.connector.KubernetesClient",
+        return_value=fake,
+    )
+    return fake
 
 
 @pytest.fixture
@@ -381,15 +398,11 @@ def test_missing_podgroup_is_skipped(mocker):
 def test_podgroup_deleted_between_list_and_lookup_is_skipped(mocker):
     """The listing saw the PodGroup but a later lookup finds nothing."""
     pg = _podgroup()
-    run_mock = _wire_kubectl(mocker, [pg], [])
+    fake = _wire_kubectl(mocker, [pg], [])
     adapter = KaiExecutionContextAdapter(namespace="team-alpha")
     assert len(adapter.discover_by_time_range(START, END)) == 1
 
-    run_mock.side_effect = subprocess.CalledProcessError(
-        returncode=1,
-        cmd=["kubectl"],
-        stderr='Error from server (NotFound): podgroups.scheduling.run.ai "pg-a" not found',
-    )
+    fake.podgroups = []
 
     assert adapter.discover_by_ids(["team-alpha/pg-a"]) == []
 
@@ -479,11 +492,14 @@ def test_jobset_joins_only_pods_from_current_child_jobs(mocker):
         _pod("current-0", controller=("Job", "uid-current")),
         _pod("stale-0", controller=("Job", "uid-stale")),
     ]
-    _wire_kubectl(mocker, [pg], pods, jobs=jobs)
+    fake = _wire_kubectl(mocker, [pg], pods, jobs=jobs)
 
     [ctx] = KaiExecutionContextAdapter().discover_by_ids(["team-alpha/pg-a"])
 
     assert ctx["pod_names"] == ["current-0"]
+    assert any(call["kind"] == "JobSet" and call["group"] == "jobset.x-k8s.io" for call in fake.calls)
+    assert any(call["kind"] == "Job" and call["api_version"] == "batch/v1" for call in fake.calls)
+    assert any(call["kind"] == "Pod" and call["api_version"] == "v1" for call in fake.calls)
 
 
 def test_member_without_a_node_contributes_no_node(mocker):
@@ -552,11 +568,11 @@ def test_podgroup_without_a_verified_owner_job_is_skipped(mocker, podgroup, jobs
 
 
 def test_unsupported_podgroups_are_not_enriched(mocker):
-    run = _wire_kubectl(mocker, [_podgroup(owner_kind="Deployment")], [])
+    fake = _wire_kubectl(mocker, [_podgroup(owner_kind="Deployment")], [])
 
     KaiExecutionContextAdapter(namespace="team-alpha").discover_by_time_range(START, END)
 
-    assert all("pods" not in c.args[0] and "job.batch" not in c.args[0] for c in run.call_args_list[1:])
+    assert all(call["kind"] not in {"Pod", "Job"} for call in fake.calls[1:])
 
 
 @pytest.mark.parametrize(
@@ -626,30 +642,30 @@ def test_pods_are_listed_once_per_namespace(mocker):
         _podgroup(name="pg-b", uid="uid-b", namespace="team-alpha"),
         _podgroup(name="pg-c", uid="uid-c", namespace="team-beta"),
     ]
-    run_mock = _wire_kubectl(mocker, pgs, [])
+    fake = _wire_kubectl(mocker, pgs, [])
 
     KaiExecutionContextAdapter().discover_by_ids(
         ["team-alpha/pg-a", "team-alpha/pg-b", "team-beta/pg-c"]
     )
 
-    pod_lists = [c.args[0] for c in run_mock.call_args_list if "pods" in c.args[0]]
+    pod_lists = [call for call in fake.calls if call["op"] == "list" and call["kind"] == "Pod"]
     assert len(pod_lists) == 2
-    assert all("-A" not in cmd for cmd in pod_lists)
+    assert {call["namespace"] for call in pod_lists} == {"team-alpha", "team-beta"}
 
 
-def test_podgroups_are_requested_by_full_resource_name(mocker):
-    run_mock = _wire_kubectl(mocker, [], [])
+def test_podgroups_are_requested_by_kind_and_group(mocker):
+    fake = _wire_kubectl(mocker, [], [])
 
     KaiExecutionContextAdapter(namespace="team-alpha").discover_by_time_range(START, END)
 
-    assert "podgroups.scheduling.run.ai" in run_mock.call_args_list[0].args[0]
+    assert fake.calls[0]["kind"] == "PodGroup"
+    assert fake.calls[0]["group"] == "scheduling.run.ai"
 
 
 def test_time_range_uses_configured_namespace(mocker):
-    run_mock = _wire_kubectl(mocker, [], [])
+    fake = _wire_kubectl(mocker, [], [])
     KaiExecutionContextAdapter(namespace="team-alpha").discover_by_time_range(START, END)
-    scoped = run_mock.call_args_list[0].args[0]
-    assert "-n" in scoped and "team-alpha" in scoped and "-A" not in scoped
+    assert fake.calls[0]["namespace"] == "team-alpha"
 
     with pytest.raises(ValueError, match="requires eca.kai.namespace"):
         KaiExecutionContextAdapter().discover_by_time_range(START, END)
@@ -668,80 +684,66 @@ def test_bare_id_uses_configured_namespace(mocker):
     assert ctx["id"] == "uid-pg-a"
 
 
-def test_kubectl_invocation_carries_kubeconfig_and_context(mocker):
-    run_mock = _wire_kubectl(mocker, [_podgroup()], [])
+def test_kubernetes_client_carries_kubeconfig_context_and_timeout(mocker):
+    client_cls = mocker.patch(
+        "attribution_blueprint.connectors.execution_contexts.kai.connector.KubernetesClient",
+        return_value=_FakeKubernetesClient([_podgroup()], []),
+    )
 
     KaiExecutionContextAdapter(
-        kubectl_path="/usr/local/bin/kubectl", kubeconfig="/tmp/kc", context="kind-kai"
+        kubeconfig="/tmp/kc",
+        context="kind-kai",
+        timeout_seconds=42,
     ).discover_by_ids(["team-alpha/pg-a"])
 
-    cmd = run_mock.call_args_list[0].args[0]
-    assert cmd[0] == "/usr/local/bin/kubectl"
-    assert "--kubeconfig" in cmd and "/tmp/kc" in cmd
-    assert "--context" in cmd and "kind-kai" in cmd
+    client_cls.assert_called_once_with(
+        kubeconfig="/tmp/kc",
+        context="kind-kai",
+        timeout_seconds=42,
+    )
 
 
 def test_failed_podgroup_list_fails_the_pass(mocker):
-    mocker.patch("subprocess.run", side_effect=subprocess.TimeoutExpired(cmd=["kubectl"], timeout=60))
+    fake = _wire_kubectl(mocker, [], [])
+    fake.failures["PodGroup"] = KubernetesClientError("connection timed out")
 
-    with pytest.raises(KubectlError):
+    with pytest.raises(KubernetesClientError):
         KaiExecutionContextAdapter(namespace="team-alpha").discover_by_time_range(START, END)
 
 
-def _fail_on(mocker, resource, stderr):
-    """Route kubectl normally, except that queries for `resource` fail."""
-    run = _wire_kubectl(mocker, [_podgroup()], [], [])
-    router = run.side_effect
-
-    def _side_effect(cmd, **kwargs):
-        if resource in cmd:
-            raise subprocess.CalledProcessError(returncode=1, cmd=cmd, stderr=stderr)
-        return router(cmd, **kwargs)
-
-    run.side_effect = _side_effect
+def _fail_on(mocker, resource, error):
+    fake = _wire_kubectl(mocker, [_podgroup()], [], [])
+    fake.failures[resource] = KubernetesClientError(error)
 
 
 def test_denied_pod_list_fails_the_pass(mocker):
-    _fail_on(mocker, "pods", "Error from server (Forbidden): pods is forbidden")
+    _fail_on(mocker, "Pod", "Forbidden: pods is forbidden")
 
-    with pytest.raises(KubectlError, match="Forbidden"):
+    with pytest.raises(KubernetesClientError, match="Forbidden"):
         KaiExecutionContextAdapter(namespace="team-alpha").discover_by_time_range(START, END)
 
 
 def test_denied_owner_lookup_fails_the_pass(mocker):
-    _fail_on(mocker, "job.batch", "Error from server (Forbidden): jobs.batch is forbidden")
+    _fail_on(mocker, "Job", "Forbidden: jobs.batch is forbidden")
 
-    with pytest.raises(KubectlError, match="Forbidden"):
+    with pytest.raises(KubernetesClientError, match="Forbidden"):
         KaiExecutionContextAdapter().discover_by_ids(["team-alpha/pg-a"])
 
 
 def test_denied_jobset_lookup_fails_the_pass(mocker):
     pg = _podgroup(owner_kind="JobSet")
-    run = _wire_kubectl(mocker, [pg], [])
-    router = run.side_effect
+    fake = _wire_kubectl(mocker, [pg], [])
+    fake.failures["JobSet"] = KubernetesClientError("Forbidden: jobsets are forbidden")
 
-    def _side_effect(cmd, **kwargs):
-        if "jobsets.jobset.x-k8s.io" in cmd:
-            raise subprocess.CalledProcessError(
-                returncode=1,
-                cmd=cmd,
-                stderr="Error from server (Forbidden): jobsets.jobset.x-k8s.io is forbidden",
-            )
-        return router(cmd, **kwargs)
-
-    run.side_effect = _side_effect
-
-    with pytest.raises(KubectlError, match="Forbidden"):
+    with pytest.raises(KubernetesClientError, match="Forbidden"):
         KaiExecutionContextAdapter().discover_by_ids(["team-alpha/pg-a"])
 
 
 def test_denied_podgroup_lookup_fails_instead_of_skipping(mocker):
-    mocker.patch(
-        "subprocess.run",
-        side_effect=subprocess.CalledProcessError(returncode=1, cmd=["kubectl"], stderr="Error (Forbidden)"),
-    )
+    fake = _wire_kubectl(mocker, [], [])
+    fake.failures["PodGroup"] = KubernetesClientError("Forbidden")
 
-    with pytest.raises(KubectlError):
+    with pytest.raises(KubernetesClientError):
         KaiExecutionContextAdapter().discover_by_ids(["team-alpha/pg-a"])
 
 
@@ -753,7 +755,8 @@ def test_registered_as_eca_component():
     component = mca_registry.get_component("eca", "kai")
 
     assert component.name == "kai"
-    assert {"ids", "kubectl_path", "kubeconfig", "context", "namespace", "timeout_seconds"} <= set(component.schema)
+    assert {"ids", "kubeconfig", "context", "namespace", "timeout_seconds"} <= set(component.schema)
+    assert "kubectl_path" not in component.schema
 
 
 def test_builder_defaults_and_validation():
