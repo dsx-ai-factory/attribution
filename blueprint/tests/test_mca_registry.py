@@ -168,7 +168,6 @@ def test_built_schema_has_expected_shape():
         "start_time",
         "end_time",
         "nodelist",
-        "kubectl_path",
         "kubeconfig",
         "context",
         "namespace",
