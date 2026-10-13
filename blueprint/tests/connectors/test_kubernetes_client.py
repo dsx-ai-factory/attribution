@@ -199,32 +199,97 @@ def test_error_messages_do_not_leak_response_bodies():
 
 def test_client_is_built_once_and_reused(mocker):
     pytest.importorskip("kubernetes")
+    configuration = SimpleNamespace()
+    api_client = SimpleNamespace(call_api=mocker.Mock(return_value={}))
     fake = _FakeDynamic()
     dynamic = mocker.patch("kubernetes.dynamic.DynamicClient", return_value=fake)
-    build = mocker.patch(
-        "kubernetes.config.new_client_from_config",
-        return_value=SimpleNamespace(),
+    configuration_cls = mocker.patch(
+        "kubernetes.client.Configuration",
+        return_value=configuration,
     )
+    load = mocker.patch("kubernetes.config.load_kube_config")
+    api_client_cls = mocker.patch("kubernetes.client.ApiClient", return_value=api_client)
     client = KubernetesClient(kubeconfig="/tmp/kc", context="ctx")
 
     for _ in range(3):
         client.list("Pod", namespace="ns")
 
-    build.assert_called_once_with(config_file="/tmp/kc", context="ctx")
-    dynamic.assert_called_once_with(build.return_value)
-
-
-def test_unset_kubeconfig_and_context_try_incluster_then_default_kubeconfig(mocker):
-    pytest.importorskip("kubernetes")
-    from kubernetes import config
-
-    mocker.patch("kubernetes.config.load_incluster_config", side_effect=config.ConfigException())
-    mocker.patch("kubernetes.dynamic.DynamicClient", return_value=_FakeDynamic())
-    build = mocker.patch(
-        "kubernetes.config.new_client_from_config",
-        return_value=SimpleNamespace(),
+    configuration_cls.assert_called_once_with()
+    load.assert_called_once_with(
+        config_file="/tmp/kc",
+        context="ctx",
+        client_configuration=configuration,
     )
+    api_client_cls.assert_called_once_with(configuration)
+    dynamic.assert_called_once_with(api_client)
+
+
+def test_unset_kubeconfig_and_context_uses_default_kubeconfig_first(mocker):
+    pytest.importorskip("kubernetes")
+    mocker.patch.dict("os.environ", {"KUBECONFIG": ""}, clear=False)
+    configuration = SimpleNamespace()
+    api_client = SimpleNamespace(call_api=mocker.Mock(return_value={}))
+    mocker.patch("kubernetes.client.Configuration", return_value=configuration)
+    load = mocker.patch("kubernetes.config.load_kube_config")
+    incluster = mocker.patch("kubernetes.config.load_incluster_config")
+    mocker.patch("kubernetes.client.ApiClient", return_value=api_client)
+    mocker.patch("kubernetes.dynamic.DynamicClient", return_value=_FakeDynamic())
 
     KubernetesClient().list("Pod", namespace="ns")
 
-    build.assert_called_once_with()
+    load.assert_called_once_with(client_configuration=configuration)
+    incluster.assert_not_called()
+
+
+def test_missing_default_kubeconfig_falls_back_to_local_incluster_config(mocker):
+    pytest.importorskip("kubernetes")
+    from kubernetes import config
+
+    mocker.patch.dict("os.environ", {"KUBECONFIG": ""}, clear=False)
+    kubeconfig_configuration = SimpleNamespace()
+    incluster_configuration = SimpleNamespace()
+    mocker.patch(
+        "kubernetes.client.Configuration",
+        side_effect=[kubeconfig_configuration, incluster_configuration],
+    )
+    mocker.patch("kubernetes.config.load_kube_config", side_effect=config.ConfigException())
+    incluster = mocker.patch("kubernetes.config.load_incluster_config")
+    api_client = SimpleNamespace(call_api=mocker.Mock(return_value={}))
+    api_client_cls = mocker.patch("kubernetes.client.ApiClient", return_value=api_client)
+    mocker.patch("kubernetes.dynamic.DynamicClient", return_value=_FakeDynamic())
+
+    KubernetesClient().list("Pod", namespace="ns")
+
+    incluster.assert_called_once_with(client_configuration=incluster_configuration)
+    api_client_cls.assert_called_once_with(incluster_configuration)
+
+
+def test_explicit_kubeconfig_failure_does_not_fall_back_to_incluster(mocker):
+    pytest.importorskip("kubernetes")
+    from kubernetes import config
+
+    mocker.patch.dict("os.environ", {"KUBECONFIG": "/tmp/broken"}, clear=False)
+    mocker.patch("kubernetes.client.Configuration", return_value=SimpleNamespace())
+    mocker.patch("kubernetes.config.load_kube_config", side_effect=config.ConfigException("invalid"))
+    incluster = mocker.patch("kubernetes.config.load_incluster_config")
+
+    with pytest.raises(KubernetesClientError, match="ConfigException"):
+        KubernetesClient().list("Pod", namespace="ns")
+
+    incluster.assert_not_called()
+
+
+def test_default_timeout_is_applied_to_discovery_api_calls(mocker):
+    pytest.importorskip("kubernetes")
+    configuration = SimpleNamespace()
+    call_api = mocker.Mock(return_value={})
+    api_client = SimpleNamespace(call_api=call_api)
+    mocker.patch("kubernetes.client.Configuration", return_value=configuration)
+    mocker.patch("kubernetes.config.load_kube_config")
+    mocker.patch("kubernetes.client.ApiClient", return_value=api_client)
+    mocker.patch("kubernetes.dynamic.DynamicClient", return_value=_FakeDynamic())
+
+    KubernetesClient(timeout_seconds=7)._client()
+    api_client.call_api("/apis", "GET", _request_timeout=None)
+
+    call_api.assert_called_once_with("/apis", "GET", _request_timeout=7)
