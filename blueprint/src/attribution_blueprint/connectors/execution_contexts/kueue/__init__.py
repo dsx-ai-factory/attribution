@@ -117,8 +117,8 @@ def _build(spec: dict, ctx: dict) -> KueueExecutionContextAdapter:
 
     # `spec.get(..., 60)` returns 60 only when the key is absent; a TOML
     # literal `null` arrives as Python None and must fall back to the same
-    # default. Otherwise None would propagate to `subprocess.run(timeout=None)`,
-    # silently disabling the timeout entirely.
+    # default. Otherwise None would propagate to the Kubernetes client as a
+    # request timeout of `None`, silently disabling the timeout entirely.
     timeout = spec.get("timeout_seconds")
     if timeout is None:
         timeout = 60
@@ -164,7 +164,6 @@ def _build(spec: dict, ctx: dict) -> KueueExecutionContextAdapter:
         if event_max_age <= 0:
             raise MCAError(f"eca.kueue.event_max_age_seconds must be positive, got {event_max_age}")
     return KueueExecutionContextAdapter(
-        kubectl_path=spec.get("kubectl_path", "kubectl"),
         kubeconfig=spec.get("kubeconfig"),
         context=spec.get("context"),
         namespace=spec.get("namespace"),
@@ -184,17 +183,16 @@ _registry.register_component(
         "start_time": _PARAM,
         "end_time": _PARAM,
         "nodelist": _PARAM,
-        "kubectl_path": _PARAM,
-        # Optional path to a kubeconfig file. When unset, kubectl falls back
-        # to its default discovery (KUBECONFIG env var, ~/.kube/config, or an
+        # Optional path to a kubeconfig file. When unset, falls back to its
+        # default discovery (KUBECONFIG env var, ~/.kube/config, or an
         # in-cluster service-account token when running inside a pod).
         "kubeconfig": _PARAM,
         # Optional context name within the resolved kubeconfig. When unset,
-        # kubectl uses the kubeconfig's current-context.
+        # uses the kubeconfig's current-context.
         "context": _PARAM,
         # Optional namespace scope. The empty string (or unset) queries every
-        # namespace via `-A`. Set this to limit blast radius on multi-tenant
-        # clusters or to allow bare `<name>` --ids values.
+        # namespace. Set this to limit blast radius on multi-tenant clusters
+        # or to allow bare `<name>` --ids values.
         "namespace": _PARAM,
         "timeout_seconds": _PARAM,
         "placement_records_enabled": _PARAM,
