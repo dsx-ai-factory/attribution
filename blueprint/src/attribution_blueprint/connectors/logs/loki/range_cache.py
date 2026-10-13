@@ -46,14 +46,18 @@ _KEY_RE = re.compile(r"^[0-9a-f]{64}:\d+$")
 
 
 def _private_directory(path: Path) -> None:
-    """Create `path` if needed and leave it owner-only when this process owns it.
+    """Create `path` if needed and leave it owner-only.
 
     `mkdir(mode=...)` is masked by the umask and never tightens a directory
-    that already exists, so the mode is checked and fixed afterwards.
+    that already exists, so the mode is checked and fixed afterwards. A
+    directory another user owns is refused: its contents could be planted and
+    this process could not make it private.
     """
     path.mkdir(mode=0o700, parents=True, exist_ok=True)
     info = path.stat()
-    if info.st_uid == os.getuid() and stat.S_IMODE(info.st_mode) != 0o700:
+    if info.st_uid != os.getuid():
+        raise PermissionError(f"range cache directory {path} is owned by uid {info.st_uid}, not this process")
+    if stat.S_IMODE(info.st_mode) != 0o700:
         path.chmod(0o700)
 
 
