@@ -1789,8 +1789,7 @@ def test_start_time_uses_earliest_admitted_not_latest(mocker):
 
 def test_build_with_none_timeout_falls_back_to_default():
     """TOML `null` (Python None) for timeout_seconds must fall back to the
-    documented 60s default - NOT propagate to `subprocess.run(timeout=None)`,
-    which would silently disable the timeout."""
+    documented 60s default rather than disabling the request timeout."""
     from attribution_blueprint.connectors.execution_contexts.kueue import _build
 
     adapter = _build({"timeout_seconds": None}, ctx={"framework": "eca"})
