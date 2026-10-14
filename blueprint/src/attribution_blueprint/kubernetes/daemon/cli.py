@@ -26,6 +26,10 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--kubeconfig")
     parser.add_argument("--context")
     parser.add_argument("--jobset-version", default="v1alpha2")
+    parser.add_argument("--enable-kueue", action="store_true")
+    parser.add_argument("--kueue-workload-version", default="v1beta1")
+    parser.add_argument("--enable-kai", action="store_true")
+    parser.add_argument("--kai-pod-group-version", default="v2alpha2")
     parser.add_argument("--sqlite-path", default="/data/placements.db")
     parser.add_argument("--retention-days", type=int, default=30)
     return parser
@@ -51,6 +55,24 @@ def main() -> None:
     api_client = client.ApiClient(configuration)
     _set_default_api_timeout(api_client)
     custom_api = client.CustomObjectsApi(api_client)
+    resource_resolvers = []
+    if args.enable_kueue:
+        from attribution_blueprint.connectors.execution_contexts.kueue.pod_placement.resource_resolver import (
+            KueueResourceResolver,
+        )
+
+        resource_resolvers.append(
+            KueueResourceResolver(custom_api, workload_version=args.kueue_workload_version)
+        )
+    if args.enable_kai:
+        from attribution_blueprint.connectors.execution_contexts.kai.resource_resolver import (
+            KaiResourceResolver,
+        )
+
+        resource_resolvers.append(
+            KaiResourceResolver(custom_api, pod_group_version=args.kai_pod_group_version)
+        )
+
     placement_store = SQLitePlacementStore(args.sqlite_path, retention_days=args.retention_days)
     daemon = KubernetesDaemon(
         client.CoreV1Api(api_client),
@@ -61,6 +83,7 @@ def main() -> None:
             custom_api,
             jobset_version=args.jobset_version,
         ),
+        resource_resolvers=tuple(resource_resolvers),
         queue_size=args.queue_size,
         workers=args.workers,
         watch_timeout_seconds=args.watch_timeout_seconds,
