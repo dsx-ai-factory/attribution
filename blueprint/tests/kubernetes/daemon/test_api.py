@@ -4,10 +4,13 @@
 import pytest
 import requests
 
+from attribution_blueprint.kubernetes.daemon.client import KubernetesDaemonClient
 from attribution_blueprint.kubernetes.daemon.health import HealthState
 from attribution_blueprint.kubernetes.daemon.models import (
+    OwnerReference,
     PlacementRecord,
     ResourceIdentity,
+    ResourceObservation,
 )
 from attribution_blueprint.kubernetes.daemon.server import serve_api
 from attribution_blueprint.kubernetes.daemon.sqlite_store import SQLitePlacementStore
@@ -30,6 +33,15 @@ def _record() -> PlacementRecord:
                 "admission-uid-1",
             ),
         ),
+    )
+
+
+def _capture(store: SQLitePlacementStore, observation: ResourceObservation) -> None:
+    store.capture_observation(
+        observation,
+        source_name=f"{observation.kind.lower()}s",
+        placement=None,
+        advance_checkpoint=False,
     )
 
 
@@ -151,3 +163,127 @@ def test_readiness_reports_disabled_optional_watches(tmp_path):
         "status": "ready",
         "disabledWatches": {"jobsets": "api-not-found"},
     }
+
+
+def test_history_endpoint_returns_controller_descendants_and_relationships(tmp_path):
+    store = SQLitePlacementStore(str(tmp_path / "placements.db"))
+    job = ResourceObservation(
+        cluster_id="cluster-a",
+        api_version="batch/v1",
+        kind="Job",
+        namespace="team-a",
+        name="trainer",
+        uid="job-uid-1",
+        resource_version="1",
+        event_type="ADDED",
+        observed_at="2026-10-14T00:00:00Z",
+        status={"active": 1},
+    )
+    pod = ResourceObservation(
+        cluster_id="cluster-a",
+        api_version="v1",
+        kind="Pod",
+        namespace="team-a",
+        name="trainer-abcde",
+        uid="pod-uid-1",
+        resource_version="2",
+        event_type="MODIFIED",
+        observed_at="2026-10-14T00:00:01Z",
+        owner_references=(
+            OwnerReference(
+                api_version="batch/v1",
+                kind="Job",
+                name="trainer",
+                uid="job-uid-1",
+                controller=True,
+            ),
+        ),
+        selected_metadata={
+            "annotations": {"batch.kubernetes.io/job-completion-index": "0"}
+        },
+        status={"phase": "Running"},
+    )
+    _capture(store, job)
+    _capture(store, pod)
+    server = serve_api(
+        HealthState(),
+        store,
+        0,
+        "team-a",
+        cluster_id="cluster-a",
+    )
+    try:
+        response = requests.get(
+            f"http://127.0.0.1:{server.server_port}/v1/history",
+            params={"namespace": "team-a", "controller_uid": "job-uid-1"},
+            timeout=2,
+        )
+    finally:
+        server.shutdown()
+        server.server_close()
+
+    assert response.status_code == 200
+    history = response.json()
+    assert history["clusterId"] == "cluster-a"
+    assert history["namespace"] == "team-a"
+    assert history["controllerUid"] == "job-uid-1"
+    assert [resource["uid"] for resource in history["resources"]] == [
+        "job-uid-1",
+        "pod-uid-1",
+    ]
+    assert history["relationships"] == [
+        {
+            "owner": {
+                "apiVersion": "batch/v1",
+                "kind": "Job",
+                "namespace": "team-a",
+                "name": "trainer",
+                "uid": "job-uid-1",
+            },
+            "resource": {
+                "apiVersion": "v1",
+                "kind": "Pod",
+                "namespace": "team-a",
+                "name": "trainer-abcde",
+                "uid": "pod-uid-1",
+            },
+            "controller": True,
+        }
+    ]
+    assert [observation["metadata"]["uid"] for observation in history["observations"]] == [
+        "job-uid-1",
+        "pod-uid-1",
+    ]
+    assert history["observations"][1]["selectedMetadata"] == pod.selected_metadata
+
+
+def test_daemon_client_reads_controller_history(tmp_path):
+    store = SQLitePlacementStore(str(tmp_path / "placements.db"))
+    observation = ResourceObservation(
+        cluster_id="cluster-a",
+        api_version="batch/v1",
+        kind="Job",
+        namespace="team-a",
+        name="trainer",
+        uid="job-uid-1",
+        resource_version="1",
+        event_type="SNAPSHOT",
+        observed_at="2026-10-14T00:00:00Z",
+    )
+    _capture(store, observation)
+    server = serve_api(
+        HealthState(),
+        store,
+        0,
+        "team-a",
+        cluster_id="cluster-a",
+    )
+    try:
+        client = KubernetesDaemonClient(f"http://127.0.0.1:{server.server_port}")
+        history = client.get_history("team-a", "job-uid-1")
+    finally:
+        server.shutdown()
+        server.server_close()
+
+    assert history["controllerUid"] == "job-uid-1"
+    assert [item["metadata"]["uid"] for item in history["observations"]] == ["job-uid-1"]

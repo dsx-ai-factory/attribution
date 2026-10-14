@@ -64,3 +64,29 @@ class KubernetesDaemonClient:
         ):
             raise ValueError("daemon returned a placement outside the requested resource")
         return records
+
+    def get_history(self, namespace: str, controller_uid: str) -> dict:
+        if not namespace:
+            raise ValueError("namespace must not be empty")
+        if not controller_uid:
+            raise ValueError("controller_uid must not be empty")
+        response = self.session.get(
+            f"{self.endpoint}/v1/history",
+            params={
+                "namespace": namespace,
+                "controller_uid": controller_uid,
+            },
+            timeout=self.timeout_seconds,
+        )
+        response.raise_for_status()
+        payload = response.json()
+        if not isinstance(payload, dict):
+            raise ValueError("daemon history response must be an object")
+        if payload.get("namespace") != namespace:
+            raise ValueError("daemon returned history outside the requested namespace")
+        if payload.get("controllerUid") != controller_uid:
+            raise ValueError("daemon returned history for a different controller")
+        for field in ("resources", "relationships", "observations"):
+            if not isinstance(payload.get(field), list):
+                raise ValueError(f"daemon history response must contain a {field} list")
+        return payload
