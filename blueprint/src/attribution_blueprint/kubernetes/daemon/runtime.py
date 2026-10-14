@@ -32,6 +32,10 @@ from attribution_blueprint.kubernetes.daemon.watch_sources import (
 from attribution_blueprint.kubernetes.helpers import pod_container_exit_reason, pod_node_failure_reason
 
 
+class _ObservationPersistenceFailed(RuntimeError):
+    pass
+
+
 class KubernetesDaemon:
     """Record Pod placement before optional ownership/scheduler enrichment."""
 
@@ -107,21 +111,33 @@ class KubernetesDaemon:
         while not self.stop_event.is_set():
             try:
                 if resource_version is None:
-                    resources, resource_version = source.list_resources()
+                    resources, listed_resource_version = source.list_resources()
                     for resource in resources:
-                        self._capture(source, resource, "SNAPSHOT")
+                        if not self._capture(source, resource, "SNAPSHOT"):
+                            raise _ObservationPersistenceFailed
+                    resource_version = listed_resource_version
                     self._mark_initial_list_complete(source.name)
 
                 for event in source.stream(resource_version, self.watch_timeout_seconds):
                     resource = event.get("object") or {}
                     metadata = resource.get("metadata") or {}
-                    resource_version = metadata.get("resourceVersion") or resource_version
+                    event_resource_version = metadata.get("resourceVersion")
                     event_type = event.get("type")
                     if event_type in {"ADDED", "MODIFIED", "DELETED"}:
-                        self._capture(source, resource, event_type)
+                        if not self._capture(source, resource, event_type):
+                            raise _ObservationPersistenceFailed
+                        if event_resource_version:
+                            resource_version = event_resource_version
+                    elif event_type == "BOOKMARK" and event_resource_version:
+                        resource_version = event_resource_version
                     if self.stop_event.is_set():
                         break
                 backoff = 1.0
+            except _ObservationPersistenceFailed:
+                logger.warning(
+                    f"{source.name} observation persistence failed; "
+                    f"restarting from resourceVersion {resource_version or 'initial-list'}"
+                )
             except ApiException as error:
                 if error.status == 410:
                     logger.warning(f"{source.name} watch resourceVersion expired; relisting")
@@ -138,7 +154,7 @@ class KubernetesDaemon:
         source: ResourceWatchSource,
         resource: dict,
         event_type: ObservationEventType,
-    ) -> None:
+    ) -> bool:
         status = source.selected_status(resource)
         metadata = resource.get("metadata") or {}
         observation = ResourceObservation.from_resource(
@@ -165,11 +181,12 @@ class KubernetesDaemon:
                 f"failed to persist {source.name} observation "
                 f"{observation.namespace}/{observation.name}@{observation.resource_version}"
             )
-            return
+            return False
         self.health.update(persistence_failed=False)
 
         if observation.kind == "Pod" and (resource.get("spec") or {}).get("nodeName"):
             self._enqueue(resource)
+        return True
 
     def _mark_initial_list_complete(self, source_name: str) -> None:
         with self._initial_lists_lock:
