@@ -55,7 +55,7 @@ Kueue adapter; see [Attribute Kueue Workloads](./kueue.md).
 namespace = "team-a"
 placement_records_enabled = true
 
-[eca.kai.placement_recorder]
+[eca.kai.kubernetes_daemon]
 endpoint = "http://attribution-kubernetes-daemon.team-a.svc:8080"
 timeout_seconds = 10
 ```

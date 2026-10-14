@@ -1069,7 +1069,7 @@ def test_builder_defaults_and_validation():
     with pytest.raises(MCAError, match="positive"):
         component.build({"timeout_seconds": 0}, ctx={"framework": "eca"})
 
-    with pytest.raises(MCAError, match="requires eca.kai.placement_recorder"):
+    with pytest.raises(MCAError, match="requires eca.kai.kubernetes_daemon"):
         component.build(
             {"namespace": "team-alpha", "placement_records_enabled": True},
             ctx={"framework": "eca"},
@@ -1079,7 +1079,7 @@ def test_builder_defaults_and_validation():
         component.build(
             {
                 "placement_records_enabled": True,
-                "placement_recorder": {"endpoint": "http://daemon:8080"},
+                "kubernetes_daemon": {"endpoint": "http://daemon:8080"},
             },
             ctx={"framework": "eca"},
         )

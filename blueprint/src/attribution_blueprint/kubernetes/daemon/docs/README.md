@@ -104,7 +104,7 @@ installation. Point each at the daemon Service in its namespace:
 namespace = "team-a"
 placement_records_enabled = true
 
-[eca.kueue.placement_recorder]
+[eca.kueue.kubernetes_daemon]
 endpoint = "http://attribution-kubernetes-daemon.team-a.svc:8080"
 timeout_seconds = 10
 ```
@@ -114,14 +114,14 @@ timeout_seconds = 10
 namespace = "team-a"
 placement_records_enabled = true
 
-[eca.kai.placement_recorder]
+[eca.kai.kubernetes_daemon]
 endpoint = "http://attribution-kubernetes-daemon.team-a.svc:8080"
 timeout_seconds = 10
 ```
 
 When `placement_records_enabled` is `true` for either adapter, the endpoint is
 required and attribution fails if retained placement cannot be read. Keep it
-`false` when the daemon is not deployed for that namespace. Each `[eca.*.placement_recorder]`
+`false` when the daemon is not deployed for that namespace. Each `[eca.*.kubernetes_daemon]`
 section accepts the same optional `auth` block (`token` with `token_env`, or
 `mtls` with `cert_path`/`key_path`/`ca_cert_path`); the daemon's API has no
 built-in authentication, so keep its Service private or place an
@@ -135,17 +135,11 @@ kubectl -n team-a logs -l app.kubernetes.io/name=kubernetes-daemon --tail=100
 kubectl -n team-a port-forward service/attribution-kubernetes-daemon 18080:8080
 curl -fsS \
   'http://127.0.0.1:18080/v1/placements?namespace=team-a&resource_uid=WORKLOAD_OR_PODGROUP_UID'
-curl -fsS \
-  'http://127.0.0.1:18080/v1/placements?namespace=team-a&owner_uid=JOB_OR_JOBSET_UID'
-curl -fsS \
-  'http://127.0.0.1:18080/v1/placements?namespace=team-a&pod_uid=POD_UID'
 ```
 
 The service exposes `/livez`, `/readyz`, and the scoped `/v1/placements` read
-endpoint, which accepts exactly one of `pod_uid`, `owner_uid`, or
-`resource_uid` alongside `namespace`. `resource_uid` matches either a Kueue
-Workload UID or a KAI PodGroup UID, whichever integration is enabled and
-resolved that Pod.
+endpoint, which requires `resource_uid` alongside `namespace`. The resource
+UID matches a resource associated with that Pod by a configured integration.
 
 ## Troubleshooting
 

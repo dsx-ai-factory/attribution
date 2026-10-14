@@ -1847,8 +1847,8 @@ def test_build_rejects_empty_workload_api_version():
 
 
 def test_build_rejects_placement_records_without_namespace():
-    """A recorder installation watches exactly one namespace. Without a
-    configured `namespace`, discovery could span namespaces the recorder
+    """A daemon installation watches exactly one namespace. Without a
+    configured `namespace`, discovery could span namespaces the daemon
     doesn't cover, and its response would be indistinguishable from `no
     placements recorded yet` for a namespace it does watch."""
     from attribution_blueprint.connectors.execution_contexts.kueue import _build
@@ -1856,7 +1856,7 @@ def test_build_rejects_placement_records_without_namespace():
 
     spec = {
         "placement_records_enabled": True,
-        "placement_recorder": {"endpoint": "http://recorder:8080"},
+        "kubernetes_daemon": {"endpoint": "http://daemon:8080"},
     }
     with pytest.raises(MCAError, match="eca.kueue.namespace"):
         _build(spec, ctx={"framework": "eca"})
@@ -2293,11 +2293,11 @@ class TestPlacementReader:
         reader.list_for_resource.side_effect = OSError("unavailable")
         eca = KueueExecutionContextAdapter(placement_reader=reader, placement_records_enabled=True)
 
-        with pytest.raises(RuntimeError, match="placement recorder lookup failed"):
+        with pytest.raises(RuntimeError, match="KubernetesDaemon placement lookup failed"):
             eca._fetch_placement_records({"namespace": "ns", "workload_uid": "wl-uid"})
 
     def test_enabled_records_require_reader(self):
         eca = KueueExecutionContextAdapter(placement_records_enabled=True)
 
-        with pytest.raises(RuntimeError, match="no recorder client"):
+        with pytest.raises(RuntimeError, match="no KubernetesDaemon client"):
             eca._fetch_placement_records({"namespace": "ns", "workload_uid": "wl-uid"})

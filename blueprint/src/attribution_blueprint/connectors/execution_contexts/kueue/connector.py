@@ -75,10 +75,8 @@ from attribution_blueprint.connectors.execution_contexts.kubernetes_client impor
     KubernetesClientError,
 )
 from attribution_blueprint.connectors.execution_contexts.kubernetes_helpers import (
-    NODE_LOSS_DISRUPTION_REASONS as _NODE_LOSS_DISRUPTION_REASONS,
     earliest_job_failure_reason as _earliest_job_failure_reason,
     job_time_limit_minutes as _job_time_limit_minutes,
-    pod_node_failure_reason as _pod_node_failure_reason,
 )
 from attribution_blueprint.connectors.execution_contexts.kueue.helpers import (
     POD_JOBSET_LABEL as _POD_JOBSET_LABEL,
@@ -95,6 +93,10 @@ from attribution_blueprint.connectors.execution_contexts.kueue.pod_placement.sto
 )
 from attribution_blueprint.kubernetes.daemon.models import PlacementRecord, PodPlacement
 from attribution_blueprint.kubernetes.daemon.store import PlacementReader
+from attribution_blueprint.kubernetes.helpers import (
+    NODE_LOSS_DISRUPTION_REASONS as _NODE_LOSS_DISRUPTION_REASONS,
+    pod_node_failure_reason as _pod_node_failure_reason,
+)
 from attribution_blueprint.types import assert_aware
 
 _KUEUE_GROUP = "kueue.x-k8s.io"
@@ -248,9 +250,8 @@ def _condition_time(conditions: list[dict], cond_type: str) -> datetime | None:
 def _pod_reports_node_failure(pod: dict) -> bool:
     """Return whether a Pod carries a node-loss signal.
 
-    Delegates to the shared `kubernetes_helpers.pod_node_failure_reason` so this check
-    and the placement recorder's copy (which captures the same evidence
-    before Pod GC removes it) can never drift apart.
+    Delegates to the shared Kubernetes helper so live discovery and retained
+    daemon evidence cannot drift apart.
     """
     return _pod_node_failure_reason(pod) is not None
 
@@ -1020,14 +1021,14 @@ class KueueExecutionContextAdapter:
         if not self.placement_records_enabled:
             return []
         if self.placement_reader is None:
-            raise RuntimeError("placement records are enabled but no recorder client is configured")
+            raise RuntimeError("placement records are enabled but no KubernetesDaemon client is configured")
         try:
             return self.placement_reader.list_for_resource(
                 context["namespace"],
                 context["workload_uid"],
             )
         except Exception as error:
-            raise RuntimeError(f"placement recorder lookup failed: {error}") from error
+            raise RuntimeError(f"KubernetesDaemon placement lookup failed: {error}") from error
 
     def _merge_placement_records(
         self,

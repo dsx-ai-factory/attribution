@@ -2,9 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
-from attribution_blueprint.connectors.execution_contexts.kueue.helpers import (
-    pod_container_exit_reason,
-)
+from attribution_blueprint.kubernetes.helpers import pod_container_exit_reason
 
 
 def _pod(status=None):

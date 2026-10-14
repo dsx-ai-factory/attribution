@@ -5,6 +5,9 @@ import os
 
 from attribution_blueprint import mca_registry as _registry
 from attribution_blueprint.connectors.auth import MTLSAuth, TokenAuth
+from attribution_blueprint.connectors.execution_contexts.kubernetes_daemon import (
+    build_kubernetes_daemon_client,
+)
 from attribution_blueprint.connectors.execution_contexts.kueue.connector import (
     KueueExecutionContext,
     KueueExecutionContextAdapter,
@@ -72,46 +75,6 @@ def _build_prometheus_metrics(spec: dict):
         raise MCAError(f"invalid eca.kueue.prometheus_metrics configuration: {error}") from error
 
 
-def _build_placement_recorder(spec: dict):
-    from attribution_blueprint.connectors.execution_contexts.kueue.pod_placement.daemon_client import (
-        KueueDaemonClient,
-    )
-    from attribution_blueprint.mca import _coerce_float
-
-    endpoint = spec.get("endpoint")
-    if not endpoint:
-        raise MCAError("eca.kueue.placement_recorder requires endpoint")
-
-    auth = None
-    auth_spec = spec.get("auth")
-    if auth_spec is not None:
-        auth_type = auth_spec.get("type")
-        if auth_type == "token":
-            env_name = auth_spec.get("token_env")
-            if not env_name:
-                raise MCAError("eca.kueue.placement_recorder.auth type=token requires token_env")
-            if env_name not in os.environ:
-                raise MCAError(f"auth.token_env references unset environment variable: {env_name}")
-            auth = TokenAuth(token=os.environ[env_name], org_id=auth_spec.get("org_id"))
-        elif auth_type == "mtls":
-            if not auth_spec.get("cert_path") or not auth_spec.get("key_path"):
-                raise MCAError("eca.kueue.placement_recorder.auth type=mtls requires cert_path and key_path")
-            auth = MTLSAuth(
-                cert_path=auth_spec["cert_path"],
-                key_path=auth_spec["key_path"],
-                ca_cert_path=auth_spec.get("ca_cert_path"),
-                org_id=auth_spec.get("org_id"),
-            )
-        else:
-            raise MCAError(f"unknown placement recorder auth type: {auth_type!r}")
-
-    timeout = _coerce_float(spec.get("timeout_seconds", 10.0), "eca.kueue.placement_recorder.timeout_seconds")
-    try:
-        return KueueDaemonClient(endpoint, auth=auth, timeout_seconds=timeout)
-    except ValueError as error:
-        raise MCAError(f"invalid eca.kueue.placement_recorder configuration: {error}") from error
-
-
 def _build(spec: dict, ctx: dict) -> KueueExecutionContextAdapter:
     from attribution_blueprint.mca import _coerce_int
 
@@ -145,17 +108,24 @@ def _build(spec: dict, ctx: dict) -> KueueExecutionContextAdapter:
         )
     prometheus_spec = spec.get("prometheus_metrics")
     prometheus_placement_resolver = _build_prometheus_metrics(prometheus_spec) if prometheus_spec is not None else None
-    recorder_spec = spec.get("placement_recorder")
-    if placement_records_enabled and recorder_spec is None:
-        raise MCAError("eca.kueue.placement_records_enabled requires eca.kueue.placement_recorder")
-    # A recorder installation watches exactly one namespace (see the Helm
+    daemon_spec = spec.get("kubernetes_daemon")
+    if placement_records_enabled and daemon_spec is None:
+        raise MCAError("eca.kueue.placement_records_enabled requires eca.kueue.kubernetes_daemon")
+    # A daemon installation watches exactly one namespace (see the Helm
     # chart's `--namespace={{ .Release.Namespace }}`). Without a configured
-    # namespace, discovery could span namespaces the recorder doesn't watch,
+    # namespace, discovery could span namespaces the daemon doesn't watch,
     # and its "no matching records" response is indistinguishable from "this
     # namespace isn't covered at all".
     if placement_records_enabled and not spec.get("namespace"):
         raise MCAError("eca.kueue.placement_records_enabled requires eca.kueue.namespace")
-    placement_reader = _build_placement_recorder(recorder_spec) if placement_records_enabled else None
+    placement_reader = (
+        build_kubernetes_daemon_client(
+            daemon_spec,
+            config_path="eca.kueue.kubernetes_daemon",
+        )
+        if placement_records_enabled
+        else None
+    )
     event_max_age = spec.get("event_max_age_seconds")
     if event_max_age is None:
         event_max_age = 3600
@@ -206,7 +176,7 @@ _registry.register_component(
         # Kueue Workload CRD `<group>/<version>` to read.
         "workload_api_version": _PARAM,
         "placement_records_enabled": _PARAM,
-        "placement_recorder": {
+        "kubernetes_daemon": {
             "endpoint": _PARAM,
             "timeout_seconds": _PARAM,
             "auth": {

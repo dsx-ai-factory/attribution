@@ -21,3 +21,13 @@ def pod_node_failure_reason(pod: dict) -> str | None:
     if disruption and disruption.get("status") == "True" and disruption.get("reason") in NODE_LOSS_DISRUPTION_REASONS:
         return disruption["reason"]
     return None
+
+
+def pod_container_exit_reason(pod: dict) -> str | None:
+    """Return ``ExitCode:<n>`` for the first non-zero container exit."""
+    for container_status in (pod.get("status") or {}).get("containerStatuses") or []:
+        terminated = (container_status.get("state") or {}).get("terminated") or {}
+        exit_code = terminated.get("exitCode")
+        if isinstance(exit_code, int) and exit_code != 0:
+            return f"ExitCode:{exit_code}"
+    return None
