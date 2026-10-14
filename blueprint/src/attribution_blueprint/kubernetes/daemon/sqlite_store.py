@@ -62,6 +62,7 @@ CREATE TABLE IF NOT EXISTS resource_observation (
     observed_at TEXT NOT NULL,
     source_timestamp TEXT,
     owner_references_json TEXT NOT NULL,
+    selected_metadata_json TEXT,
     status_json TEXT,
     UNIQUE(cluster_id, api_version, kind, uid, resource_version)
 );
@@ -103,7 +104,8 @@ class SQLitePlacementStore:
         Path(path).parent.mkdir(parents=True, exist_ok=True)
         with self._connection() as connection:
             connection.executescript(_SCHEMA)
-            connection.execute("PRAGMA user_version = 3")
+            self._migrate_observation_schema(connection)
+            connection.execute("PRAGMA user_version = 4")
             self._prune_expired(connection)
 
     def _connect(self) -> sqlite3.Connection:
@@ -234,6 +236,7 @@ class SQLitePlacementStore:
 
     def append_observation(self, observation: ResourceObservation) -> ObservationAppendResult:
         owner_references_json = _owner_references_json(observation.owner_references)
+        selected_metadata_json = _optional_json(observation.selected_metadata)
         status_json = _optional_json(observation.status)
         with self._connection() as connection:
             connection.execute("BEGIN IMMEDIATE")
@@ -266,8 +269,8 @@ class SQLitePlacementStore:
                 INSERT INTO resource_observation(
                     cluster_id, api_version, kind, namespace, name, uid,
                     resource_version, event_type, observed_at, source_timestamp,
-                    owner_references_json, status_json
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    owner_references_json, selected_metadata_json, status_json
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     observation.cluster_id,
@@ -281,6 +284,7 @@ class SQLitePlacementStore:
                     observation.observed_at,
                     observation.source_timestamp,
                     owner_references_json,
+                    selected_metadata_json,
                     status_json,
                 ),
             )
@@ -389,6 +393,17 @@ class SQLitePlacementStore:
             ],
         )
 
+    @staticmethod
+    def _migrate_observation_schema(connection: sqlite3.Connection) -> None:
+        columns = {
+            row["name"]
+            for row in connection.execute("PRAGMA table_info(resource_observation)").fetchall()
+        }
+        if "selected_metadata_json" not in columns:
+            connection.execute(
+                "ALTER TABLE resource_observation ADD COLUMN selected_metadata_json TEXT"
+            )
+
     def _prune_expired(self, connection: sqlite3.Connection) -> None:
         connection.execute(
             """
@@ -455,6 +470,11 @@ def _observation_from_row(row: sqlite3.Row) -> ResourceObservation:
             )
             for owner in json.loads(row["owner_references_json"])
         ),
+        selected_metadata=(
+            json.loads(row["selected_metadata_json"])
+            if row["selected_metadata_json"] is not None
+            else None
+        ),
         status=json.loads(row["status_json"]) if row["status_json"] is not None else None,
     )
 
@@ -469,6 +489,7 @@ def _observation_content(observation: ResourceObservation) -> tuple:
         observation.uid,
         observation.resource_version,
         observation.owner_references,
+        _optional_json(observation.selected_metadata),
         observation.source_timestamp,
         _optional_json(observation.status),
     )

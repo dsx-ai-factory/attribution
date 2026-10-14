@@ -29,6 +29,9 @@ def test_scheduler_integrations_are_explicitly_disabled_by_default():
 
     assert args.enable_kueue is False
     assert args.enable_kai is False
+    assert args.watch_pods is True
+    assert args.watch_jobs is True
+    assert args.watch_jobsets is True
 
 
 def test_scheduler_integrations_and_api_versions_are_configurable():
@@ -49,3 +52,21 @@ def test_scheduler_integrations_and_api_versions_are_configurable():
     assert args.kueue_workload_version == "v1beta1"
     assert args.enable_kai is True
     assert args.kai_pod_group_version == "v2alpha2"
+
+
+def test_lifecycle_watches_and_cluster_identity_are_configurable():
+    args = _parser().parse_args(
+        [
+            "--namespace",
+            "team-a",
+            "--cluster-id",
+            "cluster-a",
+            "--no-watch-jobs",
+            "--no-watch-jobsets",
+        ]
+    )
+
+    assert args.cluster_id == "cluster-a"
+    assert args.watch_pods is True
+    assert args.watch_jobs is False
+    assert args.watch_jobsets is False
