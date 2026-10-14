@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, replace
 from datetime import datetime, timezone
-from typing import TypedDict
+from typing import Literal, TypedDict
 
 API_GROUP = "attribution.nvidia.com"
 API_VERSION = "v1alpha2"
@@ -30,6 +30,86 @@ class ResourceIdentity:
     namespace: str
     name: str
     uid: str
+
+
+ObservationEventType = Literal["SNAPSHOT", "ADDED", "MODIFIED", "DELETED"]
+
+
+@dataclass(frozen=True)
+class OwnerReference:
+    api_version: str
+    kind: str
+    name: str
+    uid: str
+    controller: bool
+
+
+@dataclass(frozen=True)
+class ResourceObservation:
+    """One durable Kubernetes resource version from a list or watch."""
+
+    cluster_id: str
+    api_version: str
+    kind: str
+    namespace: str
+    name: str
+    uid: str
+    resource_version: str
+    event_type: ObservationEventType
+    observed_at: str
+    owner_references: tuple[OwnerReference, ...] = ()
+    source_timestamp: str | None = None
+    status: dict | None = None
+
+    @classmethod
+    def from_resource(
+        cls,
+        resource: dict,
+        *,
+        cluster_id: str,
+        event_type: ObservationEventType,
+        status: dict | None = None,
+        source_timestamp: str | None = None,
+        observed_at: str | None = None,
+    ) -> ResourceObservation:
+        metadata = resource.get("metadata") or {}
+        required = {
+            "cluster_id": cluster_id,
+            "api_version": resource.get("apiVersion"),
+            "kind": resource.get("kind"),
+            "namespace": metadata.get("namespace"),
+            "name": metadata.get("name"),
+            "uid": metadata.get("uid"),
+            "resource_version": metadata.get("resourceVersion"),
+        }
+        missing = [field for field, value in required.items() if not value]
+        if missing:
+            raise ValueError(f"resource observation is missing {', '.join(missing)}")
+        return cls(
+            cluster_id=cluster_id,
+            api_version=required["api_version"],
+            kind=required["kind"],
+            namespace=required["namespace"],
+            name=required["name"],
+            uid=required["uid"],
+            resource_version=required["resource_version"],
+            event_type=event_type,
+            observed_at=observed_at or datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+            owner_references=tuple(
+                OwnerReference(
+                    api_version=owner.get("apiVersion") or "",
+                    kind=owner["kind"],
+                    name=owner["name"],
+                    uid=owner["uid"],
+                    controller=bool(owner.get("controller", False)),
+                )
+                for owner in metadata.get("ownerReferences") or []
+                if owner.get("kind") and owner.get("name") and owner.get("uid")
+            ),
+            source_timestamp=source_timestamp,
+            status=status,
+        )
+
 
 @dataclass(frozen=True)
 class PlacementRecord:
