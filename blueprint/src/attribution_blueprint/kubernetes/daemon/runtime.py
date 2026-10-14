@@ -185,7 +185,24 @@ class KubernetesDaemon:
         self.health.update(persistence_failed=False)
 
         if observation.kind == "Pod" and (resource.get("spec") or {}).get("nodeName"):
+            # Placement (namespace, Pod UID, node) must never depend on the
+            # optional enrichment queue having capacity. Persist it here,
+            # synchronously, before queuing the best-effort owner/scheduler
+            # enrichment work below.
+            if not self._capture_placement(resource):
+                return False
             self._enqueue(resource)
+        return True
+
+    def _capture_placement(self, pod: dict) -> bool:
+        failure_reason = pod_node_failure_reason(pod) or pod_container_exit_reason(pod)
+        base = PlacementRecord.for_pod(pod, node_failure_reason=failure_reason)
+        result = self._persist(base, "scheduler-neutral Pod placement")
+        if result is None:
+            return False
+        if result != CreateResult.DUPLICATE:
+            metadata = pod.get("metadata") or {}
+            logger.info(f"{result.value} placement for Pod {self.namespace}/{metadata.get('name')}")
         return True
 
     def _mark_initial_list_complete(self, source_name: str) -> None:
@@ -204,12 +221,15 @@ class KubernetesDaemon:
             self.items.put_nowait(pod)
             self.health.update(queue_saturated=False)
         except queue.Full:
-            # The journal entry is already durable. Do not let optional
-            # placement enrichment stall subsequent lifecycle capture.
+            # Base placement is already durable by this point (see
+            # _capture_placement). Only optional owner/scheduler association
+            # enrichment is deferred here, so dropping this item cannot lose
+            # placement evidence. The association may remain unresolved until
+            # another observation queues this Pod again.
             self.health.update(queue_saturated=True)
             logger.error(
-                "KubernetesDaemon placement queue is saturated; "
-                "the observation was journaled but placement enrichment was not queued"
+                "KubernetesDaemon enrichment queue is saturated; "
+                "placement was persisted but owner/scheduler enrichment was not queued"
             )
 
     def _worker(self) -> None:
@@ -231,14 +251,14 @@ class KubernetesDaemon:
                 self.items.task_done()
 
     def _record(self, pod: dict) -> None:
-        failure_reason = pod_node_failure_reason(pod) or pod_container_exit_reason(pod)
-        base = PlacementRecord.for_pod(pod, node_failure_reason=failure_reason)
-        result = self._persist(base, "scheduler-neutral Pod placement")
-        if result is None:
-            return
-
         metadata = pod.get("metadata") or {}
-        logger.info(f"{result.value} placement for Pod {self.namespace}/{metadata.get('name')}")
+        base = self.store.get_by_pod_uid(metadata.get("uid"))
+        if base is None:
+            logger.error(
+                f"cannot enrich Pod {self.namespace}/{metadata.get('name')}: "
+                "base placement is not persisted"
+            )
+            return
         if self.owner_resolver is None:
             return
 
@@ -263,7 +283,7 @@ class KubernetesDaemon:
                 return
 
         assert owner is not None
-        owned = base.enriched(owner=owner, node_failure_reason=failure_reason)
+        owned = base.enriched(owner=owner)
         owner_result = self._persist(owned, "Pod owner enrichment")
         if owner_result is None:
             return

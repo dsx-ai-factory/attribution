@@ -3,11 +3,10 @@
 
 import threading
 
-from attribution_blueprint.kubernetes.daemon.models import ResourceIdentity
+from attribution_blueprint.kubernetes.daemon.models import PlacementRecord, ResourceIdentity
 from attribution_blueprint.kubernetes.daemon.resolvers import ResolutionPending
 from attribution_blueprint.kubernetes.daemon.runtime import KubernetesDaemon
 from attribution_blueprint.kubernetes.daemon.sqlite_store import SQLitePlacementStore
-from attribution_blueprint.kubernetes.daemon.store import CreateResult
 from attribution_blueprint.kubernetes.daemon.watch_sources import selected_status
 
 
@@ -50,9 +49,10 @@ class _FailOnEnrichmentStore:
 
     def create(self, record):
         self.calls += 1
-        if self.calls == 1:
-            return CreateResult.CREATED
         raise OSError("synthetic storage failure")
+
+    def get_by_pod_uid(self, pod_uid):
+        return PlacementRecord.for_pod(_pod())
 
 
 class _PodWatchSource:
@@ -126,6 +126,32 @@ class _FailObservationOnceStore:
     def create(self, record):
         return self.delegate.create(record)
 
+    def __getattr__(self, name):
+        return getattr(self.delegate, name)
+
+
+class _FailPlacementOnceStore:
+    """Journal writes always succeed; the first placement write fails."""
+
+    def __init__(self, delegate):
+        self.delegate = delegate
+        self.create_calls = 0
+
+    def append_observation(self, observation):
+        return self.delegate.append_observation(observation)
+
+    def create(self, record):
+        self.create_calls += 1
+        if self.create_calls == 1:
+            raise OSError("synthetic placement storage failure")
+        return self.delegate.create(record)
+
+    def get_by_pod_uid(self, pod_uid):
+        return self.delegate.get_by_pod_uid(pod_uid)
+
+    def __getattr__(self, name):
+        return getattr(self.delegate, name)
+
 
 class _NoWaitEvent(threading.Event):
     def wait(self, timeout=None):
@@ -136,7 +162,7 @@ def test_records_placement_before_any_resolution(tmp_path):
     store = SQLitePlacementStore(str(tmp_path / "placements.db"))
     daemon = KubernetesDaemon(core_api=None, store=store, namespace="team-a")
 
-    daemon._record(_pod())
+    daemon._capture_placement(_pod())
 
     record = store.get_by_pod_uid("pod-uid-1")
     assert record is not None
@@ -156,6 +182,7 @@ def test_retains_owner_when_optional_scheduler_resolution_exhausts(tmp_path):
         max_resolution_attempts=1,
     )
 
+    daemon._capture_placement(_pod())
     daemon._record(_pod())
 
     record = store.get_by_pod_uid("pod-uid-1")
@@ -175,7 +202,7 @@ def test_owner_enrichment_write_failure_does_not_escape_or_kill_recording():
 
     daemon._record(_pod())
 
-    assert store.calls == 2
+    assert store.calls == 1
     assert daemon.health.persistence_failed is True
 
 
@@ -237,10 +264,15 @@ def test_capture_journals_deletion_before_enqueuing_bound_pod(tmp_path):
     observation = store.list_observations_for_uid("cluster-a", "team-a", "pod-uid-1")[0]
     assert observation.event_type == "DELETED"
     assert observation.source_timestamp == "2026-10-14T10:00:00Z"
+    # Placement is captured synchronously, before enrichment is queued, so it
+    # is retained even though this bound Pod is already being deleted.
+    record = store.get_by_pod_uid("pod-uid-1")
+    assert record is not None
+    assert record.node_name == "node-a"
     assert daemon.items.get_nowait()["metadata"]["uid"] == "pod-uid-1"
 
 
-def test_saturated_placement_queue_does_not_block_journal_capture(tmp_path):
+def test_saturated_enrichment_queue_does_not_lose_placement(tmp_path):
     store = SQLitePlacementStore(str(tmp_path / "placements.db"))
     daemon = KubernetesDaemon(
         core_api=None,
@@ -253,11 +285,32 @@ def test_saturated_placement_queue_does_not_block_journal_capture(tmp_path):
     pod = _pod()
     pod["metadata"]["resourceVersion"] = "18"
 
-    daemon._capture(_PodWatchSource(), pod, "MODIFIED")
+    assert daemon._capture(_PodWatchSource(), pod, "MODIFIED") is True
 
     observations = store.list_observations_for_uid("cluster-a", "team-a", "pod-uid-1")
     assert len(observations) == 1
     assert daemon.health.queue_saturated is True
+    # The enrichment queue being full only defers owner/scheduler
+    # association; base placement must still be captured synchronously.
+    record = store.get_by_pod_uid("pod-uid-1")
+    assert record is not None
+    assert record.node_name == "node-a"
+
+
+def test_placement_persistence_failure_is_reported_and_blocks_advancement(tmp_path):
+    journal = SQLitePlacementStore(str(tmp_path / "placements.db"))
+    store = _FailPlacementOnceStore(journal)
+    daemon = KubernetesDaemon(core_api=None, store=store, namespace="team-a", cluster_id="cluster-a")
+    pod = _pod()
+    pod["metadata"]["resourceVersion"] = "20"
+
+    # The journal write succeeds, but the synchronous placement write fails,
+    # so the whole observation must be treated as not captured: _capture
+    # reports False so the watch loop retries this resourceVersion rather
+    # than silently losing placement evidence.
+    assert daemon._capture(_PodWatchSource(), pod, "ADDED") is False
+    assert daemon.health.persistence_failed is True
+    assert store.get_by_pod_uid("pod-uid-1") is None
 
 
 def test_watch_records_snapshots_updates_and_deletions(tmp_path):
