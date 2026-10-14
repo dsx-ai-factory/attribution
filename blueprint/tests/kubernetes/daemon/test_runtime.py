@@ -16,6 +16,7 @@ from attribution_blueprint.kubernetes.daemon.runtime import (
 )
 from attribution_blueprint.kubernetes.daemon.sqlite_store import SQLitePlacementStore
 from attribution_blueprint.kubernetes.daemon.store import CreateResult
+from attribution_blueprint.kubernetes.daemon.watch_sources import selected_status
 
 
 def _pod() -> dict:
@@ -318,6 +319,30 @@ class _FailReconcileOnceStore:
         return getattr(self.delegate, name)
 
 
+class _PodWatchSource:
+    name = "pods"
+    api_version = "v1"
+    kind = "Pod"
+
+    def selected_status(self, resource):
+        return selected_status(self.kind, resource)
+
+
+class _FinitePodWatchSource(_PodWatchSource):
+    def __init__(self, snapshots, events):
+        self.snapshots = snapshots
+        self.events = events
+        self.daemon = None
+
+    def list_resources(self):
+        return self.snapshots, "10"
+
+    def stream(self, resource_version, timeout_seconds):
+        assert resource_version == "10"
+        yield from self.events
+        self.daemon.stop()
+
+
 def test_records_placement_before_any_resolution(tmp_path):
     store = SQLitePlacementStore(str(tmp_path / "placements.db"))
     daemon = KubernetesDaemon(core_api=None, store=store, namespace="team-a")
@@ -358,12 +383,9 @@ def test_complete_listing_reconciles_absent_placements(mocker):
     store = mocker.Mock()
     daemon = KubernetesDaemon(core_api=None, store=store, namespace="team-a")
     pod = _pod()
-    listing = SimpleNamespace(
-        items=[pod],
-        metadata=SimpleNamespace(resource_version="42"),
-    )
 
-    assert daemon._enqueue_listing(listing) == "42"
+    daemon._enqueue(pod)
+    daemon._reconcile_active_pods([pod])
     store.reconcile_active_pods.assert_called_once_with(
         "team-a",
         {"pod-uid-1"},
@@ -376,12 +398,8 @@ def test_relist_marks_queued_but_now_absent_pod_deleted(tmp_path):
     store = SQLitePlacementStore(str(path))
     daemon = KubernetesDaemon(core_api=None, store=store, namespace="team-a")
     daemon._enqueue(_pod())
-    empty_listing = SimpleNamespace(
-        items=[],
-        metadata=SimpleNamespace(resource_version="43"),
-    )
 
-    daemon._enqueue_listing(empty_listing)
+    daemon._reconcile_active_pods([])
 
     assert store.get_by_pod_uid("pod-uid-1") is not None
     with sqlite3.connect(path) as connection:
@@ -397,16 +415,12 @@ def test_failed_reconciliation_replays_listing_and_keeps_deletion_marker(tmp_pat
     store = _FailReconcileOnceStore(backing_store)
     daemon = KubernetesDaemon(core_api=None, store=store, namespace="team-a")
     daemon._enqueue(_pod())
-    empty_listing = SimpleNamespace(
-        items=[],
-        metadata=SimpleNamespace(resource_version="43"),
-    )
 
     with pytest.raises(RequiredPersistenceError):
-        daemon._enqueue_listing(empty_listing)
+        daemon._reconcile_active_pods([])
 
     assert daemon.health.persistence_failed is True
-    assert daemon._enqueue_listing(empty_listing) == "43"
+    daemon._reconcile_active_pods([])
     with sqlite3.connect(path) as connection:
         marker = connection.execute(
             "SELECT pod_uid FROM placement_deletion"
@@ -1136,3 +1150,109 @@ def test_unexpected_resource_resolution_error_is_retried_not_dropped(tmp_path):
 
     assert resolver.calls == 2
     assert store.get_by_pod_uid("pod-uid-1").associated_resources[0].uid == "admission-uid-a"
+
+
+def test_capture_journals_unbound_pod_without_placement(tmp_path):
+    store = SQLitePlacementStore(str(tmp_path / "placements.db"))
+    daemon = KubernetesDaemon(core_api=None, store=store, namespace="team-a", cluster_id="cluster-a")
+    pod = _pod()
+    pod["metadata"]["resourceVersion"] = "12"
+    pod["spec"] = {}
+    pod["status"] = {
+        "phase": "Pending",
+        "containerStatuses": [{"name": "trainer", "restartCount": 0}],
+    }
+
+    daemon._capture(_PodWatchSource(), pod, "SNAPSHOT")
+
+    observations = store.list_observations_for_uid("cluster-a", "team-a", "pod-uid-1")
+    assert len(observations) == 1
+    assert observations[0].event_type == "SNAPSHOT"
+    assert observations[0].status == {
+        "containerStatuses": [{"name": "trainer", "restartCount": 0}],
+        "phase": "Pending",
+    }
+    assert not daemon._pending
+    assert store.get_by_pod_uid("pod-uid-1") is None
+
+
+def test_capture_journals_deletion_before_enqueuing_bound_pod(tmp_path):
+    store = SQLitePlacementStore(str(tmp_path / "placements.db"))
+    daemon = KubernetesDaemon(core_api=None, store=store, namespace="team-a", cluster_id="cluster-a")
+    pod = _pod()
+    pod["metadata"]["resourceVersion"] = "15"
+    pod["metadata"]["deletionTimestamp"] = "2026-10-14T10:00:00Z"
+
+    daemon._capture(_PodWatchSource(), pod, "DELETED")
+
+    observation = store.list_observations_for_uid("cluster-a", "team-a", "pod-uid-1")[0]
+    assert observation.event_type == "DELETED"
+    assert observation.source_timestamp == "2026-10-14T10:00:00Z"
+    assert daemon._pending["pod-uid-1"][0]["metadata"]["uid"] == "pod-uid-1"
+
+
+def test_saturated_placement_queue_does_not_block_journal_capture(tmp_path):
+    store = SQLitePlacementStore(str(tmp_path / "placements.db"))
+    daemon = KubernetesDaemon(
+        core_api=None,
+        store=store,
+        namespace="team-a",
+        cluster_id="cluster-a",
+        queue_size=1,
+    )
+    existing = _pod()
+    existing["metadata"]["uid"] = "already-queued"
+    daemon._schedule("already-queued", existing)
+    pod = _pod()
+    pod["metadata"]["resourceVersion"] = "18"
+
+    daemon._capture(_PodWatchSource(), pod, "MODIFIED")
+
+    observations = store.list_observations_for_uid("cluster-a", "team-a", "pod-uid-1")
+    assert len(observations) == 1
+    assert "pod-uid-1" not in daemon._pending
+    assert store.get_by_pod_uid("pod-uid-1") is not None
+
+
+def test_watch_records_snapshots_updates_and_deletions(tmp_path):
+    store = SQLitePlacementStore(str(tmp_path / "placements.db"))
+    pod = _pod()
+    pod["spec"] = {}
+    snapshots = [{**pod, "metadata": {**pod["metadata"], "resourceVersion": "10"}}]
+    events = [
+        {
+            "type": "MODIFIED",
+            "object": {
+                **pod,
+                "metadata": {**pod["metadata"], "resourceVersion": "11"},
+                "status": {"phase": "Running"},
+            },
+        },
+        {
+            "type": "DELETED",
+            "object": {
+                **pod,
+                "metadata": {**pod["metadata"], "resourceVersion": "12"},
+                "status": {"phase": "Failed"},
+            },
+        },
+    ]
+    source = _FinitePodWatchSource(snapshots, events)
+    daemon = KubernetesDaemon(
+        core_api=None,
+        store=store,
+        namespace="team-a",
+        cluster_id="cluster-a",
+        watch_sources=(source,),
+    )
+    source.daemon = daemon
+
+    daemon._watch_source(source)
+
+    observations = store.list_observations_for_uid("cluster-a", "team-a", "pod-uid-1")
+    assert [observation.event_type for observation in observations] == [
+        "SNAPSHOT",
+        "MODIFIED",
+        "DELETED",
+    ]
+    assert daemon.health.initial_list_complete is True
