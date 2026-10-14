@@ -8,12 +8,13 @@ import signal
 
 from loguru import logger
 
-from attribution_blueprint.connectors.execution_contexts.kueue.pod_placement.recorder.runtime import (
-    KubernetesIdentityResolver,
-    PodPlacementRecorder,
+from attribution_blueprint.connectors.execution_contexts.kueue.pod_placement.resource_resolver import (
+    KueueResourceResolver,
 )
-from attribution_blueprint.connectors.execution_contexts.kueue.pod_placement.recorder.server import serve_api
-from attribution_blueprint.connectors.execution_contexts.kueue.pod_placement.sqlite_store import SQLitePlacementStore
+from attribution_blueprint.kubernetes.daemon.resolvers import KubernetesOwnershipResolver
+from attribution_blueprint.kubernetes.daemon.runtime import KubernetesDaemon
+from attribution_blueprint.kubernetes.daemon.server import serve_api
+from attribution_blueprint.kubernetes.daemon.sqlite_store import SQLitePlacementStore
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -46,24 +47,32 @@ def main() -> None:
 
     custom_api = client.CustomObjectsApi()
     placement_store = SQLitePlacementStore(args.sqlite_path, retention_days=args.retention_days)
-    recorder = PodPlacementRecorder(
+    recorder = KubernetesDaemon(
         client.CoreV1Api(),
-        KubernetesIdentityResolver(
-            client.BatchV1Api(),
-            custom_api,
-            workload_version=args.workload_version,
-            jobset_version=args.jobset_version,
-        ),
         placement_store,
         args.namespace,
+        owner_resolver=KubernetesOwnershipResolver(
+            client.BatchV1Api(),
+            custom_api,
+            jobset_version=args.jobset_version,
+        ),
+        resource_resolvers=(
+            KueueResourceResolver(custom_api, workload_version=args.workload_version),
+        ),
         queue_size=args.queue_size,
         workers=args.workers,
         watch_timeout_seconds=args.watch_timeout_seconds,
     )
-    api_server = serve_api(recorder.health, placement_store, args.health_port, args.namespace)
+    api_server = serve_api(
+        recorder.health,
+        placement_store,
+        args.health_port,
+        args.namespace,
+        resource_uid_aliases=("workload_uid",),
+    )
 
     def stop(_signum, _frame):
-        logger.info("stopping Kueue Pod placement recorder")
+        logger.info("stopping KubernetesDaemon through pod-placement-recorder compatibility command")
         recorder.stop()
         api_server.shutdown()
 

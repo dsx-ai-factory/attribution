@@ -73,8 +73,8 @@ def _build_prometheus_metrics(spec: dict):
 
 
 def _build_placement_recorder(spec: dict):
-    from attribution_blueprint.connectors.execution_contexts.kueue.pod_placement.recorder_client import (
-        RecorderPlacementClient,
+    from attribution_blueprint.connectors.execution_contexts.kueue.pod_placement.daemon_client import (
+        KueueDaemonClient,
     )
     from attribution_blueprint.mca import _coerce_float
 
@@ -107,7 +107,7 @@ def _build_placement_recorder(spec: dict):
 
     timeout = _coerce_float(spec.get("timeout_seconds", 10.0), "eca.kueue.placement_recorder.timeout_seconds")
     try:
-        return RecorderPlacementClient(endpoint, auth=auth, timeout_seconds=timeout)
+        return KueueDaemonClient(endpoint, auth=auth, timeout_seconds=timeout)
     except ValueError as error:
         raise MCAError(f"invalid eca.kueue.placement_recorder configuration: {error}") from error
 

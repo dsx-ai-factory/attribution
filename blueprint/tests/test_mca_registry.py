@@ -147,6 +147,13 @@ def test_built_schema_has_expected_shape():
         "context",
         "namespace",
         "timeout_seconds",
+        "placement_records_enabled",
+        "placement_recorder",
+    }
+    assert set(schema["eca"]["_selector"]["kai"]["placement_recorder"]) == {
+        "endpoint",
+        "timeout_seconds",
+        "auth",
     }
     assert set(schema["eca"]["_selector"]["slurm"]) == {
         "ids",

@@ -1852,22 +1852,27 @@ class TestMergePlacementRecordsFailedNode:
     Events fallback can reconstruct it."""
 
     def _record(self, *, node_name, node_failure_reason=None, pod_uid="pod-uid-1", pod_name="pod-a"):
-        from attribution_blueprint.connectors.execution_contexts.kueue.pod_placement.models import (
-            OwnerIdentity,
-            PlacementRecord,
-            WorkloadIdentity,
+        from attribution_blueprint.kubernetes.daemon.models import PlacementRecord, ResourceIdentity
+
+        owner = ResourceIdentity("batch/v1", "Job", "team-a", "job-a", "job-uid-1")
+        workload = ResourceIdentity(
+            "kueue.x-k8s.io/v1beta1",
+            "Workload",
+            "team-a",
+            "wl-a",
+            "workload-uid-1",
         )
 
         return PlacementRecord(
             namespace="team-a",
-            workload=WorkloadIdentity(name="wl-a", uid="workload-uid-1"),
-            owner=OwnerIdentity(api_version="batch/v1", kind="Job", name="job-a", uid="job-uid-1"),
             pod_name=pod_name,
             pod_uid=pod_uid,
             node_name=node_name,
             observed_at="2026-05-01T00:00:00Z",
-            resolver_source="owner-uid",
             node_failure_reason=node_failure_reason,
+            owner_references=(owner,),
+            owner=owner,
+            associated_resources=(workload,),
         )
 
     def _context(self, **overrides):
@@ -1973,7 +1978,7 @@ class TestMergePlacementRecordsFailedNode:
             },
         }
         reader = mocker.Mock()
-        reader.list_for_workload.return_value = [
+        reader.list_for_resource.return_value = [
             self._record(
                 node_name="node-b",
                 node_failure_reason="NodeLost",
@@ -2242,19 +2247,19 @@ class TestPlacementReader:
         eca = KueueExecutionContextAdapter(placement_reader=reader)
 
         assert eca._fetch_placement_records({"namespace": "ns", "workload_uid": "wl-uid"}) == []
-        reader.list_for_workload.assert_not_called()
+        reader.list_for_resource.assert_not_called()
 
     def test_enabled_records_query_reader(self, mocker):
         reader = mocker.Mock()
-        reader.list_for_workload.return_value = []
+        reader.list_for_resource.return_value = []
         eca = KueueExecutionContextAdapter(placement_reader=reader, placement_records_enabled=True)
 
         assert eca._fetch_placement_records({"namespace": "ns", "workload_uid": "wl-uid"}) == []
-        reader.list_for_workload.assert_called_once_with("ns", "wl-uid")
+        reader.list_for_resource.assert_called_once_with("ns", "wl-uid")
 
     def test_enabled_records_propagate_reader_outage(self, mocker):
         reader = mocker.Mock()
-        reader.list_for_workload.side_effect = OSError("unavailable")
+        reader.list_for_resource.side_effect = OSError("unavailable")
         eca = KueueExecutionContextAdapter(placement_reader=reader, placement_records_enabled=True)
 
         with pytest.raises(RuntimeError, match="placement recorder lookup failed"):
