@@ -1,6 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
+import sqlite3
 from dataclasses import replace
 
 import pytest
@@ -47,6 +48,7 @@ def _observation(
     *,
     resource_version: str = "1",
     event_type: ObservationEventType = "SNAPSHOT",
+    selected_metadata: dict | None = None,
     status: dict | None = None,
 ) -> ResourceObservation:
     return ResourceObservation(
@@ -69,6 +71,7 @@ def _observation(
                 controller=True,
             ),
         ),
+        selected_metadata=selected_metadata,
         status=status,
     )
 
@@ -189,7 +192,12 @@ def test_resource_uid_replaces_stale_resource_metadata(tmp_path):
 def test_observation_journal_is_append_only_and_survives_reopen(tmp_path):
     path = tmp_path / "placements.db"
     store = SQLitePlacementStore(str(path))
-    initial = _observation(status={"phase": "Pending"})
+    initial = _observation(
+        selected_metadata={
+            "annotations": {"batch.kubernetes.io/job-completion-index": "0"}
+        },
+        status={"phase": "Pending"},
+    )
     updated = _observation(
         resource_version="2",
         event_type="MODIFIED",
@@ -204,6 +212,26 @@ def test_observation_journal_is_append_only_and_survives_reopen(tmp_path):
         initial,
         updated,
     ]
+
+
+def test_observation_schema_adds_selected_metadata_to_existing_journal(tmp_path):
+    path = tmp_path / "placements.db"
+    SQLitePlacementStore(str(path))
+    with sqlite3.connect(path) as connection:
+        connection.execute("ALTER TABLE resource_observation DROP COLUMN selected_metadata_json")
+        connection.execute("PRAGMA user_version = 3")
+
+    store = SQLitePlacementStore(str(path))
+    observation = _observation(
+        selected_metadata={
+            "labels": {"jobset.sigs.k8s.io/restart-attempt": "1"},
+        }
+    )
+
+    assert store.append_observation(observation) == ObservationAppendResult.APPENDED
+    assert store.list_observations_for_uid("cluster-a", "team-a", "pod-uid-1") == [observation]
+    with sqlite3.connect(path) as connection:
+        assert connection.execute("PRAGMA user_version").fetchone()[0] == 4
 
 
 def test_replayed_resource_version_is_deduplicated(tmp_path):

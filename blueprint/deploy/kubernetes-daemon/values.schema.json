@@ -2,9 +2,19 @@
   "$schema": "https://json-schema.org/draft-07/schema#",
   "type": "object",
   "properties": {
+    "clusterId": {"type": "string", "minLength": 1},
     "queueSize": {"type": "integer", "minimum": 1},
     "workers": {"type": "integer", "minimum": 1},
     "retentionDays": {"type": "integer", "minimum": 1},
+    "watches": {
+      "type": "object",
+      "required": ["pods", "jobs", "jobsets"],
+      "properties": {
+        "pods": {"type": "boolean"},
+        "jobs": {"type": "boolean"},
+        "jobsets": {"type": "boolean"}
+      }
+    },
     "integrations": {
       "type": "object",
       "properties": {

@@ -10,16 +10,25 @@ import threading
 from loguru import logger
 
 from attribution_blueprint.kubernetes.daemon.health import HealthState
-from attribution_blueprint.kubernetes.daemon.models import PlacementRecord
+from attribution_blueprint.kubernetes.daemon.models import (
+    ObservationEventType,
+    PlacementRecord,
+    ResourceObservation,
+)
 from attribution_blueprint.kubernetes.daemon.resolvers import (
     AssociatedResourceResolver,
     OwnershipResolver,
     ResolutionPending,
     StaleOwnerReference,
     UnsupportedOwner,
-    normalize_resource,
 )
 from attribution_blueprint.kubernetes.daemon.store import CreateResult, PlacementStore
+from attribution_blueprint.kubernetes.daemon.watch_sources import (
+    ResourceWatchSource,
+    pod_watch_source,
+    selected_metadata,
+    source_timestamp,
+)
 from attribution_blueprint.kubernetes.helpers import pod_container_exit_reason, pod_node_failure_reason
 
 
@@ -38,6 +47,8 @@ class KubernetesDaemon:
         workers: int = 2,
         watch_timeout_seconds: int = 60,
         max_resolution_attempts: int = 5,
+        cluster_id: str = "default",
+        watch_sources: tuple[ResourceWatchSource, ...] | None = None,
     ):
         if queue_size <= 0:
             raise ValueError("queue_size must be positive")
@@ -50,15 +61,18 @@ class KubernetesDaemon:
         self.resource_resolvers = resource_resolvers
         self.watch_timeout_seconds = watch_timeout_seconds
         self.max_resolution_attempts = max_resolution_attempts
+        self.cluster_id = cluster_id
+        self.watch_sources = watch_sources
+        if self.watch_sources is None:
+            self.watch_sources = (pod_watch_source(core_api, namespace),) if core_api is not None else ()
         self.health = HealthState()
         self.items: queue.Queue[dict] = queue.Queue(maxsize=queue_size)
         self.worker_count = workers
         self.stop_event = threading.Event()
+        self._initial_lists_complete: set[str] = set()
+        self._initial_lists_lock = threading.Lock()
 
     def run(self) -> None:
-        from kubernetes.client.exceptions import ApiException
-        from kubernetes.watch import Watch
-
         workers = [
             threading.Thread(target=self._worker, name=f"kubernetes-daemon-worker-{index}", daemon=True)
             for index in range(self.worker_count)
@@ -66,61 +80,120 @@ class KubernetesDaemon:
         for worker in workers:
             worker.start()
 
+        watchers = [
+            threading.Thread(
+                target=self._watch_source,
+                args=(source,),
+                name=f"kubernetes-daemon-watch-{source.name}",
+                daemon=True,
+            )
+            for source in self.watch_sources
+        ]
+        for watcher in watchers:
+            watcher.start()
+
+        while any(watcher.is_alive() for watcher in watchers):
+            if self.stop_event.wait(0.5):
+                break
+        for watcher in watchers:
+            watcher.join(timeout=self.watch_timeout_seconds + 1)
+        self.items.join()
+
+    def _watch_source(self, source: ResourceWatchSource) -> None:
+        from kubernetes.client.exceptions import ApiException
+
         resource_version = None
         backoff = 1.0
         while not self.stop_event.is_set():
             try:
                 if resource_version is None:
-                    listing = self.core_api.list_namespaced_pod(self.namespace)
-                    resource_version = listing.metadata.resource_version
-                    for pod in listing.items:
-                        self._enqueue(_as_dict(pod))
-                    self.health.update(initial_list_complete=True)
+                    resources, resource_version = source.list_resources()
+                    for resource in resources:
+                        self._capture(source, resource, "SNAPSHOT")
+                    self._mark_initial_list_complete(source.name)
 
-                watcher = Watch()
-                for event in watcher.stream(
-                    self.core_api.list_namespaced_pod,
-                    namespace=self.namespace,
-                    resource_version=resource_version,
-                    timeout_seconds=self.watch_timeout_seconds,
-                    allow_watch_bookmarks=True,
-                ):
-                    pod_dict = _as_dict(event.get("object"))
-                    resource_version = (pod_dict.get("metadata") or {}).get("resourceVersion") or resource_version
-                    self._enqueue(pod_dict)
+                for event in source.stream(resource_version, self.watch_timeout_seconds):
+                    resource = event.get("object") or {}
+                    metadata = resource.get("metadata") or {}
+                    resource_version = metadata.get("resourceVersion") or resource_version
+                    event_type = event.get("type")
+                    if event_type in {"ADDED", "MODIFIED", "DELETED"}:
+                        self._capture(source, resource, event_type)
                     if self.stop_event.is_set():
-                        watcher.stop()
                         break
                 backoff = 1.0
             except ApiException as error:
                 if error.status == 410:
-                    logger.warning("Pod watch resourceVersion expired; relisting")
+                    logger.warning(f"{source.name} watch resourceVersion expired; relisting")
                     resource_version = None
                     continue
-                logger.warning(f"Pod watch failed: {error}")
+                logger.warning(f"{source.name} watch failed: {error}")
             except Exception:
-                logger.exception("Pod watch failed")
+                logger.exception(f"{source.name} watch failed")
             self.stop_event.wait(backoff + random.uniform(0, backoff / 4))
             backoff = min(backoff * 2, 30)
 
-        self.items.join()
+    def _capture(
+        self,
+        source: ResourceWatchSource,
+        resource: dict,
+        event_type: ObservationEventType,
+    ) -> None:
+        status = source.selected_status(resource)
+        metadata = resource.get("metadata") or {}
+        observation = ResourceObservation.from_resource(
+            resource,
+            cluster_id=self.cluster_id,
+            event_type=event_type,
+            status=status,
+            selected_metadata=selected_metadata(resource),
+            source_timestamp=source_timestamp(
+                {
+                    "status": status,
+                    "metadata": {
+                        "creationTimestamp": metadata.get("creationTimestamp"),
+                        "deletionTimestamp": metadata.get("deletionTimestamp"),
+                    },
+                }
+            ),
+        )
+        try:
+            self.store.append_observation(observation)
+        except Exception:
+            self.health.update(persistence_failed=True)
+            logger.exception(
+                f"failed to persist {source.name} observation "
+                f"{observation.namespace}/{observation.name}@{observation.resource_version}"
+            )
+            return
+        self.health.update(persistence_failed=False)
+
+        if observation.kind == "Pod" and (resource.get("spec") or {}).get("nodeName"):
+            self._enqueue(resource)
+
+    def _mark_initial_list_complete(self, source_name: str) -> None:
+        with self._initial_lists_lock:
+            self._initial_lists_complete.add(source_name)
+            all_complete = len(self._initial_lists_complete) == len(self.watch_sources)
+        self.health.update(initial_list_complete=all_complete)
 
     def stop(self) -> None:
         self.stop_event.set()
 
     def _enqueue(self, pod: dict) -> None:
-        # Unbound Pod ingestion belongs to the reusable watch interface in
-        # step 3. The placement foundation remains bound-Pod-only for now.
         if not (pod.get("spec") or {}).get("nodeName"):
             return
-        while not self.stop_event.is_set():
-            try:
-                self.items.put(pod, timeout=0.5)
-                self.health.update(queue_saturated=False)
-                return
-            except queue.Full:
-                self.health.update(queue_saturated=True)
-                logger.error("KubernetesDaemon work queue is saturated; readiness is failing")
+        try:
+            self.items.put_nowait(pod)
+            self.health.update(queue_saturated=False)
+        except queue.Full:
+            # The journal entry is already durable. Do not let optional
+            # placement enrichment stall subsequent lifecycle capture.
+            self.health.update(queue_saturated=True)
+            logger.error(
+                "KubernetesDaemon placement queue is saturated; "
+                "the observation was journaled but placement enrichment was not queued"
+            )
 
     def _worker(self) -> None:
         while not self.stop_event.is_set() or not self.items.empty():
@@ -220,9 +293,3 @@ class KubernetesDaemon:
             return None
         self.health.update(persistence_failed=False)
         return result
-
-
-def _as_dict(resource) -> dict:
-    if isinstance(resource, dict):
-        return resource
-    return normalize_resource(resource.to_dict())

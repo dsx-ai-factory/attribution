@@ -6,6 +6,7 @@ from attribution_blueprint.kubernetes.daemon.resolvers import ResolutionPending
 from attribution_blueprint.kubernetes.daemon.runtime import KubernetesDaemon
 from attribution_blueprint.kubernetes.daemon.sqlite_store import SQLitePlacementStore
 from attribution_blueprint.kubernetes.daemon.store import CreateResult
+from attribution_blueprint.kubernetes.daemon.watch_sources import selected_status
 
 
 def _pod() -> dict:
@@ -50,6 +51,30 @@ class _FailOnEnrichmentStore:
         if self.calls == 1:
             return CreateResult.CREATED
         raise OSError("synthetic storage failure")
+
+
+class _PodWatchSource:
+    name = "pods"
+    api_version = "v1"
+    kind = "Pod"
+
+    def selected_status(self, resource):
+        return selected_status(self.kind, resource)
+
+
+class _FinitePodWatchSource(_PodWatchSource):
+    def __init__(self, snapshots, events):
+        self.snapshots = snapshots
+        self.events = events
+        self.daemon = None
+
+    def list_resources(self):
+        return self.snapshots, "10"
+
+    def stream(self, resource_version, timeout_seconds):
+        assert resource_version == "10"
+        yield from self.events
+        self.daemon.stop()
 
 
 def test_records_placement_before_any_resolution(tmp_path):
@@ -119,3 +144,106 @@ def test_worker_survives_unexpected_recording_failure(tmp_path):
     assert calls == 2
     assert daemon.items.unfinished_tasks == 0
     assert daemon.health.recording_failed is False
+
+
+def test_capture_journals_unbound_pod_without_placement(tmp_path):
+    store = SQLitePlacementStore(str(tmp_path / "placements.db"))
+    daemon = KubernetesDaemon(core_api=None, store=store, namespace="team-a", cluster_id="cluster-a")
+    pod = _pod()
+    pod["metadata"]["resourceVersion"] = "12"
+    pod["spec"] = {}
+    pod["status"] = {
+        "phase": "Pending",
+        "containerStatuses": [{"name": "trainer", "restartCount": 0}],
+    }
+
+    daemon._capture(_PodWatchSource(), pod, "SNAPSHOT")
+
+    observations = store.list_observations_for_uid("cluster-a", "team-a", "pod-uid-1")
+    assert len(observations) == 1
+    assert observations[0].event_type == "SNAPSHOT"
+    assert observations[0].status == {
+        "containerStatuses": [{"name": "trainer", "restartCount": 0}],
+        "phase": "Pending",
+    }
+    assert daemon.items.empty()
+    assert store.get_by_pod_uid("pod-uid-1") is None
+
+
+def test_capture_journals_deletion_before_enqueuing_bound_pod(tmp_path):
+    store = SQLitePlacementStore(str(tmp_path / "placements.db"))
+    daemon = KubernetesDaemon(core_api=None, store=store, namespace="team-a", cluster_id="cluster-a")
+    pod = _pod()
+    pod["metadata"]["resourceVersion"] = "15"
+    pod["metadata"]["deletionTimestamp"] = "2026-10-14T10:00:00Z"
+
+    daemon._capture(_PodWatchSource(), pod, "DELETED")
+
+    observation = store.list_observations_for_uid("cluster-a", "team-a", "pod-uid-1")[0]
+    assert observation.event_type == "DELETED"
+    assert observation.source_timestamp == "2026-10-14T10:00:00Z"
+    assert daemon.items.get_nowait()["metadata"]["uid"] == "pod-uid-1"
+
+
+def test_saturated_placement_queue_does_not_block_journal_capture(tmp_path):
+    store = SQLitePlacementStore(str(tmp_path / "placements.db"))
+    daemon = KubernetesDaemon(
+        core_api=None,
+        store=store,
+        namespace="team-a",
+        cluster_id="cluster-a",
+        queue_size=1,
+    )
+    daemon.items.put({"already": "queued"})
+    pod = _pod()
+    pod["metadata"]["resourceVersion"] = "18"
+
+    daemon._capture(_PodWatchSource(), pod, "MODIFIED")
+
+    observations = store.list_observations_for_uid("cluster-a", "team-a", "pod-uid-1")
+    assert len(observations) == 1
+    assert daemon.health.queue_saturated is True
+
+
+def test_watch_records_snapshots_updates_and_deletions(tmp_path):
+    store = SQLitePlacementStore(str(tmp_path / "placements.db"))
+    pod = _pod()
+    pod["spec"] = {}
+    snapshots = [{**pod, "metadata": {**pod["metadata"], "resourceVersion": "10"}}]
+    events = [
+        {
+            "type": "MODIFIED",
+            "object": {
+                **pod,
+                "metadata": {**pod["metadata"], "resourceVersion": "11"},
+                "status": {"phase": "Running"},
+            },
+        },
+        {
+            "type": "DELETED",
+            "object": {
+                **pod,
+                "metadata": {**pod["metadata"], "resourceVersion": "12"},
+                "status": {"phase": "Failed"},
+            },
+        },
+    ]
+    source = _FinitePodWatchSource(snapshots, events)
+    daemon = KubernetesDaemon(
+        core_api=None,
+        store=store,
+        namespace="team-a",
+        cluster_id="cluster-a",
+        watch_sources=(source,),
+    )
+    source.daemon = daemon
+
+    daemon._watch_source(source)
+
+    observations = store.list_observations_for_uid("cluster-a", "team-a", "pod-uid-1")
+    assert [observation.event_type for observation in observations] == [
+        "SNAPSHOT",
+        "MODIFIED",
+        "DELETED",
+    ]
+    assert daemon.health.initial_list_complete is True
