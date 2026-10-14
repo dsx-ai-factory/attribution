@@ -7,8 +7,17 @@ import json
 import sqlite3
 from pathlib import Path
 
-from attribution_blueprint.kubernetes.daemon.models import PlacementRecord
-from attribution_blueprint.kubernetes.daemon.store import CreateResult, PlacementConflictError
+from attribution_blueprint.kubernetes.daemon.models import (
+    OwnerReference,
+    PlacementRecord,
+    ResourceObservation,
+)
+from attribution_blueprint.kubernetes.daemon.store import (
+    CreateResult,
+    ObservationAppendResult,
+    ObservationConflictError,
+    PlacementConflictError,
+)
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS placement_record (
@@ -30,6 +39,33 @@ CREATE TABLE IF NOT EXISTS placement_resource (
 );
 CREATE INDEX IF NOT EXISTS placement_resource_identity
     ON placement_resource(namespace, resource_uid);
+CREATE TABLE IF NOT EXISTS resource_observation (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    cluster_id TEXT NOT NULL,
+    api_version TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    namespace TEXT NOT NULL,
+    name TEXT NOT NULL,
+    uid TEXT NOT NULL,
+    resource_version TEXT NOT NULL,
+    event_type TEXT NOT NULL,
+    observed_at TEXT NOT NULL,
+    source_timestamp TEXT,
+    owner_references_json TEXT NOT NULL,
+    status_json TEXT,
+    UNIQUE(cluster_id, api_version, kind, uid, resource_version)
+);
+CREATE INDEX IF NOT EXISTS resource_observation_identity
+    ON resource_observation(cluster_id, namespace, uid, id);
+CREATE TABLE IF NOT EXISTS observation_owner_reference (
+    observation_id INTEGER NOT NULL,
+    owner_uid TEXT NOT NULL,
+    controller INTEGER NOT NULL,
+    PRIMARY KEY(observation_id, owner_uid),
+    FOREIGN KEY(observation_id) REFERENCES resource_observation(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS observation_owner_identity
+    ON observation_owner_reference(owner_uid, observation_id);
 """
 
 
@@ -57,7 +93,7 @@ class SQLitePlacementStore:
         Path(path).parent.mkdir(parents=True, exist_ok=True)
         with self._connect() as connection:
             connection.executescript(_SCHEMA)
-            connection.execute("PRAGMA user_version = 2")
+            connection.execute("PRAGMA user_version = 3")
             self._prune_expired(connection)
 
     def _connect(self) -> sqlite3.Connection:
@@ -133,6 +169,110 @@ class SQLitePlacementStore:
             ).fetchall()
         return [PlacementRecord.from_resource(json.loads(row["raw_json"])) for row in rows]
 
+    def append_observation(self, observation: ResourceObservation) -> ObservationAppendResult:
+        owner_references_json = _owner_references_json(observation.owner_references)
+        status_json = _optional_json(observation.status)
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            row = connection.execute(
+                """
+                SELECT *
+                FROM resource_observation
+                WHERE cluster_id = ? AND api_version = ? AND kind = ?
+                  AND uid = ? AND resource_version = ?
+                """,
+                (
+                    observation.cluster_id,
+                    observation.api_version,
+                    observation.kind,
+                    observation.uid,
+                    observation.resource_version,
+                ),
+            ).fetchone()
+            if row is not None:
+                existing = _observation_from_row(row)
+                if _observation_content(existing) != _observation_content(observation):
+                    raise ObservationConflictError(
+                        f"resource {observation.kind} {observation.namespace}/{observation.name} "
+                        f"UID {observation.uid} version {observation.resource_version} changed during replay"
+                    )
+                return ObservationAppendResult.DUPLICATE
+
+            cursor = connection.execute(
+                """
+                INSERT INTO resource_observation(
+                    cluster_id, api_version, kind, namespace, name, uid,
+                    resource_version, event_type, observed_at, source_timestamp,
+                    owner_references_json, status_json
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    observation.cluster_id,
+                    observation.api_version,
+                    observation.kind,
+                    observation.namespace,
+                    observation.name,
+                    observation.uid,
+                    observation.resource_version,
+                    observation.event_type,
+                    observation.observed_at,
+                    observation.source_timestamp,
+                    owner_references_json,
+                    status_json,
+                ),
+            )
+            connection.executemany(
+                """
+                INSERT INTO observation_owner_reference(observation_id, owner_uid, controller)
+                VALUES (?, ?, ?)
+                """,
+                [
+                    (cursor.lastrowid, owner.uid, int(owner.controller))
+                    for owner in observation.owner_references
+                ],
+            )
+        return ObservationAppendResult.APPENDED
+
+    def list_observations_for_uid(
+        self,
+        cluster_id: str,
+        namespace: str,
+        uid: str,
+    ) -> list[ResourceObservation]:
+        with self._connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT *
+                FROM resource_observation
+                WHERE cluster_id = ? AND namespace = ? AND uid = ?
+                ORDER BY id
+                """,
+                (cluster_id, namespace, uid),
+            ).fetchall()
+        return [_observation_from_row(row) for row in rows]
+
+    def list_observations_for_owner(
+        self,
+        cluster_id: str,
+        namespace: str,
+        owner_uid: str,
+    ) -> list[ResourceObservation]:
+        with self._connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT observation.*
+                FROM resource_observation AS observation
+                JOIN observation_owner_reference AS owner
+                  ON owner.observation_id = observation.id
+                WHERE observation.cluster_id = ?
+                  AND observation.namespace = ?
+                  AND owner.owner_uid = ?
+                ORDER BY observation.id
+                """,
+                (cluster_id, namespace, owner_uid),
+            ).fetchall()
+        return [_observation_from_row(row) for row in rows]
+
     def _insert(self, connection: sqlite3.Connection, record: PlacementRecord) -> None:
         raw_json = json.dumps(record.to_resource(), separators=(",", ":"), sort_keys=True)
         connection.execute(
@@ -199,4 +339,66 @@ def _placement_identity(record: PlacementRecord) -> tuple:
         record.pod_name,
         record.pod_uid,
         record.node_name,
+    )
+
+
+def _owner_references_json(owner_references: tuple[OwnerReference, ...]) -> str:
+    return json.dumps(
+        [
+            {
+                "apiVersion": owner.api_version,
+                "kind": owner.kind,
+                "name": owner.name,
+                "uid": owner.uid,
+                "controller": owner.controller,
+            }
+            for owner in owner_references
+        ],
+        separators=(",", ":"),
+        sort_keys=True,
+    )
+
+
+def _optional_json(value: dict | None) -> str | None:
+    return json.dumps(value, separators=(",", ":"), sort_keys=True) if value is not None else None
+
+
+def _observation_from_row(row: sqlite3.Row) -> ResourceObservation:
+    return ResourceObservation(
+        cluster_id=row["cluster_id"],
+        api_version=row["api_version"],
+        kind=row["kind"],
+        namespace=row["namespace"],
+        name=row["name"],
+        uid=row["uid"],
+        resource_version=row["resource_version"],
+        event_type=row["event_type"],
+        observed_at=row["observed_at"],
+        source_timestamp=row["source_timestamp"],
+        owner_references=tuple(
+            OwnerReference(
+                api_version=owner.get("apiVersion") or "",
+                kind=owner["kind"],
+                name=owner["name"],
+                uid=owner["uid"],
+                controller=bool(owner["controller"]),
+            )
+            for owner in json.loads(row["owner_references_json"])
+        ),
+        status=json.loads(row["status_json"]) if row["status_json"] is not None else None,
+    )
+
+
+def _observation_content(observation: ResourceObservation) -> tuple:
+    return (
+        observation.cluster_id,
+        observation.api_version,
+        observation.kind,
+        observation.namespace,
+        observation.name,
+        observation.uid,
+        observation.resource_version,
+        observation.owner_references,
+        observation.source_timestamp,
+        _optional_json(observation.status),
     )
