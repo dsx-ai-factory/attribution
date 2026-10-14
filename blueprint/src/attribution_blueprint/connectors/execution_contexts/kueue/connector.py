@@ -89,13 +89,12 @@ from attribution_blueprint.connectors.execution_contexts.kueue.helpers import (
 )
 from attribution_blueprint.connectors.execution_contexts.kueue.pod_placement.models import (
     PlacementQuery,
-    PlacementRecord,
-    PodPlacement,
 )
 from attribution_blueprint.connectors.execution_contexts.kueue.pod_placement.store import (
-    PlacementReader,
     PlacementResolver,
 )
+from attribution_blueprint.kubernetes.daemon.models import PlacementRecord, PodPlacement
+from attribution_blueprint.kubernetes.daemon.store import PlacementReader
 from attribution_blueprint.types import assert_aware
 
 _KUEUE_GROUP = "kueue.x-k8s.io"
@@ -1023,7 +1022,7 @@ class KueueExecutionContextAdapter:
         if self.placement_reader is None:
             raise RuntimeError("placement records are enabled but no recorder client is configured")
         try:
-            return self.placement_reader.list_for_workload(
+            return self.placement_reader.list_for_resource(
                 context["namespace"],
                 context["workload_uid"],
             )
