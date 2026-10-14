@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
 """Durable, scheduler-neutral Kubernetes evidence collection."""
 
 from attribution_blueprint.kubernetes.daemon.client import KubernetesDaemonClient
