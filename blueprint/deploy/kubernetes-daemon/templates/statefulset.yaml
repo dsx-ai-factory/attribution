@@ -41,6 +41,14 @@ spec:
             - --jobset-version={{ .Values.jobsetVersion }}
             - --sqlite-path={{ .Values.storage.sqlite.path }}
             - --retention-days={{ .Values.retentionDays }}
+{{- if .Values.integrations.kueue.enabled }}
+            - --enable-kueue
+            - --kueue-workload-version={{ .Values.integrations.kueue.workloadVersion }}
+{{- end }}
+{{- if .Values.integrations.kai.enabled }}
+            - --enable-kai
+            - --kai-pod-group-version={{ .Values.integrations.kai.podGroupVersion }}
+{{- end }}
           ports:
             - name: health
               containerPort: 8080
