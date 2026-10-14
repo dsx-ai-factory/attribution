@@ -46,9 +46,25 @@ spec:
               drop: ["ALL"]
           args:
             - --namespace={{ .Release.Namespace }}
+            - --cluster-id={{ .Values.clusterId }}
             - --queue-size={{ .Values.queueSize }}
             - --workers={{ .Values.workers }}
             - --watch-timeout-seconds={{ .Values.watchTimeoutSeconds }}
+{{- if .Values.watches.pods }}
+            - --watch-pods
+{{- else }}
+            - --no-watch-pods
+{{- end }}
+{{- if .Values.watches.jobs }}
+            - --watch-jobs
+{{- else }}
+            - --no-watch-jobs
+{{- end }}
+{{- if .Values.watches.jobsets }}
+            - --watch-jobsets
+{{- else }}
+            - --no-watch-jobsets
+{{- end }}
             - --jobset-version={{ .Values.jobsetVersion }}
             - --sqlite-path={{ .Values.storage.sqlite.path }}
             - --retention-days={{ .Values.retentionDays }}

@@ -58,6 +58,7 @@ class ResourceObservation:
     event_type: ObservationEventType
     observed_at: str
     owner_references: tuple[OwnerReference, ...] = ()
+    selected_metadata: dict | None = None
     source_timestamp: str | None = None
     status: dict | None = None
 
@@ -69,6 +70,7 @@ class ResourceObservation:
         cluster_id: str,
         event_type: ObservationEventType,
         status: dict | None = None,
+        selected_metadata: dict | None = None,
         source_timestamp: str | None = None,
         observed_at: str | None = None,
     ) -> ResourceObservation:
@@ -106,6 +108,7 @@ class ResourceObservation:
                 for owner in metadata.get("ownerReferences") or []
                 if owner.get("kind") and owner.get("name") and owner.get("uid")
             ),
+            selected_metadata=selected_metadata,
             source_timestamp=source_timestamp,
             status=status,
         )

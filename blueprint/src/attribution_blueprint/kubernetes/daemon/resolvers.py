@@ -138,6 +138,9 @@ def normalize_resource(resource: dict, *, api_version: str | None = None, kind: 
             "labels": metadata.get("labels") or {},
             "annotations": metadata.get("annotations") or {},
             "resourceVersion": metadata.get("resource_version") or metadata.get("resourceVersion"),
+            "creationTimestamp": metadata.get("creation_timestamp") or metadata.get("creationTimestamp"),
+            "deletionTimestamp": metadata.get("deletion_timestamp") or metadata.get("deletionTimestamp"),
+            "generation": metadata.get("generation"),
             "ownerReferences": [
                 {
                     "apiVersion": owner.get("api_version") or owner.get("apiVersion"),
