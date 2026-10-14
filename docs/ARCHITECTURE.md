@@ -71,8 +71,8 @@ flowchart TD
 ```
 
 Proposed extensions are documented separately. See the
-[Kueue Pod placement recorder reference](https://github.com/dsx-ai-factory/attribution/blob/main/blueprint/src/attribution_blueprint/connectors/execution_contexts/kueue/pod_placement/recorder/docs/README.md)
-for durable Pod-to-node placement before post-hoc Kueue attribution.
+[KubernetesDaemon reference](../blueprint/src/attribution_blueprint/kubernetes/daemon/docs/README.md)
+for durable Pod-to-node placement before post-hoc Kubernetes attribution.
 
 ## End-to-end flow for one workload
 

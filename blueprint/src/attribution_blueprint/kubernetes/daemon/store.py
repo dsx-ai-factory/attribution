@@ -20,11 +20,7 @@ class PlacementConflictError(RuntimeError):
 
 
 class PlacementReader(Protocol):
-    def list_for_pod(self, namespace: str, pod_uid: str) -> list[PlacementRecord]: ...
-
     def list_for_resource(self, namespace: str, resource_uid: str) -> list[PlacementRecord]: ...
-
-    def list_for_owner(self, namespace: str, owner_uid: str) -> list[PlacementRecord]: ...
 
 
 class PlacementStore(PlacementReader, Protocol):

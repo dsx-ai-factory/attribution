@@ -20,7 +20,7 @@ from attribution_blueprint.kubernetes.daemon.resolvers import (
     normalize_resource,
 )
 from attribution_blueprint.kubernetes.daemon.store import CreateResult, PlacementStore
-from attribution_blueprint.kubernetes.helpers import pod_node_failure_reason
+from attribution_blueprint.kubernetes.helpers import pod_container_exit_reason, pod_node_failure_reason
 
 
 class KubernetesDaemon:
@@ -141,7 +141,7 @@ class KubernetesDaemon:
                 self.items.task_done()
 
     def _record(self, pod: dict) -> None:
-        failure_reason = pod_node_failure_reason(pod) or _pod_container_exit_reason(pod)
+        failure_reason = pod_node_failure_reason(pod) or pod_container_exit_reason(pod)
         base = PlacementRecord.for_pod(pod, node_failure_reason=failure_reason)
         result = self._persist(base, "scheduler-neutral Pod placement")
         if result is None:
@@ -226,12 +226,3 @@ def _as_dict(resource) -> dict:
     if isinstance(resource, dict):
         return resource
     return normalize_resource(resource.to_dict())
-
-
-def _pod_container_exit_reason(pod: dict) -> str | None:
-    for container_status in (pod.get("status") or {}).get("containerStatuses") or []:
-        terminated = (container_status.get("state") or {}).get("terminated") or {}
-        exit_code = terminated.get("exitCode")
-        if isinstance(exit_code, int) and exit_code != 0:
-            return f"ExitCode:{exit_code}"
-    return None

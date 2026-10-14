@@ -53,61 +53,19 @@ def test_placement_endpoint_queries_associated_resource(tmp_path):
     assert response.json()["items"] == [_record().to_resource()]
 
 
-def test_placement_endpoint_queries_owner_without_scheduler_association(tmp_path):
+def test_placement_endpoint_requires_resource_uid(tmp_path):
     store = SQLitePlacementStore(str(tmp_path / "placements.db"))
     store.create(_record())
     server = serve_api(HealthState(), store, 0, "team-a")
     try:
         response = requests.get(
             f"http://127.0.0.1:{server.server_port}/v1/placements",
-            params={"namespace": "team-a", "owner_uid": "job-uid-1"},
+            params={"namespace": "team-a"},
             timeout=2,
         )
     finally:
         server.shutdown()
         server.server_close()
 
-    assert response.status_code == 200
-    assert response.json()["items"] == [_record().to_resource()]
-
-
-def test_placement_endpoint_queries_pod_uid(tmp_path):
-    store = SQLitePlacementStore(str(tmp_path / "placements.db"))
-    store.create(_record())
-    server = serve_api(HealthState(), store, 0, "team-a")
-    try:
-        response = requests.get(
-            f"http://127.0.0.1:{server.server_port}/v1/placements",
-            params={"namespace": "team-a", "pod_uid": "pod-uid-1"},
-            timeout=2,
-        )
-    finally:
-        server.shutdown()
-        server.server_close()
-
-    assert response.status_code == 200
-    assert response.json()["items"] == [_record().to_resource()]
-
-
-def test_placement_endpoint_can_enable_a_resource_query_alias(tmp_path):
-    store = SQLitePlacementStore(str(tmp_path / "placements.db"))
-    store.create(_record())
-    server = serve_api(
-        HealthState(),
-        store,
-        0,
-        "team-a",
-        resource_uid_aliases=("legacy_resource_uid",),
-    )
-    try:
-        response = requests.get(
-            f"http://127.0.0.1:{server.server_port}/v1/placements",
-            params={"namespace": "team-a", "legacy_resource_uid": "admission-uid-1"},
-            timeout=2,
-        )
-    finally:
-        server.shutdown()
-        server.server_close()
-
-    assert response.status_code == 200
-    assert response.json()["items"] == [_record().to_resource()]
+    assert response.status_code == 400
+    assert response.json() == {"error": "namespace and resource_uid are required"}

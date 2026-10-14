@@ -16,14 +16,11 @@ CREATE TABLE IF NOT EXISTS placement_record (
     namespace TEXT NOT NULL,
     pod_name TEXT NOT NULL,
     node_name TEXT NOT NULL,
-    owner_uid TEXT,
     node_failure_reason TEXT,
     raw_json TEXT NOT NULL,
     observed_at TEXT NOT NULL,
     updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
-CREATE INDEX IF NOT EXISTS placement_record_owner
-    ON placement_record(namespace, owner_uid);
 CREATE TABLE IF NOT EXISTS placement_resource (
     pod_uid TEXT NOT NULL,
     namespace TEXT NOT NULL,
@@ -59,7 +56,6 @@ class SQLitePlacementStore:
         self.retention_days = retention_days
         Path(path).parent.mkdir(parents=True, exist_ok=True)
         with self._connect() as connection:
-            self._validate_schema(connection)
             connection.executescript(_SCHEMA)
             connection.execute("PRAGMA user_version = 2")
             self._prune_expired(connection)
@@ -121,10 +117,6 @@ class SQLitePlacementStore:
             ).fetchone()
         return PlacementRecord.from_resource(json.loads(row["raw_json"])) if row else None
 
-    def list_for_pod(self, namespace: str, pod_uid: str) -> list[PlacementRecord]:
-        record = self.get_by_pod_uid(pod_uid)
-        return [record] if record is not None and record.namespace == namespace else []
-
     def list_for_resource(self, namespace: str, resource_uid: str) -> list[PlacementRecord]:
         with self._connect() as connection:
             self._prune_expired(connection)
@@ -141,34 +133,20 @@ class SQLitePlacementStore:
             ).fetchall()
         return [PlacementRecord.from_resource(json.loads(row["raw_json"])) for row in rows]
 
-    def list_for_owner(self, namespace: str, owner_uid: str) -> list[PlacementRecord]:
-        with self._connect() as connection:
-            self._prune_expired(connection)
-            rows = connection.execute(
-                """
-                SELECT raw_json FROM placement_record
-                WHERE namespace = ? AND owner_uid = ?
-                ORDER BY pod_uid
-                """,
-                (namespace, owner_uid),
-            ).fetchall()
-        return [PlacementRecord.from_resource(json.loads(row["raw_json"])) for row in rows]
-
     def _insert(self, connection: sqlite3.Connection, record: PlacementRecord) -> None:
         raw_json = json.dumps(record.to_resource(), separators=(",", ":"), sort_keys=True)
         connection.execute(
             """
             INSERT INTO placement_record(
-                pod_uid, namespace, pod_name, node_name, owner_uid,
+                pod_uid, namespace, pod_name, node_name,
                 node_failure_reason, raw_json, observed_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 record.pod_uid,
                 record.namespace,
                 record.pod_name,
                 record.node_name,
-                record.owner.uid if record.owner else None,
                 record.node_failure_reason,
                 raw_json,
                 record.observed_at,
@@ -181,12 +159,11 @@ class SQLitePlacementStore:
         connection.execute(
             """
             UPDATE placement_record
-            SET owner_uid = ?, node_failure_reason = ?, raw_json = ?,
+            SET node_failure_reason = ?, raw_json = ?,
                 updated_at = CURRENT_TIMESTAMP
             WHERE pod_uid = ?
             """,
             (
-                record.owner.uid if record.owner else None,
                 record.node_failure_reason,
                 raw_json,
                 record.pod_uid,
@@ -208,13 +185,6 @@ class SQLitePlacementStore:
                 for resource in record.associated_resources
             ],
         )
-
-    @staticmethod
-    def _validate_schema(connection: sqlite3.Connection) -> None:
-        columns = connection.execute("PRAGMA table_info(placement_record)").fetchall()
-        if not columns or any(row["name"] == "pod_name" for row in columns):
-            return
-        raise RuntimeError("existing placement database requires compatibility migration before KubernetesDaemon can use it")
 
     def _prune_expired(self, connection: sqlite3.Connection) -> None:
         connection.execute(

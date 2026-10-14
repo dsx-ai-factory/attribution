@@ -161,7 +161,7 @@ Enable daemon reads in the Blueprint:
 [eca.kueue]
 placement_records_enabled = true
 
-[eca.kueue.placement_recorder]
+[eca.kueue.kubernetes_daemon]
 endpoint = "http://attribution-kubernetes-daemon.team-a.svc:8080"
 timeout_seconds = 10
 ```
