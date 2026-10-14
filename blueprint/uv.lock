@@ -843,7 +843,7 @@ requires-dist = [
     { name = "requests", specifier = ">=2.31" },
     { name = "uvicorn", marker = "extra == 'web'", specifier = ">=0.27" },
 ]
-provides-extras = ["dev", "pod-placement-recorder", "web"]
+provides-extras = ["dev", "kubernetes-daemon", "pod-placement-recorder", "web"]
 
 [package.metadata.requires-dev]
 dev = [{ name = "ruff", specifier = ">=0.15.12" }]
