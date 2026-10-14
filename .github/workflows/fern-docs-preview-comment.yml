@@ -47,12 +47,25 @@ jobs:
 
       - name: Validate and read PR metadata
         id: metadata
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RUN_HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+          RUN_HEAD_REPO: ${{ github.event.workflow_run.head_repository.full_name }}
         run: |
           PR_NUMBER=$(cat preview-metadata/pr_number)
           # [[ =~ ]] matches the whole string; grep -E is per line and would let
           # "12<newline>foo=bar" through into $GITHUB_OUTPUT.
           if ! [[ "$PR_NUMBER" =~ ^[0-9]+$ ]]; then
             echo "::error::Invalid pr_number in artifact"
+            exit 1
+          fi
+          # The artifact is untrusted, and a fork can change the build workflow
+          # to name any PR number. Only accept a PR whose head is the commit and
+          # repository that produced this run.
+          PR_HEAD=$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}" \
+            --jq '[.head.sha, (.head.repo.full_name // "")] | @tsv')
+          if [ "$PR_HEAD" != "$(printf '%s\t%s' "$RUN_HEAD_SHA" "$RUN_HEAD_REPO")" ]; then
+            echo "::error::pr_number ${PR_NUMBER} in the artifact does not match the commit and repository of this run"
             exit 1
           fi
           echo "pr_number=${PR_NUMBER}" >> "$GITHUB_OUTPUT"
@@ -76,7 +89,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
         with:
-          node-version: '20'
+          node-version: '22'
 
       - name: Install Fern CLI
         # Intentionally unpinned: Fern ships often with no LTS channel and the
@@ -155,13 +168,17 @@ jobs:
 
           ${MARKER}"
 
-          COMMENT_ID=$(gh api "repos/${{ github.repository }}/issues/${PR_NUMBER}/comments" \
-            --jq ".[] | select(.body | contains(\"${MARKER}\")) | .id" | tr -d '\r' | head -1)
+          # Match only this bot's own comment, so a contributor who posts the
+          # marker cannot block the preview comment. Paginate so an older
+          # comment is still found on a PR with many comments.
+          COMMENT_ID=$(gh api --paginate "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/comments" \
+            --jq ".[] | select(.user.login == \"github-actions[bot]\" and (.body | contains(\"${MARKER}\"))) | .id" \
+            | tr -d '\r' | head -1)
 
           if [ -n "$COMMENT_ID" ]; then
-            gh api "repos/${{ github.repository }}/issues/comments/${COMMENT_ID}" \
+            gh api "repos/${GITHUB_REPOSITORY}/issues/comments/${COMMENT_ID}" \
               -X PATCH -f body="$BODY"
           else
-            gh api "repos/${{ github.repository }}/issues/${PR_NUMBER}/comments" \
+            gh api "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/comments" \
               -f body="$BODY"
           fi
