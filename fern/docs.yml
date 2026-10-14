@@ -1,0 +1,27 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+instances:
+  - url: nvidia-attribution.docs.buildwithfern.com/attribution
+    multi-source: true
+
+redirects:
+  - source: /attribution/index.html
+    destination: /attribution
+
+title: NVIDIA Attribution
+
+global-theme: nvidia
+
+logo:
+  href: /attribution
+  right-text: Attribution
+
+navbar-links:
+  - type: github
+    value: https://github.com/dsx-ai-factory/attribution
+
+products:
+  - display-name: Attribution
+    path: ../docs/index.yml
+    slug: /
