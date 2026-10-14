@@ -308,7 +308,7 @@ class SQLitePlacementStore:
         namespace: str,
         kind: str,
     ) -> list[ResourceObservation]:
-        with self._connect() as connection:
+        with self._connection() as connection:
             rows = connection.execute(
                 """
                 WITH latest AS (
@@ -323,6 +323,44 @@ class SQLitePlacementStore:
                 ORDER BY observation.id
                 """,
                 (cluster_id, namespace, kind),
+            ).fetchall()
+        return [_observation_from_row(row) for row in rows]
+
+    def list_observations_for_controller(
+        self,
+        cluster_id: str,
+        namespace: str,
+        controller_uid: str,
+    ) -> list[ResourceObservation]:
+        with self._connection() as connection:
+            rows = connection.execute(
+                """
+                WITH RECURSIVE related(uid) AS (
+                    SELECT ?
+                    UNION
+                    SELECT observation.uid
+                    FROM resource_observation AS observation
+                    JOIN observation_owner_reference AS owner
+                      ON owner.observation_id = observation.id
+                    JOIN related
+                      ON related.uid = owner.owner_uid
+                    WHERE observation.cluster_id = ?
+                      AND observation.namespace = ?
+                )
+                SELECT observation.*
+                FROM resource_observation AS observation
+                JOIN related USING (uid)
+                WHERE observation.cluster_id = ?
+                  AND observation.namespace = ?
+                ORDER BY observation.id
+                """,
+                (
+                    controller_uid,
+                    cluster_id,
+                    namespace,
+                    cluster_id,
+                    namespace,
+                ),
             ).fetchall()
         return [_observation_from_row(row) for row in rows]
 

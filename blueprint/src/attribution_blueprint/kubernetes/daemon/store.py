@@ -124,6 +124,12 @@ class ObservationJournal(Protocol):
         namespace: str,
     ) -> list[CoverageGap]: ...
 
+    def list_observations_for_controller(
+        self,
+        cluster_id: str,
+        namespace: str,
+        controller_uid: str,
+    ) -> list[ResourceObservation]: ...
 
 class PlacementReader(Protocol):
     def list_for_resource(self, namespace: str, resource_uid: str) -> list[PlacementRecord]: ...

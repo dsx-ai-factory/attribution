@@ -742,6 +742,61 @@ def test_latest_observations_are_queryable_by_resource_kind(tmp_path):
     ) == [updated]
 
 
+def test_controller_history_recursively_includes_descendant_resources(tmp_path):
+    store = SQLitePlacementStore(str(tmp_path / "placements.db"))
+    jobset = replace(
+        _observation(),
+        api_version="jobset.x-k8s.io/v1alpha2",
+        kind="JobSet",
+        name="training",
+        uid="jobset-uid-1",
+        owner_references=(),
+    )
+    job = replace(
+        _observation(resource_version="2"),
+        api_version="batch/v1",
+        kind="Job",
+        name="training-workers-0",
+        uid="job-uid-1",
+        owner_references=(
+            OwnerReference(
+                api_version="jobset.x-k8s.io/v1alpha2",
+                kind="JobSet",
+                name="training",
+                uid="jobset-uid-1",
+                controller=True,
+            ),
+        ),
+    )
+    pod = replace(
+        _observation(resource_version="3"),
+        name="training-workers-0-abcde",
+        uid="pod-uid-1",
+    )
+    unrelated = replace(
+        _observation(resource_version="4"),
+        name="other-pod",
+        uid="other-pod-uid",
+        owner_references=(
+            OwnerReference(
+                api_version="batch/v1",
+                kind="Job",
+                name="other-job",
+                uid="other-job-uid",
+                controller=True,
+            ),
+        ),
+    )
+    for observation in (jobset, job, pod, unrelated):
+        _capture(store, observation)
+
+    assert store.list_observations_for_controller(
+        "cluster-a",
+        "team-a",
+        "jobset-uid-1",
+    ) == [jobset, job, pod]
+
+
 def test_observation_journal_does_not_change_placement_view(tmp_path):
     store = SQLitePlacementStore(str(tmp_path / "placements.db"))
 

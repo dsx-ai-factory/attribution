@@ -154,7 +154,13 @@ def main() -> None:
         cluster_id=args.cluster_id,
         watch_sources=tuple(watch_sources),
     )
-    api_server = serve_api(daemon.health, placement_store, args.health_port, args.namespace)
+    api_server = serve_api(
+        daemon.health,
+        placement_store,
+        args.health_port,
+        args.namespace,
+        cluster_id=args.cluster_id,
+    )
 
     def stop(_signum, _frame):
         logger.info("stopping KubernetesDaemon")
