@@ -47,10 +47,13 @@ from loguru import logger
 
 from attribution_blueprint.connectors.execution_contexts.kubernetes_client import KubernetesClient
 from attribution_blueprint.connectors.execution_contexts.kubernetes_helpers import (
+    NODE_LOSS_DISRUPTION_REASONS,
     earliest_job_failure_reason,
     job_time_limit_minutes,
     pod_node_failure_reason,
 )
+from attribution_blueprint.kubernetes.daemon.models import PlacementRecord, PodPlacement
+from attribution_blueprint.kubernetes.daemon.store import PlacementReader
 from attribution_blueprint.types import assert_aware
 
 _PODGROUP_RESOURCE = "PodGroup"
@@ -107,6 +110,7 @@ class KaiExecutionContext(TypedDict):
     pod_names: NotRequired[list[str]]
     # Pod name -> `.spec.nodeName`.
     pod_nodes: NotRequired[dict[str, str]]
+    pod_placements: NotRequired[list[PodPlacement]]
 
 
 def _parse_dt(value: str | None) -> datetime | None:
@@ -451,9 +455,15 @@ class KaiExecutionContextAdapter:
         context: str | None = None,
         namespace: str | None = None,
         timeout_seconds: int = 60,
+        placement_records_enabled: bool = False,
+        placement_reader: PlacementReader | None = None,
     ):
         self.namespace = namespace or ""
         self.timeout_seconds = timeout_seconds
+        if not isinstance(placement_records_enabled, bool):
+            raise ValueError("placement_records_enabled must be a bool")
+        self.placement_records_enabled = placement_records_enabled
+        self.placement_reader = placement_reader
         self._kubernetes = KubernetesClient(
             kubeconfig=kubeconfig,
             context=context,
@@ -587,8 +597,62 @@ class KaiExecutionContextAdapter:
                 now,
             )
             if ctx is not None:
+                self._merge_placement_records(ctx)
                 contexts.append(ctx)
         return contexts
+
+    def _fetch_placement_records(self, context: KaiExecutionContext) -> list[PlacementRecord]:
+        if not self.placement_records_enabled:
+            return []
+        if self.placement_reader is None:
+            raise RuntimeError("placement records are enabled but no KubernetesDaemon client is configured")
+        try:
+            return self.placement_reader.list_for_resource(
+                context["namespace"],
+                context["pod_group_uid"],
+            )
+        except Exception as error:
+            raise RuntimeError(f"KubernetesDaemon placement lookup failed: {error}") from error
+
+    def _merge_placement_records(self, context: KaiExecutionContext) -> None:
+        records = self._fetch_placement_records(context)
+        if not records:
+            return
+        placements: list[PodPlacement] = [
+            {
+                "pod_uid": record.pod_uid,
+                "pod_name": record.pod_name,
+                "node_name": record.node_name,
+                "source": "kubernetes_daemon",
+            }
+            for record in records
+        ]
+        existing = {
+            placement["pod_uid"]: placement
+            for placement in context.get("pod_placements") or []
+            if placement.get("pod_uid")
+        }
+        for placement in placements:
+            existing.setdefault(placement["pod_uid"], placement)
+        merged = sorted(existing.values(), key=lambda placement: placement["pod_uid"])
+        context["pod_placements"] = merged
+        context["nodes"] = sorted(set(context["nodes"]) | {placement["node_name"] for placement in merged})
+        context["pod_names"] = sorted(
+            set(context.get("pod_names") or []) | {placement["pod_name"] for placement in merged}
+        )
+        pod_nodes = dict(context.get("pod_nodes") or {})
+        pod_nodes.update({placement["pod_name"]: placement["node_name"] for placement in merged})
+        context["pod_nodes"] = pod_nodes
+
+        node_loss_nodes = {
+            record.node_name
+            for record in records
+            if record.node_failure_reason == "NodeLost"
+            or record.node_failure_reason in NODE_LOSS_DISRUPTION_REASONS
+        }
+        if node_loss_nodes and context["state"] != "COMPLETED":
+            context["state"] = "NODE_FAIL"
+            context["failed_node"] = min(node_loss_nodes)
 
     def _fetch_pods(self, podgroups: list[dict]) -> list[dict]:
         """List Pods once per distinct namespace.
