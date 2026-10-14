@@ -343,6 +343,62 @@ class _FinitePodWatchSource(_PodWatchSource):
         self.daemon.stop()
 
 
+class _ReplayPodWatchSource(_PodWatchSource):
+    def __init__(self, snapshot, event):
+        self.snapshot = snapshot
+        self.event = event
+        self.stream_resource_versions = []
+        self.daemon = None
+
+    def list_resources(self):
+        return [self.snapshot], "10"
+
+    def stream(self, resource_version, timeout_seconds):
+        self.stream_resource_versions.append(resource_version)
+        yield self.event
+        if len(self.stream_resource_versions) > 1:
+            self.daemon.stop()
+
+
+class _RetrySnapshotSource(_PodWatchSource):
+    def __init__(self, snapshot):
+        self.snapshot = snapshot
+        self.list_calls = 0
+        self.daemon = None
+
+    def list_resources(self):
+        self.list_calls += 1
+        return [self.snapshot], "10"
+
+    def stream(self, resource_version, timeout_seconds):
+        self.daemon.stop()
+        return ()
+
+
+class _FailObservationOnceStore:
+    def __init__(self, delegate, resource_version):
+        self.delegate = delegate
+        self.resource_version = resource_version
+        self.failed = False
+
+    def append_observation(self, observation):
+        if observation.resource_version == self.resource_version and not self.failed:
+            self.failed = True
+            raise OSError("synthetic journal failure")
+        return self.delegate.append_observation(observation)
+
+    def create(self, record):
+        return self.delegate.create(record)
+
+    def __getattr__(self, name):
+        return getattr(self.delegate, name)
+
+
+class _NoWaitEvent(threading.Event):
+    def wait(self, timeout=None):
+        return self.is_set()
+
+
 def test_records_placement_before_any_resolution(tmp_path):
     store = SQLitePlacementStore(str(tmp_path / "placements.db"))
     daemon = KubernetesDaemon(core_api=None, store=store, namespace="team-a")
@@ -1256,3 +1312,62 @@ def test_watch_records_snapshots_updates_and_deletions(tmp_path):
         "DELETED",
     ]
     assert daemon.health.initial_list_complete is True
+
+
+def test_watch_replays_failed_write_from_last_persisted_resource_version(tmp_path):
+    journal = SQLitePlacementStore(str(tmp_path / "placements.db"))
+    store = _FailObservationOnceStore(journal, "11")
+    pod = _pod()
+    pod["spec"] = {}
+    snapshot = {**pod, "metadata": {**pod["metadata"], "resourceVersion": "10"}}
+    event = {
+        "type": "MODIFIED",
+        "object": {
+            **pod,
+            "metadata": {**pod["metadata"], "resourceVersion": "11"},
+            "status": {"phase": "Running"},
+        },
+    }
+    source = _ReplayPodWatchSource(snapshot, event)
+    daemon = KubernetesDaemon(
+        core_api=None,
+        store=store,
+        namespace="team-a",
+        cluster_id="cluster-a",
+        watch_sources=(source,),
+    )
+    daemon.stop_event = _NoWaitEvent()
+    source.daemon = daemon
+
+    daemon._watch_source(source)
+
+    observations = journal.list_observations_for_uid("cluster-a", "team-a", "pod-uid-1")
+    assert [observation.resource_version for observation in observations] == ["10", "11"]
+    assert source.stream_resource_versions == ["10", "10"]
+    assert daemon.health.persistence_failed is False
+
+
+def test_initial_list_is_retried_before_watch_position_advances(tmp_path):
+    journal = SQLitePlacementStore(str(tmp_path / "placements.db"))
+    store = _FailObservationOnceStore(journal, "10")
+    pod = _pod()
+    pod["spec"] = {}
+    snapshot = {**pod, "metadata": {**pod["metadata"], "resourceVersion": "10"}}
+    source = _RetrySnapshotSource(snapshot)
+    daemon = KubernetesDaemon(
+        core_api=None,
+        store=store,
+        namespace="team-a",
+        cluster_id="cluster-a",
+        watch_sources=(source,),
+    )
+    daemon.stop_event = _NoWaitEvent()
+    source.daemon = daemon
+
+    daemon._watch_source(source)
+
+    observations = journal.list_observations_for_uid("cluster-a", "team-a", "pod-uid-1")
+    assert [observation.resource_version for observation in observations] == ["10"]
+    assert source.list_calls == 2
+    assert daemon.health.initial_list_complete is True
+    assert daemon.health.persistence_failed is False
