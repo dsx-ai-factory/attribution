@@ -6,11 +6,13 @@ from __future__ import annotations
 import queue
 import random
 import threading
+from datetime import datetime, timezone
 
 from loguru import logger
 
 from attribution_blueprint.kubernetes.daemon.health import HealthState
 from attribution_blueprint.kubernetes.daemon.models import (
+    CoverageGapReason,
     ObservationEventType,
     PlacementRecord,
     ResourceObservation,
@@ -107,14 +109,70 @@ class KubernetesDaemon:
         from kubernetes.client.exceptions import ApiException
 
         resource_version = None
+        gap_id = None
+        checkpoint_loaded = False
+        pending_gap_reason: CoverageGapReason | None = None
+        pending_gap_resource_version: str | None = None
         backoff = 1.0
         while not self.stop_event.is_set():
             try:
+                if not checkpoint_loaded:
+                    coverage = self.store.get_watch_coverage(
+                        self.cluster_id,
+                        self.namespace,
+                        source.name,
+                    )
+                    if pending_gap_reason is not None:
+                        assert pending_gap_resource_version is not None
+                        gap_id = self.store.begin_coverage_gap(
+                            cluster_id=self.cluster_id,
+                            namespace=self.namespace,
+                            source_name=source.name,
+                            api_version=source.api_version,
+                            kind=source.kind,
+                            reason=pending_gap_reason,
+                            start_resource_version=pending_gap_resource_version,
+                            detected_at=_utc_now(),
+                        )
+                    elif coverage is not None:
+                        if (
+                            coverage.api_version != source.api_version
+                            or coverage.kind != source.kind
+                        ):
+                            gap_id = self.store.begin_coverage_gap(
+                                cluster_id=self.cluster_id,
+                                namespace=self.namespace,
+                                source_name=source.name,
+                                api_version=source.api_version,
+                                kind=source.kind,
+                                reason="WATCH_SOURCE_CHANGED",
+                                start_resource_version=coverage.resource_version,
+                                detected_at=_utc_now(),
+                            )
+                        else:
+                            resource_version = coverage.resource_version
+                            self._mark_initial_list_complete(source.name)
+                    checkpoint_loaded = True
+
                 if resource_version is None:
                     resources, listed_resource_version = source.list_resources()
                     for resource in resources:
                         if not self._capture(source, resource, "SNAPSHOT"):
                             raise _ObservationPersistenceFailed
+                    completed_at = _utc_now()
+                    self.store.complete_watch_list(
+                        cluster_id=self.cluster_id,
+                        namespace=self.namespace,
+                        source_name=source.name,
+                        api_version=source.api_version,
+                        kind=source.kind,
+                        resource_version=listed_resource_version,
+                        completed_at=completed_at,
+                        gap_id=gap_id,
+                    )
+                    gap_id = None
+                    pending_gap_reason = None
+                    pending_gap_resource_version = None
                     resource_version = listed_resource_version
                     self._mark_initial_list_complete(source.name)
 
@@ -129,6 +187,7 @@ class KubernetesDaemon:
                         if event_resource_version:
                             resource_version = event_resource_version
                     elif event_type == "BOOKMARK" and event_resource_version:
+                        self._mark_watch_checkpoint(source, event_resource_version)
                         resource_version = event_resource_version
                     if self.stop_event.is_set():
                         break
@@ -141,6 +200,11 @@ class KubernetesDaemon:
             except ApiException as error:
                 if error.status == 410:
                     logger.warning(f"{source.name} watch resourceVersion expired; relisting")
+                    assert resource_version is not None
+                    self._mark_initial_list_incomplete(source.name)
+                    checkpoint_loaded = False
+                    pending_gap_reason = "RESOURCE_VERSION_EXPIRED"
+                    pending_gap_resource_version = resource_version
                     resource_version = None
                     continue
                 logger.warning(f"{source.name} watch failed: {error}")
@@ -173,36 +237,34 @@ class KubernetesDaemon:
                 }
             ),
         )
+        placement = None
+        if observation.kind == "Pod" and (resource.get("spec") or {}).get("nodeName"):
+            failure_reason = pod_node_failure_reason(resource) or pod_container_exit_reason(resource)
+            placement = PlacementRecord.for_pod(resource, node_failure_reason=failure_reason)
         try:
-            self.store.append_observation(observation)
+            result = self.store.capture_observation(
+                observation,
+                source_name=source.name,
+                placement=placement,
+                advance_checkpoint=event_type != "SNAPSHOT",
+            )
         except Exception:
             self.health.update(persistence_failed=True)
             logger.exception(
-                f"failed to persist {source.name} observation "
+                f"failed to persist {source.name} capture "
                 f"{observation.namespace}/{observation.name}@{observation.resource_version}"
             )
             return False
         self.health.update(persistence_failed=False)
 
-        if observation.kind == "Pod" and (resource.get("spec") or {}).get("nodeName"):
-            # Placement (namespace, Pod UID, node) must never depend on the
-            # optional enrichment queue having capacity. Persist it here,
-            # synchronously, before queuing the best-effort owner/scheduler
-            # enrichment work below.
-            if not self._capture_placement(resource):
-                return False
+        if placement is not None:
+            assert result.placement is not None
+            if result.placement != CreateResult.DUPLICATE:
+                logger.info(
+                    f"{result.placement.value} placement for Pod "
+                    f"{placement.namespace}/{placement.pod_name}"
+                )
             self._enqueue(resource)
-        return True
-
-    def _capture_placement(self, pod: dict) -> bool:
-        failure_reason = pod_node_failure_reason(pod) or pod_container_exit_reason(pod)
-        base = PlacementRecord.for_pod(pod, node_failure_reason=failure_reason)
-        result = self._persist(base, "scheduler-neutral Pod placement")
-        if result is None:
-            return False
-        if result != CreateResult.DUPLICATE:
-            metadata = pod.get("metadata") or {}
-            logger.info(f"{result.value} placement for Pod {self.namespace}/{metadata.get('name')}")
         return True
 
     def _mark_initial_list_complete(self, source_name: str) -> None:
@@ -210,6 +272,28 @@ class KubernetesDaemon:
             self._initial_lists_complete.add(source_name)
             all_complete = len(self._initial_lists_complete) == len(self.watch_sources)
         self.health.update(initial_list_complete=all_complete)
+
+    def _mark_initial_list_incomplete(self, source_name: str) -> None:
+        with self._initial_lists_lock:
+            self._initial_lists_complete.discard(source_name)
+        self.health.update(initial_list_complete=False)
+
+    def _mark_watch_checkpoint(
+        self,
+        source: ResourceWatchSource,
+        resource_version: str,
+    ) -> None:
+        try:
+            self.store.mark_watch_checkpoint(
+                cluster_id=self.cluster_id,
+                namespace=self.namespace,
+                source_name=source.name,
+                resource_version=resource_version,
+                checkpointed_at=_utc_now(),
+            )
+        except Exception as error:
+            self.health.update(persistence_failed=True)
+            raise _ObservationPersistenceFailed from error
 
     def stop(self) -> None:
         self.stop_event.set()
@@ -221,11 +305,11 @@ class KubernetesDaemon:
             self.items.put_nowait(pod)
             self.health.update(queue_saturated=False)
         except queue.Full:
-            # Base placement is already durable by this point (see
-            # _capture_placement). Only optional owner/scheduler association
-            # enrichment is deferred here, so dropping this item cannot lose
-            # placement evidence. The association may remain unresolved until
-            # another observation queues this Pod again.
+            # Base placement is already durable by this point. Only optional
+            # owner/scheduler association enrichment is deferred here, so
+            # dropping this item cannot lose placement evidence. The
+            # association may remain unresolved until another observation
+            # queues this Pod again.
             self.health.update(queue_saturated=True)
             logger.error(
                 "KubernetesDaemon enrichment queue is saturated; "
@@ -330,3 +414,7 @@ class KubernetesDaemon:
             return None
         self.health.update(persistence_failed=False)
         return result
+
+
+def _utc_now() -> str:
+    return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")

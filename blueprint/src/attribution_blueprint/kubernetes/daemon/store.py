@@ -3,10 +3,17 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from enum import Enum
 from typing import Protocol
 
-from attribution_blueprint.kubernetes.daemon.models import PlacementRecord, ResourceObservation
+from attribution_blueprint.kubernetes.daemon.models import (
+    CoverageGap,
+    CoverageGapReason,
+    PlacementRecord,
+    ResourceObservation,
+    WatchCoverage,
+)
 
 
 class CreateResult(str, Enum):
@@ -28,8 +35,21 @@ class ObservationConflictError(RuntimeError):
     pass
 
 
+@dataclass(frozen=True)
+class CaptureResult:
+    observation: ObservationAppendResult
+    placement: CreateResult | None
+
+
 class ObservationJournal(Protocol):
-    def append_observation(self, observation: ResourceObservation) -> ObservationAppendResult: ...
+    def capture_observation(
+        self,
+        observation: ResourceObservation,
+        *,
+        source_name: str,
+        placement: PlacementRecord | None,
+        advance_checkpoint: bool,
+    ) -> CaptureResult: ...
 
     def list_observations_for_uid(
         self,
@@ -44,6 +64,55 @@ class ObservationJournal(Protocol):
         namespace: str,
         owner_uid: str,
     ) -> list[ResourceObservation]: ...
+
+    def get_watch_coverage(
+        self,
+        cluster_id: str,
+        namespace: str,
+        source_name: str,
+    ) -> WatchCoverage | None: ...
+
+    def begin_coverage_gap(
+        self,
+        *,
+        cluster_id: str,
+        namespace: str,
+        source_name: str,
+        api_version: str,
+        kind: str,
+        reason: CoverageGapReason,
+        start_resource_version: str,
+        detected_at: str,
+    ) -> int: ...
+
+    def complete_watch_list(
+        self,
+        *,
+        cluster_id: str,
+        namespace: str,
+        source_name: str,
+        api_version: str,
+        kind: str,
+        resource_version: str,
+        completed_at: str,
+        gap_id: int | None,
+    ) -> None: ...
+
+    def mark_watch_checkpoint(
+        self,
+        *,
+        cluster_id: str,
+        namespace: str,
+        source_name: str,
+        resource_version: str,
+        checkpointed_at: str,
+    ) -> None: ...
+
+    def list_coverage_gaps(
+        self,
+        cluster_id: str,
+        namespace: str,
+    ) -> list[CoverageGap]: ...
 
 
 class PlacementReader(Protocol):
