@@ -16,7 +16,6 @@ WORKLOAD_ANNOTATION = "kueue.x-k8s.io/workload"
 WORKLOAD_OWNER_UID_LABEL = "kueue.x-k8s.io/job-uid"
 
 
-
 def controller_owner(resource: dict, kind: str | None = None) -> dict | None:
     """Return the single matching controller owner, rejecting ambiguity."""
     owners = [
@@ -121,16 +120,6 @@ def workload_matches_owner(workload: dict, owner: OwnerIdentity) -> bool:
     if ref and ref.get("kind") == owner.kind and ref.get("uid") == owner.uid:
         return True
     return (metadata.get("labels") or {}).get(WORKLOAD_OWNER_UID_LABEL) == owner.uid
-
-
-def pod_container_exit_reason(pod: dict) -> str | None:
-    """Return ``ExitCode:<n>`` for the first non-zero container exit."""
-    for container_status in (pod.get("status") or {}).get("containerStatuses") or []:
-        terminated = (container_status.get("state") or {}).get("terminated") or {}
-        exit_code = terminated.get("exitCode")
-        if isinstance(exit_code, int) and exit_code != 0:
-            return f"ExitCode:{exit_code}"
-    return None
 
 
 def identities_from(workload: dict, owner_resource: dict) -> tuple[WorkloadIdentity, OwnerIdentity] | None:

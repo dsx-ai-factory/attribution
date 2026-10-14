@@ -32,13 +32,11 @@ web = [
     "uvicorn>=0.27",
     "pyyaml>=6.0",
 ]
-pod-placement-recorder = []
 kubernetes-daemon = []
 
 [project.scripts]
 nvidia-attribution-blueprint = "attribution_blueprint.cli:main"
 nvidia-attribution-blueprint-web = "attribution_blueprint.webui.cli:main"
-pod-placement-recorder = "attribution_blueprint.connectors.execution_contexts.kueue.pod_placement.recorder.cli:main"
 kubernetes-daemon = "attribution_blueprint.kubernetes.daemon.cli:main"
 
 [tool.uv.sources]

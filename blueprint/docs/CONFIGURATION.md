@@ -234,7 +234,7 @@ Point the Kueue adapter at the Service:
 [eca.kueue]
 placement_records_enabled = true
 
-[eca.kueue.placement_recorder]
+[eca.kueue.kubernetes_daemon]
 endpoint = "http://attribution-kubernetes-daemon.team-a.svc:8080"
 timeout_seconds = 10
 ```
@@ -251,7 +251,7 @@ For node-loss validation, `nodeFailureReason` must be present before the
 Pod disappears; post-hoc attribution should then return `NODE_FAIL` and the
 recorded `failed_node`. If Blueprint runs outside the cluster, use an
 authenticated proxy or port-forward and set the endpoint to that reachable
-URL. Optional `placement_recorder.auth` supports the same `token` and `mtls`
+URL. Optional `kubernetes_daemon.auth` supports the same `token` and `mtls`
 fields as the Prometheus source. The daemon itself does not terminate
 authentication, so keep its Service private or place an authenticated proxy
 in front of it.
@@ -330,7 +330,7 @@ kube_pod_labels{
 }
 ```
 
-To prove the fallback rather than live-Pod or recorder recovery, leave
+To prove the fallback rather than live-Pod or daemon recovery, leave
 `placement_records_enabled = false`, delete the Pod after the series has been
 scraped, and run attribution while the Workload remains available. The
 result must contain the original Pod UID and node with
@@ -339,7 +339,7 @@ child Job objects so the adapter can resolve their exact UIDs.
 
 Kueue time-range filtering is client-side because the Workload API does not
 provide server-side time filtering. The adapter reads pod and node names from
-live owned pods and recorder records, then always merges in configured
+live owned pods and daemon records, then always merges in configured
 Prometheus placement data for Workloads with an owner Job (already-known Pod
 UIDs take precedence). If nodes or pod names are still missing afterward, it
 falls back to querying Kubernetes Events for UID-matched Pod scheduling
@@ -429,7 +429,7 @@ The baseline KAI adapter does not require `kubernetes-daemon`. It uses live
 Pods only. If Pods are cleaned up before attribution, the execution context
 can have missing `nodes` or `pod_names`.
 
-#### `[eca.kai.placement_recorder]`
+#### `[eca.kai.kubernetes_daemon]`
 
 The KAI adapter reads from the same `kubernetes-daemon` installation used for
 Kueue (see [Kubernetes daemon](#kubernetes-daemon) above), scoped by KAI
@@ -441,7 +441,7 @@ that installation. Point the adapter at the Service:
 namespace = "team-a"
 placement_records_enabled = true
 
-[eca.kai.placement_recorder]
+[eca.kai.kubernetes_daemon]
 endpoint = "http://attribution-kubernetes-daemon.team-a.svc:8080"
 timeout_seconds = 10
 ```
@@ -449,7 +449,7 @@ timeout_seconds = 10
 `endpoint` is required when this section is present; `timeout_seconds`
 defaults to `10`. Optional `auth` supports `token` (`token_env`, optional
 `org_id`) or `mtls` (`cert_path`, `key_path`, optional `ca_cert_path` and
-`org_id`), identical to the Kueue adapter's `placement_recorder.auth`.
+`org_id`), identical to the Kueue adapter's `kubernetes_daemon.auth`.
 
 When enabled, daemon lookup is fail-closed. After deleting a completed Pod, a
 validation run should retain the same Pod UID and node with

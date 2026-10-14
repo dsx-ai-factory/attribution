@@ -148,9 +148,9 @@ def test_built_schema_has_expected_shape():
         "namespace",
         "timeout_seconds",
         "placement_records_enabled",
-        "placement_recorder",
+        "kubernetes_daemon",
     }
-    assert set(schema["eca"]["_selector"]["kai"]["placement_recorder"]) == {
+    assert set(schema["eca"]["_selector"]["kai"]["kubernetes_daemon"]) == {
         "endpoint",
         "timeout_seconds",
         "auth",
@@ -190,11 +190,11 @@ def test_built_schema_has_expected_shape():
         "namespace",
         "timeout_seconds",
         "placement_records_enabled",
-        "placement_recorder",
+        "kubernetes_daemon",
         "event_max_age_seconds",
         "prometheus_metrics",
     }
-    assert set(schema["eca"]["_selector"]["kueue"]["placement_recorder"]) == {
+    assert set(schema["eca"]["_selector"]["kueue"]["kubernetes_daemon"]) == {
         "endpoint",
         "timeout_seconds",
         "auth",
