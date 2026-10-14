@@ -25,7 +25,7 @@ Optional capabilities require:
 
 - permission to run `kubectl logs` for the workload pods
 - network access and credentials for Loki when collecting node syslogs
-- network access to the Pod placement recorder or Prometheus when either
+- network access to `kubernetes-daemon` or Prometheus when either
   fallback placement source is configured
 - permission to read Kubernetes Events for the best-effort placement
   fallback
@@ -35,8 +35,8 @@ before its owned Pods are deleted when application logs are required:
 Pod and node identity can be recovered, but no source can restore `kubectl logs`
 for a deleted Pod.
 
-Pod Placement sources are merged in this order: live Pods, the Pod placement
-recorder, and Prometheus metrics. If Pod or node names are still missing, the
+Pod Placement sources are merged in this order: live Pods, `kubernetes-daemon`,
+and Prometheus metrics. If Pod or node names are still missing, the
 adapter makes a best-effort recovery from short-lived Kubernetes Events.
 Event recovery is a heuristic: it parses human-readable Event messages, which
 have no versioned schema.
@@ -138,35 +138,46 @@ rank prefix first.
 
 ### Recover Pod placement after deletion
 
-The recorder and Prometheus sources are optional. The baseline adapter can use
-live Pods and the final Kubernetes Events fallback without either source.
+`kubernetes-daemon` and Prometheus sources are optional. The baseline adapter
+can use live Pods and the final Kubernetes Events fallback without either
+source.
 
-#### Pod placement recorder
+#### Kubernetes daemon
 
-The namespace-scoped recorder stores Pod placement in SQLite. Install one recorder
-in each workload namespace before submitting workloads whose placement must
-survive Pod deletion. Schedule it outside the workload failure domain so it can
+The namespace-scoped `kubernetes-daemon` stores Pod placement in SQLite.
+Install one daemon release in each workload namespace, with the Kueue
+integration enabled, before submitting workloads whose placement must survive
+Pod deletion. Schedule it outside the workload failure domain so it can
 observe the final Pod update.
 
-Enable recorder reads in the Blueprint:
+```bash
+helm upgrade --install attribution blueprint/deploy/kubernetes-daemon \
+  --namespace team-a --set integrations.kueue.enabled=true
+```
+
+Enable daemon reads in the Blueprint:
 
 ```toml
 [eca.kueue]
 placement_records_enabled = true
 
 [eca.kueue.placement_recorder]
-endpoint = "http://attribution-pod-placement-recorder.team-a.svc:8080"
+endpoint = "http://attribution-kubernetes-daemon.team-a.svc:8080"
 timeout_seconds = 10
 ```
 
-Recorder reads are fail-closed. When `placement_records_enabled = true`, the
-endpoint is required and attribution fails if it cannot be read. The recorder
-retains Pod UID, name, node, and observed `NodeLost`, `DeletionByPodGC`, or
-non-zero-exit evidence. It does not retain Pod logs or Pod specifications.
+Daemon reads are fail-closed. When `placement_records_enabled = true`, the
+endpoint is required and attribution fails if it cannot be read. The daemon
+retains Pod UID, name, node, owner, and observed `NodeLost`,
+`DeletionByPodGC`, or non-zero-exit evidence. It does not retain Pod logs or
+Pod specifications. The same daemon installation, with the KAI integration
+also enabled, serves the KAI adapter; see
+[Attribute KAI PodGroups](./kai.md).
 
 See the
-[recorder reference](../../src/attribution_blueprint/connectors/execution_contexts/kueue/pod_placement/recorder/docs/README.md)
-for installation, retention, RBAC, and troubleshooting.
+[kubernetes-daemon reference](../../src/attribution_blueprint/kubernetes/daemon/docs/README.md)
+for installation, enabling integrations, retention, RBAC, and
+troubleshooting.
 
 #### Prometheus metrics
 
@@ -223,13 +234,13 @@ pod labels to confirm which pods belong to the workload. For a Job, Kubernetes
 uses `batch.kubernetes.io/controller-uid`. For a JobSet, the adapter uses
 `jobset.sigs.k8s.io/jobset-name`.
 
-To verify recorder recovery, query the recorder with the exact Workload UID:
+To verify daemon recovery, query `kubernetes-daemon` with the exact Workload UID:
 
 ```bash
 kubectl -n "${NAMESPACE}" port-forward \
-  service/attribution-pod-placement-recorder 18080:8080
+  service/attribution-kubernetes-daemon 18080:8080
 curl -fsS \
-  "http://127.0.0.1:18080/v1/placements?namespace=${NAMESPACE}&workload_uid=WORKLOAD_UID"
+  "http://127.0.0.1:18080/v1/placements?namespace=${NAMESPACE}&resource_uid=WORKLOAD_UID"
 ```
 
 To verify Prometheus recovery, confirm this query returns the target Job UID
@@ -302,8 +313,8 @@ and preserves the original value as `kueue_state` in `raw_scheduler_json`. For
 to normalize the service-facing state to `TIMEOUT` or `FAILED`. Legacy
 `NodeLost` pod status and `DisruptionTarget=True` with
 `DeletionByPodGC` normalize the state to `NODE_FAIL`, even if Kueue remains
-`ADMITTED`. Recorder records can preserve this node-loss evidence and the
-failed node after Pod deletion. Prometheus placement alone cannot restore
+`ADMITTED`. `kubernetes-daemon` records can preserve this node-loss evidence
+and the failed node after Pod deletion. Prometheus placement alone cannot restore
 Pod-status evidence or derive `NODE_FAIL`. The adapter also normalizes
 `EVICTED_PREEMPTED` and
 `PREEMPTED` to the service-facing state `PREEMPTED`, and
@@ -330,7 +341,7 @@ Workload name requires `eca.kueue.namespace`; an explicit
 Confirm that owned pods still exist and that `kubectl logs` is authorized. The
 adapter supports standard Job and JobSet ownership. Pod garbage collection or
 an unsupported owner can leave no pod names for the log connector. The adapter
-can recover Pod names from recorder records, retained Prometheus metrics, or
+can recover Pod names from `kubernetes-daemon` records, retained Prometheus metrics, or
 Kubernetes Events, but `kubectl logs` still returns `NotFound` after the Pod
 object is deleted.
 
