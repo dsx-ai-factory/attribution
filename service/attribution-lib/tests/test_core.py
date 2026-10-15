@@ -210,7 +210,9 @@ class TestNeverRanJob:
 
         assert list(result.symptoms()) == ["Job didn't start"]
 
-    def test_kueue_terminal_failed_job_without_node_evidence_reports_failure(self, event_stream, simple_job_factory):
+    def test_kueue_terminal_failed_job_without_node_evidence_reports_failure(
+        self, event_stream, simple_job_factory
+    ):
         job_info = simple_job_factory(
             node_to_ranks={},
             state="FAILED",
@@ -226,7 +228,9 @@ class TestNeverRanJob:
         assert "job failed" in result
         assert "Job didn't start" not in result
 
-    def test_kueue_type_without_scheduler_retains_didnt_start_fallback(self, event_stream, simple_job_factory):
+    def test_kueue_type_without_scheduler_retains_didnt_start_fallback(
+        self, event_stream, simple_job_factory
+    ):
         job_info = simple_job_factory(node_to_ranks={}, state="FAILED", job_type="kueue")
 
         result = calculate_symptoms(
@@ -270,7 +274,9 @@ class TestRunningJob:
 
         assert "running without error" in result
 
-    def test_kueue_running_job_preserves_node_symptoms(self, event_stream, simple_job_factory, source_set_factory):
+    def test_kueue_running_job_preserves_node_symptoms(
+        self, event_stream, simple_job_factory, source_set_factory
+    ):
         """A running Kueue workload must not hide collected failure evidence."""
         job_info = simple_job_factory(state="RUNNING", scheduler=Scheduler.KUEUE)
         bad_nodes = JobNodeAttributions()
@@ -1958,7 +1964,9 @@ class TestSingleNodeNodeFail:
         )
         assert "" not in my_bad_nodes.attributions
 
-    def test_kueue_nodefail_uses_slurm_symptom_and_provenance(self, event_stream, simple_job_factory):
+    def test_kueue_nodefail_uses_slurm_symptom_and_provenance(
+        self, event_stream, simple_job_factory
+    ):
         """Kueue uses the same "slurm" symptom/provenance as every other
         scheduler: a scheduler-specific string here would need to be added
         to every existing cascade_discards/pattern list that already
@@ -1976,7 +1984,9 @@ class TestSingleNodeNodeFail:
         source = next(iter(my_bad_nodes["node-b"].attributions[self._NODE_FAILURE_SYMPTOM]))
         assert source.rule == "slurm_failed_node_field"
 
-    def test_non_kueue_nodefail_retains_slurm_symptom_and_provenance(self, event_stream, simple_job_factory):
+    def test_non_kueue_nodefail_retains_slurm_symptom_and_provenance(
+        self, event_stream, simple_job_factory
+    ):
         job_info = simple_job_factory(
             state="NODE_FAIL",
             nodes=["node-a", "node-b"],
