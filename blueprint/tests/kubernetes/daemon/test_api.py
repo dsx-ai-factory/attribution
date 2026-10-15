@@ -69,3 +69,25 @@ def test_placement_endpoint_requires_resource_uid(tmp_path):
 
     assert response.status_code == 400
     assert response.json() == {"error": "namespace and resource_uid are required"}
+
+
+def test_readiness_reports_disabled_optional_watches(tmp_path):
+    store = SQLitePlacementStore(str(tmp_path / "placements.db"))
+    state = HealthState()
+    state.update(initial_list_complete=True)
+    state.disable_watch("jobsets", "api-not-found")
+    server = serve_api(state, store, 0, "team-a")
+    try:
+        response = requests.get(
+            f"http://127.0.0.1:{server.server_port}/readyz",
+            timeout=2,
+        )
+    finally:
+        server.shutdown()
+        server.server_close()
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "status": "ready",
+        "disabledWatches": {"jobsets": "api-not-found"},
+    }

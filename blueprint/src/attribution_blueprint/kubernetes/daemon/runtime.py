@@ -207,6 +207,13 @@ class KubernetesDaemon:
                     pending_gap_resource_version = resource_version
                     resource_version = None
                     continue
+                if error.status == 404 and source.kind == "JobSet":
+                    logger.warning(
+                        f"{source.name} Kubernetes API is absent; disabling the JobSet watch"
+                    )
+                    self.health.disable_watch(source.name, "api-not-found")
+                    self._mark_initial_list_complete(source.name)
+                    return
                 logger.warning(f"{source.name} watch failed: {error}")
             except Exception:
                 logger.exception(f"{source.name} watch failed")

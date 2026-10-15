@@ -12,6 +12,7 @@ class HealthState:
         self.queue_saturated = False
         self.persistence_failed = False
         self.recording_failed = False
+        self.disabled_watches: dict[str, str] = {}
         self._lock = threading.Lock()
 
     def update(
@@ -31,6 +32,14 @@ class HealthState:
                 self.persistence_failed = persistence_failed
             if recording_failed is not None:
                 self.recording_failed = recording_failed
+
+    def disable_watch(self, name: str, reason: str) -> None:
+        with self._lock:
+            self.disabled_watches[name] = reason
+
+    def disabled_watch_status(self) -> dict[str, str]:
+        with self._lock:
+            return dict(self.disabled_watches)
 
     def ready(self) -> bool:
         with self._lock:
