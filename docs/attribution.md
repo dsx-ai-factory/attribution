@@ -5,7 +5,7 @@ There are many parts involved in a system that does automated job attribution: s
 
 This repository-level document describes the rule-processing model at the center of NVIDIA Attribution. The Blueprint supplies normalized observations to the Service, the Service manages the attribution lifecycle, and the attribution library analyzes that evidence and produces a result.
 
-For a concrete end-to-end example, see the [interactive attribution process walkthrough](attribution-tour/README.md).
+For a concrete end-to-end example, see the [interactive attribution process walkthrough](https://dsx-ai-factory.github.io/attribution/walkthroughs/attribution-process/).
 
 - [Elements of Attribution](#elements-of-attribution): symptoms, outcomes, sources
 - [Attribution Process Overview](#attribution-process-overview): state, events, rules, rule engine/loader

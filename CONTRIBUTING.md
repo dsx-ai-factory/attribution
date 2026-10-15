@@ -216,7 +216,7 @@ Keep these rules in mind when editing a published page:
 - Keep every file path inside `docs/`. Fern reads any file a page names, such as the `src` of a `Code` or `Markdown` component, a markdown image, or a `path` in `docs/index.yml`, and it accepts `../` and absolute paths. The publish job runs with a repository secret in its environment, so a page that reaches outside `docs/` could expose it. `tools/check-docs-paths` rejects these paths in `docs/` and `fern/`, along with symbolic links. The one path it allows to leave its directory is the `../docs/index.yml` entry in `fern/docs.yml`. It also rejects YAML it cannot read as plain `key: value` lines, such as quoted keys, block scalars, and multi-line values, so write navigation entries in that plain form. `Fern Check` and the publish job run it.
 - A new page needs an entry in `docs/index.yml`.
 
-A pull request from a branch in this repository that changes the published pages gets a preview link in a comment. Pull requests from forks do not get a preview, because the preview build runs with a repository secret. Merging a change to the published pages or to `fern/` into `main` publishes the site. A merge that touches neither does not.
+A pull request from a branch in this repository that changes the published pages gets a preview link in a comment. Pull requests from forks do not get a preview, because the preview build runs with a repository secret. Merging a change to the published pages, to `fern/`, or to the publish workflow itself into `main` publishes the site. A merge that touches none of these does not.
 
 ## Review interactive documentation
 

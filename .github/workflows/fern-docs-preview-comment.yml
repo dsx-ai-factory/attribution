@@ -76,7 +76,9 @@ jobs:
           fi
           # The artifact is untrusted, and a fork can change the build workflow
           # to name any PR number. Only accept a PR whose head is the commit and
-          # repository that produced this run.
+          # repository that produced this run. For a pull_request run,
+          # workflow_run.head_sha is the PR's head commit, not GitHub's synthetic
+          # merge commit, so it matches the API's head.sha.
           PR_HEAD=$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}" \
             --jq '[.head.sha, (.head.repo.full_name // "")] | @tsv')
           if [ "$PR_HEAD" != "$(printf '%s\t%s' "$RUN_HEAD_SHA" "$RUN_HEAD_REPO")" ]; then
@@ -100,6 +102,17 @@ jobs:
           cp -r docs trusted/docs
           # A symlink in PR content could make the CLI read and upload runner files.
           find trusted/docs -type l -delete
+
+      # Run the checker from the trusted tree on the PR's docs before any step
+      # that has FERN_TOKEN. It is a deny-list, so it backs up the same-repository
+      # condition above and does not replace it.
+      - name: Check the PR's docs paths stay inside docs
+        run: >-
+          python3 trusted/tools/check-docs-paths
+          --exclude 'trusted/docs/attribution-tour/*'
+          --exclude 'trusted/docs/github-pages.md'
+          --allow '../docs/index.yml'
+          trusted/docs trusted/fern
 
       - name: Setup Node.js
         uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0

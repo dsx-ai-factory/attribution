@@ -56,8 +56,13 @@ This image listens on port `8000` and does not read `ATTRIBUTION_DB`,
 `ATTRIBUTION_SERVICE_PORT`, or `ATTRIBUTION_WEB_PORT`. Use it for a shared
 attribution endpoint that Blueprint runs elsewhere call over HTTP. Pass the
 service variables in [Service environment variables](#service-environment-variables)
-with `-e` as needed. Use the `BASE_IMAGE` build argument to build on an
-air-gapped mirror of the Python base image.
+with `-e` as needed.
+
+The `BASE_IMAGE` build argument sets only the final runtime image. The build
+stage still pulls `python:3.14.6-slim-trixie` and `ghcr.io/astral-sh/uv:0.10.12`,
+installs Debian packages with `apt-get`, and downloads Python dependencies with
+`uv`. For a build with no internet access, mirror those images and package
+sources as well, and point the build at them.
 
 ## Run The Container
 
