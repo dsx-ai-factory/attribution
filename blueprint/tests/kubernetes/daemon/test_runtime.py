@@ -421,6 +421,17 @@ class _ExpiredWatchSource(_PodWatchSource):
         return ()
 
 
+class _AbsentJobSetWatchSource(_PodWatchSource):
+    name = "jobsets"
+    api_version = "jobset.x-k8s.io/v1alpha2"
+    kind = "JobSet"
+
+    def list_resources(self):
+        from kubernetes.client.exceptions import ApiException
+
+        raise ApiException(status=404, reason="the server could not find the requested resource")
+
+
 class _FailObservationOnceStore:
     def __init__(self, delegate, resource_version):
         self.delegate = delegate
@@ -1653,3 +1664,20 @@ def test_changed_watch_source_relists_instead_of_reusing_checkpoint(tmp_path):
     assert gap.reason == "WATCH_SOURCE_CHANGED"
     assert gap.start_resource_version == "10"
     assert gap.end_resource_version == "20"
+
+
+def test_absent_jobset_api_disables_watch_without_blocking_readiness(tmp_path):
+    store = SQLitePlacementStore(str(tmp_path / "placements.db"))
+    source = _AbsentJobSetWatchSource()
+    daemon = KubernetesDaemon(
+        core_api=None,
+        store=store,
+        namespace="team-a",
+        cluster_id="cluster-a",
+        watch_sources=(source,),
+    )
+
+    daemon._watch_source(source)
+
+    assert daemon.health.ready()
+    assert daemon.health.disabled_watch_status() == {"jobsets": "api-not-found"}

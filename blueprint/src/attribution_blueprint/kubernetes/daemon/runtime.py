@@ -240,6 +240,13 @@ class KubernetesDaemon:
                     resource_version = None
                     self.health.update(initial_list_complete=False)
                     continue
+                if error.status == 404 and source.kind == "JobSet":
+                    logger.warning(
+                        f"{source.name} Kubernetes API is absent; disabling the JobSet watch"
+                    )
+                    self.health.disable_watch(source.name, "api-not-found")
+                    self._mark_initial_list_complete(source.name)
+                    return
                 logger.warning(f"{source.name} watch failed: {error}")
             except RequiredPersistenceError as error:
                 logger.warning(f"{error}; replaying from the last persisted resourceVersion")
