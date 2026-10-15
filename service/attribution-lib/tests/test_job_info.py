@@ -281,6 +281,20 @@ class TestNodeToRanksLookup:
         assert job_info.verify_node("node-b") == "node-b"
 
 
+class TestJobInfoClusterContext:
+    """Caller-owned cluster context available to attribution refiners."""
+
+    def test_builder_preserves_cluster_context(self, timezone):
+        context = {"candidates": [{"incident_scope": "cluster"}]}
+        builder = _builder(timezone, node_to_ranks={})
+        builder.job_end_time(datetime.fromtimestamp(1700001000, tz=timezone))
+
+        job_info = builder.cluster_context(context).build()
+
+        assert job_info.cluster_context == context
+        assert job_info.cluster_context is not context
+
+
 class TestJobInfoTags:
     """SlurmDB tag coercion and the builder duplicate-field guard."""
 

@@ -149,6 +149,8 @@ class JobInfo(NamedTuple):
     allocation_failure: Optional[SchedulerFailure] = None
     # Associated execution evidence does not overwrite the raw allocation fields.
     execution_cancellation: Optional[ExecutionCancellation] = None
+    # Optional caller-owned cluster context available to refiner rules.
+    cluster_context: Optional[dict[str, object]] = None
 
     @property
     def attributed_cancellation(self) -> Optional[ExecutionCancellation]:
@@ -367,6 +369,7 @@ class JobInfoBuilder:
     _failed_node: Optional[str] = None
     _allocation_failure: Optional[SchedulerFailure] = None
     _execution_cancellation: Optional[ExecutionCancellation] = None
+    _cluster_context: Optional[dict[str, object]] = None
     _cluster: str
     _slurm_node_infos: dict[str, dict[str, str]] = dict()
     _job_start_time: datetime
@@ -527,6 +530,14 @@ class JobInfoBuilder:
         self._execution_cancellation = evidence
         return self
 
+    def cluster_context(self, context: Optional[Mapping[str, object]]) -> "JobInfoBuilder":
+        """Supply caller-owned cluster context for attribution refiners."""
+        if self._cluster_context is not None:
+            raise JobInfoDuplicateFieldError("cluster_context")
+        if context is not None:
+            self._cluster_context = dict(context)
+        return self
+
     def slurm_node_infos(self, in_slurm_node_infos: dict[str, dict[str, str]]) -> "JobInfoBuilder":
         if len(self._slurm_node_infos) > 0:
             raise JobInfoDuplicateFieldError("slurm_node_infos")
@@ -616,6 +627,7 @@ class JobInfoBuilder:
             failed_node=self._failed_node,
             allocation_failure=self._allocation_failure,
             execution_cancellation=self._execution_cancellation,
+            cluster_context=self._cluster_context,
             cluster=self._cluster,
             nodes=derived_nodes,
             slurm_node_infos=self._slurm_node_infos,
