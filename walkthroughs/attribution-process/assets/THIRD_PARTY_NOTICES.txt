@@ -52,18 +52,6 @@ client arguments. Generated client code uses the project's Apache-2.0 license.
 3.0 and retains its Creative Commons Attribution-ShareAlike 4.0 license and
 attribution.
 
-## NVIDIA Sans font files
-
-The unmodified font files in
-[the frontend font directory](blueprint/src/attribution_blueprint/webui/frontend/src/assets/fonts/nvidia-sans)
-retain this embedded notice:
-
-> Copyright 2022 NVIDIA Corporation. Modification of this file requires prior
-> written permission from NVIDIA Corporation.
-
-These font files are excluded from the project's Apache-2.0 license grant.
-Their embedded notices remain in the font files when the frontend is built.
-
 ## Installed dependencies
 
 Python and JavaScript dependencies retain their own licenses. Package manifests
