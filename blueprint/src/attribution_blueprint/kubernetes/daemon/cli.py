@@ -18,6 +18,9 @@ from attribution_blueprint.kubernetes.daemon.watch_sources import (
     pod_watch_source,
 )
 
+_API_CONNECT_TIMEOUT_SECONDS = 10.0
+_API_READ_TIMEOUT_GRACE_SECONDS = 10.0
+
 
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Record durable Kubernetes evidence")
@@ -46,17 +49,24 @@ def main() -> None:
     from kubernetes import client, config
 
     args = _parser().parse_args()
+    configuration = client.Configuration()
     if args.kubeconfig or args.context:
-        config.load_kube_config(config_file=args.kubeconfig, context=args.context)
+        config.load_kube_config(
+            config_file=args.kubeconfig,
+            context=args.context,
+            client_configuration=configuration,
+        )
     else:
         try:
-            config.load_incluster_config()
+            config.load_incluster_config(client_configuration=configuration)
         except config.ConfigException:
-            config.load_kube_config()
+            config.load_kube_config(client_configuration=configuration)
 
-    core_api = client.CoreV1Api()
-    batch_api = client.BatchV1Api()
-    custom_api = client.CustomObjectsApi()
+    api_client = client.ApiClient(configuration)
+    _set_default_api_timeout(api_client, args.watch_timeout_seconds)
+    core_api = client.CoreV1Api(api_client)
+    batch_api = client.BatchV1Api(api_client)
+    custom_api = client.CustomObjectsApi(api_client)
     resource_resolvers = []
     watch_sources = []
     if args.watch_pods:
@@ -141,6 +151,21 @@ def main() -> None:
     signal.signal(signal.SIGTERM, stop)
     signal.signal(signal.SIGINT, stop)
     daemon.run()
+
+def _set_default_api_timeout(api_client, watch_timeout_seconds: int) -> None:
+    """Bound connect and read time for list, watch, and enrichment calls."""
+    call_api = api_client.call_api
+    request_timeout = (
+        _API_CONNECT_TIMEOUT_SECONDS,
+        float(watch_timeout_seconds) + _API_READ_TIMEOUT_GRACE_SECONDS,
+    )
+
+    def call_api_with_timeout(*args, **kwargs):
+        if kwargs.get("_request_timeout") is None:
+            kwargs["_request_timeout"] = request_timeout
+        return call_api(*args, **kwargs)
+
+    api_client.call_api = call_api_with_timeout
 
 
 if __name__ == "__main__":

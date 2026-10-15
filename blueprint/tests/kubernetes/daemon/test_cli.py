@@ -1,7 +1,12 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-from attribution_blueprint.kubernetes.daemon.cli import _parser
+from types import SimpleNamespace
+
+from attribution_blueprint.kubernetes.daemon.cli import (
+    _parser,
+    _set_default_api_timeout,
+)
 
 
 def test_scheduler_integrations_are_explicitly_disabled_by_default():
@@ -50,3 +55,17 @@ def test_lifecycle_watches_and_cluster_identity_are_configurable():
     assert args.watch_pods is True
     assert args.watch_jobs is False
     assert args.watch_jobsets is False
+
+
+def test_kubernetes_api_calls_have_bounded_connect_and_read_timeouts():
+    calls = []
+    api_client = SimpleNamespace(
+        call_api=lambda *args, **kwargs: calls.append((args, kwargs))
+    )
+    _set_default_api_timeout(api_client, watch_timeout_seconds=60)
+
+    api_client.call_api("/api/v1/pods")
+    api_client.call_api("/api/v1/jobs", _request_timeout=(2, 3))
+
+    assert calls[0][1]["_request_timeout"] == (10.0, 70.0)
+    assert calls[1][1]["_request_timeout"] == (2, 3)
