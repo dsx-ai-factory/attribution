@@ -284,6 +284,16 @@ class TestNodeToRanksLookup:
 class TestJobInfoClusterContext:
     """Caller-owned cluster context available to attribution refiners."""
 
+    def test_defaults_to_none(self, simple_job_factory):
+        assert simple_job_factory().cluster_context is None
+
+    @pytest.mark.parametrize("context", [None, {}])
+    def test_builder_preserves_empty_context(self, timezone, context):
+        builder = _builder(timezone, node_to_ranks={})
+        builder.job_end_time(datetime.fromtimestamp(1700001000, tz=timezone))
+
+        assert builder.cluster_context(context).build().cluster_context == context
+
     def test_builder_preserves_cluster_context(self, timezone):
         context = {"candidates": [{"incident_scope": "cluster"}]}
         builder = _builder(timezone, node_to_ranks={})
