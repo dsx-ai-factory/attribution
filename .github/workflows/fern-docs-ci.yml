@@ -83,15 +83,18 @@ jobs:
           --exclude 'docs/github-pages.md'
           docs fern
 
-      # Fern reads any file a page names, including paths that leave docs/. The
-      # publish job runs with FERN_TOKEN, so reject such paths before they merge.
+      # Fern reads any file a page or its configuration names, including paths
+      # that leave docs/. The publish job runs with FERN_TOKEN, so reject such
+      # paths before they merge. fern/docs.yml points at ../docs/index.yml by
+      # design, and that is the only path allowed to leave its directory.
       - name: Check docs paths stay inside docs
         if: steps.changes.outputs.docs == 'true'
         run: >-
           python3 tools/check-docs-paths
           --exclude 'docs/attribution-tour/*'
           --exclude 'docs/github-pages.md'
-          docs
+          --allow '../docs/index.yml'
+          docs fern
 
       - name: Fern check
         if: steps.changes.outputs.docs == 'true'

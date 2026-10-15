@@ -5,23 +5,30 @@
 """Check published docs for paths that make Fern read files outside docs/.
 
 Fern reads local files named by a page: the src of a Code, Markdown, or Image
-component, a markdown image, and the path entries in index.yml. It accepts
-paths that leave docs/, such as ../../x, and absolute paths. The publish job
-runs the Fern CLI with FERN_TOKEN in its environment, so a page that reads
+component, a markdown image, and the path entries in index.yml and docs.yml. It
+accepts paths that leave docs/, such as ../../x, and absolute paths. The publish
+job runs the Fern CLI with FERN_TOKEN in its environment, so a page that reads
 /proc/self/environ can print the token on the published site.
 
 This checker reports:
   - src attributes and markdown images that use a path segment of "..", an
     absolute path, or a scheme other than https
   - src attributes with a dynamic value, such as src={name}
-  - path, image, logo, favicon, and src entries in YAML files, and values in
-    markdown frontmatter, that do the same
+  - markdown frontmatter values that do the same
+  - YAML values with a path segment of "..", and path, src, image, logo,
+    favicon, and file entries that are absolute or use a scheme other than https
+  - YAML that is not written as plain "key: value" lines (quoted keys, block
+    scalars, flow collections, anchors, tags, multi-line values), because the
+    checker cannot read those safely and so rejects them
   - symbolic links under the checked directories
+
+A path that is expected, such as the "../docs/index.yml" entry in
+fern/docs.yml, is accepted with --allow. The match is exact.
 
 It scans every line, including fenced code blocks, so an example that shows one
 of these patterns is reported too. Exclude such a file with --exclude.
 
-Usage: check-docs-paths [--exclude GLOB]... DIR [DIR...]
+Usage: check-docs-paths [--exclude GLOB]... [--allow PATH]... DIR [DIR...]
 """
 
 from __future__ import annotations
@@ -41,10 +48,14 @@ YAML_SUFFIXES = {".yml", ".yaml"}
 SRC_ATTRIBUTE = re.compile(r"""\bsrc\s*=\s*(\{[^}]*\}|"[^"]*"|'[^']*')""")
 # A markdown image: ![alt](target) or ![alt](<target>).
 MARKDOWN_IMAGE = re.compile(r"!\[[^\]]*\]\(\s*<?([^)\s>]+)")
-# YAML entries whose value is a file path or a path-like reference.
-YAML_PATH_KEY = re.compile(
-    r"""^\s*(?:-\s+)?(path|src|image|logo|favicon|icon|file)\s*:\s*(?P<value>.+?)\s*$"""
+# A plain YAML line: optional list dash, a bare key, and an optional value.
+YAML_LINE = re.compile(
+    r"^\s*(?:-\s+)?(?P<key>[A-Za-z][A-Za-z0-9_.-]*):(?:\s+(?P<value>\S.*?))?\s*$"
 )
+# A YAML value starting with one of these is a block scalar, flow collection,
+# anchor, alias, tag, directive, or reserved indicator.
+YAML_UNSUPPORTED_START = tuple(">|&*!{[%@`")
+YAML_EMPTY_COLLECTIONS = {"[]", "{}"}
 # Keys that name a file, as opposed to a slug or a title.
 FILE_KEYS = {"path", "src", "image", "logo", "favicon", "file"}
 SCHEME = re.compile(r"^[A-Za-z][A-Za-z0-9+.-]*:")
@@ -66,24 +77,31 @@ def traversal(value: str) -> bool:
     return any(segment == ".." for segment in re.split(r"[\\/]", decoded))
 
 
-def problem(value: str, *, allow_absolute: bool = False) -> str | None:
-    """Return why a file reference is unsafe, or None if it is acceptable."""
+def problem(value: str, *, file_like: bool, allowed: set[str]) -> str | None:
+    """Return why a value is unsafe, or None if it is acceptable.
+
+    A "..", "%2e%2e", or backslash traversal is reported for every value. An
+    absolute path or a scheme other than https is reported only when the value
+    names a file, because slugs and titles can legitimately start with "/".
+    """
     value = strip_quotes(value)
-    if not value:
+    if not value or value in allowed:
         return None
-    decoded = unquote(unquote(value))
     if traversal(value):
         return f"path {value!r} leaves the docs directory with '..'"
+    if not file_like:
+        return None
+    decoded = unquote(unquote(value))
     if SCHEME.match(decoded):
         if decoded.lower().startswith("https:"):
             return None
         return f"{value!r} uses a scheme other than https, which can read a local file"
-    if not allow_absolute and decoded.startswith(("/", "\\", "~")):
+    if decoded.startswith(("/", "\\", "~")):
         return f"absolute path {value!r}"
     return None
 
 
-def check_markdown(path: str, text: str) -> list[str]:
+def check_markdown(path: str, text: str, allowed: set[str]) -> list[str]:
     issues: list[str] = []
     lines = text.split("\n")
     frontmatter_end = 0
@@ -98,7 +116,7 @@ def check_markdown(path: str, text: str) -> list[str]:
             continue
         key, value = match.group(1), match.group(2)
         name = key.lower().split(":")[-1]
-        why = problem(value, allow_absolute=name not in FILE_KEYS and name != "image")
+        why = problem(value, file_like=name in FILE_KEYS, allowed=allowed)
         if why:
             issues.append(f"{path}:{number}: [frontmatter] {key}: {why}")
     for match in SRC_ATTRIBUTE.finditer(text):
@@ -109,27 +127,46 @@ def check_markdown(path: str, text: str) -> list[str]:
                 f"{path}:{number}: [src] dynamic src={raw} cannot be checked; use a literal path"
             )
             continue
-        why = problem(raw)
+        why = problem(raw, file_like=True, allowed=allowed)
         if why:
             issues.append(f"{path}:{number}: [src] {why}")
     for match in MARKDOWN_IMAGE.finditer(text):
-        why = problem(match.group(1))
+        why = problem(match.group(1), file_like=True, allowed=allowed)
         if why:
             issues.append(f"{path}:{line_of(text, match.start())}: [image] {why}")
     return issues
 
 
-def check_yaml(path: str, text: str) -> list[str]:
+def check_yaml(path: str, text: str, allowed: set[str]) -> list[str]:
+    """Check a YAML file written as plain "key: value" lines.
+
+    The checker has no YAML parser, so it fails closed: a line it cannot read as
+    a plain key and value is reported, not skipped.
+    """
     issues: list[str] = []
     for number, line in enumerate(text.split("\n"), start=1):
-        match = YAML_PATH_KEY.match(line)
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        match = YAML_LINE.match(line)
         if not match:
+            issues.append(
+                f"{path}:{number}: [yaml] unsupported YAML; write plain 'key: value' lines"
+            )
             continue
-        key = match.group(1)
+        key = match.group("key")
         value = match.group("value")
-        if value.startswith("#"):
+        if value is None:
             continue
-        why = problem(value, allow_absolute=key not in FILE_KEYS)
+        if (
+            value.startswith(YAML_UNSUPPORTED_START)
+            and value not in YAML_EMPTY_COLLECTIONS
+        ):
+            issues.append(
+                f"{path}:{number}: [yaml] {key}: unsupported YAML value; write a plain value"
+            )
+            continue
+        why = problem(value, file_like=key.lower() in FILE_KEYS, allowed=allowed)
         if why:
             issues.append(f"{path}:{number}: [yaml] {key}: {why}")
     return issues
@@ -149,7 +186,15 @@ def main() -> int:
         metavar="GLOB",
         help="fnmatch glob of a path to skip; repeatable",
     )
+    parser.add_argument(
+        "--allow",
+        action="append",
+        default=[],
+        metavar="PATH",
+        help="exact path value to accept even though it leaves the directory; repeatable",
+    )
     args = parser.parse_args()
+    allowed = set(args.allow)
 
     issues: list[str] = []
     for root in args.dirs:
@@ -177,9 +222,9 @@ def main() -> int:
                     continue
                 text = Path(full).read_text(encoding="utf-8", errors="replace")
                 if suffix in MARKDOWN_SUFFIXES:
-                    issues.extend(check_markdown(posix, text))
+                    issues.extend(check_markdown(posix, text, allowed))
                 else:
-                    issues.extend(check_yaml(posix, text))
+                    issues.extend(check_yaml(posix, text, allowed))
 
     if issues:
         print(f"Docs paths: {len(issues)} issue(s) found")
