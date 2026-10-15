@@ -4,13 +4,17 @@
 # Workflow 1 of 2 for Fern doc previews.
 #
 # Collects the docs/ sources and PR metadata from the PR branch and uploads them
-# as an artifact. No secrets are used here, so this is safe to run on fork PRs
-# via the regular pull_request trigger.
+# as an artifact. No secrets are used here.
 #
-# The companion workflow (fern-docs-preview-comment.yml) treats the artifact as
-# untrusted: it builds the preview with FERN_TOKEN against fern/ from the default
-# branch and copies in only this artifact's docs/. The rest of the uploaded
-# fern/ is ignored there.
+# Only pull requests from branches in this repository are collected. The
+# companion workflow (fern-docs-preview-comment.yml) builds the preview with
+# FERN_TOKEN and Fern pages can read files outside docs/, so it must not build
+# content written by a fork. Skipping fork pull requests here avoids uploading an
+# artifact that the companion workflow would reject.
+#
+# The companion workflow treats the artifact as untrusted: it runs against fern/
+# from the default branch and copies in only this artifact's docs/. The rest of
+# the uploaded fern/ is ignored there.
 
 name: "Preview Fern Docs: Build"
 
@@ -32,6 +36,7 @@ concurrency:
 
 jobs:
   collect:
+    if: ${{ github.event.pull_request.head.repo.full_name == github.repository }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:

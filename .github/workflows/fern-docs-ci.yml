@@ -42,7 +42,7 @@ jobs:
           # --no-renames lists both sides of a rename. Non-PR events always validate.
           if [ "$EVENT_NAME" = "pull_request" ] && \
              ! git diff --name-only --no-renames HEAD^1 HEAD \
-               | grep -qE '^(docs/|fern/|tools/check-docs-mdx$|\.github/workflows/fern-docs-ci\.yml$)'; then
+               | grep -qE '^(docs/|fern/|tools/check-docs-(mdx|paths)$|\.github/workflows/fern-docs-ci\.yml$)'; then
             echo "docs=false" >> "$GITHUB_OUTPUT"
             echo "No docs-related changes; skipping Fern validation."
           else
@@ -82,6 +82,16 @@ jobs:
           --exclude 'docs/attribution-tour/*'
           --exclude 'docs/github-pages.md'
           docs fern
+
+      # Fern reads any file a page names, including paths that leave docs/. The
+      # publish job runs with FERN_TOKEN, so reject such paths before they merge.
+      - name: Check docs paths stay inside docs
+        if: steps.changes.outputs.docs == 'true'
+        run: >-
+          python3 tools/check-docs-paths
+          --exclude 'docs/attribution-tour/*'
+          --exclude 'docs/github-pages.md'
+          docs
 
       - name: Fern check
         if: steps.changes.outputs.docs == 'true'

@@ -201,6 +201,7 @@ Install the Fern CLI with `npm install -g fern-api@latest`. The CLI is intention
 
 ```bash
 python3 tools/check-docs-mdx --exclude 'docs/attribution-tour/*' --exclude 'docs/github-pages.md' docs fern
+python3 tools/check-docs-paths --exclude 'docs/attribution-tour/*' --exclude 'docs/github-pages.md' docs
 fern check
 fern docs md check
 fern docs broken-links
@@ -212,9 +213,10 @@ Keep these rules in mind when editing a published page:
 
 - Fern compiles pages as MDX, so a bare `{`, a `<digit`, an HTML comment, or an unclosed `<img>` in prose fails the build. `tools/check-docs-mdx` reports these.
 - A link to a file outside `docs/` must be an absolute GitHub URL. A relative link works on GitHub but leads to a missing page on the published site, and `fern docs broken-links` does not report it.
+- Keep every file path inside `docs/`. Fern reads any file a page names, such as the `src` of a `Code` or `Markdown` component, a markdown image, or a `path` in `docs/index.yml`, and it accepts `../` and absolute paths. The publish job runs with a repository secret in its environment, so a page that reaches outside `docs/` could expose it. `tools/check-docs-paths` rejects these paths, along with symbolic links, and `Fern Check` and the publish job run it.
 - A new page needs an entry in `docs/index.yml`.
 
-A pull request that changes the published pages gets a preview link in a comment. Merging to `main` publishes the site.
+A pull request from a branch in this repository that changes the published pages gets a preview link in a comment. Pull requests from forks do not get a preview, because the preview build runs with a repository secret. Merging to `main` publishes the site.
 
 ## Review interactive documentation
 

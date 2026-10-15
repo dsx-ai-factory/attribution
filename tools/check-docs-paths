@@ -1,0 +1,194 @@
+#!/usr/bin/env python3
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+"""Check published docs for paths that make Fern read files outside docs/.
+
+Fern reads local files named by a page: the src of a Code, Markdown, or Image
+component, a markdown image, and the path entries in index.yml. It accepts
+paths that leave docs/, such as ../../x, and absolute paths. The publish job
+runs the Fern CLI with FERN_TOKEN in its environment, so a page that reads
+/proc/self/environ can print the token on the published site.
+
+This checker reports:
+  - src attributes and markdown images that use a path segment of "..", an
+    absolute path, or a scheme other than https
+  - src attributes with a dynamic value, such as src={name}
+  - path, image, logo, favicon, and src entries in YAML files, and values in
+    markdown frontmatter, that do the same
+  - symbolic links under the checked directories
+
+It scans every line, including fenced code blocks, so an example that shows one
+of these patterns is reported too. Exclude such a file with --exclude.
+
+Usage: check-docs-paths [--exclude GLOB]... DIR [DIR...]
+"""
+
+from __future__ import annotations
+
+import argparse
+import fnmatch
+import os
+import re
+import sys
+from pathlib import Path
+from urllib.parse import unquote
+
+MARKDOWN_SUFFIXES = {".md", ".mdx"}
+YAML_SUFFIXES = {".yml", ".yaml"}
+
+# A src attribute: src="x", src='x', or src={expression}.
+SRC_ATTRIBUTE = re.compile(r"""\bsrc\s*=\s*(\{[^}]*\}|"[^"]*"|'[^']*')""")
+# A markdown image: ![alt](target) or ![alt](<target>).
+MARKDOWN_IMAGE = re.compile(r"!\[[^\]]*\]\(\s*<?([^)\s>]+)")
+# YAML entries whose value is a file path or a path-like reference.
+YAML_PATH_KEY = re.compile(
+    r"""^\s*(?:-\s+)?(path|src|image|logo|favicon|icon|file)\s*:\s*(?P<value>.+?)\s*$"""
+)
+# Keys that name a file, as opposed to a slug or a title.
+FILE_KEYS = {"path", "src", "image", "logo", "favicon", "file"}
+SCHEME = re.compile(r"^[A-Za-z][A-Za-z0-9+.-]*:")
+
+
+def line_of(text: str, offset: int) -> int:
+    return text.count("\n", 0, offset) + 1
+
+
+def strip_quotes(value: str) -> str:
+    value = value.strip()
+    if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
+        return value[1:-1]
+    return value
+
+
+def traversal(value: str) -> bool:
+    decoded = unquote(unquote(value))
+    return any(segment == ".." for segment in re.split(r"[\\/]", decoded))
+
+
+def problem(value: str, *, allow_absolute: bool = False) -> str | None:
+    """Return why a file reference is unsafe, or None if it is acceptable."""
+    value = strip_quotes(value)
+    if not value:
+        return None
+    decoded = unquote(unquote(value))
+    if traversal(value):
+        return f"path {value!r} leaves the docs directory with '..'"
+    if SCHEME.match(decoded):
+        if decoded.lower().startswith("https:"):
+            return None
+        return f"{value!r} uses a scheme other than https, which can read a local file"
+    if not allow_absolute and decoded.startswith(("/", "\\", "~")):
+        return f"absolute path {value!r}"
+    return None
+
+
+def check_markdown(path: str, text: str) -> list[str]:
+    issues: list[str] = []
+    lines = text.split("\n")
+    frontmatter_end = 0
+    if lines and lines[0].strip() == "---":
+        for index in range(1, len(lines)):
+            if lines[index].strip() == "---":
+                frontmatter_end = index + 1
+                break
+    for number, line in enumerate(lines[:frontmatter_end], start=1):
+        match = re.match(r"^\s*([A-Za-z0-9_:.-]+)\s*:\s*(.+?)\s*$", line)
+        if not match:
+            continue
+        key, value = match.group(1), match.group(2)
+        name = key.lower().split(":")[-1]
+        why = problem(value, allow_absolute=name not in FILE_KEYS and name != "image")
+        if why:
+            issues.append(f"{path}:{number}: [frontmatter] {key}: {why}")
+    for match in SRC_ATTRIBUTE.finditer(text):
+        raw = match.group(1)
+        number = line_of(text, match.start())
+        if raw.startswith("{"):
+            issues.append(
+                f"{path}:{number}: [src] dynamic src={raw} cannot be checked; use a literal path"
+            )
+            continue
+        why = problem(raw)
+        if why:
+            issues.append(f"{path}:{number}: [src] {why}")
+    for match in MARKDOWN_IMAGE.finditer(text):
+        why = problem(match.group(1))
+        if why:
+            issues.append(f"{path}:{line_of(text, match.start())}: [image] {why}")
+    return issues
+
+
+def check_yaml(path: str, text: str) -> list[str]:
+    issues: list[str] = []
+    for number, line in enumerate(text.split("\n"), start=1):
+        match = YAML_PATH_KEY.match(line)
+        if not match:
+            continue
+        key = match.group(1)
+        value = match.group("value")
+        if value.startswith("#"):
+            continue
+        why = problem(value, allow_absolute=key not in FILE_KEYS)
+        if why:
+            issues.append(f"{path}:{number}: [yaml] {key}: {why}")
+    return issues
+
+
+def excluded(path: str, patterns: list[str]) -> bool:
+    return any(fnmatch.fnmatch(path, pattern) for pattern in patterns)
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])
+    parser.add_argument("dirs", nargs="+", help="directories to check")
+    parser.add_argument(
+        "--exclude",
+        action="append",
+        default=[],
+        metavar="GLOB",
+        help="fnmatch glob of a path to skip; repeatable",
+    )
+    args = parser.parse_args()
+
+    issues: list[str] = []
+    for root in args.dirs:
+        for current, directories, files in os.walk(root, followlinks=False):
+            for name in list(directories) + files:
+                full = os.path.join(current, name)
+                posix = Path(full).as_posix()
+                if os.path.islink(full) and not excluded(posix, args.exclude):
+                    issues.append(
+                        f"{posix}: [symlink] symbolic links can point outside the docs directory"
+                    )
+            directories[:] = [
+                d
+                for d in directories
+                if not os.path.islink(os.path.join(current, d))
+                and not excluded(Path(current, d).as_posix() + "/x", args.exclude)
+            ]
+            for name in files:
+                full = os.path.join(current, name)
+                posix = Path(full).as_posix()
+                suffix = Path(name).suffix.lower()
+                if os.path.islink(full) or excluded(posix, args.exclude):
+                    continue
+                if suffix not in MARKDOWN_SUFFIXES | YAML_SUFFIXES:
+                    continue
+                text = Path(full).read_text(encoding="utf-8", errors="replace")
+                if suffix in MARKDOWN_SUFFIXES:
+                    issues.extend(check_markdown(posix, text))
+                else:
+                    issues.extend(check_yaml(posix, text))
+
+    if issues:
+        print(f"Docs paths: {len(issues)} issue(s) found")
+        for issue in issues:
+            print(issue)
+        return 1
+    print("OK: no docs path leaves the docs directory")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
