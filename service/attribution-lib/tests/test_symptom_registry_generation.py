@@ -406,13 +406,13 @@ def test_bare_nv_err_no_memory_maps_to_multicategory():
     assert match.hw_cause == "Not Applicable"
 
 
-def test_nvrx_detected_failure_maps_to_fail_undetermined():
+def test_nvrx_detected_failure_maps_to_fail_multicategory():
     registry = _load_committed_registry()
 
     match = registry.outcome_for(["NVRx detected failure"])
 
     assert match is not None
-    assert match.outcome == "Fail Undetermined"
+    assert match.outcome == "Fail MultiCategory"
     assert match.tier_index == OUTCOME_PRIORITIES.index(OutcomePriority.LOW_GENERIC)
 
 
