@@ -580,6 +580,10 @@ The supported log sources are:
 - `applog`, application logs
 - `syslog`, system logs
 
+Every log connector sends one `entry_timeseries` entry per line. The entry
+shape and the per-source rules for a missing timestamp or node are in
+[Observation entry format](../../service/service-app/docs/api/observation-format.md).
+
 The supported log components are:
 
 - `local_file`, read files visible on the blueprint host
