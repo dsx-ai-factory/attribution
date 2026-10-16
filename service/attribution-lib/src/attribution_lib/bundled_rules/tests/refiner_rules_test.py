@@ -1151,20 +1151,32 @@ def test_kernel_panic_precedes_xid145(stream, obs_ctx, xid_node, classification)
     ("age_seconds", "keep"), [(0, True), (600, True), (660, True), (661, False), (-1, False), (None, False)]
 )
 def test_link_down_watchdog_window_with_unknown_node(stream, obs_ctx, job_info, assigned, age_seconds, keep):
-    """Job-level time correlation must not require or invent a node identity."""
+    """Job-level time correlation must not require or invent a node identity.
+
+    Args:
+        stream: Event stream fixture.
+        obs_ctx: Observation source context.
+        job_info: Job metadata fixture.
+        assigned: Whether the link-down evidence names a node.
+        age_seconds: Age of link-down evidence relative to the watchdog.
+        keep: Whether the link-down symptom should remain.
+
+    Returns:
+        None. Assertions verify the evidence and resource contract.
+    """
     watchdog_time = datetime(2024, 1, 1, 10, 30, tzinfo=ZoneInfo("UTC"))
     source = Source(
         source_context=obs_ctx,
         line_num=1,
         datum="NCCL WARN NET/IB : port error",
         time=None if age_seconds is None else watchdog_time - timedelta(seconds=age_seconds),
-        resources=ResourceSet([Node(hostname="node01")]) if assigned else ResourceSet(),
+        resources=ResourceSet([Node(hostname="node01")]) if assigned is True else ResourceSet(),
         rule="test",
     )
     link_down = "link down(east-west)"
     sources = SourceSet(link_down).add(source)
     bad_nodes = JobNodeAttributions()
-    if assigned:
+    if assigned is True:
         bad_nodes.add(["node01"], sources)
     else:
         bad_nodes.job_level.add(sources)
@@ -1175,15 +1187,25 @@ def test_link_down_watchdog_window_with_unknown_node(stream, obs_ctx, job_info, 
 
     assert (link_down in symptoms) is keep
     assert ("PyTorch NCCL watchdog" in symptoms) is not keep
-    assert set(bad_nodes.attributions) == ({"node01"} if assigned else set())
-    if not assigned:
+    assert set(bad_nodes.attributions) == ({"node01"} if assigned is True else set())
+    if assigned is False:
         assert (link_down in bad_nodes.job_level) is keep
-        assert not source.resources
+        assert len(source.resources) == 0
 
 
 @pytest.mark.parametrize("with_ib_error", [False, True])
 def test_unassigned_link_down_without_watchdog(stream, obs_ctx, job_info, with_ib_error):
-    """Existing IB corroboration applies without assigning the port error to a node."""
+    """Existing IB corroboration applies without assigning the port error to a node.
+
+    Args:
+        stream: Event stream fixture.
+        obs_ctx: Observation source context.
+        job_info: Job metadata fixture.
+        with_ib_error: Whether independent IB evidence corroborates link-down.
+
+    Returns:
+        None. Assertions verify the evidence and resource contract.
+    """
     link_down = "link down(east-west)"
     source = Source(
         source_context=obs_ctx, line_num=1, datum="port error", time=None, resources=ResourceSet(), rule="test"
@@ -1193,7 +1215,7 @@ def test_unassigned_link_down_without_watchdog(stream, obs_ctx, job_info, with_i
     bad_nodes.job_level.add(sources)
     symptoms = SymptomSet()
     symptoms.add(sources)
-    if with_ib_error:
+    if with_ib_error is True:
         symptoms.update(_make_symptoms(obs_ctx, "IB Error-12 (IBV_WC_RETRY_EXC_ERR)", "Connection closed"))
 
     _run_ib_cleanup(stream, job_info, symptoms, bad_nodes)
@@ -1202,7 +1224,7 @@ def test_unassigned_link_down_without_watchdog(stream, obs_ctx, job_info, with_i
     assert (link_down in bad_nodes.job_level) is with_ib_error
     assert "IB Error-12 (IBV_WC_RETRY_EXC_ERR)" not in symptoms
     assert "Connection closed" not in symptoms
-    assert not bad_nodes.attributions
+    assert len(bad_nodes.attributions) == 0
 
 
 class TestKernelCrashIbCascadeCleanup:
@@ -1449,6 +1471,15 @@ class TestSlurmStateSymptoms:
         assert calculate_outcome(symptoms).value().outcome == "Fail InfraSW"
 
     def test_non_kueue_node_fail_without_specific_node_retains_legacy_fallback(self, stream, obs_ctx):
+        """Non kueue node fail without specific node retains legacy fallback.
+
+        Args:
+            stream: Event stream fixture.
+            obs_ctx: Observation source context.
+
+        Returns:
+            None. Assertions verify the evidence and resource contract.
+        """
         ji = _job_info_with(state="NODE_FAIL", nodes=["node01", "node02"])._replace(
             type="runai",
             failed_node=None,

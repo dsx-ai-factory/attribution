@@ -218,7 +218,14 @@ class TestApplogExtractNodeRank:
         ],
     )
     def test_unidentified_prefixes_preserve_unknown_rank(self, log_line):
-        """Neither message content nor a producer IP establishes a rank."""
+        """Neither message content nor a producer IP establishes a rank.
+
+        Args:
+            log_line: Application-log line under test.
+
+        Returns:
+            None. Assertions verify the evidence and resource contract.
+        """
         assert applog_extract_node_rank(log_line) == (None, None)
 
     def test_empty_string(self):

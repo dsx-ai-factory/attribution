@@ -35,6 +35,20 @@ SYMPTOM = "IB Error-12 Vendor-129 (IBV_WC_RETRY_EXC_ERR)"
 def test_completion_keeps_symptom_without_inventing_emitter(
     request, event_manager, simple_job_factory, timezone, prefix, resources, expected_nodes
 ):
+    """Completion keeps symptom without inventing emitter.
+
+    Args:
+        request: Test identity used to name the event stream.
+        event_manager: Event-store fixture.
+        simple_job_factory: Factory creating job metadata for the test.
+        timezone: Observation timezone.
+        prefix: Source prefix under test.
+        resources: Explicit resources or an omitted declaration.
+        expected_nodes: Nodes that the evidence is allowed to identify.
+
+    Returns:
+        None. Assertions verify the evidence and resource contract.
+    """
     job = simple_job_factory(nodes=["node-a", "node-b"], ranks_per_node=1, state="FAILED", exit_code_signal=1)
     stream = event_manager.create_stream(request.node.name)
     attributor = Attributor.new(stream, job)
@@ -55,8 +69,8 @@ def test_completion_keeps_symptom_without_inventing_emitter(
     named_job_nodes = (set(bad) | set(interesting)) & set(job.nodes)
     assert named_job_nodes == expected_nodes
     records = stream.query_raw("SELECT resources FROM events WHERE source_datum = ?", [body])
-    assert records
-    if not expected_nodes:
+    assert len(records) > 0
+    if len(expected_nodes) == 0:
         assert all(row[0] == "[]" for row in records)
 
 
@@ -64,6 +78,18 @@ def test_completion_keeps_symptom_without_inventing_emitter(
 def test_explicit_all_resources_is_distinct_from_unknown(
     request, event_manager, simple_job_factory, timezone, resources
 ):
+    """Explicit all resources is distinct from unknown.
+
+    Args:
+        request: Test identity used to name the event stream.
+        event_manager: Event-store fixture.
+        simple_job_factory: Factory creating job metadata for the test.
+        timezone: Observation timezone.
+        resources: Explicit resources or an omitted declaration.
+
+    Returns:
+        None. Assertions verify the evidence and resource contract.
+    """
     job = simple_job_factory(nodes=["node-a", "node-b"], state="FAILED", exit_code_signal=1)
     stream = event_manager.create_stream(request.node.name)
     attributor = Attributor.new(stream, job)
@@ -80,13 +106,25 @@ def test_explicit_all_resources_is_distinct_from_unknown(
     result = attributor.attribute()
     assert "cudaErrorMisalignedAddress" in {str(s) for s in result.symptoms.symptoms()}
     records = stream.query_raw("SELECT resources FROM events WHERE source_datum = ?", [body])
-    assert records
+    assert len(records) > 0
     expected = "AllJobResources" if resources == "AllJobResources" else []
     assert all(json.loads(row[0]) == expected for row in records)
 
 
 @pytest.mark.parametrize("resources", [None, []])
 def test_unknown_emitter_preserves_timeout_reason(request, event_manager, simple_job_factory, timezone, resources):
+    """Unknown emitter preserves timeout reason.
+
+    Args:
+        request: Test identity used to name the event stream.
+        event_manager: Event-store fixture.
+        simple_job_factory: Factory creating job metadata for the test.
+        timezone: Observation timezone.
+        resources: Explicit resources or an omitted declaration.
+
+    Returns:
+        None. Assertions verify the evidence and resource contract.
+    """
     job = simple_job_factory(nodes=["node-a", "node-b"], state="FAILED", exit_code_signal=1)
     stream = event_manager.create_stream(request.node.name)
     attributor = Attributor.new(stream, job)
@@ -106,14 +144,25 @@ def test_unknown_emitter_preserves_timeout_reason(request, event_manager, simple
     attributions = result.bad_nodes_attr.my_bad_nodes
     assert attributions.num_nodes() == 0
     sources = attributions.job_level["Cancelled by Timeout"]
-    assert any(source.datum == body and not source.resources for source in sources)
+    assert any(source.datum == body and len(source.resources) == 0 for source in sources)
 
 
 @pytest.mark.parametrize("identity", ["timestamp_prefix", "explicit_unknown", "explicit_rank"])
 def test_link_down_watchdog_keeps_hardware_outcome_without_inventing_node(
     request, event_manager, simple_job_factory, timezone, identity
 ):
-    """Exercise ingestion through refinement for timestamped port-error evidence."""
+    """Exercise ingestion through refinement for timestamped port-error evidence.
+
+    Args:
+        request: Test identity used to name the event stream.
+        event_manager: Event-store fixture.
+        simple_job_factory: Factory creating job metadata for the test.
+        timezone: Observation timezone.
+        identity: Resource/identity variant under test.
+
+    Returns:
+        None. Assertions verify the evidence and resource contract.
+    """
     job = simple_job_factory(nodes=["node-a", "node-b"], state="FAILED", exit_code_signal=1)
     stream = event_manager.create_stream(request.node.name)
     attributor = Attributor.new(stream, job)
@@ -155,4 +204,84 @@ def test_link_down_watchdog_keeps_hardware_outcome_without_inventing_node(
         # The explicitly ranked watchdog can remain interesting on node-a;
         # the unassigned port error must not become that node's evidence.
         assert all("link down(east-west)" not in group for _, group in result.bad_nodes_attr.my_bad_nodes.items())
-        assert all(not source.resources for source in result.symptoms["link down(east-west)"])
+        assert all(len(source.resources) == 0 for source in result.symptoms["link down(east-west)"])
+
+
+@pytest.mark.parametrize("declaration", ["omitted", "null", "empty", "outside", "multiple"])
+@pytest.mark.parametrize("nodes", [["node-a"], ["node-a", "node-b"]])
+def test_single_node_inference_requires_omitted_or_null_resources(
+    request, event_manager, simple_job_factory, timezone, declaration, nodes
+):
+    """Preserve the single-node pin without overriding explicit resource evidence.
+
+    Args:
+        request: Test identity for the event stream.
+        event_manager: Event-store fixture.
+        simple_job_factory: Factory for jobs with the selected node list.
+        timezone: Observation timezone.
+        declaration: Missing, null, empty, or invalid explicit resource declaration.
+        nodes: One or two allocated nodes.
+    Returns:
+        None. Checks the node and job-level attribution sets.
+    """
+    job = simple_job_factory(nodes=nodes, state="FAILED", exit_code_signal=1)
+    stream = event_manager.create_stream(request.node.name)
+    attributor = Attributor.new(stream, job)
+    entry = {"body": "OSError: [Errno 5] Input/output error"}
+    declarations = {
+        "null": None,
+        "empty": [],
+        "outside": [{"kind": "node", "hostname": "outside-job"}],
+        "multiple": [{"kind": "node", "hostname": name} for name in ("node-a", "node-b")],
+    }
+    if declaration != "omitted":
+        entry["resources"] = declarations[declaration]
+    attributor.ingest(
+        Observation(
+            Context(TimeInterval(None, None), AllJobResources, Source.APPLOG, Format.ENTRY_TIMESERIES, timezone),
+            [entry],
+        )
+    )
+    result = attributor.attribute()
+    groups = result.bad_nodes_attr.my_bad_nodes
+    assert "IO error" in result.symptoms
+    if declaration in ("omitted", "null") and len(nodes) == 1:
+        assert "IO error" in groups["node-a"].symptoms()
+        assert "IO error" not in groups.job_level
+    else:
+        assert "IO error" in groups.job_level
+        assert groups.num_nodes() == 0
+
+
+@pytest.mark.parametrize("prefix", ["outside-job: ", "outside-job:1:2 [0] ", "OSError:1:2 [0] "])
+@pytest.mark.parametrize("declaration", ["omitted", "null"])
+def test_outside_body_hostname_does_not_infer_sole_node(
+    request, event_manager, simple_job_factory, timezone, prefix, declaration
+):
+    """Retain explicit outside-job hostnames without blaming the sole job node.
+
+    Args:
+        request: Test identity for the event stream.
+        event_manager: Event-store fixture.
+        simple_job_factory: Factory producing a single-node job.
+        timezone: Observation timezone.
+        prefix: Plain or NCCL source hostname outside the job.
+        declaration: Whether entry resources are omitted or explicitly null.
+    Returns:
+        None. Checks that the symptom remains job-level.
+    """
+    job = simple_job_factory(nodes=["node-a"], state="FAILED", exit_code_signal=1)
+    stream = event_manager.create_stream(request.node.name)
+    attributor = Attributor.new(stream, job)
+    entry = {"body": prefix + "OSError: [Errno 5] Input/output error"}
+    if declaration == "null":
+        entry["resources"] = None
+    attributor.ingest(
+        Observation(
+            Context(TimeInterval(None, None), AllJobResources, Source.APPLOG, Format.ENTRY_TIMESERIES, timezone),
+            [entry],
+        )
+    )
+    result = attributor.attribute()
+    assert "IO error" in result.bad_nodes_attr.my_bad_nodes.job_level
+    assert result.bad_nodes_attr.my_bad_nodes.num_nodes() == 0

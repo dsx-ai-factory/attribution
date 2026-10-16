@@ -245,8 +245,13 @@ class JobNodeAttributions:
         return res
 
     def to_dict(self) -> dict[str, Any]:
+        """Serialize node attributions and any job-level evidence.
+
+        Returns:
+            Node attributions plus job_level when its symptom groups are nonempty.
+        """
         result = {"attributions": serialize(self.attributions)}
-        if not self.job_level.is_void():
+        if self.job_level.is_void() is False:
             result["job_level"] = serialize(self.job_level)
         return result
 

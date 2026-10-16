@@ -18,6 +18,15 @@ from attribution_lib.sources import (
 
 class TestSource:
     def test_unknown_resources_survive_derivation_and_roundtrip(self, full_context, timezone):
+        """Unknown resources survive derivation and roundtrip.
+
+        Args:
+            full_context: Observation context fixture.
+            timezone: Observation timezone.
+
+        Returns:
+            None. Assertions verify the evidence and resource contract.
+        """
         context = replace(full_context, resources=ResourceSetClass())
         src = Source(context, 1, "unknown emitter", None, ResourceSetClass(), None)
         derived = src.derived(rule="completion")

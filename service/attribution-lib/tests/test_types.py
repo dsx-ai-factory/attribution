@@ -195,6 +195,14 @@ class TestNodeAttributionGroup:
 
 class TestJobNodeAttributions:
     def test_unassigned_sources_survive_merge_and_demotion(self, full_context):
+        """Unassigned sources survive merge and demotion.
+
+        Args:
+            full_context: Observation context fixture.
+
+        Returns:
+            None. Assertions verify the evidence and resource contract.
+        """
         base = Source(full_context, 1, "test datum", datetime.now(), AllJobResources, "test_rule")
         original = JobNodeAttributions()
         original.job_level.add(SourceSet("symptom").add(base))
@@ -204,9 +212,9 @@ class TestJobNodeAttributions:
         assert list(merged.job_level["symptom"]) == [base]
         assert "job_level" in merged.to_dict()
         merged.clear()
-        assert not merged.job_level.has_bad()
-        assert merged.job_level.has_interesting()
-        assert original.job_level.has_bad()
+        assert merged.job_level.has_bad() is False
+        assert merged.job_level.has_interesting() is True
+        assert original.job_level.has_bad() is True
         assert "job_level" in merged.to_dict()
 
     def test_attribute_and_update(self, full_context):

@@ -27,7 +27,14 @@ class Context(InboundContext):
 
     @classmethod
     def from_dict(cls, data: dict) -> Self:
-        """Reconstruct ObservationContext from dict."""
+        """Reconstruct serialized evidence while preserving explicitly empty resources.
+
+        Args:
+            data: Serialized source or observation context.
+
+        Returns:
+            Reconstructed source or observation context.
+        """
         ti = data["time_interval"]
         start = datetime.fromisoformat(ti["start"]) if isinstance(ti.get("start"), str) else ti.get("start")
         end = datetime.fromisoformat(ti["end"]) if isinstance(ti.get("end"), str) else ti.get("end")

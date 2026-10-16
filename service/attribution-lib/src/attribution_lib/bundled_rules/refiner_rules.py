@@ -486,7 +486,16 @@ def _remove_connection_closed_cascade(symptoms, my_bad_nodes) -> None:
 
 
 def _handle_link_down_time_proximity(symptoms, my_bad_nodes, event_stream: EventStream) -> None:
-    """Handle link down(east-west) without IB errors using watchdog time-proximity."""
+    """Handle link down(east-west) without IB errors using watchdog time-proximity.
+
+    Args:
+        symptoms: Mutable job symptom set.
+        my_bad_nodes: Per-node and job-level attribution groups.
+        event_stream: Events providing watchdog timing.
+
+    Returns:
+        None. Updates the symptom groups in place.
+    """
     link_down = "link down(east-west)"
     # This is job-level time correlation, not a same-node composite. Unknown
     # source identity must not hide a timestamped link-down observation.
@@ -1584,7 +1593,14 @@ def node_offline_xid145_cascade(context: RefinerContext):
     derived_rules=["IBSymptomCleanup", "Found IB error"],
 )
 def ib_symptom_cleanup(context: RefinerContext):
-    """Clean up IB/EFA cascaded symptoms based on root cause analysis."""
+    """Clean up IB/EFA cascaded symptoms based on root cause analysis.
+
+    Args:
+        context: Refinement context containing symptoms, node groups and events.
+
+    Returns:
+        None. Updates the symptom groups in place.
+    """
     symptoms = context.symptoms
     my_bad_nodes = context.my_bad_nodes
     es = context.event_stream

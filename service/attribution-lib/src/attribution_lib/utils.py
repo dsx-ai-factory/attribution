@@ -1,6 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
+import builtins
 import logging
 import re
 from collections.abc import Callable, Iterable, Iterator, Mapping
@@ -157,6 +158,14 @@ def _leading_explicit_applog_rank(line: str) -> Optional[int]:
     return None
 
 
+# Exception-type prefixes are message syntax, not source hostnames. Keep this
+# vocabulary bounded to Python's built-ins; arbitrary unknown prefixes are not
+# silently reclassified as exceptions. Explicit NCCL source syntax still wins.
+_PYTHON_EXCEPTION_NAMES = frozenset(
+    name for name, value in vars(builtins).items() if isinstance(value, type) and issubclass(value, BaseException)
+)
+
+
 def applog_extract_node_rank(line: str) -> tuple[Optional[str], Optional[int]]:
     """Extract node name and rank from an application-log line.
 
@@ -195,8 +204,8 @@ def applog_extract_node_rank(line: str) -> tuple[Optional[str], Optional[int]]:
     else:
         rank_or_node = line.split(":")[0].strip()
         try:
-            if " " in rank_or_node:
-                # if it's not a valid node name
+            if " " in rank_or_node or rank_or_node in _PYTHON_EXCEPTION_NAMES:
+                # Message text and built-in exception names do not identify a node.
                 rank = None
             else:
                 rank = int(rank_or_node)

@@ -63,7 +63,14 @@ class Source(NamedTuple):
 
     @classmethod
     def from_dict(cls, data: dict) -> Self:
-        """Reconstruct Source from dict."""
+        """Reconstruct serialized evidence while preserving explicitly empty resources.
+
+        Args:
+            data: Serialized source or observation context.
+
+        Returns:
+            Reconstructed source or observation context.
+        """
         source_context = ObservationContext.from_dict(data["source_context"])
         time = datetime.fromisoformat(data["time"]) if isinstance(data["time"], str) else data["time"]
 

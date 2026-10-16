@@ -54,6 +54,11 @@ from attribution_lib.rule_types.observation import ObservationProcessor
 from attribution_lib.symptoms.declarations import SymptomDeclaration
 from attribution_lib.symptoms.predicate_registry import SymptomPredicate
 
+# Bump for parser/resource-handling changes outside extractor rule definitions.
+# Version 1 invalidates caches created before explicit unknown-node semantics
+# and the restricted single-node inference were part of extraction.
+EXTRACTION_SEMANTICS_VERSION = 1
+
 
 @dataclass(frozen=True, slots=True)
 class RuleDeclarations:
@@ -180,7 +185,10 @@ class RuleEngine:
     # -- Cache keys --------------------------------------------------------
 
     def extractor_hash(self) -> str:
-        """Stable hash of all extractor rules. Changes when extraction behavior changes.
+        """Hash extractor rules and the versioned extraction semantics.
+
+        Returns:
+            Stable cache key that changes with rules or parser/resource semantics.
 
         Contributions are folded in sorted order rather than sub-engine order,
         so renaming a rule_types module cannot silently change every key.
@@ -189,6 +197,7 @@ class RuleEngine:
         rule changes (e.g. additive rules could reuse existing cache + incremental extract).
         """
         h = hashlib.sha256()
+        h.update(f"extraction-semantics:{EXTRACTION_SEMANTICS_VERSION}\0".encode())
         for contribution in sorted(c for e in self._engines if len(c := e.extractor_hash_contribution()) > 0):
             h.update(contribution.encode())
         return h.hexdigest()
@@ -437,7 +446,9 @@ class SourceProcessingConfig:
     body_fallbacks: BodyFallbacks = BodyFallbacks()
     """Per line: what an `entry_timeseries` entry may parse out of its body; `year_fallback` is filled per job."""
     fallback_unknown_nodes: bool = False
-    """Per line: a node that fails to resolve against the job keeps the line as resource ANY instead of dropping it."""
+    """Keep entries with unresolved nodes. Invalid application-log identity stays
+    job-level with empty resources; other formats retain their resource policy.
+    """
     requires_job_nodes: bool = False
     """Per job: skip the whole source when `job_info.nodes` is empty, since node checks pass anything then.
 
@@ -599,12 +610,10 @@ def process_observation_source(
                 log_ignored_node_line(e, entry, job_info, entry.context().source)
                 att_src_base = entry.attribution_source_base(None)
             if att_src_base.resources == ResourceSetClass.ANY and len(job_info.nodes) == 1:
-                # Unlabelled output (no ``srun --label`` prefix) of a single-node
-                # job can only have come from its sole allocated node. Without a
-                # node, symptoms are silently dropped when node attributions are
-                # built, so infer it as SchedulerNodeFailure does for NODE_FAIL.
-                # This covers both a prefix that is not a job node (raised above)
-                # and a line that parses to neither node nor rank (resolved to ANY).
+                # Preserve the existing sole-node interpretation of ANY. The
+                # application-log entry processor separately handles omitted/null
+                # resources with an unidentifiable body. Explicit empty resources
+                # and invalid identity remain job-level and never enter this pin.
                 att_src_base = att_src_base.derived(
                     resources=ResourceSetClass([NodeResource(hostname=job_info.nodes[0])])
                 )

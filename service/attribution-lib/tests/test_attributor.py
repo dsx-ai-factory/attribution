@@ -975,13 +975,23 @@ UNLABELLED_ECC_TRACEBACK = [
     ("lines", "symptom"),
     [(UNLABELLED_IO_ERROR, "IO error"), (UNLABELLED_ECC_TRACEBACK, "cudaErrorECCUncorrectable")],
 )
-def test_unlabelled_applog_line_on_single_node_job_preserves_unknown_node(request, event_manager, lines, symptom):
-    """A single allocated node does not replace missing source identity."""
+def test_unlabelled_applog_line_on_single_node_job_blames_sole_node(request, event_manager, lines, symptom):
+    """Preserve the existing sole-node inference for unlabelled application logs.
+
+    Args:
+        request: Test identity used to name the event stream.
+        event_manager: Event-store fixture.
+        lines: Application-log entries being attributed.
+        symptom: Expected attributed symptom.
+
+    Returns:
+        None. Assertions verify the evidence and resource contract.
+    """
     result = _attribute_applog(request, event_manager, _job_info_on("node1"), lines)
 
     assert symptom in result.symptoms
-    assert symptom in result.bad_nodes_attr.my_bad_nodes.job_level
-    assert result.bad_nodes_attr.my_bad_nodes.num_nodes() == 0
+    assert symptom in result.bad_nodes_attr.my_bad_nodes["node1"].symptoms()
+    assert symptom not in result.bad_nodes_attr.my_bad_nodes.job_level
 
 
 @pytest.mark.parametrize(
@@ -997,14 +1007,22 @@ def test_unlabelled_applog_line_on_multi_node_job_is_job_level(request, event_ma
     assert not any(symptom in group.symptoms() for _, group in result.bad_nodes_attr.my_bad_nodes.items())
 
 
-def test_malformed_rank_prefix_on_single_node_job_preserves_unknown_node(request, event_manager):
-    """A malformed rank remains unknown even when only one node is allocated."""
+def test_malformed_rank_prefix_on_single_node_job_blames_sole_node(request, event_manager):
+    """Preserve the existing pin when a malformed rank names no node or rank.
+
+    Args:
+        request: Test identity used to name the event stream.
+        event_manager: Event-store fixture.
+
+    Returns:
+        None. Assertions verify the evidence and resource contract.
+    """
     result = _attribute_applog(
         request, event_manager, _job_info_on("node1"), ["[rankX]: OSError: [Errno 5] Input/output error"]
     )
 
-    assert "IO error" in result.bad_nodes_attr.my_bad_nodes.job_level
-    assert result.bad_nodes_attr.my_bad_nodes.num_nodes() == 0
+    assert "IO error" in result.bad_nodes_attr.my_bad_nodes["node1"].symptoms()
+    assert "IO error" not in result.bad_nodes_attr.my_bad_nodes.job_level
 
 
 UNLABELLED_ECC_LINE = "RuntimeError: CUDA error: uncorrectable ECC error encountered"

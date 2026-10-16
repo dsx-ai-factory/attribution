@@ -155,7 +155,9 @@ class Format(str, Enum):
         - When `resources` is absent or null, the body node is parsed from an explicit rank-like or
           node-name text prefix. Message content, timestamps and unrecognized producer prefixes do not
           imply rank zero. An entry that still names no node, or declares an invalid node, is retained
-          as job-level evidence with an empty resource set; it does not identify any job node.
+          as job-level evidence with an empty resource set. The sole-node inference from #198
+          is preserved when resources is absent/null, body parsing names no node, and the job
+          has exactly one node. A parsed hostname outside the job does not qualify.
         - Explicit `resources: []` preserves unknown node identity without parsing a replacement from
           the body. Explicit `"AllJobResources"` retains its distinct meaning and skips prefix parsing.
         - The caller must establish which execution owns the entry before submitting it. Unknown node
