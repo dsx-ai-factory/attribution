@@ -1618,15 +1618,18 @@ def ib_symptom_cleanup(context: RefinerContext):
     if has_ib_error:
         if "link down(east-west)" in symptoms:
             # IB corroboration is also job-level; it does not establish which
-            # node emitted an unassigned link-down entry.
+            # node emitted an unassigned link-down entry. Clean every matching
+            # group before updating job-wide symptoms and bad pair events.
+            found_link_down = False
             for _, errors in my_bad_nodes.symptom_groups():
                 if "link down(east-west)" in errors:
+                    found_link_down = True
                     symptoms.add(errors["link down(east-west)"])
                     errors.add(errors["link down(east-west)"])
-                    _discard_ib_cascade(symptoms)
                     _discard_ib_cascade(errors)
-                    _deactivate_bad_pairs(es, "IBSymptomCleanup")
-                    break
+            if found_link_down is True:
+                _discard_ib_cascade(symptoms)
+                _deactivate_bad_pairs(es, "IBSymptomCleanup")
     elif "link down(east-west)" in symptoms:
         _handle_link_down_time_proximity(symptoms, my_bad_nodes, es)
 

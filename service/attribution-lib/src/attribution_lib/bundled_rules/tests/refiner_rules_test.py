@@ -1227,6 +1227,40 @@ def test_unassigned_link_down_without_watchdog(stream, obs_ctx, job_info, with_i
     assert len(bad_nodes.attributions) == 0
 
 
+@pytest.mark.parametrize("named_nodes", [("node01",), ("node01", "node02")])
+def test_link_down_cleans_ib_cascade_in_all_groups(stream, obs_ctx, job_info, named_nodes):
+    """Clean every link-down group without assigning job-level evidence to a node.
+
+    Args:
+        stream: Event stream fixture.
+        obs_ctx: Observation source context.
+        job_info: Job metadata fixture.
+        named_nodes: Nodes with link-down and cascaded IB evidence.
+
+    Returns:
+        None. Assertions verify active symptoms and source identity after cleanup.
+    """
+    link_down = "link down(east-west)"
+    ib_error = "IB Error-12 (IBV_WC_RETRY_EXC_ERR)"
+    bad_nodes = _make_bad_nodes(obs_ctx, {node: [link_down, ib_error] for node in named_nodes})
+    source = Source(
+        source_context=obs_ctx, line_num=1, datum="port error", time=None, resources=ResourceSet(), rule="test"
+    )
+    for symptom in (link_down, ib_error):
+        bad_nodes.job_level.add(SourceSet(symptom).add(source))
+    symptoms = _make_symptoms(obs_ctx, link_down, ib_error)
+
+    _run_ib_cleanup(stream, job_info, symptoms, bad_nodes)
+
+    assert link_down in symptoms
+    assert ib_error not in symptoms
+    for _, group in bad_nodes.symptom_groups():
+        assert link_down in group
+        assert ib_error not in group
+    assert set(bad_nodes.attributions) == set(named_nodes)
+    assert len(source.resources) == 0
+
+
 class TestKernelCrashIbCascadeCleanup:
     """Kernel crashes discard the IB cascade reported by peer nodes."""
 
