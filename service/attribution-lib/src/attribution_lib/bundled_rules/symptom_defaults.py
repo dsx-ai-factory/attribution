@@ -2803,3 +2803,16 @@ known_symptom("plr_tx_bw_loss_high_1m_5pct")
 known_symptom("plr_tx_bw_loss_high_5m_1pct")
 
 known_symptom("pyxis: cancelled by SIGTERM")
+
+known_symptom("mlx5 firmware in initialization state")
+known_symptom("mlx5 device initialization failed")
+
+outcome_symptom(
+    "detected bad NIC state",
+    outcome="Fail InfraSW",
+    # Independent MEDIUM_SW faults retain precedence. Outcome selection
+    # handles the QP and device-open failures superseded by this symptom.
+    priority=OutcomePriority.LOW,
+    doc="detected-bad-nic-state",
+    hw_cause="NIC firmware initialization failure",
+)

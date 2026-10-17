@@ -332,3 +332,36 @@ symptom = "imex_worker: Failed to update Rx Detect Link mask!"
 expect  = "bad"
 line    = "Failed to update Rx Detect Link mask!"
 symptom = "Failed to update Rx Detect Link mask!"
+
+
+# Linux mlx5 initialization failures are inputs to DetectBadNicState.
+[[extractor]]
+name     = "SyslogMlx5FirmwareInitTimeout"
+match_re = '\bmlx5_core\s+[0-9a-fA-F:.]+:.*\bFirmware over \d+ MS in initializing state, aborting\b'
+emit     = { type = "bad_node", symptom = "mlx5 firmware in initialization state" }
+[[extractor.cases]]
+expect  = "bad"
+line    = "mlx5_core 0000:01:00.0: wait_fw_init:201:(pid 10): Firmware over 10000 MS in initializing state, aborting"
+symptom = "mlx5 firmware in initialization state"
+[[extractor.cases]]
+expect  = "bad"
+line    = "mlx5_core 0000:01:00.0: Firmware over 20000 MS in initializing state, aborting"
+symptom = "mlx5 firmware in initialization state"
+[[extractor.cases]]
+expect  = "none"
+line    = "mlx5_core 0000:01:00.0: Firmware over 10000 MS in pre-initializing state, aborting"
+[[extractor.cases]]
+expect  = "none"
+line    = "other_driver 0000:01:00.0: Firmware over 10000 MS in initializing state, aborting"
+
+[[extractor]]
+name     = "SyslogMlx5InitFailure"
+match_re = '\bmlx5_core\s+[0-9a-fA-F:.]+:.*\bmlx5_init_one failed with error code\b'
+emit     = { type = "bad_node", symptom = "mlx5 device initialization failed" }
+[[extractor.cases]]
+expect  = "bad"
+line    = "mlx5_core 0000:01:00.0: probe_one:2002:(pid 10): mlx5_init_one failed with error code -110"
+symptom = "mlx5 device initialization failed"
+[[extractor.cases]]
+expect  = "none"
+line    = "mlx5_core 0000:01:00.0: mlx5_pci_init failed with error code -110"

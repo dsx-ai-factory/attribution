@@ -306,6 +306,93 @@ class TestPoisonedGspComposite:
         assert self._RESET in symptoms
 
 
+class TestDetectBadNicState:
+    _COMPONENTS = ("mlx5 firmware in initialization state", "mlx5 device initialization failed")
+
+    @pytest.mark.parametrize("missing", ["timestamp", "job_end", "pci", "active_component"])
+    def test_incomplete_context_does_not_combine(self, stream, obs_ctx, job_info, missing):
+        bad_nodes = JobNodeAttributions()
+        for i, symptom in enumerate(self._COMPONENTS):
+            source = _make_source(
+                obs_ctx,
+                source_time=job_info.job_end_time,
+                datum=f"mlx5_core 0000:01:00.0: {symptom}",
+                line_num=i + 1,
+            )
+            if missing == "timestamp" and i == 0:
+                source = source._replace(time=None)
+            if missing == "pci" and i == 0:
+                source = source._replace(datum=symptom)
+            bad_nodes.add(["node01"], SourceSet.new_one(symptom, source))
+        if missing == "job_end":
+            job_info = job_info._replace(job_end_time=None)
+        if missing == "active_component":
+            bad_nodes["node01"].discard(self._COMPONENTS[0])
+
+        _run_scrub(stream, job_info, bad_nodes)
+
+        assert "detected bad NIC state" not in bad_nodes["node01"]
+
+    def test_provenance_and_stale_sources_are_preserved(self, stream, obs_ctx, job_info):
+        bad_nodes = JobNodeAttributions()
+        for i, symptom in enumerate(self._COMPONENTS):
+            source = _make_source(
+                obs_ctx,
+                source_time=job_info.job_end_time,
+                datum=f"mlx5_core 0000:01:00.0: {symptom}",
+                line_num=i + 1,
+            )
+            bad_nodes.add(["node01"], SourceSet.new_one(symptom, source))
+        stale = source._replace(time=job_info.job_end_time - timedelta(minutes=3), line_num=3)
+        bad_nodes.add(["node01"], SourceSet.new_one(self._COMPONENTS[1], stale))
+        recorder = DecisionRecorder(job_info.id)
+
+        _run_scrub(stream, job_info, bad_nodes, recorder=recorder)
+
+        symptoms = bad_nodes["node01"].attributions
+        assert {source.line_num for source in symptoms["detected bad NIC state"]} == {1, 2}
+        assert list(symptoms[self._COMPONENTS[1]]) == [stale]
+        assert all(symptoms[component].has_interesting() for component in self._COMPONENTS)
+        created = [
+            event
+            for event in recorder.events
+            if event.rule_name == "DetectBadNicState" and event.action is Action.CREATED
+        ]
+        assert len(created) == 1
+        assert created[0].symptom == "detected bad NIC state"
+        assert created[0].hostname == "node01"
+
+    @pytest.mark.parametrize(
+        "offset,expected",
+        [(-120, False), (-1, False), (0, True), (4, True), (26, True), (120, True), (121, False)],
+    )
+    def test_post_job_window(self, stream, obs_ctx, job_info, offset, expected):
+        bad_nodes = JobNodeAttributions()
+        for i, symptom in enumerate(self._COMPONENTS):
+            source = _make_source(
+                obs_ctx,
+                source_time=job_info.job_end_time + timedelta(seconds=offset),
+                datum=f"mlx5_core 0000:01:00.0: {symptom}",
+                line_num=i + 1,
+            )
+            bad_nodes.add(["node01"], SourceSet.new_one(symptom, source))
+        _run_scrub(stream, job_info, bad_nodes)
+        assert ("detected bad NIC state" in bad_nodes["node01"]) is expected
+
+    def test_missing_job_start_does_not_prevent_detection(self, stream, obs_ctx, job_info):
+        bad_nodes = JobNodeAttributions()
+        for i, component in enumerate(self._COMPONENTS):
+            source = _make_source(
+                obs_ctx,
+                source_time=job_info.job_end_time,
+                datum=f"mlx5_core 0000:01:00.0: {component}",
+                line_num=i + 1,
+            )
+            bad_nodes.add(["node01"], SourceSet.new_one(component, source))
+        _run_scrub(stream, job_info._replace(job_start_time=None), bad_nodes)
+        assert "detected bad NIC state" in bad_nodes["node01"]
+
+
 class TestScrubBadNodes:
     """Tests for the ScrubBadNodes refiner (SCRUB phase, pre-aggregation)."""
 
