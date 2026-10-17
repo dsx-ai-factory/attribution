@@ -897,6 +897,13 @@ def test_symptom_docs_from_declarations_includes_only_doc_bearing_outcomes():
             priority=OutcomePriority.LOW_GENERIC,
             doc="",
         ),
+        # Whitespace-only doc slug: excluded.
+        SymptomDeclaration(
+            prefix="blank-doc",
+            outcome="Fail InfraSW",
+            priority=OutcomePriority.LOW,
+            doc=" \t\n",
+        ),
         # Missing doc slug: excluded.
         SymptomDeclaration(
             prefix="RuntimeError",

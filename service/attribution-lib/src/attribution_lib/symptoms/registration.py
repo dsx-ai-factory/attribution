@@ -62,7 +62,7 @@ def outcome_symptom(
         dag_discard: Projection behavior when the DAG discards this symptom.
         family: Optional structured family schema or member identity.
     """
-    if doc == "" or (doc is None and not fallback_prefix):
+    if (doc is not None and doc.strip() == "") or (doc is None and not fallback_prefix):
         raise RuleIngestionError(f"outcome_symptom({prefix!r}) requires a non-empty doc anchor")
     loader = _require_rule_loader("declaring outcome symptom")
     loader.register_symptom_declaration(

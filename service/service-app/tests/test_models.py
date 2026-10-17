@@ -394,6 +394,7 @@ def test_fallback_catalog_ids_resolve_in_packaged_catalog() -> None:
     loader.load(str(get_bundled_rules_path() / "symptom_defaults.py"))
     registry = registry_from_declarations(loader.symptom_declarations)
 
+    checked: set[str] = set()
     for prefix in registry.fallback_prefixes:
         symptom = prefix + " example"
         match = registry.outcome_for([symptom])
@@ -413,5 +414,7 @@ def test_fallback_catalog_ids_resolve_in_packaged_catalog() -> None:
         root = AttributionResponseV2.from_lib_attribution(set(), result).verdict.root_symptom
         assert root is not None
         assert root.catalog_id is None or root.catalog_id in catalog_ids, (prefix, root.catalog_id)
+        checked.add(prefix)
         if prefix == "NV_ERR_RESET_REQUIRED":
             assert root.catalog_id == "gpu-reset-required"
+    assert "NV_ERR_RESET_REQUIRED" in checked

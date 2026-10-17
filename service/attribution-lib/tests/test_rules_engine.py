@@ -92,7 +92,14 @@ def test_symptom_declarations_register_during_load(tmp_path):
 
 @pytest.mark.parametrize(
     ("doc", "fallback_prefix", "valid"),
-    [("", False, False), ("", True, False), (None, False, False), (None, True, True)],
+    [
+        ("", False, False),
+        ("", True, False),
+        ("   ", False, False),
+        ("\t\n", True, False),
+        (None, False, False),
+        (None, True, True),
+    ],
 )
 def test_outcome_symptom_requires_doc_anchor(tmp_path, doc, fallback_prefix, valid):
     """Allow an absent documentation link only for fallback declarations.

@@ -384,7 +384,7 @@ def symptom_docs_from_declarations(declarations: Iterable[SymptomDeclaration]) -
     for declaration in declarations:
         if declaration.cascade_noop or declaration.outcome is None:
             continue
-        if declaration.doc is None or declaration.doc == "":
+        if declaration.doc is None or declaration.doc.strip() == "":
             continue
         docs[declaration.prefix] = declaration.doc
     return docs
