@@ -908,8 +908,8 @@ def validate_documentation_and_delivery(root: Path, violations: list[str]) -> No
         # Provenance comments come first; the NVIDIA SPDX block follows them.
         if (
             template_lines[2:4] != [template_copyright, template_tag]
-            or template_text.count(template_copyright) != 1
-            or template_text.count(template_tag) != 1
+            or template_text.count(COPYRIGHT_TAG) != 1
+            or template_text.count(IDENTIFIER_TAG) != 1
         ):
             violations.append(
                 f"{template_path}: expected exact Apache-2.0 SPDX template tag"
