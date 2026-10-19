@@ -415,7 +415,7 @@ def test_failed_jobset_child_deadline_exceeded_normalizes_to_timeout(mocker):
             "namespace": "team-alpha",
             "uid": "workload-jobset-timeout",
             "creationTimestamp": "2026-05-01T12:00:00Z",
-            "ownerReferences": [{"kind": "JobSet", "name": "training", "uid": "jobset-uid"}],
+            "ownerReferences": [{"kind": "JobSet", "name": "training", "uid": "jobset-uid", "controller": True}],
         },
         "spec": {"podSets": []},
         "status": {
@@ -441,7 +441,7 @@ def test_failed_jobset_child_deadline_exceeded_normalizes_to_timeout(mocker):
             "name": "training-workers-0",
             "namespace": "team-alpha",
             "labels": {"jobset.sigs.k8s.io/jobset-name": "training"},
-            "ownerReferences": [{"kind": "JobSet", "name": "training", "uid": "jobset-uid"}],
+            "ownerReferences": [{"kind": "JobSet", "name": "training", "uid": "jobset-uid", "controller": True}],
         },
         "spec": {"activeDeadlineSeconds": 60},
         "status": {
@@ -482,7 +482,9 @@ def test_reused_jobset_name_with_different_uid_is_not_used_as_owner(mocker):
             "namespace": "team-alpha",
             "uid": "workload-jobset-timeout",
             "creationTimestamp": "2026-05-01T12:00:00Z",
-            "ownerReferences": [{"kind": "JobSet", "name": "training", "uid": "jobset-uid-OLD"}],
+            "ownerReferences": [
+                {"kind": "JobSet", "name": "training", "uid": "jobset-uid-OLD", "controller": True}
+            ],
         },
         "spec": {"podSets": []},
         "status": {
@@ -505,7 +507,9 @@ def test_reused_jobset_name_with_different_uid_is_not_used_as_owner(mocker):
             "name": "training-workers-0",
             "namespace": "team-alpha",
             "labels": {"jobset.sigs.k8s.io/jobset-name": "training"},
-            "ownerReferences": [{"kind": "JobSet", "name": "training", "uid": "jobset-uid-NEW"}],
+            "ownerReferences": [
+                {"kind": "JobSet", "name": "training", "uid": "jobset-uid-NEW", "controller": True}
+            ],
         },
         "spec": {"activeDeadlineSeconds": 60},
         "status": {
@@ -549,7 +553,7 @@ def _jobset_workload_and_children(*, first_reason: str, second_reason: str) -> t
             "namespace": "team-alpha",
             "uid": "workload-jobset-mixed",
             "creationTimestamp": "2026-05-01T12:00:00Z",
-            "ownerReferences": [{"kind": "JobSet", "name": "training", "uid": "jobset-uid"}],
+            "ownerReferences": [{"kind": "JobSet", "name": "training", "uid": "jobset-uid", "controller": True}],
         },
         "spec": {"podSets": []},
         "status": {
@@ -573,7 +577,9 @@ def _jobset_workload_and_children(*, first_reason: str, second_reason: str) -> t
                 "name": name,
                 "namespace": "team-alpha",
                 "labels": {"jobset.sigs.k8s.io/jobset-name": "training"},
-                "ownerReferences": [{"kind": "JobSet", "name": "training", "uid": "jobset-uid"}],
+                "ownerReferences": [
+                    {"kind": "JobSet", "name": "training", "uid": "jobset-uid", "controller": True}
+                ],
             },
             "spec": {},
             "status": {
@@ -1077,7 +1083,7 @@ def test_denied_jobset_child_job_list_fails_discovery(mocker):
             "uid": "workload-jobset",
             "creationTimestamp": "2026-05-01T12:00:00Z",
             "ownerReferences": [
-                {"kind": "JobSet", "name": "training", "uid": "jobset-uid"},
+                {"kind": "JobSet", "name": "training", "uid": "jobset-uid", "controller": True},
             ],
         },
         "spec": {},
@@ -1187,7 +1193,15 @@ def test_pods_filtered_by_batch_controller_uid_not_workload_uid_or_kueue_label(m
                     "namespace": "team-alpha",
                     "uid": "WORKLOAD-UID-1",
                     "creationTimestamp": "2026-05-10T11:59:00Z",
-                    "ownerReferences": [{"apiVersion": "batch/v1", "kind": "Job", "name": "regr", "uid": "JOB-UID-1"}],
+                    "ownerReferences": [
+                        {
+                            "apiVersion": "batch/v1",
+                            "kind": "Job",
+                            "name": "regr",
+                            "uid": "JOB-UID-1",
+                            "controller": True,
+                        }
+                    ],
                 },
                 "spec": {"queueName": "q"},
                 "status": {
@@ -1496,7 +1510,15 @@ def test_discover_by_time_range_skips_pod_and_job_fetches_for_out_of_window_work
                 "namespace": ns,
                 "uid": uid,
                 "creationTimestamp": f"2026-05-{day:02d}T11:59:00Z",
-                "ownerReferences": [{"apiVersion": "batch/v1", "kind": "Job", "name": owner_name, "uid": owner_uid}],
+                "ownerReferences": [
+                    {
+                        "apiVersion": "batch/v1",
+                        "kind": "Job",
+                        "name": owner_name,
+                        "uid": owner_uid,
+                        "controller": True,
+                    }
+                ],
             },
             "spec": {"queueName": "q"},
             "status": {
@@ -1651,7 +1673,14 @@ def test_same_named_jobsets_in_two_namespaces_keep_separate_pod_evidence():
                 "namespace": ns,
                 "uid": f"wl-{ns}",
                 "creationTimestamp": "2026-05-01T11:59:00Z",
-                "ownerReferences": [{"apiVersion": "jobset.x-k8s.io/v1alpha2", "kind": "JobSet", "name": "train"}],
+                "ownerReferences": [
+                    {
+                        "apiVersion": "jobset.x-k8s.io/v1alpha2",
+                        "kind": "JobSet",
+                        "name": "train",
+                        "controller": True,
+                    }
+                ],
             },
             "spec": {},
             "status": {
@@ -1693,7 +1722,14 @@ def test_identically_named_jobsets_in_different_namespaces_do_not_cross_contamin
                 "namespace": namespace,
                 "uid": uid,
                 "creationTimestamp": "2026-05-01T12:00:00Z",
-                "ownerReferences": [{"kind": "JobSet", "name": "trainer", "uid": f"jobset-{namespace}"}],
+                "ownerReferences": [
+                    {
+                        "kind": "JobSet",
+                        "name": "trainer",
+                        "uid": f"jobset-{namespace}",
+                        "controller": True,
+                    }
+                ],
             },
             "spec": {"podSets": []},
             "status": {
@@ -2150,7 +2186,9 @@ class TestMergePrometheusPlacements:
                     "namespace": "team-a",
                     "uid": "child-job-uid-1",
                     "labels": {"jobset.sigs.k8s.io/jobset-name": "set-a"},
-                    "ownerReferences": [{"kind": "JobSet", "name": "set-a", "uid": "jobset-uid-1"}],
+                    "ownerReferences": [
+                        {"kind": "JobSet", "name": "set-a", "uid": "jobset-uid-1", "controller": True}
+                    ],
                 }
             },
             "team-a/set-a-workers-1": {
@@ -2158,7 +2196,9 @@ class TestMergePrometheusPlacements:
                     "namespace": "team-a",
                     "uid": "child-job-uid-2",
                     "labels": {"jobset.sigs.k8s.io/jobset-name": "set-a"},
-                    "ownerReferences": [{"kind": "JobSet", "name": "set-a", "uid": "jobset-uid-1"}],
+                    "ownerReferences": [
+                        {"kind": "JobSet", "name": "set-a", "uid": "jobset-uid-1", "controller": True}
+                    ],
                 }
             },
         }
