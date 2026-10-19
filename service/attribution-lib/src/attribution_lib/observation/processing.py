@@ -24,6 +24,7 @@ from attribution_lib.observation.inbound import (
     Format,
     NodeStr,
     RawLogLine,
+    Source as ObservationSource,
     TimeseriesEntry,
 )
 from attribution_lib.resources import get_single_node
@@ -83,6 +84,12 @@ class BodyFallbacks:
     - `require_node` only: the entry is dropped
     - `parse_node` only: the node is read from the body if possible, else ANY
     - both: the node is read from the body, else the entry is dropped
+
+    Application logs retain unknown identity as an empty resource set instead
+    of ANY, except that an omitted/null declaration and unidentifiable body
+    infer the sole node of a single-node job. Explicitly empty declarations
+    disable both body parsing and this inference. Invalid declarations do not
+    qualify. Only explicit `AllJobResources` applies to every job resource.
 
     `parse_timestamp` and `require_timestamp` pair the same way. When `ts` is null:
 
@@ -334,14 +341,19 @@ class TimeseriesEntryObj(EntryBase):
         self._body_fallbacks = body_fallbacks
 
     def attribution_source_base(self, job_info: Optional[JobInfo]) -> Source:
-        """Retain a verified producer-declared node separately from body fallbacks."""
+        """Retain a verified producer-declared node separately from inferred nodes.
+
+        Args:
+            job_info: Job used to validate declarations, or None after validation fails.
+        Returns:
+            Attribution source with declared_node only for an explicit valid declaration.
+        """
         source = super().attribution_source_base(job_info)
-        if (
-            job_info is not None
-            and self._resources is not None
-            and self._resources != ResourceSetClass.ANY
-            and any(isinstance(resource, NodeResource) for resource in self._resources)
-        ):
+        if job_info is None or self._resources is None:
+            return source
+        if self._resources == ResourceSetClass.ANY:
+            return source
+        if any(isinstance(resource, NodeResource) for resource in self._resources):
             return source._replace(declared_node=get_single_node(source.resources).hostname)
         return source
 
@@ -362,18 +374,37 @@ class TimeseriesEntryObj(EntryBase):
     def _verified_resources(self, job_info: JobInfo) -> ResourceSet:
         """The declared resources, with the declared node checked against the job.
 
-        ANY when `AllJobResources` was declared, or when nothing was declared, nothing could be parsed
-        with `parse_node`, and `require_node` is off. Replicas ride along unread.
+        ANY when `AllJobResources` was declared, or for non-application sources
+        when nothing could be parsed and `require_node` is off. Application logs
+        preserve unknown identity as an empty set unless absent/null resources
+        and an unidentifiable body qualify for the single-node inference.
+        Replicas ride along unread.
 
-        Raises UnidentifiableNodeError when `require_node` finds no node, or when anything other than
-        exactly one node was declared; UnknownNodeError when that node is not in the job.
+        Args:
+            job_info: Job whose nodes validate declared or parsed identity.
+        Returns:
+            Verified resources, explicit ANY, or the source-specific unknown set.
+        Raises:
+            UnidentifiableNodeError: If a required node is absent or a declaration
+                does not contain exactly one node.
+            UnknownNodeError: If a declared or parsed hostname is outside the job.
         """
         if self._resources == ResourceSetClass.ANY:
             return ResourceSetClass.ANY
 
+        # An explicitly empty application-log resource set declares unknown
+        # identity. Do not reinterpret the body as a replacement declaration.
+        if (
+            self._context.source == ObservationSource.APPLOG
+            and self._resources is not None
+            and len(self._resources) == 0
+        ):
+            return self._resources
+
         verified: list[ResourceBase] = []
         node_count = 0
-        for resource in self._resources or ():
+        declared_resources = () if self._resources is None else self._resources
+        for resource in declared_resources:
             if isinstance(resource, NodeResource):
                 node_count += 1
                 verified.append(NodeResource(hostname=job_info.verify_node(resource.hostname)))
@@ -391,6 +422,10 @@ class TimeseriesEntryObj(EntryBase):
         if len(verified) == 0:
             if self._body_fallbacks.require_node:
                 raise UnidentifiableNodeError(self.body())
+            if self._context.source == ObservationSource.APPLOG:
+                if all((self._resources is None, self._body_fallbacks.parse_node is True, len(job_info.nodes) == 1)):
+                    return ResourceSetClass([NodeResource(hostname=job_info.nodes[0])])
+                return ResourceSetClass()
             return ResourceSetClass.ANY
 
         # Potentially relaxable later; for now this matches every other format's one node per entry.
@@ -416,7 +451,18 @@ class TimeseriesEntryObj(EntryBase):
         return self._body
 
     def resources(self, job_info: Optional[JobInfo] = None) -> ResourceSet:
+        """Resolve resources without replacing an invalid application-log declaration.
+
+        Args:
+            job_info: Job for validation, or None when identity could not be validated.
+        Returns:
+            Validated resources, or empty application-log resources after invalid identity.
+        """
         if job_info is None:
+            # Application-log errors with invalid or conflicting declarations
+            # remain job-level evidence, without acquiring every job node.
+            if self._context.source == ObservationSource.APPLOG and self._resources != ResourceSetClass.ANY:
+                return ResourceSetClass()
             return ResourceSetClass.ANY
         return self._verified_resources(job_info)
 

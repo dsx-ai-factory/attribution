@@ -1,6 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
+import builtins
 import logging
 import re
 from collections.abc import Callable, Iterable, Iterator, Mapping
@@ -157,6 +158,14 @@ def _leading_explicit_applog_rank(line: str) -> Optional[int]:
     return None
 
 
+# Exception-type prefixes are message syntax, not source hostnames. Keep this
+# vocabulary bounded to Python's built-ins; arbitrary unknown prefixes are not
+# silently reclassified as exceptions. Explicit NCCL source syntax still wins.
+_PYTHON_EXCEPTION_NAMES = frozenset(
+    name for name, value in vars(builtins).items() if isinstance(value, type) and issubclass(value, BaseException)
+)
+
+
 def applog_extract_node_rank(line: str) -> tuple[Optional[str], Optional[int]]:
     """Extract node name and rank from an application-log line.
 
@@ -184,7 +193,8 @@ def applog_extract_node_rank(line: str) -> tuple[Optional[str], Optional[int]]:
         #   what():  [PG 13 Rank 6] NCCL watchdog thread terminated with exception: CUDA error: device-side assert triggered
         # CUDA kernel errors might be asynchronously reported at some other API call, so the stacktrace below might be incorrect.
         #
-        rank = 0
+        # These messages carry no observed node or rank.
+        rank = None
     elif line.startswith("[rank"):
         # extract 4 from
         # [rank4]:   File \"/usr/lib/python3.10/runpy.py\", line 196, in _run_module_as_main\n",
@@ -194,9 +204,9 @@ def applog_extract_node_rank(line: str) -> tuple[Optional[str], Optional[int]]:
     else:
         rank_or_node = line.split(":")[0].strip()
         try:
-            if " " in rank_or_node:
-                # if it's not a valid node name
-                rank = 0
+            if " " in rank_or_node or rank_or_node in _PYTHON_EXCEPTION_NAMES:
+                # Message text and built-in exception names do not identify a node.
+                rank = None
             else:
                 rank = int(rank_or_node)
         except ValueError:
@@ -206,7 +216,7 @@ def applog_extract_node_rank(line: str) -> tuple[Optional[str], Optional[int]]:
     # Every NCCL prefix includes [cudaDev]; skip impossible matches cheaply.
     if "[" in line and (nccl := NCCL_HOST_PID_TID_REGEX.search(line)) is not None:
         node = nccl.group("node")
-        # Wipe timestamp-driven rank 0; keep a real srun / [rankN] prefix.
+        # Keep only a real srun / [rankN] rank alongside the NCCL hostname.
         rank = _leading_explicit_applog_rank(line)
     return node, rank
 

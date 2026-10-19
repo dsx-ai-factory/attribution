@@ -1,12 +1,12 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime
 
 import pytest
 
-from attribution_lib.resources.resource_set import AllJobResources
+from attribution_lib.resources.resource_set import AllJobResources, ResourceSetClass
 from attribution_lib.sources import (
     Source,
     SourceSet,
@@ -17,6 +17,26 @@ from attribution_lib.sources import (
 
 
 class TestSource:
+    def test_unknown_resources_survive_derivation_and_roundtrip(self, full_context, timezone):
+        """Unknown resources survive derivation and roundtrip.
+
+        Args:
+            full_context: Observation context fixture.
+            timezone: Observation timezone.
+
+        Returns:
+            None. Assertions verify the evidence and resource contract.
+        """
+        context = replace(full_context, resources=ResourceSetClass())
+        src = Source(context, 1, "unknown emitter", None, ResourceSetClass(), None)
+        derived = src.derived(rule="completion")
+        data = derived.to_dict()
+        data["source_context"]["timezone"] = str(timezone)
+        data["resources"] = []
+        data["source_context"]["resources"] = []
+        assert Source.from_dict(data) == derived
+        assert derived.resources != AllJobResources
+
     def test_declared_node_survives_derivation_and_roundtrip(self, full_context, timezone):
         src = Source(full_context, 1, "line", datetime.now(tz=timezone), AllJobResources, None, "host-a")
         derived = src.derived(rule="completion")

@@ -486,8 +486,20 @@ def _remove_connection_closed_cascade(symptoms, my_bad_nodes) -> None:
 
 
 def _handle_link_down_time_proximity(symptoms, my_bad_nodes, event_stream: EventStream) -> None:
-    """Handle link down(east-west) without IB errors using watchdog time-proximity."""
+    """Handle link down(east-west) without IB errors using watchdog time-proximity.
+
+    Args:
+        symptoms: Mutable job symptom set.
+        my_bad_nodes: Per-node and job-level attribution groups.
+        event_stream: Events providing watchdog timing.
+
+    Returns:
+        None. Updates the symptom groups in place.
+    """
     link_down = "link down(east-west)"
+    # This is job-level time correlation, not a same-node composite. Unknown
+    # source identity must not hide a timestamped link-down observation.
+    evidence_groups = [group for _, group in my_bad_nodes.symptom_groups()]
 
     watchdog_cancellation_timestamp = None
     for watchdog_symptom in _WATCHDOG_SYMPTOMS:
@@ -504,8 +516,7 @@ def _handle_link_down_time_proximity(symptoms, my_bad_nodes, event_stream: Event
         threshold = timeout_seconds + buffer_seconds
 
         keep_link_down_in_symptoms = False
-        for _node, node_group in my_bad_nodes.items():
-            errors = node_group.attributions
+        for errors in evidence_groups:
             if link_down in errors:
                 node_link_down_set = errors[link_down]
                 to_discard = []
@@ -530,8 +541,7 @@ def _handle_link_down_time_proximity(symptoms, my_bad_nodes, event_stream: Event
             _discard_ib_cascade(symptoms)
     else:
         symptoms.discard(link_down)
-        for _node, node_group in my_bad_nodes.items():
-            errors = node_group.attributions
+        for errors in evidence_groups:
             if link_down in errors:
                 errors.discard(link_down)
 
@@ -1583,7 +1593,14 @@ def node_offline_xid145_cascade(context: RefinerContext):
     derived_rules=["IBSymptomCleanup", "Found IB error"],
 )
 def ib_symptom_cleanup(context: RefinerContext):
-    """Clean up IB/EFA cascaded symptoms based on root cause analysis."""
+    """Clean up IB/EFA cascaded symptoms based on root cause analysis.
+
+    Args:
+        context: Refinement context containing symptoms, node groups and events.
+
+    Returns:
+        None. Updates the symptom groups in place.
+    """
     symptoms = context.symptoms
     my_bad_nodes = context.my_bad_nodes
     es = context.event_stream
@@ -1600,15 +1617,19 @@ def ib_symptom_cleanup(context: RefinerContext):
 
     if has_ib_error:
         if "link down(east-west)" in symptoms:
-            for _node, node_group in my_bad_nodes.items():
-                errors = node_group.attributions
+            # IB corroboration is also job-level; it does not establish which
+            # node emitted an unassigned link-down entry. Clean every matching
+            # group before updating job-wide symptoms and bad pair events.
+            found_link_down = False
+            for _, errors in my_bad_nodes.symptom_groups():
                 if "link down(east-west)" in errors:
+                    found_link_down = True
                     symptoms.add(errors["link down(east-west)"])
                     errors.add(errors["link down(east-west)"])
-                    _discard_ib_cascade(symptoms)
                     _discard_ib_cascade(errors)
-                    _deactivate_bad_pairs(es, "IBSymptomCleanup")
-                    break
+            if found_link_down is True:
+                _discard_ib_cascade(symptoms)
+                _deactivate_bad_pairs(es, "IBSymptomCleanup")
     elif "link down(east-west)" in symptoms:
         _handle_link_down_time_proximity(symptoms, my_bad_nodes, es)
 

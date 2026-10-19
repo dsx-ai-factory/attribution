@@ -1,6 +1,9 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
+import hashlib
+
+from attribution_lib import rules_engine
 from attribution_lib.core import get_bundled_rules_path
 from attribution_lib.observation.inbound import Source as ObservationSource
 from attribution_lib.rule_types.definitions import (
@@ -145,3 +148,36 @@ class TestHashWithLoadedRules:
 
         assert loader1.build().extractor_hash() == loader2.build().extractor_hash()
         assert loader1.build().attribution_hash() == loader2.build().attribution_hash()
+
+
+def test_extractor_hash_includes_extraction_semantics_version(monkeypatch):
+    """Invalidate cached events when extraction semantics change without new rules.
+
+    Args:
+        monkeypatch: Fixture temporarily changing the semantics version.
+    Returns:
+        None. Checks a version change invalidates the key and restoration is stable.
+    """
+    engine = RuleLoader().build()
+    initial = engine.extractor_hash()
+    version = rules_engine.EXTRACTION_SEMANTICS_VERSION
+    monkeypatch.setattr(rules_engine, "EXTRACTION_SEMANTICS_VERSION", version + 1)
+    assert engine.extractor_hash() != initial
+    monkeypatch.setattr(rules_engine, "EXTRACTION_SEMANTICS_VERSION", version)
+    assert engine.extractor_hash() == initial
+
+
+def test_extractor_hash_invalidates_unversioned_cache():
+    """Ensure a pre-versioning cache cannot retain old resource assignments.
+
+    Returns:
+        None. Checks the new key differs from the old rule-only hash.
+    """
+    loader = RuleLoader()
+    loader.register_rule(_make_extractor("example", r"error"))
+    engine = loader.build()
+    old_hash = hashlib.sha256()
+    for contribution in sorted(c for e in engine._engines if len(c := e.extractor_hash_contribution()) > 0):
+        old_hash.update(contribution.encode())
+    assert engine.extractor_hash() != old_hash.hexdigest()
+    assert engine.extractor_hash() == loader.build().extractor_hash()

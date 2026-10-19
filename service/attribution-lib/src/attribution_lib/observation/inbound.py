@@ -128,7 +128,9 @@ class Format(str, Enum):
           or an array naming exactly one `{"kind": "node", "hostname": ...}`, optionally alongside
           `{"kind": "replica", "name": ...}` objects, which are recorded but not attributed on. An array
           naming several nodes, or a hostname outside the job, is invalid and handled like an entry naming
-          no node. Node may be parsed from body and/or dropped if none given for some sources.
+          no node. For application logs, an empty array explicitly declares unknown node identity;
+          it prevents body-based node inference. Node may be parsed from body and/or dropped if none
+          given for other sources.
       - Any other key in an entry is rejected.
 
       Entries are time-filtered only by the observation context's `time_interval`. That interval is the
@@ -150,9 +152,16 @@ class Format(str, Enum):
       - `applog`:
         - `ts` can be null, in which case the body is parsed for a timestamp. Year-less formats resolve it
           against the workload's `job_end_time`.
-        - The body node is parsed from the rank-like or node-name text prefix. An entry that still names no node,
-          or names an invalid one, is recorded against every job resource instead of dropped. An explicit
-          `"AllJobResources"` skips the prefix parse altogether.
+        - When `resources` is absent or null, the body node is parsed from an explicit rank-like or
+          node-name text prefix. Message content, timestamps and unrecognized producer prefixes do not
+          imply rank zero. An entry that still names no node, or declares an invalid node, is retained
+          as job-level evidence with an empty resource set. The sole-node inference from #198
+          is preserved when resources is absent/null, body parsing names no node, and the job
+          has exactly one node. A parsed hostname outside the job does not qualify.
+        - Explicit `resources: []` preserves unknown node identity without parsing a replacement from
+          the body. Explicit `"AllJobResources"` retains its distinct meaning and skips prefix parsing.
+        - The caller must establish which execution owns the entry before submitting it. Unknown node
+          identity does not prevent its symptom from affecting that execution's outcome.
       - `syslog` & `health_check`: the node is parsed from the hostname field of the body.
       - `ufmlog`:
         - `ts` can be null, in which case the entry is kept and treated as untimed.
