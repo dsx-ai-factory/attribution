@@ -351,6 +351,9 @@ def validate_headers_and_relics(
                 )
             continue
 
+        if relative_path in DERIVED_TEMPLATE_PATHS:
+            # Mustache comment headers are checked with the template boundary.
+            continue
         has_nvidia_spdx = COPYRIGHT_TAG in text and "NVIDIA CORPORATION" in text
         if not (requires_apache_header(relative_path) or has_nvidia_spdx):
             continue
@@ -889,6 +892,9 @@ def validate_documentation_and_delivery(root: Path, violations: list[str]) -> No
         "expected Apache-2.0 generated header",
         violations,
     )
+    template_copyright = (
+        f"{{{{! {COPYRIGHT_TAG} Copyright (c) 2026{NVIDIA_COPYRIGHT_SUFFIX} }}}}"
+    )
     template_tag = f"{{{{! {APACHE_IDENTIFIER} }}}}"
     template_provenance = (
         "{{! This template is derived from OpenAPI Generator; see ./LICENSE. "
@@ -899,17 +905,18 @@ def validate_documentation_and_delivery(root: Path, violations: list[str]) -> No
         if template_text is None:
             continue
         template_lines = template_text.splitlines()
+        # Provenance comments come first; the NVIDIA SPDX block follows them.
         if (
-            not template_lines
-            or template_lines[0] != template_tag
-            or template_text.count(template_tag) != 1
+            template_lines[2:4] != [template_copyright, template_tag]
+            or template_text.count(COPYRIGHT_TAG) != 1
+            or template_text.count(IDENTIFIER_TAG) != 1
         ):
             violations.append(
                 f"{template_path}: expected exact Apache-2.0 SPDX template tag"
             )
         if (
-            len(template_lines) < 2
-            or template_lines[1] != template_provenance
+            not template_lines
+            or template_lines[0] != template_provenance
             or template_text.count(template_provenance) != 1
         ):
             violations.append(

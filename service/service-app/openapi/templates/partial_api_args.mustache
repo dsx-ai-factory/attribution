@@ -1,6 +1,7 @@
-{{! SPDX-License-Identifier: Apache-2.0 }}
 {{! This template is derived from OpenAPI Generator; see ./LICENSE. OpenAPI Generator does not license generated code; this project applies Apache-2.0 through partial_header.mustache. }}
 {{! Override of openapi-generator's default partial_api_args.mustache (python v7.21). Upstream emits one flat allParams loop, so an optional operation parameter takes a positional slot ahead of _request_timeout and friends: adding a new optional param silently shifts every caller's positional arguments. We split the loop into required-params-first, then a bare "*", then the optional params, which makes every optional param keyword-only and pins the positions of _request_timeout / _request_auth / _content_type / _headers / _host_index. No generator config option produces this (sortParamsByRequiredFlag is not exposed for the python generator and only affects order, not keyword-only-ness), so the template override is the only lever. Re-sync from upstream when bumping openapi-generator. }}
+{{! SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved. }}
+{{! SPDX-License-Identifier: Apache-2.0 }}
 (
         self,
         {{#allParams}}

@@ -872,7 +872,7 @@ outcome_symptom(
     family=XID_FAMILY_SCHEMA,
     outcome="Fail InfraHW",
     priority=OutcomePriority.MEDIUM_BROAD,
-    doc="xid",
+    doc=None,
     hw_cause="Known HW Cause - Node",
     fallback_prefix=True,
     cascade_discards=(
@@ -1532,7 +1532,7 @@ outcome_symptom(
     "NV_ERR_",
     outcome="Fail Undetermined",
     priority=OutcomePriority.LOW_GENERIC,
-    doc="nv-err",
+    doc=None,
     hw_cause="Driver bug",
     fallback_prefix=True,
 )
@@ -1600,7 +1600,7 @@ outcome_symptom(
     "cudaError",
     outcome="Fail User",
     priority=OutcomePriority.LOW_GENERIC,
-    doc="cudaerror",
+    doc=None,
     fallback_prefix=True,
 )
 
@@ -1664,7 +1664,7 @@ outcome_symptom(
     "IB Error-",
     outcome="Fail InfraSW",
     priority=OutcomePriority.LOW_GENERIC,
-    doc="ib-error",
+    doc=None,
     fallback_prefix=True,
 )
 
@@ -1672,7 +1672,7 @@ outcome_symptom(
     "EFA Error-",
     outcome="Fail MultiCategory",
     priority=OutcomePriority.LOW_GENERIC,
-    doc="efa-error",
+    doc=None,
     fallback_prefix=True,
 )
 
@@ -1724,7 +1724,7 @@ outcome_symptom(
     "NVRx node health check failed",
     outcome="Fail MultiCategory",
     priority=OutcomePriority.LOW_GENERIC,
-    doc="nvrx-node-health-check-failed",
+    doc=None,
     fallback_prefix=True,
 )
 
@@ -1732,7 +1732,7 @@ outcome_symptom(
     "NVRx GPU recovery action",
     outcome="Fail MultiCategory",
     priority=OutcomePriority.LOW_GENERIC,
-    doc="nvrx-gpu-recovery-action",
+    doc=None,
     fallback_prefix=True,
 )
 
