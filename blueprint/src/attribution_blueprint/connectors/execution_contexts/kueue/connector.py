@@ -70,6 +70,10 @@ from typing import NamedTuple, NotRequired, TypedDict
 
 from loguru import logger
 
+from attribution_blueprint.connectors.execution_contexts.kueue.attempts import (
+    WorkloadAttempt,
+    attempts_from_workload_history,
+)
 from attribution_blueprint.connectors.execution_contexts.kueue.helpers import (
     POD_JOBSET_LABEL as _POD_JOBSET_LABEL,
     POD_OWNER_LABEL as _POD_OWNER_LABEL,
@@ -137,6 +141,9 @@ class KueueExecutionContext(TypedDict):
     # garbage-collected.
     pod_names: NotRequired[list[str]]
     pod_placements: NotRequired[list[PodPlacement]]
+    owner_uid: NotRequired[str]
+    attempt_boundary: NotRequired[dict]
+    history_observation_refs: NotRequired[list[dict]]
     # Pod name -> `.spec.nodeName`, for connectors that need per-pod node
     # identity. Unscheduled pods are absent.
     pod_nodes: NotRequired[dict[str, str]]
@@ -805,6 +812,41 @@ def _split_csv(value: str) -> list[str]:
     return [piece.strip() for piece in value.split(",") if piece.strip()]
 
 
+def _history_attempt_state(
+    attempt: WorkloadAttempt,
+) -> tuple[str, str]:
+    terminal = attempt.terminal
+    if terminal is None:
+        return (
+            ("RUNNING", "RUNNING")
+            if attempt.open
+            else ("UNKNOWN", "UNKNOWN")
+        )
+    terminal_type = terminal["type"]
+    reason = str(terminal.get("reason") or "")
+    if terminal["kind"] == "Job":
+        if terminal_type == "Complete":
+            return "COMPLETED", "FINISHED_SUCCEEDED"
+        if reason == "DeadlineExceeded":
+            return "TIMEOUT", "FINISHED_FAILED"
+        return "FAILED", "FINISHED_FAILED"
+    if terminal_type == "Finished":
+        return (
+            ("FAILED", "FINISHED_FAILED")
+            if "fail" in reason.lower()
+            else ("COMPLETED", "FINISHED_SUCCEEDED")
+        )
+    if reason.lower() == "preempted":
+        return "PREEMPTED", "EVICTED_PREEMPTED"
+    if reason.lower() == "nodefailures":
+        return "NODE_FAIL", "EVICTED_NODEFAILURES"
+    return "EVICTED", (
+        f"EVICTED_{reason.upper()}"
+        if reason
+        else "EVICTED"
+    )
+
+
 class KueueExecutionContextAdapter:
     """ExecutionContextAdapter that talks to a Kubernetes cluster over the
     Kubernetes API.
@@ -847,6 +889,11 @@ class KueueExecutionContextAdapter:
             raise ValueError("placement_records_enabled must be a bool")
         self.placement_records_enabled = placement_records_enabled
         self.placement_reader = placement_reader
+        self.history_reader = (
+            placement_reader
+            if callable(getattr(placement_reader, "find_histories", None))
+            else None
+        )
         self.event_max_age_seconds = event_max_age_seconds
         self.prometheus_placement_resolver = prometheus_placement_resolver
 
@@ -871,6 +918,7 @@ class KueueExecutionContextAdapter:
         unknown names.
         """
         workloads: list[dict] = []
+        retained_contexts: list[KueueExecutionContext] = []
         for ref in ids:
             ns, _, name = ref.partition("/")
             if not name:
@@ -881,6 +929,20 @@ class KueueExecutionContextAdapter:
                         f"use `<namespace>/<name>` or configure eca.kueue.namespace"
                     )
                 ns, name = self.namespace, ref
+            if self.history_reader is not None:
+                histories = self.history_reader.find_histories(
+                    ns,
+                    "Workload",
+                    name=name,
+                )
+                if histories:
+                    retained_contexts.extend(
+                        self._contexts_from_histories(
+                            histories,
+                            workload_name=name,
+                        )
+                    )
+                    continue
             try:
                 workloads.append(
                     self._kubernetes.get_one(
@@ -890,7 +952,109 @@ class KueueExecutionContextAdapter:
             except KubernetesClientError as error:
                 if error.status != 404:
                     raise
-        return self._finalize(workloads)
+        return [
+            *retained_contexts,
+            *self._finalize(workloads),
+        ]
+
+    def _contexts_from_histories(
+        self,
+        histories: list[dict],
+        *,
+        workload_name: str,
+    ) -> list[KueueExecutionContext]:
+        assert self.placement_reader is not None
+        now = datetime.now(tz=timezone.utc)
+        contexts: list[KueueExecutionContext] = []
+        for history in histories:
+            workload_uids = {
+                metadata["uid"]
+                for observation in history.get("observations") or []
+                if observation.get("kind") == "Workload"
+                and (metadata := observation.get("metadata") or {}).get("uid")
+            }
+            history_placements = [
+                PlacementRecord.from_resource(resource)
+                for resource in history.get("placements") or []
+            ]
+            placements = {
+                uid: history_placements
+                for uid in workload_uids
+            }
+            for attempt in attempts_from_workload_history(
+                history,
+                workload_name=workload_name,
+                now=now,
+            ):
+                contexts.append(
+                    self._context_from_history_attempt(
+                        attempt,
+                        placements.get(attempt.workload_uid, []),
+                    )
+                )
+        return contexts
+
+    @staticmethod
+    def _context_from_history_attempt(
+        attempt: WorkloadAttempt,
+        placements: list[PlacementRecord],
+    ) -> KueueExecutionContext:
+        attempt_placements = [
+            placement
+            for placement in placements
+            if placement.pod_uid in attempt.pod_uids
+        ]
+        state, kueue_state = _history_attempt_state(attempt)
+        context: KueueExecutionContext = {
+            "id": attempt.attempt_id,
+            "attempt_id": attempt.attempt_id,
+            "workload_type": "kueue",
+            "scheduler": "kueue",
+            "job_id": f"{attempt.namespace}/{attempt.workload_name}",
+            "workload_uid": attempt.workload_uid,
+            "namespace": attempt.namespace,
+            "name": attempt.workload_name,
+            "nodes": sorted(
+                {
+                    placement.node_name
+                    for placement in attempt_placements
+                }
+            ),
+            "pod_names": sorted(
+                {
+                    placement.pod_name
+                    for placement in attempt_placements
+                }
+            ),
+            "pod_placements": [
+                {
+                    "pod_uid": placement.pod_uid,
+                    "pod_name": placement.pod_name,
+                    "node_name": placement.node_name,
+                    "source": "kubernetes_daemon",
+                }
+                for placement in sorted(
+                    attempt_placements,
+                    key=lambda item: item.pod_uid,
+                )
+            ],
+            "start_time": attempt.start_time,
+            "end_time": attempt.end_time,
+            "state": state,
+            "kueue_state": kueue_state,
+            "attempt_boundary": {
+                "version": 1,
+                "admission": attempt.admission_key,
+                "restartAttempt": attempt.restart_attempt,
+                "endObserved": attempt.end_observed,
+            },
+            "history_observation_refs": list(
+                attempt.observation_refs
+            ),
+        }
+        if attempt.owner_uid:
+            context["owner_uid"] = attempt.owner_uid
+        return context
 
     def discover_by_time_range(
         self,
