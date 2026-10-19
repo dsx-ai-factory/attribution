@@ -5,7 +5,17 @@ from __future__ import annotations
 
 from typing import Protocol
 
-from attribution_blueprint.kubernetes.daemon.models import ResourceIdentity
+from attribution_blueprint.kubernetes.daemon.models import (
+    OwnerReference,
+    ResourceIdentity,
+    ResourceObservation,
+)
+from attribution_blueprint.kubernetes.daemon.observation_queries import (
+    controller_owner_reference,
+    latest_observation_for_uid,
+    observation_identity,
+)
+from attribution_blueprint.kubernetes.daemon.store import ObservationJournal
 
 
 class ResolutionPending(RuntimeError):
@@ -31,10 +41,20 @@ class AssociatedResourceResolver(Protocol):
 class KubernetesOwnershipResolver:
     """Resolve a Pod's UID-verified Job or JobSet owner without a scheduler."""
 
-    def __init__(self, batch_api, custom_api, *, jobset_version: str = "v1alpha2"):
+    def __init__(
+        self,
+        batch_api,
+        custom_api,
+        *,
+        jobset_version: str = "v1alpha2",
+        journal: ObservationJournal | None = None,
+        cluster_id: str = "default",
+    ):
         self.batch_api = batch_api
         self.custom_api = custom_api
         self.jobset_version = jobset_version
+        self.journal = journal
+        self.cluster_id = cluster_id
 
     def resolve(self, pod: dict) -> ResourceIdentity:
         from kubernetes.client.exceptions import ApiException
@@ -50,8 +70,17 @@ class KubernetesOwnershipResolver:
         metadata = pod.get("metadata") or {}
         namespace = metadata.get("namespace")
         pod_owner = _controller_owner(pod, "Job")
-        if not namespace or not pod_owner or not pod_owner.get("name"):
+        if (
+            not namespace
+            or not pod_owner
+            or not pod_owner.get("name")
+            or not pod_owner.get("uid")
+        ):
             raise UnsupportedOwner("Pod is not controlled by a batch/v1 Job")
+
+        journal_owner = self._resolve_from_journal(namespace, pod_owner)
+        if journal_owner is not None:
+            return journal_owner
 
         job = self.batch_api.read_namespaced_job(pod_owner["name"], namespace).to_dict()
         job = normalize_resource(job, api_version="batch/v1", kind="Job")
@@ -71,6 +100,59 @@ class KubernetesOwnershipResolver:
         _verify_uid("JobSet", namespace, jobset_ref, jobset)
         return _identity(jobset, namespace, api_version=f"jobset.x-k8s.io/{self.jobset_version}", kind="JobSet")
 
+    def _resolve_from_journal(
+        self,
+        namespace: str,
+        pod_owner: dict,
+    ) -> ResourceIdentity | None:
+        if self.journal is None:
+            return None
+        job = latest_observation_for_uid(
+            self.journal,
+            self.cluster_id,
+            namespace,
+            pod_owner["uid"],
+        )
+        if job is None:
+            return None
+        _verify_observation("Job", namespace, pod_owner, job)
+        job_identity = observation_identity(job)
+
+        jobset_ref = controller_owner_reference(job, "JobSet")
+        if jobset_ref is None:
+            return job_identity
+        jobset = latest_observation_for_uid(
+            self.journal,
+            self.cluster_id,
+            namespace,
+            jobset_ref.uid,
+        )
+        if jobset is not None:
+            _verify_observation("JobSet", namespace, jobset_ref, jobset)
+            return observation_identity(jobset)
+
+        if self.custom_api is None:
+            raise ResolutionPending("JobSet owner is not retained or visible")
+        live_jobset = self.custom_api.get_namespaced_custom_object(
+            "jobset.x-k8s.io",
+            self.jobset_version,
+            namespace,
+            "jobsets",
+            jobset_ref.name,
+        )
+        _verify_uid(
+            "JobSet",
+            namespace,
+            {"name": jobset_ref.name, "uid": jobset_ref.uid},
+            live_jobset,
+        )
+        return _identity(
+            live_jobset,
+            namespace,
+            api_version=f"jobset.x-k8s.io/{self.jobset_version}",
+            kind="JobSet",
+        )
+
 
 def _controller_owner(resource: dict, kind: str | None = None) -> dict | None:
     owners = [
@@ -88,6 +170,26 @@ def _verify_uid(kind: str, namespace: str, reference: dict, resource: dict) -> N
         raise StaleOwnerReference(
             f"{kind} {namespace}/{reference.get('name')} uid mismatch "
             f"(reference uid={expected_uid!r}, fetched uid={actual_uid!r})"
+        )
+
+
+def _verify_observation(
+    kind: str,
+    namespace: str,
+    reference: dict | OwnerReference,
+    observation: ResourceObservation,
+) -> None:
+    expected_uid = reference.uid if isinstance(reference, OwnerReference) else reference.get("uid")
+    expected_name = reference.name if isinstance(reference, OwnerReference) else reference.get("name")
+    if (
+        observation.uid != expected_uid
+        or observation.kind != kind
+        or observation.namespace != namespace
+        or observation.name != expected_name
+    ):
+        raise StaleOwnerReference(
+            f"{kind} {namespace}/{expected_name} journal identity mismatch "
+            f"(reference uid={expected_uid!r}, observed uid={observation.uid!r})"
         )
 
 
