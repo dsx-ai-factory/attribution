@@ -5,6 +5,8 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 
 from attribution_blueprint.kubernetes.daemon.models import PlacementRecord
@@ -33,6 +35,13 @@ CREATE TABLE IF NOT EXISTS placement_resource (
 );
 CREATE INDEX IF NOT EXISTS placement_resource_identity
     ON placement_resource(namespace, resource_uid);
+CREATE TABLE IF NOT EXISTS placement_deletion (
+    pod_uid TEXT PRIMARY KEY,
+    deleted_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY(pod_uid) REFERENCES placement_record(pod_uid) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS placement_deletion_expiration
+    ON placement_deletion(deleted_at);
 """
 
 
@@ -58,7 +67,7 @@ class SQLitePlacementStore:
         self.timeout_seconds = timeout_seconds
         self.retention_days = retention_days
         Path(path).parent.mkdir(parents=True, exist_ok=True)
-        with self._connect() as connection:
+        with self._connection() as connection:
             self._validate_schema(connection)
             connection.executescript(_SCHEMA)
             connection.execute("PRAGMA user_version = 2")
@@ -73,8 +82,17 @@ class SQLitePlacementStore:
         connection.execute("PRAGMA synchronous = FULL")
         return connection
 
+    @contextmanager
+    def _connection(self) -> Iterator[sqlite3.Connection]:
+        connection = self._connect()
+        try:
+            with connection:
+                yield connection
+        finally:
+            connection.close()
+
     def create(self, record: PlacementRecord) -> CreateResult:
-        with self._connect() as connection:
+        with self._connection() as connection:
             connection.execute("BEGIN IMMEDIATE")
             self._prune_expired(connection)
             row = connection.execute(
@@ -113,7 +131,7 @@ class SQLitePlacementStore:
             return CreateResult.UPDATED
 
     def get_by_pod_uid(self, pod_uid: str) -> PlacementRecord | None:
-        with self._connect() as connection:
+        with self._connection() as connection:
             self._prune_expired(connection)
             row = connection.execute(
                 "SELECT raw_json FROM placement_record WHERE pod_uid = ?",
@@ -126,7 +144,7 @@ class SQLitePlacementStore:
         return [record] if record is not None and record.namespace == namespace else []
 
     def list_for_resource(self, namespace: str, resource_uid: str) -> list[PlacementRecord]:
-        with self._connect() as connection:
+        with self._connection() as connection:
             self._prune_expired(connection)
             rows = connection.execute(
                 """
@@ -142,7 +160,7 @@ class SQLitePlacementStore:
         return [PlacementRecord.from_resource(json.loads(row["raw_json"])) for row in rows]
 
     def list_for_owner(self, namespace: str, owner_uid: str) -> list[PlacementRecord]:
-        with self._connect() as connection:
+        with self._connection() as connection:
             self._prune_expired(connection)
             rows = connection.execute(
                 """
@@ -153,6 +171,19 @@ class SQLitePlacementStore:
                 (namespace, owner_uid),
             ).fetchall()
         return [PlacementRecord.from_resource(json.loads(row["raw_json"])) for row in rows]
+
+    def mark_deleted(self, pod_uid: str) -> None:
+        with self._connection() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            self._prune_expired(connection)
+            connection.execute(
+                """
+                INSERT INTO placement_deletion(pod_uid)
+                SELECT pod_uid FROM placement_record WHERE pod_uid = ?
+                ON CONFLICT(pod_uid) DO UPDATE SET deleted_at = CURRENT_TIMESTAMP
+                """,
+                (pod_uid,),
+            )
 
     def _insert(self, connection: sqlite3.Connection, record: PlacementRecord) -> None:
         raw_json = json.dumps(record.to_resource(), separators=(",", ":"), sort_keys=True)
@@ -218,7 +249,14 @@ class SQLitePlacementStore:
 
     def _prune_expired(self, connection: sqlite3.Connection) -> None:
         connection.execute(
-            "DELETE FROM placement_record WHERE updated_at < datetime('now', ?)",
+            """
+            DELETE FROM placement_record
+            WHERE pod_uid IN (
+                SELECT pod_uid
+                FROM placement_deletion
+                WHERE deleted_at < datetime('now', ?)
+            )
+            """,
             (f"-{self.retention_days} days",),
         )
 

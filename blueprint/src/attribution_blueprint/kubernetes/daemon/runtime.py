@@ -51,7 +51,7 @@ class KubernetesDaemon:
         self.watch_timeout_seconds = watch_timeout_seconds
         self.max_resolution_attempts = max_resolution_attempts
         self.health = HealthState()
-        self.items: queue.Queue[dict] = queue.Queue(maxsize=queue_size)
+        self.items: queue.Queue[tuple[dict, bool]] = queue.Queue(maxsize=queue_size)
         self.worker_count = workers
         self.stop_event = threading.Event()
 
@@ -87,7 +87,7 @@ class KubernetesDaemon:
                 ):
                     pod_dict = _as_dict(event.get("object"))
                     resource_version = (pod_dict.get("metadata") or {}).get("resourceVersion") or resource_version
-                    self._enqueue(pod_dict)
+                    self._enqueue(pod_dict, deleted=event.get("type") == "DELETED")
                     if self.stop_event.is_set():
                         watcher.stop()
                         break
@@ -108,14 +108,14 @@ class KubernetesDaemon:
     def stop(self) -> None:
         self.stop_event.set()
 
-    def _enqueue(self, pod: dict) -> None:
+    def _enqueue(self, pod: dict, *, deleted: bool = False) -> None:
         # Unbound Pod ingestion belongs to the reusable watch interface in
         # step 3. The placement foundation remains bound-Pod-only for now.
         if not (pod.get("spec") or {}).get("nodeName"):
             return
         while not self.stop_event.is_set():
             try:
-                self.items.put(pod, timeout=0.5)
+                self.items.put((pod, deleted), timeout=0.5)
                 self.health.update(queue_saturated=False)
                 return
             except queue.Full:
@@ -125,11 +125,11 @@ class KubernetesDaemon:
     def _worker(self) -> None:
         while not self.stop_event.is_set() or not self.items.empty():
             try:
-                pod = self.items.get(timeout=0.5)
+                pod, deleted = self.items.get(timeout=0.5)
             except queue.Empty:
                 continue
             try:
-                self._record(pod)
+                self._record(pod, deleted=deleted)
             except Exception:
                 # A malformed observation or an unexpected enrichment bug
                 # must never terminate a recording worker.
@@ -140,7 +140,15 @@ class KubernetesDaemon:
             finally:
                 self.items.task_done()
 
-    def _record(self, pod: dict) -> None:
+    def _record(self, pod: dict, *, deleted: bool = False) -> None:
+        pod_uid = (pod.get("metadata") or {}).get("uid")
+        try:
+            self._record_placement(pod)
+        finally:
+            if deleted and pod_uid:
+                self._mark_deleted(pod_uid)
+
+    def _record_placement(self, pod: dict) -> None:
         failure_reason = pod_node_failure_reason(pod) or _pod_container_exit_reason(pod)
         base = PlacementRecord.for_pod(pod, node_failure_reason=failure_reason)
         result = self._persist(base, "scheduler-neutral Pod placement")
@@ -220,6 +228,13 @@ class KubernetesDaemon:
             return None
         self.health.update(persistence_failed=False)
         return result
+
+    def _mark_deleted(self, pod_uid: str) -> None:
+        try:
+            self.store.mark_deleted(pod_uid)
+        except Exception:
+            self.health.update(persistence_failed=True)
+            logger.exception(f"failed to persist deletion for Pod UID {pod_uid}")
 
 
 def _as_dict(resource) -> dict:
