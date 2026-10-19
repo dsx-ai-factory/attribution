@@ -1,6 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
+import sqlite3
 from dataclasses import replace
 
 import pytest
@@ -43,6 +44,51 @@ def test_unresolved_placement_can_be_enriched_later(tmp_path):
 
     assert store.create(_record(associated=True)) == CreateResult.UPDATED
     assert store.list_for_resource("team-a", "admission-uid-1") == [_record(associated=True)]
+
+
+def test_active_placement_does_not_expire(tmp_path):
+    path = tmp_path / "placements.db"
+    store = SQLitePlacementStore(str(path), retention_days=1)
+    record = _record(associated=False)
+    store.create(record)
+    with sqlite3.connect(path) as connection:
+        connection.execute(
+            "UPDATE placement_record SET updated_at = datetime('now', '-2 days')"
+        )
+
+    assert store.get_by_pod_uid(record.pod_uid) == record
+
+
+def test_deleted_placement_expires_after_retention_window(tmp_path):
+    path = tmp_path / "placements.db"
+    store = SQLitePlacementStore(str(path), retention_days=1)
+    record = _record(associated=False)
+    store.create(record)
+    store.mark_deleted(record.pod_uid)
+    with sqlite3.connect(path) as connection:
+        connection.execute(
+            "UPDATE placement_deletion SET deleted_at = datetime('now', '-2 days')"
+        )
+
+    assert store.get_by_pod_uid(record.pod_uid) is None
+
+
+def test_store_closes_connection_after_operation(tmp_path, monkeypatch):
+    store = SQLitePlacementStore(str(tmp_path / "placements.db"))
+
+    class TrackingConnection(sqlite3.Connection):
+        closed = False
+
+        def close(self):
+            self.closed = True
+            super().close()
+
+    connection = sqlite3.connect(store.path, factory=TrackingConnection)
+    connection.row_factory = sqlite3.Row
+    monkeypatch.setattr(store, "_connect", lambda: connection)
+
+    assert store.get_by_pod_uid("missing") is None
+    assert connection.closed
 
 
 def test_multiple_associated_resources_are_queryable(tmp_path):

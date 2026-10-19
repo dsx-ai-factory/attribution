@@ -1,6 +1,8 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
+import sqlite3
+
 from attribution_blueprint.kubernetes.daemon.models import ResourceIdentity
 from attribution_blueprint.kubernetes.daemon.resolvers import ResolutionPending
 from attribution_blueprint.kubernetes.daemon.runtime import KubernetesDaemon
@@ -84,6 +86,20 @@ def test_retains_owner_when_optional_scheduler_resolution_exhausts(tmp_path):
     assert record.associated_resources == ()
 
 
+def test_deleted_event_starts_placement_retention(tmp_path):
+    path = tmp_path / "placements.db"
+    store = SQLitePlacementStore(str(path))
+    daemon = KubernetesDaemon(core_api=None, store=store, namespace="team-a")
+
+    daemon._record(_pod(), deleted=True)
+
+    with sqlite3.connect(path) as connection:
+        marker = connection.execute(
+            "SELECT pod_uid FROM placement_deletion"
+        ).fetchone()
+    assert marker == ("pod-uid-1",)
+
+
 def test_owner_enrichment_write_failure_does_not_escape_or_kill_recording():
     store = _FailOnEnrichmentStore()
     daemon = KubernetesDaemon(
@@ -102,12 +118,13 @@ def test_owner_enrichment_write_failure_does_not_escape_or_kill_recording():
 def test_worker_survives_unexpected_recording_failure(tmp_path):
     store = SQLitePlacementStore(str(tmp_path / "placements.db"))
     daemon = KubernetesDaemon(core_api=None, store=store, namespace="team-a")
-    daemon.items.put(_pod())
-    daemon.items.put(_pod())
+    daemon.items.put((_pod(), False))
+    daemon.items.put((_pod(), False))
     daemon.stop_event.set()
     calls = 0
 
-    def fail_once(_pod):
+    def fail_once(_pod, *, deleted=False):
+        del deleted
         nonlocal calls
         calls += 1
         if calls == 1:
