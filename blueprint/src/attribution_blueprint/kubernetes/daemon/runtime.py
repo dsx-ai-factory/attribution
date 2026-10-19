@@ -72,9 +72,7 @@ class KubernetesDaemon:
             try:
                 if resource_version is None:
                     listing = self.core_api.list_namespaced_pod(self.namespace)
-                    resource_version = listing.metadata.resource_version
-                    for pod in listing.items:
-                        self._enqueue(_as_dict(pod))
+                    resource_version = self._enqueue_listing(listing)
                     self.health.update(initial_list_complete=True)
 
                 watcher = Watch()
@@ -107,6 +105,18 @@ class KubernetesDaemon:
 
     def stop(self) -> None:
         self.stop_event.set()
+
+    def _enqueue_listing(self, listing) -> str:
+        pods = [_as_dict(pod) for pod in listing.items]
+        for pod in pods:
+            self._enqueue(pod)
+        active_pod_uids = {
+            uid
+            for pod in pods
+            if (uid := (pod.get("metadata") or {}).get("uid"))
+        }
+        self.store.reconcile_active_pods(self.namespace, active_pod_uids)
+        return listing.metadata.resource_version
 
     def _enqueue(self, pod: dict, *, deleted: bool = False) -> None:
         # Unbound Pod ingestion belongs to the reusable watch interface in

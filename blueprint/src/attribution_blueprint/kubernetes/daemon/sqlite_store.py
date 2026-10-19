@@ -175,15 +175,42 @@ class SQLitePlacementStore:
     def mark_deleted(self, pod_uid: str) -> None:
         with self._connection() as connection:
             connection.execute("BEGIN IMMEDIATE")
-            self._prune_expired(connection)
             connection.execute(
                 """
                 INSERT INTO placement_deletion(pod_uid)
                 SELECT pod_uid FROM placement_record WHERE pod_uid = ?
-                ON CONFLICT(pod_uid) DO UPDATE SET deleted_at = CURRENT_TIMESTAMP
+                ON CONFLICT(pod_uid) DO NOTHING
                 """,
                 (pod_uid,),
             )
+            self._prune_expired(connection)
+
+    def reconcile_active_pods(
+        self,
+        namespace: str,
+        active_pod_uids: set[str],
+    ) -> None:
+        with self._connection() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            connection.execute(
+                "CREATE TEMP TABLE active_pod_uid(pod_uid TEXT PRIMARY KEY) WITHOUT ROWID"
+            )
+            connection.executemany(
+                "INSERT INTO active_pod_uid(pod_uid) VALUES (?)",
+                [(pod_uid,) for pod_uid in active_pod_uids],
+            )
+            connection.execute(
+                """
+                INSERT INTO placement_deletion(pod_uid)
+                SELECT record.pod_uid
+                FROM placement_record AS record
+                LEFT JOIN active_pod_uid AS active USING (pod_uid)
+                WHERE record.namespace = ? AND active.pod_uid IS NULL
+                ON CONFLICT(pod_uid) DO NOTHING
+                """,
+                (namespace,),
+            )
+            self._prune_expired(connection)
 
     def _insert(self, connection: sqlite3.Connection, record: PlacementRecord) -> None:
         raw_json = json.dumps(record.to_resource(), separators=(",", ":"), sort_keys=True)

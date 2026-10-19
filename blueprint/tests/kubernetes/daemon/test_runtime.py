@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import sqlite3
+from types import SimpleNamespace
 
 from attribution_blueprint.kubernetes.daemon.models import ResourceIdentity
 from attribution_blueprint.kubernetes.daemon.resolvers import ResolutionPending
@@ -65,6 +66,23 @@ def test_records_placement_before_any_resolution(tmp_path):
     assert record.node_name == "node-a"
     assert record.owner is None
     assert record.associated_resources == ()
+
+
+def test_complete_listing_reconciles_absent_placements(mocker):
+    store = mocker.Mock()
+    daemon = KubernetesDaemon(core_api=None, store=store, namespace="team-a")
+    pod = _pod()
+    listing = SimpleNamespace(
+        items=[pod],
+        metadata=SimpleNamespace(resource_version="42"),
+    )
+
+    assert daemon._enqueue_listing(listing) == "42"
+    store.reconcile_active_pods.assert_called_once_with(
+        "team-a",
+        {"pod-uid-1"},
+    )
+    assert daemon.items.get_nowait() == (pod, False)
 
 
 def test_retains_owner_when_optional_scheduler_resolution_exhausts(tmp_path):

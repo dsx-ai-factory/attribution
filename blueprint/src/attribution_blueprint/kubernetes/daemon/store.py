@@ -33,3 +33,9 @@ class PlacementStore(PlacementReader, Protocol):
     def create(self, record: PlacementRecord) -> CreateResult: ...
 
     def mark_deleted(self, pod_uid: str) -> None: ...
+
+    def reconcile_active_pods(
+        self,
+        namespace: str,
+        active_pod_uids: set[str],
+    ) -> None: ...
