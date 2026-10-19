@@ -76,7 +76,7 @@ def _controller_owner(resource: dict, kind: str | None = None) -> dict | None:
     owners = [
         owner
         for owner in (resource.get("metadata") or {}).get("ownerReferences") or []
-        if owner.get("controller", True) and (kind is None or owner.get("kind") == kind)
+        if owner.get("controller") is True and (kind is None or owner.get("kind") == kind)
     ]
     return owners[0] if len(owners) == 1 else None
 
