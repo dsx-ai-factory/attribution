@@ -17,9 +17,10 @@ Emits one workload-level context per PodGroup, with these KAI specifics:
     nodes              Union of .spec.nodeName across the member Pods
 
 Member Pods are joined on the `pod-group-name` annotation plus namespace,
-then validated against the exact owning Job UID. For JobSets, the valid UIDs
-come from child Jobs whose controller points to the current JobSet UID. KAI
-can create a PodGroup after its Pods, so creation times are not used.
+then validated against the exact owning Job UID and the time Kubernetes
+recorded the PodGroup annotation assignment. For JobSets, the valid UIDs come
+from child Jobs whose controller points to the current JobSet UID. KAI can
+create a PodGroup after its Pods, so Pod creation times are not used.
 
 The owner comes from the `kai.scheduler/top-owner-metadata` annotation, or
 else the PodGroup's controller ownerReference. Only PodGroups owned by a
@@ -120,11 +121,27 @@ def _index_pods_by_pod_group(pods: list[dict]) -> dict[tuple[str, str], list[dic
     return index
 
 
-def _member_pods(owner_job_uids: set[str], pods: list[dict]) -> list[dict]:
+def _pod_group_assignment_time(pod: dict) -> datetime | None:
+    """When managed fields record that `pod-group-name` was assigned."""
+    times = []
+    for entry in (pod.get("metadata") or {}).get("managedFields") or []:
+        fields = (entry or {}).get("fieldsV1") or {}
+        annotations = ((fields.get("f:metadata") or {}).get("f:annotations") or {})
+        if "f:pod-group-name" not in annotations:
+            continue
+        if (assigned := _parse_dt(entry.get("time"))) is not None:
+            times.append(assigned)
+    return max(times) if times else None
+
+
+def _member_pods(podgroup_created: datetime, owner_job_uids: set[str], pods: list[dict]) -> list[dict]:
     """Return Pods controlled by the current Job or JobSet child Jobs.
 
     A recreated PodGroup reuses its name, so name-and-namespace alone would
-    also match Pods left over from the earlier incarnation.
+    also match Pods left over from the earlier incarnation. The Pod annotation
+    assignment is recorded after KAI creates the PodGroup, even when the Pod
+    itself was created first. Pods without that incarnation signal are
+    ambiguous and cannot safely contribute timestamps, nodes, or logs.
     """
     return [
         pod
@@ -132,6 +149,8 @@ def _member_pods(owner_job_uids: set[str], pods: list[dict]) -> list[dict]:
         if (controller := _controller_owner(pod.get("metadata") or {})) is not None
         and controller["kind"] == "Job"
         and controller["uid"] in owner_job_uids
+        and (assigned := _pod_group_assignment_time(pod)) is not None
+        and assigned >= podgroup_created
     ]
 
 
@@ -272,7 +291,7 @@ def _parse_pod_group(
         logger.warning(f"podgroup {namespace}/{name} has no creationTimestamp; skipping")
         return None
 
-    members = _member_pods(owner_job_uids, pods)
+    members = _member_pods(start_time, owner_job_uids, pods)
     member_starts = [
         created
         for pod in members
