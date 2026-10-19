@@ -58,10 +58,70 @@ def serve_api(
                             requested_namespace,
                             controller_uid,
                             observations,
+                            _placements_for_observations(
+                                evidence_store,
+                                observations,
+                            ),
                         )
                     except Exception:
                         logger.exception("execution history lookup failed")
                         status, body = 500, {"error": "execution history lookup failed"}
+            elif parsed.path == "/v1/histories":
+                query = parse_qs(parsed.query)
+                requested_namespace = (query.get("namespace") or [""])[0]
+                kind = (query.get("kind") or [""])[0]
+                name = (query.get("name") or [None])[0]
+                if not requested_namespace or not kind:
+                    status, body = 400, {
+                        "error": "namespace and kind are required"
+                    }
+                elif requested_namespace != namespace:
+                    status, body = 403, {
+                        "error": f"this daemon only serves namespace {namespace!r}, got {requested_namespace!r}"
+                    }
+                else:
+                    try:
+                        candidates = evidence_store.list_latest_observations_for_kind(
+                            cluster_id,
+                            requested_namespace,
+                            kind,
+                        )
+                        if name:
+                            candidates = [
+                                candidate
+                                for candidate in candidates
+                                if candidate.name == name
+                            ]
+                        histories = []
+                        seen_controllers: set[str] = set()
+                        for candidate in candidates:
+                            controller_uid = _controller_uid(candidate) or candidate.uid
+                            if controller_uid in seen_controllers:
+                                continue
+                            seen_controllers.add(controller_uid)
+                            observations = evidence_store.list_observations_for_controller(
+                                cluster_id,
+                                requested_namespace,
+                                controller_uid,
+                            )
+                            histories.append(
+                                _history_response(
+                                    cluster_id,
+                                    requested_namespace,
+                                    controller_uid,
+                                    observations,
+                                    _placements_for_observations(
+                                        evidence_store,
+                                        observations,
+                                    ),
+                                )
+                            )
+                        status, body = 200, {"items": histories}
+                    except Exception:
+                        logger.exception("execution history discovery failed")
+                        status, body = 500, {
+                            "error": "execution history discovery failed"
+                        }
             elif parsed.path == "/v1/placements":
                 query = parse_qs(parsed.query)
                 requested_namespace = (query.get("namespace") or [""])[0]
@@ -105,6 +165,7 @@ def _history_response(
     namespace: str,
     controller_uid: str,
     observations: list[ResourceObservation],
+    placements: list[dict],
 ) -> dict:
     resources: dict[str, dict] = {}
     relationships: dict[tuple[str, str, bool], dict] = {}
@@ -138,6 +199,7 @@ def _history_response(
         "resources": list(resources.values()),
         "relationships": list(relationships.values()),
         "observations": [_observation_response(observation) for observation in observations],
+        "placements": placements,
     }
 
 
@@ -187,3 +249,29 @@ def _resource_identity(
         "name": name,
         "uid": uid,
     }
+
+
+def _controller_uid(observation: ResourceObservation) -> str | None:
+    controllers = [
+        owner.uid
+        for owner in observation.owner_references
+        if owner.controller
+    ]
+    return controllers[0] if len(controllers) == 1 else None
+
+
+def _placements_for_observations(
+    evidence_store: PlacementStore,
+    observations: list[ResourceObservation],
+) -> list[dict]:
+    records = {
+        record.pod_uid: record
+        for observation in observations
+        if observation.kind == "Pod"
+        and (record := evidence_store.get_by_pod_uid(observation.uid))
+        is not None
+    }
+    return [
+        records[pod_uid].to_resource()
+        for pod_uid in sorted(records)
+    ]
