@@ -80,15 +80,11 @@ from attribution_blueprint.connectors.execution_contexts.kubernetes_helpers impo
 )
 from attribution_blueprint.connectors.execution_contexts.kueue.helpers import (
     POD_JOBSET_LABEL as _POD_JOBSET_LABEL,
-    jobs_for_workload as _jobs_for_workload,
-    owner_job_uids as _owner_job_uids,
-    pod_matches_selector as _pod_matches_selector,
-    pod_selector_for as _pod_selector_for,
+    POD_OWNER_LABEL as _POD_OWNER_LABEL,
+    controller_owner as _controller_owner,
 )
-from attribution_blueprint.connectors.execution_contexts.kueue.pod_placement.models import (
+from attribution_blueprint.connectors.execution_contexts.kueue.prometheus_placement import (
     PlacementQuery,
-)
-from attribution_blueprint.connectors.execution_contexts.kueue.pod_placement.store import (
     PlacementResolver,
 )
 from attribution_blueprint.kubernetes.daemon.models import PlacementRecord, PodPlacement
@@ -158,6 +154,77 @@ _COND_REQUEUED = "Requeued"
 # Native Workload Evicted reasons from the Kueue v1beta1 API.
 _EVICTED_PREEMPTED = "EVICTED_PREEMPTED"
 _EVICTED_NODE_FAILURES = "EVICTED_NODEFAILURES"
+
+
+def _pod_selector_for(workload: dict) -> tuple[str, str, str] | None:
+    """Return the namespace-scoped Pod selector for a supported owner."""
+    owner = _controller_owner(workload)
+    if owner is None:
+        return None
+    namespace = (workload.get("metadata") or {}).get("namespace") or "default"
+    if owner.get("kind") == "Job" and owner.get("uid"):
+        return namespace, _POD_OWNER_LABEL, owner["uid"]
+    if owner.get("kind") == "JobSet" and owner.get("name"):
+        return namespace, _POD_JOBSET_LABEL, owner["name"]
+    return None
+
+
+def _pod_matches_selector(pod: dict, selector: tuple[str, str, str]) -> bool:
+    """Return whether a Pod matches a namespace-scoped owner selector."""
+    namespace, label_key, label_value = selector
+    metadata = pod.get("metadata") or {}
+    return (
+        metadata.get("namespace") == namespace
+        and (metadata.get("labels") or {}).get(label_key) == label_value
+    )
+
+
+def _jobset_owner_uid(job: dict) -> str | None:
+    """Return the UID of the JobSet that controls a Job."""
+    owner = _controller_owner(job, "JobSet")
+    return owner.get("uid") if owner else None
+
+
+def _jobs_for_workload(workload: dict, owner_jobs: dict[str, dict]) -> list[dict]:
+    """Return UID-verified direct or JobSet child Jobs for one Workload."""
+    owner = _controller_owner(workload)
+    if owner is None:
+        return []
+    namespace = (workload.get("metadata") or {}).get("namespace") or ""
+    owner_name = owner.get("name")
+    owner_uid = owner.get("uid")
+    if not owner_name:
+        return []
+    if owner.get("kind") == "Job":
+        job = owner_jobs.get(f"{namespace}/{owner_name}")
+        if job is None or (job.get("metadata") or {}).get("uid") != owner_uid:
+            return []
+        return [job]
+    if owner.get("kind") == "JobSet":
+        return [
+            job
+            for job in owner_jobs.values()
+            if (job.get("metadata") or {}).get("namespace") == namespace
+            and ((job.get("metadata") or {}).get("labels") or {}).get(_POD_JOBSET_LABEL) == owner_name
+            and _jobset_owner_uid(job) == owner_uid
+        ]
+    return []
+
+
+def _owner_job_uids(workload: dict, owner_jobs: dict[str, dict]) -> set[str]:
+    """Return exact direct or child Job UIDs belonging to one Workload."""
+    owner = _controller_owner(workload)
+    if owner is None:
+        return set()
+    if owner.get("kind") == "Job" and owner.get("uid"):
+        return {owner["uid"]}
+    if owner.get("kind") == "JobSet":
+        return {
+            uid
+            for job in _jobs_for_workload(workload, owner_jobs)
+            if (uid := (job.get("metadata") or {}).get("uid"))
+        }
+    return set()
 
 
 def _parse_dt(value: str | None) -> datetime | None:

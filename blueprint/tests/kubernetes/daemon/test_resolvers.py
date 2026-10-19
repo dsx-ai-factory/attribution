@@ -5,7 +5,11 @@ from datetime import datetime, timezone
 
 import pytest
 
-from attribution_blueprint.kubernetes.daemon.models import ResourceIdentity
+from attribution_blueprint.kubernetes.daemon.models import (
+    OwnerReference,
+    ResourceIdentity,
+    ResourceObservation,
+)
 from attribution_blueprint.kubernetes.daemon.resolvers import (
     KubernetesOwnershipResolver,
     StaleOwnerReference,
@@ -43,6 +47,39 @@ class _CustomApi:
             "trainer-set",
         )
         return self.jobset
+
+
+class _Journal:
+    def __init__(self, observations):
+        self.observations = observations
+
+    def list_observations_for_uid(self, cluster_id, namespace, uid):
+        assert (cluster_id, namespace) == ("cluster-a", "team-a")
+        return self.observations.get(uid, [])
+
+
+class _UnexpectedApi:
+    def __getattr__(self, name):
+        raise AssertionError(f"live API should not be used: {name}")
+
+
+def _observation(*, kind, name, uid, owners=()):
+    return ResourceObservation(
+        cluster_id="cluster-a",
+        api_version=(
+            "batch/v1"
+            if kind == "Job"
+            else "jobset.x-k8s.io/v1alpha2"
+        ),
+        kind=kind,
+        namespace="team-a",
+        name=name,
+        uid=uid,
+        resource_version="1",
+        event_type="DELETED",
+        observed_at="2026-10-14T00:00:00Z",
+        owner_references=owners,
+    )
 
 
 def _pod() -> dict:
@@ -128,6 +165,49 @@ def test_rejects_reincarnated_job():
 
     with pytest.raises(StaleOwnerReference, match="uid mismatch"):
         resolver.resolve(_pod())
+
+
+def test_resolves_deleted_jobset_owner_from_uid_verified_journal():
+    jobset_owner = OwnerReference(
+        api_version="jobset.x-k8s.io/v1alpha2",
+        kind="JobSet",
+        name="trainer-set",
+        uid="jobset-uid-1",
+        controller=True,
+    )
+    journal = _Journal(
+        {
+            "job-uid-1": [
+                _observation(
+                    kind="Job",
+                    name="trainer",
+                    uid="job-uid-1",
+                    owners=(jobset_owner,),
+                )
+            ],
+            "jobset-uid-1": [
+                _observation(
+                    kind="JobSet",
+                    name="trainer-set",
+                    uid="jobset-uid-1",
+                )
+            ],
+        }
+    )
+    resolver = KubernetesOwnershipResolver(
+        _UnexpectedApi(),
+        _UnexpectedApi(),
+        journal=journal,
+        cluster_id="cluster-a",
+    )
+
+    assert resolver.resolve(_pod()) == ResourceIdentity(
+        "jobset.x-k8s.io/v1alpha2",
+        "JobSet",
+        "team-a",
+        "trainer-set",
+        "jobset-uid-1",
+    )
 
 
 def test_normalizes_sdk_resource_fields():

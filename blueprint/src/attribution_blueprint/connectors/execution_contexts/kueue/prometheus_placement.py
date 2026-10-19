@@ -5,21 +5,40 @@ from __future__ import annotations
 
 import re
 from collections import defaultdict
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+from typing import Protocol
 
 from loguru import logger
 
 from attribution_blueprint.connectors.auth import Auth
-from attribution_blueprint.connectors.execution_contexts.kueue.pod_placement.models import PlacementQuery, PodPlacement
 from attribution_blueprint.connectors.metrics.promql.client import (
     PrometheusClient,
     promql_string,
     re2_escape,
 )
+from attribution_blueprint.kubernetes.daemon.models import PodPlacement
 from attribution_blueprint.types import assert_aware
 
 _PROMQL_METRIC_IDENTIFIER = re.compile(r"^[a-zA-Z_:][a-zA-Z0-9_:]*$")
 _PROMQL_LABEL_IDENTIFIER = re.compile(r"^[a-zA-Z_][a-zA-Z0-9_]*$")
+
+
+@dataclass(frozen=True)
+class PlacementQuery:
+    """One Workload's inputs to a shared historical-placement query."""
+
+    workload_uid: str
+    namespace: str
+    owner_job_uids: frozenset[str]
+    start_time: datetime
+    end_time: datetime
+
+
+class PlacementResolver(Protocol):
+    """Resolve retained Pod placements for batches of Kueue Workloads."""
+
+    def placements_for_many(self, queries: list[PlacementQuery]) -> dict[str, list[PodPlacement]]: ...
 
 
 class PrometheusPlacementResolver:

@@ -17,7 +17,7 @@ from attribution_blueprint.mca_registry import _PARAM
 
 
 def _build_prometheus_metrics(spec: dict):
-    from attribution_blueprint.connectors.execution_contexts.kueue.pod_placement.prometheus_resolver import (
+    from attribution_blueprint.connectors.execution_contexts.kueue.prometheus_placement import (
         PrometheusPlacementResolver,
     )
     from attribution_blueprint.mca import _coerce_float, _coerce_int
