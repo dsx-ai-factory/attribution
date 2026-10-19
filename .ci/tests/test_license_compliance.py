@@ -698,6 +698,35 @@ class LicenseComplianceTest(unittest.TestCase):
                     f"{relative_path}: expected exact Apache-2.0 SPDX template tag",
                 )
             with (
+                self.subTest(relative_path=relative_path, boundary="copyright"),
+                valid_fixture() as root,
+            ):
+                self.replace_and_stage(
+                    root,
+                    relative_path,
+                    "Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES.",
+                    "Copyright (c) 2026 Example Corp.",
+                )
+                self.assert_violation(
+                    root,
+                    f"{relative_path}: expected exact Apache-2.0 SPDX template tag",
+                )
+            for extra_tag in (IDENTIFIER_TAG + " MIT", COPYRIGHT_TAG + " Example"):
+                with (
+                    self.subTest(relative_path=relative_path, extra_tag=extra_tag),
+                    valid_fixture() as root,
+                ):
+                    self.replace_and_stage(
+                        root,
+                        relative_path,
+                        exact_tag,
+                        f"{exact_tag}\n{{{{! {extra_tag} }}}}",
+                    )
+                    self.assert_violation(
+                        root,
+                        f"{relative_path}: expected exact Apache-2.0 SPDX template tag",
+                    )
+            with (
                 self.subTest(relative_path=relative_path, boundary="provenance"),
                 valid_fixture() as root,
             ):

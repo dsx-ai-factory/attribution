@@ -71,7 +71,7 @@ flowchart TD
 ```
 
 Proposed extensions are documented separately. See the
-[Kueue Pod placement recorder reference](../blueprint/src/attribution_blueprint/connectors/execution_contexts/kueue/pod_placement/recorder/docs/README.md)
+[Kueue Pod placement recorder reference](https://github.com/dsx-ai-factory/attribution/blob/main/blueprint/src/attribution_blueprint/connectors/execution_contexts/kueue/pod_placement/recorder/docs/README.md)
 for durable Pod-to-node placement before post-hoc Kueue attribution.
 
 ## End-to-end flow for one workload
@@ -101,7 +101,7 @@ detect partial conflicts must inspect the summaries; a zero exit code alone
 does not mean every context was attributed. With `--strict`, the CLI also
 exits nonzero when any attributed context's `evidence_status` is not
 `complete`. See the
-[session lifecycle guidance](../blueprint/docs/rest-api.md) for retry and
+[session lifecycle guidance](https://github.com/dsx-ai-factory/attribution/blob/main/blueprint/docs/rest-api.md) for retry and
 abandoned-session handling.
 
 ## Connector frameworks
@@ -129,7 +129,7 @@ The Service returns a raw verdict. The Blueprint enriches it with normalized fie
 | sub_domain | string | none, hardware, system_software, application, ambiguous, unattributed, expected, artificial, unclassified, plus cancellation/incomplete variants |
 | tenant_sre_action | string | Reserved field that is currently emitted as an empty string. |
 | cloud_operator_sre_action | string | Reserved field that is currently emitted as an empty string. |
-| connector_reports | list | List of {connector: str, source: str, status: "ok" or "error", reason: str, observation_count: int} |
+| connector_reports | list | List of `{connector: str, source: str, status: "ok" or "error", reason: str, observation_count: int}` |
 
 `terminal_state` and `sub_domain` are mapped from the service verdict via `taxonomy.py`. The mapping is deterministic. Downstream consumers should branch on these normalized fields.
 

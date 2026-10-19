@@ -76,7 +76,7 @@ Three cases the rules engine handles in production:
 
 * **Python.** `>=3.14.6,<3.15` on the host running the Attribution Service. 3.11+ on the host running the Blueprint orchestrator. The two can run on the same host or different hosts.
 * **uv package manager.** Install with `curl -LsSf https://astral.sh/uv/install.sh | sh`. Every `uv run` command resolves and installs dependencies on first invocation, no separate install step.
-* **Scheduler.** Slurm 25.11+ (SLUID required), or Kueue v0.6+ with JobSet v0.5+ for JobSet-shaped distributed training.
+* **Scheduler.** Slurm 25.11+ (SLUID required), or Kueue v0.6+ with JobSet v0.5+ for JobSet-shaped distributed training. NVIDIA KAI Scheduler support is pending: the Service API accepts `kai` as a scheduler value, but attribution for it is not implemented yet.
 * **Telemetry backends (any subset of):** Loki for application or system logs, a PromQL-compatible Prometheus or Mimir instance for node metrics, `kubectl` access for Kueue pod log collection, or local files for sacct-resolved StdOut/StdErr paths.
 * **Network reach.** The Blueprint must reach the Attribution Service over HTTP. The Service does not need outbound network access.
 * **Supported GPU architectures.** A100, H100, L40S, B200, GB200, GB300. GB200 and GB300 rule coverage continues to mature as coverage expands.
@@ -155,10 +155,22 @@ If `ATTRIBUTION_DB` already exists, the command appends a new attribution run fo
 
 Open `http://127.0.0.1:8080`, or the port you set in `ATTRIBUTION_WEB_PORT`.
 
-If you are running from a source checkout rather than the release bundle, use the source repository's web UI helper instead of Docker. The helper builds the React assets and starts the FastAPI backend directly against your database. See the source repository README for the full source workflow.
+To run the web UI from a source checkout without Docker, use [blueprint/scripts/webui.sh](blueprint/scripts/webui.sh). It builds the React assets and serves them from the FastAPI backend against a SQLite database. Pass your own database and port:
+
+```None
+blueprint/scripts/webui.sh --db "$ATTRIBUTION_DB" --port "$ATTRIBUTION_WEB_PORT"
+```
+
+Without `--db`, the helper seeds and serves a demo database. Run it with `--help` for all options, and see [Web UI Flags](blueprint/docs/CONFIGURATION.md#web-ui-flags) for the underlying `nvidia-attribution-blueprint-web` command.
 
 ## Where to go for more
 
+* Start here for operators: [Overview](docs/overview.md)
+* How the engine reaches a diagnosis: [How Attribution Works](docs/attribution.md)
+* System architecture: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
+* Running the Service, web UI, and database: [Service Operator Guide](docs/service-operators.md)
+* Common questions: [docs/FAQ.md](docs/FAQ.md)
+* Writing rules: [Add a New Extractor Rule](service/attribution-lib/docs/adding-a-rule.md)
 * Runnable release-bundle quickstart: [docs/quickstart.md](blueprint/docs/quickstart.md)
 * Blueprint configuration reference: [docs/CONFIGURATION.md](blueprint/docs/CONFIGURATION.md)
 * Kueue example: [examples/kueue](blueprint/examples/kueue)
