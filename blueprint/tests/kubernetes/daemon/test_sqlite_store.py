@@ -258,6 +258,24 @@ def test_observations_are_queryable_by_controller_owner(tmp_path):
     ]
 
 
+def test_latest_observations_are_queryable_by_resource_kind(tmp_path):
+    store = SQLitePlacementStore(str(tmp_path / "placements.db"))
+    initial = _observation(status={"phase": "Pending"})
+    updated = _observation(
+        resource_version="2",
+        event_type="MODIFIED",
+        status={"phase": "Running"},
+    )
+    _capture(store, initial)
+    _capture(store, updated)
+
+    assert store.list_latest_observations_for_kind(
+        "cluster-a",
+        "team-a",
+        "Pod",
+    ) == [updated]
+
+
 def test_observation_journal_does_not_change_placement_view(tmp_path):
     store = SQLitePlacementStore(str(tmp_path / "placements.db"))
 

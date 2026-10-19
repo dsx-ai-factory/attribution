@@ -298,6 +298,30 @@ class SQLitePlacementStore:
             ).fetchall()
         return [_observation_from_row(row) for row in rows]
 
+    def list_latest_observations_for_kind(
+        self,
+        cluster_id: str,
+        namespace: str,
+        kind: str,
+    ) -> list[ResourceObservation]:
+        with self._connect() as connection:
+            rows = connection.execute(
+                """
+                WITH latest AS (
+                    SELECT uid, MAX(id) AS observation_id
+                    FROM resource_observation
+                    WHERE cluster_id = ? AND namespace = ? AND kind = ?
+                    GROUP BY uid
+                )
+                SELECT observation.*
+                FROM resource_observation AS observation
+                JOIN latest ON latest.observation_id = observation.id
+                ORDER BY observation.id
+                """,
+                (cluster_id, namespace, kind),
+            ).fetchall()
+        return [_observation_from_row(row) for row in rows]
+
     def get_watch_coverage(
         self,
         cluster_id: str,

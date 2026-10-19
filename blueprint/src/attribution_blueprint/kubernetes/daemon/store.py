@@ -65,6 +65,13 @@ class ObservationJournal(Protocol):
         owner_uid: str,
     ) -> list[ResourceObservation]: ...
 
+    def list_latest_observations_for_kind(
+        self,
+        cluster_id: str,
+        namespace: str,
+        kind: str,
+    ) -> list[ResourceObservation]: ...
+
     def get_watch_coverage(
         self,
         cluster_id: str,
