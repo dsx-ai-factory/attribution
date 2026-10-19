@@ -34,7 +34,7 @@ def outcome_symptom(
     *,
     outcome: str,
     priority: OutcomePriority,
-    doc: str,
+    doc: Optional[str],
     hw_cause: str = "Not Applicable",
     cascade_discards: tuple[str, ...] = (),
     conditional_discards: tuple[tuple[str, str], ...] = (),
@@ -50,7 +50,7 @@ def outcome_symptom(
         prefix: Symptom prefix matched via startswith during outcome selection.
         outcome: NVIDIA Attribution outcome assigned when this symptom wins.
         priority: Outcome selection priority tier (lower wins).
-        doc: User-facing attribution documentation anchor for this symptom.
+        doc: Documentation anchor, or None for a fallback without a catalog entry.
         hw_cause: Hardware cause text preserved in outcome attribution.
         cascade_discards: Symptoms discarded when this symptom is present.
         conditional_discards: Predicate-gated cascade discards.
@@ -62,7 +62,7 @@ def outcome_symptom(
         dag_discard: Projection behavior when the DAG discards this symptom.
         family: Optional structured family schema or member identity.
     """
-    if doc == "":
+    if (doc is not None and doc.strip() == "") or (doc is None and not fallback_prefix):
         raise RuleIngestionError(f"outcome_symptom({prefix!r}) requires a non-empty doc anchor")
     loader = _require_rule_loader("declaring outcome symptom")
     loader.register_symptom_declaration(

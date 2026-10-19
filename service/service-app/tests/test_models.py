@@ -2,17 +2,19 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from datetime import datetime, timedelta
+from pathlib import Path
 from unittest.mock import MagicMock
 from zoneinfo import ZoneInfo
 
 import pytest
+import yaml
 from attribution_lib.compound_outcome import (
     CancellationActor,
     FailureDomain,
     TerminalState,
     UncertaintyType,
 )
-from attribution_lib.core import AttributionResult, CalcBadNodesAttributionResult
+from attribution_lib.core import AttributionResult, CalcBadNodesAttributionResult, get_bundled_rules_path
 from attribution_lib.observation import Context as FullObservationContext
 from attribution_lib.observation.inbound import (
     Context as InboundContext,
@@ -23,10 +25,12 @@ from attribution_lib.observation.inbound import (
 )
 from attribution_lib.outcome import OutcomeAttribution
 from attribution_lib.resources import AllJobResources
+from attribution_lib.rules_engine import RuleLoader
 from attribution_lib.sources import (
     Source as LibSource,
     SourceSet,
 )
+from attribution_lib.symptoms.registry_generation import registry_from_declarations
 from pydantic import ValidationError
 
 from app.v2.models import (
@@ -380,3 +384,37 @@ class TestV2Models:
         sites = response.symptoms["link_flap"]
         assert [s.node for s in sites] == ["node-a", "node-b"]
         assert all(s.type == "NodeSource" for s in sites)
+
+
+def test_fallback_catalog_ids_resolve_in_packaged_catalog() -> None:
+    """Check each fallback outcome against the catalog used by Diagnose."""
+    catalog_path = Path(__file__).resolve().parents[3] / "blueprint/src/attribution_blueprint/data/failures.yml"
+    catalog_ids = {entry["id"] for entry in yaml.safe_load(catalog_path.read_text())["failures"]}
+    loader = RuleLoader()
+    loader.load(str(get_bundled_rules_path() / "symptom_defaults.py"))
+    registry = registry_from_declarations(loader.symptom_declarations)
+
+    checked: set[str] = set()
+    for prefix in registry.fallback_prefixes:
+        symptom = prefix + " example"
+        match = registry.outcome_for([symptom])
+        if match is None:
+            continue
+        result = _empty_result()
+        _set_outcome(
+            result,
+            OutcomeAttribution(
+                outcome=match.outcome,
+                hw_cause=match.hw_cause,
+                root_cause_symptom=symptom,
+                doc=match.doc,
+            ),
+            _lib_source(rule="fallback"),
+        )
+        root = AttributionResponseV2.from_lib_attribution(set(), result).verdict.root_symptom
+        assert root is not None
+        assert root.catalog_id is None or root.catalog_id in catalog_ids, (prefix, root.catalog_id)
+        checked.add(prefix)
+        if prefix == "NV_ERR_RESET_REQUIRED":
+            assert root.catalog_id == "gpu-reset-required"
+    assert "NV_ERR_RESET_REQUIRED" in checked
