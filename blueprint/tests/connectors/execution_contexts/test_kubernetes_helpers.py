@@ -6,6 +6,7 @@ import pytest
 from attribution_blueprint.kubernetes.helpers import (
     earliest_job_failure_reason,
     job_time_limit_minutes,
+    pod_container_exit_reason,
     pod_node_failure_reason,
 )
 
@@ -88,6 +89,34 @@ class TestPodNodeFailureReason:
             }
         )
         assert pod_node_failure_reason(pod) == "DeletionByPodGC"
+
+
+class TestPodContainerExitReason:
+    def test_no_status_returns_none(self):
+        assert pod_container_exit_reason({}) is None
+
+    def test_zero_exit_code_returns_none(self):
+        pod = _pod({"containerStatuses": [{"state": {"terminated": {"exitCode": 0}}}]})
+        assert pod_container_exit_reason(pod) is None
+
+    def test_nonzero_exit_code_returns_formatted_reason(self):
+        pod = _pod({"containerStatuses": [{"state": {"terminated": {"exitCode": 137}}}]})
+        assert pod_container_exit_reason(pod) == "ExitCode:137"
+
+    def test_non_terminated_container_ignored(self):
+        pod = _pod({"containerStatuses": [{"state": {"running": {}}}]})
+        assert pod_container_exit_reason(pod) is None
+
+    def test_first_nonzero_exit_code_among_multiple_containers(self):
+        pod = _pod(
+            {
+                "containerStatuses": [
+                    {"state": {"terminated": {"exitCode": 0}}},
+                    {"state": {"terminated": {"exitCode": 1}}},
+                ]
+            }
+        )
+        assert pod_container_exit_reason(pod) == "ExitCode:1"
 
 
 def test_earliest_job_failure_reason():
