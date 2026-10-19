@@ -880,7 +880,7 @@ def test_symptom_docs_from_declarations_includes_only_doc_bearing_outcomes():
         ),
         # Cascade-only pruning edge: not a symptom, excluded even with a doc.
         SymptomDeclaration(prefix="noop-only", cascade_noop=True, doc="noop-doc"),
-        # Generic fallback prefix: resolves dynamically, excluded even with a doc.
+        # Fallback prefixes retain an explicitly declared doc.
         SymptomDeclaration(
             prefix="XID-",
             outcome="Fail InfraHW",
@@ -897,6 +897,13 @@ def test_symptom_docs_from_declarations_includes_only_doc_bearing_outcomes():
             priority=OutcomePriority.LOW_GENERIC,
             doc="",
         ),
+        # Whitespace-only doc slug: excluded.
+        SymptomDeclaration(
+            prefix="blank-doc",
+            outcome="Fail InfraSW",
+            priority=OutcomePriority.LOW,
+            doc=" \t\n",
+        ),
         # Missing doc slug: excluded.
         SymptomDeclaration(
             prefix="RuntimeError",
@@ -907,10 +914,10 @@ def test_symptom_docs_from_declarations_includes_only_doc_bearing_outcomes():
 
     docs = symptom_docs_from_declarations(declarations)
 
-    assert docs == {"XID-149": "xid-149"}
+    assert docs == {"XID-149": "xid-149", "XID-": "xid"}
 
 
-def test_outcome_for_carries_doc_for_matched_prefix_and_none_for_fallback():
+def test_outcome_for_carries_doc_for_exact_and_fallback_prefixes():
     declarations = [
         SymptomDeclaration(
             prefix="XID-149",
@@ -935,12 +942,11 @@ def test_outcome_for_carries_doc_for_matched_prefix_and_none_for_fallback():
     assert doc_bearing.matched_prefix == "XID-149"
     assert doc_bearing.doc == "xid-149"
 
-    # The fallback prefix declares a doc slug, but fallback prefixes are excluded
-    # from symptom_docs, so a dynamic id that only matches it resolves with no doc.
+    # A dynamic id inherits the documentation declared by its fallback prefix.
     fallback_match = registry.outcome_for(["XID-777-unmapped-variant"])
     assert isinstance(fallback_match, GeneratedOutcomeMatch)
     assert fallback_match.matched_prefix == "XID-"
-    assert fallback_match.doc is None
+    assert fallback_match.doc == "xid"
 
 
 def test_generated_registry_uses_immutable_containers():
@@ -1023,3 +1029,18 @@ def test_symptoms_package_exports_declaration_types():
     assert ExportedOutcomePriority is OutcomePriority
     assert ExportedSymptomCategory is SymptomCategory
     assert ExportedSymptomDeclaration is SymptomDeclaration
+
+
+@pytest.mark.parametrize("symptom", ["NV_ERR_RESET_REQUIRED", "NV_ERR_RESET_REQUIRED kernel_channel.c"])
+def test_gpu_reset_outcome_retains_documentation(symptom: str) -> None:
+    """Check that GPU-reset variants retain their declared documentation.
+
+    Args:
+        symptom: Exact or file-suffixed GPU-reset symptom.
+    """
+    registry = _load_committed_registry()
+    match = registry.outcome_for([symptom])
+
+    assert isinstance(match, GeneratedOutcomeMatch)
+    assert match.matched_prefix == "NV_ERR_RESET_REQUIRED"
+    assert match.doc == "gpu-reset-required"

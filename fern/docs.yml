@@ -4,6 +4,7 @@
 instances:
   - url: nvidia-attribution.docs.buildwithfern.com/attribution
     multi-source: true
+    custom-domain: docs.nvidia.com/attribution
 
 redirects:
   - source: /attribution/index.html
