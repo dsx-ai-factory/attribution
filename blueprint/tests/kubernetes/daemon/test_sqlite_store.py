@@ -73,6 +73,37 @@ def test_deleted_placement_expires_after_retention_window(tmp_path):
     assert store.get_by_pod_uid(record.pod_uid) is None
 
 
+def test_reconcile_marks_absent_pods_without_resetting_deletion_time(tmp_path):
+    path = tmp_path / "placements.db"
+    store = SQLitePlacementStore(str(path))
+    active = _record(associated=False)
+    absent = replace(
+        active,
+        pod_name="trainer-1",
+        pod_uid="pod-uid-2",
+    )
+    store.create(active)
+    store.create(absent)
+
+    store.reconcile_active_pods("team-a", {active.pod_uid})
+    with sqlite3.connect(path) as connection:
+        connection.execute(
+            "UPDATE placement_deletion SET deleted_at = datetime('now', '-1 day')"
+        )
+        first_deleted_at = connection.execute(
+            "SELECT deleted_at FROM placement_deletion WHERE pod_uid = ?",
+            (absent.pod_uid,),
+        ).fetchone()[0]
+
+    store.reconcile_active_pods("team-a", {active.pod_uid})
+    with sqlite3.connect(path) as connection:
+        markers = connection.execute(
+            "SELECT pod_uid, deleted_at FROM placement_deletion ORDER BY pod_uid"
+        ).fetchall()
+
+    assert markers == [(absent.pod_uid, first_deleted_at)]
+
+
 def test_store_closes_connection_after_operation(tmp_path, monkeypatch):
     store = SQLitePlacementStore(str(tmp_path / "placements.db"))
 
