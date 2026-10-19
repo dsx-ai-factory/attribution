@@ -604,6 +604,24 @@ describe('VerdictView', () => {
     expect(copied).toContain(support)
     expect(copied).not.toContain('Cloud operator guidance')
     expect(mocks.downloadBlob.mock.calls[0][1]).toBe(copied)
+    fireEvent.click(screen.getByRole('button', { name: 'Download as JSON' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Download as YAML' }))
+    const json = mocks.downloadBlob.mock.calls[1][1]
+    const yaml = mocks.downloadBlob.mock.calls[2][1]
+    expect(JSON.parse(json).tenant_guidance).toEqual({
+      summary: run().diagnose!.summary,
+      impact: run().diagnose!.impact,
+      action: actionValue.textContent,
+      support_details: [support, markup],
+    })
+    expect(yaml).toContain(`  action: ${JSON.stringify(action)}`)
+    expect(yaml).toContain(`    - ${JSON.stringify(support)}`)
+    expect(yaml).toContain(`    - ${JSON.stringify(markup)}`)
+    for (const serialized of [json, yaml]) {
+      expect(serialized).not.toContain('Drain the node.')
+      expect(serialized).not.toContain('node ID')
+      expect(serialized).not.toContain('operatorDiagnose')
+    }
   })
 
   it.each([undefined, { ...run().diagnose!, hasPersona: false }])(
@@ -614,6 +632,14 @@ describe('VerdictView', () => {
       expect(screen.queryByText('Cloud operator guidance')).toBeNull()
       expect(screen.queryByText('Drain the node.')).toBeNull()
       expect(screen.queryByText('Retry elsewhere.')).toBeNull()
+      fireEvent.click(screen.getByRole('button', { name: 'Download as JSON' }))
+      fireEvent.click(screen.getByRole('button', { name: 'Download as YAML' }))
+      expect(JSON.parse(mocks.downloadBlob.mock.calls[0][1]).tenant_guidance).toBeNull()
+      expect(mocks.downloadBlob.mock.calls[1][1]).toContain('tenant_guidance: null')
+      for (const [, content] of mocks.downloadBlob.mock.calls) {
+        expect(content).not.toContain('Drain the node.')
+        expect(content).not.toContain('Retry elsewhere.')
+      }
     },
   )
 
