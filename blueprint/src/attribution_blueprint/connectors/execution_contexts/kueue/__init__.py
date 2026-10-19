@@ -76,7 +76,7 @@ def _build_prometheus_metrics(spec: dict):
 
 
 def _build(spec: dict, ctx: dict) -> KueueExecutionContextAdapter:
-    from attribution_blueprint.mca import _coerce_int
+    from attribution_blueprint.mca import _coerce_bool, _coerce_int
 
     # `spec.get(..., 60)` returns 60 only when the key is absent; a TOML
     # literal `null` arrives as Python None and must fall back to the same
@@ -89,23 +89,10 @@ def _build(spec: dict, ctx: dict) -> KueueExecutionContextAdapter:
         timeout = _coerce_int(timeout, "eca.kueue.timeout_seconds")
         if timeout <= 0:
             raise MCAError(f"eca.kueue.timeout_seconds must be positive, got {timeout}")
-    placement_records_enabled = spec.get("placement_records_enabled", False)
-    if isinstance(placement_records_enabled, str):
-        normalized = placement_records_enabled.lower()
-        if normalized in {"true", "yes", "1"}:
-            placement_records_enabled = True
-        elif normalized in {"false", "no", "0", ""}:
-            placement_records_enabled = False
-        else:
-            raise MCAError(
-                "eca.kueue.placement_records_enabled must be a bool, "
-                f"got {placement_records_enabled!r}"
-            )
-    elif not isinstance(placement_records_enabled, bool):
-        raise MCAError(
-            "eca.kueue.placement_records_enabled must be a bool, "
-            f"got {placement_records_enabled!r}"
-        )
+    placement_records_enabled = _coerce_bool(
+        spec.get("placement_records_enabled", False),
+        "eca.kueue.placement_records_enabled",
+    )
     prometheus_spec = spec.get("prometheus_metrics")
     prometheus_placement_resolver = _build_prometheus_metrics(prometheus_spec) if prometheus_spec is not None else None
     daemon_spec = spec.get("kubernetes_daemon")

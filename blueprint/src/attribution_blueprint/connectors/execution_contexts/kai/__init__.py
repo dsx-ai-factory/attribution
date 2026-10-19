@@ -14,7 +14,7 @@ from attribution_blueprint.mca_registry import _PARAM
 
 
 def _build(spec: dict, ctx: dict) -> KaiExecutionContextAdapter:
-    from attribution_blueprint.mca import _coerce_int
+    from attribution_blueprint.mca import _coerce_bool, _coerce_int
 
     # A literal `null` arrives as None and must fall back to the default;
     # otherwise None would reach the Kubernetes client and silently disable
@@ -26,9 +26,10 @@ def _build(spec: dict, ctx: dict) -> KaiExecutionContextAdapter:
         timeout = _coerce_int(timeout, "eca.kai.timeout_seconds")
         if timeout <= 0:
             raise MCAError(f"eca.kai.timeout_seconds must be positive, got {timeout}")
-    placement_records_enabled = spec.get("placement_records_enabled", False)
-    if not isinstance(placement_records_enabled, bool):
-        raise MCAError("eca.kai.placement_records_enabled must be a bool")
+    placement_records_enabled = _coerce_bool(
+        spec.get("placement_records_enabled", False),
+        "eca.kai.placement_records_enabled",
+    )
     daemon_spec = spec.get("kubernetes_daemon")
     if placement_records_enabled and daemon_spec is None:
         raise MCAError("eca.kai.placement_records_enabled requires eca.kai.kubernetes_daemon")

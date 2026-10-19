@@ -579,6 +579,18 @@ def _coerce_float(value: Any, field: str) -> float:
         raise MCAError(f"{field}={value!r} must be a float") from exc
 
 
+def _coerce_bool(value: Any, field: str) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"true", "yes", "1"}:
+            return True
+        if normalized in {"false", "no", "0", ""}:
+            return False
+    raise MCAError(f"{field}={value!r} must be a bool")
+
+
 def _coerce_datetime(value: Any, field: str) -> datetime:
     if isinstance(value, datetime):
         return value

@@ -1075,3 +1075,28 @@ def test_builder_defaults_and_validation():
             },
             ctx={"framework": "eca"},
         )
+
+
+def test_builder_coerces_cli_and_environment_boolean_strings():
+    component = mca_registry.get_component("eca", "kai")
+
+    disabled = component.build(
+        {"placement_records_enabled": "false"},
+        ctx={"framework": "eca"},
+    )
+    enabled = component.build(
+        {
+            "namespace": "team-alpha",
+            "placement_records_enabled": "true",
+            "kubernetes_daemon": {"endpoint": "http://daemon:8080"},
+        },
+        ctx={"framework": "eca"},
+    )
+
+    assert disabled.placement_records_enabled is False
+    assert enabled.placement_records_enabled is True
+    with pytest.raises(MCAError, match="must be a bool"):
+        component.build(
+            {"placement_records_enabled": "sometimes"},
+            ctx={"framework": "eca"},
+        )
