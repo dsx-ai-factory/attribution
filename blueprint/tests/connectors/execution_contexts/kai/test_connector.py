@@ -57,6 +57,7 @@ def _pod(
     namespace="team-alpha",
     node="node001",
     created="2026-05-01T12:00:10Z",
+    podgroup_assigned=None,
     phase="Running",
     finished=None,
     controller=None,
@@ -67,6 +68,20 @@ def _pod(
         meta["ownerReferences"] = [{"kind": kind, "name": "c", "uid": controller_uid, "controller": True}]
     if podgroup is not None:
         meta["annotations"] = {"pod-group-name": podgroup}
+        meta["managedFields"] = [
+            {
+                "manager": "pod-grouper",
+                "operation": "Update",
+                "time": podgroup_assigned or created,
+                "fieldsV1": {
+                    "f:metadata": {
+                        "f:annotations": {
+                            "f:pod-group-name": {},
+                        },
+                    },
+                },
+            },
+        ]
     status = {"phase": phase}
     if finished:
         status["containerStatuses"] = [{"name": "c", "state": {"terminated": {"finishedAt": finished}}}]
@@ -320,9 +335,23 @@ def test_hierarchical_podgroup_is_emitted_and_flagged(mocker):
 
 def test_same_name_new_uid_does_not_inherit_previous_incarnation_pods(mocker):
     new_pg = _podgroup(uid="uid-pg-new", created="2026-05-01T14:00:00Z")
+    owner_uid = "uid-job-uid-pg-new"
     pods = [
-        _pod("old-0", node="node-old", phase="Failed", controller=("Job", "uid-job-uid-pg-old")),
-        _pod("new-0", node="node-new", controller=("Job", "uid-job-uid-pg-new")),
+        _pod(
+            "old-0",
+            created="2026-05-01T12:00:00Z",
+            podgroup_assigned="2026-05-01T12:00:01Z",
+            node="node-old",
+            phase="Failed",
+            controller=("Job", owner_uid),
+        ),
+        _pod(
+            "new-0",
+            created="2026-05-01T13:59:59Z",
+            podgroup_assigned="2026-05-01T14:00:01Z",
+            node="node-new",
+            controller=("Job", owner_uid),
+        ),
     ]
     _wire_kubectl(mocker, [new_pg], pods)
 
@@ -335,7 +364,13 @@ def test_same_name_new_uid_does_not_inherit_previous_incarnation_pods(mocker):
 
 def test_pod_created_before_its_podgroup_is_a_member(mocker):
     pg = _podgroup(created="2026-05-01T12:00:00Z")
-    pod = _pod("early-0", created="2026-05-01T11:59:00Z", node="node-early", controller=("Job", "uid-job-uid-pg-a"))
+    pod = _pod(
+        "early-0",
+        created="2026-05-01T11:59:00Z",
+        podgroup_assigned="2026-05-01T12:00:01Z",
+        node="node-early",
+        controller=("Job", "uid-job-uid-pg-a"),
+    )
     _wire_kubectl(mocker, [pg], [pod])
 
     [ctx] = KaiExecutionContextAdapter().discover_by_ids(["team-alpha/pg-a"])
@@ -345,9 +380,26 @@ def test_pod_created_before_its_podgroup_is_a_member(mocker):
     assert ctx["start_time"] == datetime(2026, 5, 1, 11, 59, tzinfo=timezone.utc)
 
 
+def test_pod_without_an_annotation_assignment_time_is_not_member_evidence(mocker):
+    pg = _podgroup()
+    pod = _pod("ambiguous-0", controller=("Job", "uid-job-uid-pg-a"))
+    del pod["metadata"]["managedFields"]
+    _wire_kubectl(mocker, [pg], [pod])
+
+    [ctx] = KaiExecutionContextAdapter().discover_by_ids(["team-alpha/pg-a"])
+
+    assert "pod_names" not in ctx
+    assert ctx["nodes"] == []
+
+
 def test_time_range_uses_a_member_pod_that_predates_its_podgroup(mocker):
     pg = _podgroup(created="2026-05-01T12:00:00Z")
-    pod = _pod("early-0", created="2026-05-01T11:59:00Z", controller=("Job", "uid-job-uid-pg-a"))
+    pod = _pod(
+        "early-0",
+        created="2026-05-01T11:59:00Z",
+        podgroup_assigned="2026-05-01T12:00:01Z",
+        controller=("Job", "uid-job-uid-pg-a"),
+    )
     _wire_kubectl(mocker, [pg], [pod])
 
     contexts = KaiExecutionContextAdapter(namespace="team-alpha").discover_by_time_range(
