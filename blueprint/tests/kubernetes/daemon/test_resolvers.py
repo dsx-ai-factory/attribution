@@ -9,6 +9,7 @@ from attribution_blueprint.kubernetes.daemon.models import ResourceIdentity
 from attribution_blueprint.kubernetes.daemon.resolvers import (
     KubernetesOwnershipResolver,
     StaleOwnerReference,
+    UnsupportedOwner,
     normalize_resource,
 )
 
@@ -79,6 +80,21 @@ def test_resolves_uid_verified_job_owner():
         "trainer",
         "job-uid-1",
     )
+
+
+@pytest.mark.parametrize(
+    "controller_field",
+    [{}, {"controller": None}, {"controller": False}],
+)
+def test_rejects_non_controller_job_owner_references(controller_field):
+    pod = _pod()
+    owner = pod["metadata"]["ownerReferences"][0]
+    owner.pop("controller")
+    owner.update(controller_field)
+    resolver = KubernetesOwnershipResolver(object(), custom_api=None)
+
+    with pytest.raises(UnsupportedOwner, match="not controlled"):
+        resolver.resolve(pod)
 
 
 def test_resolves_uid_verified_jobset_owner():
