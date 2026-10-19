@@ -5,6 +5,8 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 
 from attribution_blueprint.kubernetes.daemon.models import (
@@ -62,6 +64,8 @@ CREATE TABLE IF NOT EXISTS resource_observation (
 );
 CREATE INDEX IF NOT EXISTS resource_observation_identity
     ON resource_observation(cluster_id, namespace, uid, id);
+CREATE INDEX IF NOT EXISTS resource_observation_retention
+    ON resource_observation(kind, event_type, observed_at);
 CREATE TABLE IF NOT EXISTS observation_owner_reference (
     observation_id INTEGER NOT NULL,
     owner_uid TEXT NOT NULL,
@@ -122,7 +126,7 @@ class SQLitePlacementStore:
         self.timeout_seconds = timeout_seconds
         self.retention_days = retention_days
         Path(path).parent.mkdir(parents=True, exist_ok=True)
-        with self._connect() as connection:
+        with self._connection() as connection:
             connection.executescript(_SCHEMA)
             connection.execute("PRAGMA user_version = 3")
             self._prune_expired(connection)
@@ -136,14 +140,23 @@ class SQLitePlacementStore:
         connection.execute("PRAGMA synchronous = FULL")
         return connection
 
+    @contextmanager
+    def _connection(self) -> Iterator[sqlite3.Connection]:
+        connection = self._connect()
+        try:
+            with connection:
+                yield connection
+        finally:
+            connection.close()
+
     def create(self, record: PlacementRecord) -> CreateResult:
-        with self._connect() as connection:
+        with self._connection() as connection:
             connection.execute("BEGIN IMMEDIATE")
             self._prune_expired(connection)
             return self._create(connection, record)
 
     def get_by_pod_uid(self, pod_uid: str) -> PlacementRecord | None:
-        with self._connect() as connection:
+        with self._connection() as connection:
             self._prune_expired(connection)
             row = connection.execute(
                 "SELECT raw_json FROM placement_record WHERE pod_uid = ?",
@@ -152,7 +165,7 @@ class SQLitePlacementStore:
         return PlacementRecord.from_resource(json.loads(row["raw_json"])) if row else None
 
     def list_for_resource(self, namespace: str, resource_uid: str) -> list[PlacementRecord]:
-        with self._connect() as connection:
+        with self._connection() as connection:
             self._prune_expired(connection)
             rows = connection.execute(
                 """
@@ -175,7 +188,7 @@ class SQLitePlacementStore:
         placement: PlacementRecord | None,
         advance_checkpoint: bool,
     ) -> CaptureResult:
-        with self._connect() as connection:
+        with self._connection() as connection:
             connection.execute("BEGIN IMMEDIATE")
             observation_result = self._append_observation(connection, observation)
             placement_result = self._create(connection, placement) if placement else None
@@ -264,7 +277,7 @@ class SQLitePlacementStore:
         namespace: str,
         uid: str,
     ) -> list[ResourceObservation]:
-        with self._connect() as connection:
+        with self._connection() as connection:
             rows = connection.execute(
                 """
                 SELECT *
@@ -282,7 +295,7 @@ class SQLitePlacementStore:
         namespace: str,
         owner_uid: str,
     ) -> list[ResourceObservation]:
-        with self._connect() as connection:
+        with self._connection() as connection:
             rows = connection.execute(
                 """
                 SELECT observation.*
@@ -304,7 +317,7 @@ class SQLitePlacementStore:
         namespace: str,
         kind: str,
     ) -> list[ResourceObservation]:
-        with self._connect() as connection:
+        with self._connection() as connection:
             rows = connection.execute(
                 """
                 WITH latest AS (
@@ -328,7 +341,7 @@ class SQLitePlacementStore:
         namespace: str,
         source_name: str,
     ) -> WatchCoverage | None:
-        with self._connect() as connection:
+        with self._connection() as connection:
             row = connection.execute(
                 """
                 SELECT *
@@ -351,7 +364,7 @@ class SQLitePlacementStore:
         start_resource_version: str,
         detected_at: str,
     ) -> int:
-        with self._connect() as connection:
+        with self._connection() as connection:
             connection.execute("BEGIN IMMEDIATE")
             existing = connection.execute(
                 """
@@ -398,7 +411,7 @@ class SQLitePlacementStore:
         completed_at: str,
         gap_id: int | None,
     ) -> None:
-        with self._connect() as connection:
+        with self._connection() as connection:
             connection.execute("BEGIN IMMEDIATE")
             connection.execute(
                 """
@@ -452,7 +465,7 @@ class SQLitePlacementStore:
         resource_version: str,
         checkpointed_at: str,
     ) -> None:
-        with self._connect() as connection:
+        with self._connection() as connection:
             connection.execute("BEGIN IMMEDIATE")
             self._mark_watch_checkpoint(
                 connection,
@@ -468,7 +481,7 @@ class SQLitePlacementStore:
         cluster_id: str,
         namespace: str,
     ) -> list[CoverageGap]:
-        with self._connect() as connection:
+        with self._connection() as connection:
             rows = connection.execute(
                 """
                 SELECT *
@@ -602,7 +615,24 @@ class SQLitePlacementStore:
 
     def _prune_expired(self, connection: sqlite3.Connection) -> None:
         connection.execute(
-            "DELETE FROM placement_record WHERE updated_at < datetime('now', ?)",
+            """
+            DELETE FROM placement_record
+            WHERE pod_uid IN (
+                SELECT observation.uid
+                FROM resource_observation AS observation
+                WHERE observation.kind = 'Pod'
+                  AND observation.event_type = 'DELETED'
+                  AND datetime(observation.observed_at) < datetime('now', ?)
+                  AND observation.id = (
+                      SELECT MAX(latest.id)
+                      FROM resource_observation AS latest
+                      WHERE latest.cluster_id = observation.cluster_id
+                        AND latest.namespace = observation.namespace
+                        AND latest.kind = observation.kind
+                        AND latest.uid = observation.uid
+                  )
+            )
+            """,
             (f"-{self.retention_days} days",),
         )
 

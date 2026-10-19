@@ -1,6 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
+import sqlite3
 from dataclasses import replace
 
 import pytest
@@ -131,6 +132,49 @@ def test_unresolved_placement_can_be_enriched_later(tmp_path):
 
     assert store.create(_record(associated=True)) == CreateResult.UPDATED
     assert store.list_for_resource("team-a", "admission-uid-1") == [_record(associated=True)]
+
+
+@pytest.mark.parametrize(
+    ("event_type", "retained"),
+    [
+        ("SNAPSHOT", True),
+        ("DELETED", False),
+    ],
+)
+def test_retention_starts_only_after_pod_deletion(tmp_path, event_type, retained):
+    path = tmp_path / f"{event_type.lower()}.db"
+    store = SQLitePlacementStore(str(path), retention_days=1)
+    record = _record(associated=False)
+    store.capture_observation(
+        _observation(event_type=event_type),
+        source_name="pods",
+        placement=record,
+        advance_checkpoint=False,
+    )
+    with sqlite3.connect(path) as connection:
+        connection.execute(
+            "UPDATE resource_observation SET observed_at = datetime('now', '-2 days')"
+        )
+
+    assert (store.get_by_pod_uid(record.pod_uid) is not None) is retained
+
+
+def test_store_closes_connection_after_operation(tmp_path, monkeypatch):
+    store = SQLitePlacementStore(str(tmp_path / "placements.db"))
+
+    class TrackingConnection(sqlite3.Connection):
+        closed = False
+
+        def close(self):
+            self.closed = True
+            super().close()
+
+    connection = sqlite3.connect(store.path, factory=TrackingConnection)
+    connection.row_factory = sqlite3.Row
+    monkeypatch.setattr(store, "_connect", lambda: connection)
+
+    assert store.get_by_pod_uid("missing") is None
+    assert connection.closed
 
 
 def test_multiple_associated_resources_are_queryable(tmp_path):
