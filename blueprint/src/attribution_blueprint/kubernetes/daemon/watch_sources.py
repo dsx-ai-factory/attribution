@@ -16,6 +16,10 @@ _ATTEMPT_METADATA_KEYS = frozenset(
         "jobset.sigs.k8s.io/job-index",
         "jobset.sigs.k8s.io/replicatedjob-name",
         "jobset.sigs.k8s.io/restart-attempt",
+        "kai.scheduler/top-owner-metadata",
+        "kueue.x-k8s.io/job-uid",
+        "kueue.x-k8s.io/workload",
+        "pod-group-name",
     }
 )
 

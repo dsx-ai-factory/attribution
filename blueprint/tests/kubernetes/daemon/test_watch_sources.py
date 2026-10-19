@@ -210,7 +210,7 @@ def test_podgroup_retains_allocation_and_scheduler_start_signal():
     }
 
 
-def test_attempt_metadata_is_allowlisted_and_preserves_its_source():
+def test_attempt_and_scheduler_identity_metadata_is_allowlisted():
     metadata = selected_metadata(
         {
             "metadata": {
@@ -218,10 +218,14 @@ def test_attempt_metadata_is_allowlisted_and_preserves_its_source():
                     "jobset.sigs.k8s.io/replicatedjob-name": "workers",
                     "jobset.sigs.k8s.io/job-index": "2",
                     "jobset.sigs.k8s.io/restart-attempt": "1",
+                    "kueue.x-k8s.io/job-uid": "job-uid",
                     "unrelated.example/label": "discarded",
                 },
                 "annotations": {
                     "batch.kubernetes.io/job-completion-index": "3",
+                    "kai.scheduler/top-owner-metadata": "uid: job-uid",
+                    "kueue.x-k8s.io/workload": "workload-a",
+                    "pod-group-name": "podgroup-a",
                     "unrelated.example/annotation": "discarded",
                 },
             }
@@ -233,8 +237,12 @@ def test_attempt_metadata_is_allowlisted_and_preserves_its_source():
             "jobset.sigs.k8s.io/job-index": "2",
             "jobset.sigs.k8s.io/replicatedjob-name": "workers",
             "jobset.sigs.k8s.io/restart-attempt": "1",
+            "kueue.x-k8s.io/job-uid": "job-uid",
         },
         "annotations": {
             "batch.kubernetes.io/job-completion-index": "3",
+            "kai.scheduler/top-owner-metadata": "uid: job-uid",
+            "kueue.x-k8s.io/workload": "workload-a",
+            "pod-group-name": "podgroup-a",
         },
     }
