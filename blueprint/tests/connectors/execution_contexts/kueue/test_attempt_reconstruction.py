@@ -160,6 +160,23 @@ def _seed_jobset_retry_history(store: SQLitePlacementStore) -> None:
             status={"startTime": "2026-10-14T10:01:00Z"},
         ),
         _observation(
+            kind="JobSet",
+            name="training",
+            uid="jobset-uid",
+            resource_version="4",
+            observed_at="2026-10-14T10:31:00Z",
+            status={
+                "restarts": 1,
+                "conditions": [
+                    _condition(
+                        "RestartingJobSet",
+                        "2026-10-14T10:31:00Z",
+                        reason="DefaultFailurePolicy",
+                    )
+                ],
+            },
+        ),
+        _observation(
             kind="Job",
             name="training-workers-1",
             uid="job-uid-1",
@@ -318,7 +335,7 @@ def test_retained_jobset_retries_flow_as_distinct_execution_contexts(
         31,
         tzinfo=timezone.utc,
     )
-    assert contexts[0]["state"] == "UNKNOWN"
+    assert contexts[0]["state"] == "FAILED"
     assert contexts[0]["nodes"] == ["node-a"]
     assert contexts[1]["start_time"] == datetime(
         2026,
