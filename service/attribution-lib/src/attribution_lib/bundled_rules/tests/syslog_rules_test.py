@@ -14,6 +14,7 @@ from attribution_lib.job_info import JobInfoBuilder
 from attribution_lib.observation.inbound import (
     Format as ObservationFormat,
     Source as ObservationSource,
+    TimeInterval,
 )
 from attribution_lib.resources.resource_set import AllJobResources
 from attribution_lib.sources import Source, SourceSet
@@ -52,7 +53,7 @@ def sys_tst_bldr(attribution_test_builder):
     - source: SYSLOG (always)
     """
 
-    def _build(job_info, data, *, stream_id=None, events_to_add=None):
+    def _build(job_info, data, *, stream_id=None, events_to_add=None, time_interval=None):
         return attribution_test_builder(
             job_info=job_info,
             data=data,
@@ -60,6 +61,7 @@ def sys_tst_bldr(attribution_test_builder):
             check_fn=process_check,
             stream_id=stream_id,
             events_to_add=events_to_add,
+            time_interval=time_interval,
         )
 
     return _build
@@ -820,6 +822,252 @@ class TestPoisonedGspOutcome:
 
         assert "poisoned gsp" not in attribution.symptoms
         assert attribution.outcome_attr.value().outcome != "Fail InfraHW"
+
+
+class TestBadNicStateOutcome:
+    """Correlate public mlx5 messages without mixing nodes, NICs, or stale evidence."""
+
+    _LINES = (
+        "mlx5_core 0000:01:00.0: wait_fw_init:201:(pid 10): "
+        "Firmware over 10000 MS in initializing state, aborting",
+        "mlx5_core 0000:01:00.0: probe_one:2002:(pid 10): mlx5_init_one failed with error code -110",
+    )
+    _COMPONENTS = ("mlx5 firmware in initialization state", "mlx5 device initialization failed")
+    _QP = "Call to ibv_modify_qp failed"
+
+    @pytest.fixture(scope="class")
+    def job_info(self, simple_job_factory):
+        return simple_job_factory(
+            state="FAILED",
+            framework="pytorch",
+            ranks_per_node=4,
+            start_timestamp=1746000000,
+            end_timestamp=1746003600,
+            nodes=["test-node-001", "test-node-002"],
+        )
+
+    def _attribute(
+        self, request, sys_tst_bldr, job_info, node_lines, offsets, extra_symptoms=()
+    ):
+        end_ns = int(job_info.job_end_time.timestamp() * 1e9)
+        entries = [
+            make_syslog_entry(body=line, node=node, timestamp_ns=end_ns + int(offset * 1e9))
+            for (node, line), offset in zip(node_lines, offsets, strict=True)
+        ]
+        # Match the producer's NIC post-job observation contract; the default
+        # observation cutoff is covered separately below.
+        result = sys_tst_bldr(
+            job_info,
+            entries,
+            stream_id=request.node.name,
+            time_interval=TimeInterval(job_info.job_start_time, job_info.job_end_time + timedelta(minutes=2)),
+        )
+        bad_nodes = core.CalcBadNodesAttributionResult()
+        bad_nodes.my_bad_nodes = result.get_node_attributions()
+        for symptom in extra_symptoms:
+            bad_nodes.my_bad_nodes.add(
+                ["test-node-001"],
+                SourceSet.new_one(
+                    symptom,
+                    job_info.source(symptom, "test")._replace(time=job_info.job_end_time - timedelta(seconds=1)),
+                ),
+            )
+        return core.attribute(
+            event_stream=result.event_stream,
+            job_info=result.job_info,
+            bad_node_result=bad_nodes,
+            extract_job_metadata_from_logfile=False,
+        )
+
+    @pytest.mark.parametrize("reverse,extra_symptoms", [(False, ()), (True, ()), (False, (_QP,))])
+    def test_pair_near_job_end_retains_both_sources(
+        self, request, sys_tst_bldr, job_info, reverse, extra_symptoms
+    ):
+        lines = self._LINES[::-1] if reverse else self._LINES
+        result = self._attribute(
+            request,
+            sys_tst_bldr,
+            job_info,
+            [("test-node-001", line) for line in lines],
+            [4, 4.002],
+            extra_symptoms=extra_symptoms,
+        )
+
+        assert set(result.symptoms.symptoms()) == {"detected bad NIC state", *extra_symptoms}
+        assert result.outcome_attr.value().outcome == "Fail InfraSW"
+        assert result.outcome_attr.value().root_cause_symptom == "detected bad NIC state"
+        sources = list(result.symptoms["detected bad NIC state"])
+        assert {source.datum for source in sources} == set(self._LINES)
+        assert {source.rule for source in sources} == {"SyslogMlx5FirmwareInitTimeout", "SyslogMlx5InitFailure"}
+        node_symptoms = result.bad_nodes_attr.my_bad_nodes["test-node-001"].attributions
+        for symptom in extra_symptoms:
+            assert {source.datum for source in result.symptoms[symptom]} == {symptom}
+            assert {source.datum for source in node_symptoms[symptom]} == {symptom}
+        for component in self._COMPONENTS:
+            assert component not in node_symptoms
+            assert node_symptoms[component].has_interesting()
+
+    @pytest.mark.parametrize("offsets", [(-1, 0), (0, 121)])
+    def test_outside_window_does_not_combine(self, request, sys_tst_bldr, job_info, offsets):
+        result = self._attribute(
+            request,
+            sys_tst_bldr,
+            job_info,
+            [("test-node-001", line) for line in self._LINES],
+            offsets,
+        )
+        assert "detected bad NIC state" not in result.symptoms
+
+    @pytest.mark.parametrize("index", [0, 1])
+    def test_single_signal_does_not_produce_compound_outcome(self, request, sys_tst_bldr, job_info, index):
+        result = self._attribute(
+            request, sys_tst_bldr, job_info, [("test-node-001", self._LINES[index])], [4]
+        )
+        assert "detected bad NIC state" not in result.symptoms
+        assert result.outcome_attr.value().outcome != "Fail InfraSW"
+
+    @pytest.mark.parametrize(
+        "other_node,other_pci",
+        [("test-node-002", "0000:01:00.0"), ("test-node-001", "0000:02:00.0")],
+    )
+    def test_different_nodes_or_devices_do_not_combine(
+        self, request, sys_tst_bldr, job_info, other_node, other_pci
+    ):
+        result = self._attribute(
+            request,
+            sys_tst_bldr,
+            job_info,
+            [
+                ("test-node-001", self._LINES[0]),
+                (other_node, self._LINES[1].replace("0000:01:00.0", other_pci)),
+            ],
+            [4, 4.002],
+        )
+        assert "detected bad NIC state" not in result.symptoms
+
+    @pytest.mark.parametrize("extra_symptoms", [(), (_QP,)])
+    def test_slurm_node_failure_and_bad_nic_state_both_remain_active(
+        self, request, sys_tst_bldr, job_info, extra_symptoms
+    ):
+        job_info = job_info._replace(state="NODE_FAIL", failed_node="test-node-001")
+        result = self._attribute(
+            request,
+            sys_tst_bldr,
+            job_info,
+            [("test-node-001", line) for line in self._LINES],
+            [4, 4.002],
+            extra_symptoms=extra_symptoms,
+        )
+
+        expected = {"Node failure reported by slurm", "detected bad NIC state"}
+        assert set(result.symptoms.symptoms()) == expected
+        node_symptoms = result.bad_nodes_attr.my_bad_nodes["test-node-001"].attributions
+        assert set(node_symptoms.symptoms()) == expected
+        for symptom in expected:
+            assert node_symptoms[symptom].has_bad()
+            assert result.symptoms[symptom].has_bad()
+        for symptoms in (result.symptoms, node_symptoms):
+            for symptom in extra_symptoms:
+                assert not symptoms[symptom].has_bad()
+                assert symptoms[symptom].has_interesting()
+                assert {source.datum for source in symptoms[symptom].all_sources()} == {symptom}
+        assert {source.datum for source in node_symptoms["detected bad NIC state"]} == set(self._LINES)
+        for component in self._COMPONENTS:
+            assert component not in node_symptoms
+            assert node_symptoms[component].has_interesting()
+        outcome = result.outcome_attr.value()
+        assert outcome.outcome == "Fail InfraSW"
+        assert outcome.root_cause_symptom == "Node failure reported by slurm"
+
+    def test_variable_timeout_and_error_code(self, request, sys_tst_bldr, job_info):
+        lines = [self._LINES[0].replace("10000", "20000"), self._LINES[1].replace("-110", "-5")]
+        result = self._attribute(
+            request,
+            sys_tst_bldr,
+            job_info,
+            [("test-node-001", line) for line in lines],
+            [4, 5],
+        )
+        assert "detected bad NIC state" in result.symptoms
+
+    def test_repeated_pair_preserves_unmatched_device_evidence(self, request, sys_tst_bldr, job_info):
+        other = self._LINES[0].replace("0000:01:00.0", "0000:02:00.0")
+        lines = [*self._LINES, *self._LINES, other]
+        result = self._attribute(
+            request,
+            sys_tst_bldr,
+            job_info,
+            [("test-node-001", line) for line in lines],
+            [1, 2, 3, 4, 5],
+        )
+        assert len(result.symptoms["detected bad NIC state"]) == 4
+        assert {source.datum for source in result.symptoms[self._COMPONENTS[0]]} == {other}
+
+    @pytest.mark.parametrize(
+        "secondary,independent",
+        [
+            ("ibv_open_device failed", None),
+            ("Call to ibv_modify_qp failed", "Node unexpectedly rebooted"),
+            ("Call to ibv_modify_qp failed", "Page Retirement"),
+        ],
+    )
+    def test_outcome_precedence_preserves_evidence(
+        self, request, sys_tst_bldr, job_info, secondary, independent
+    ):
+        extra_symptoms = [secondary]
+        if independent is not None:
+            extra_symptoms.append(independent)
+        result = self._attribute(
+            request,
+            sys_tst_bldr,
+            job_info,
+            [("test-node-001", line) for line in self._LINES],
+            [4, 4.002],
+            extra_symptoms=extra_symptoms,
+        )
+
+        expected = {"detected bad NIC state", independent or secondary}
+        node_symptoms = result.bad_nodes_attr.my_bad_nodes["test-node-001"].attributions
+        assert set(result.symptoms.symptoms()) == expected
+        assert set(node_symptoms.symptoms()) == expected
+        for symptom in expected:
+            assert result.symptoms[symptom].has_bad()
+            assert node_symptoms[symptom].has_bad()
+        for symptoms in (result.symptoms, node_symptoms):
+            for symptom in extra_symptoms:
+                assert {source.datum for source in symptoms[symptom].all_sources()} == {symptom}
+            if independent is not None:
+                # Existing IB cleanup demotes generic QP after finding a non-IB root cause.
+                assert not symptoms[secondary].has_bad()
+                assert symptoms[secondary].has_interesting()
+        outcome = result.outcome_attr.value()
+        if independent is None:
+            expected_outcome = "Fail InfraSW"
+        else:
+            expected_outcome = "Fail InfraHW"
+        assert outcome.outcome == expected_outcome
+        assert outcome.root_cause_symptom == (independent or "detected bad NIC state")
+
+    @pytest.mark.parametrize("offset,expected", [(0, True), (4, False)])
+    def test_default_observation_window(self, request, sys_tst_bldr, job_info, offset, expected):
+        end_ns = int(job_info.job_end_time.timestamp() * 1e9)
+        result = sys_tst_bldr(
+            job_info,
+            [
+                make_syslog_entry(body=line, node="test-node-001", timestamp_ns=end_ns + offset * 10**9)
+                for line in self._LINES
+            ],
+            stream_id=request.node.name,
+        )
+        bad_nodes = core.CalcBadNodesAttributionResult()
+        bad_nodes.my_bad_nodes = result.get_node_attributions()
+        attribution = core.attribute(
+            event_stream=result.event_stream,
+            job_info=result.job_info,
+            bad_node_result=bad_nodes,
+            extract_job_metadata_from_logfile=False,
+        )
+        assert ("detected bad NIC state" in attribution.symptoms) is expected
 
 
 class TestFmLostAllGpusOutcome:

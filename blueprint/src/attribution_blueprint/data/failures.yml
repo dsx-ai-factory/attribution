@@ -16363,3 +16363,49 @@ failures:
   severity: critical
   verification: verified
   last_reviewed: 2026-07-23
+- id: detected-bad-nic-state
+  title: detected bad NIC state
+  aliases:
+  - mlx5 firmware in initialization state
+  - mlx5 device initialization failed
+  category: distributed_comm
+  likely_owner: infrastructure
+  personas:
+    tenant_sre:
+      title: NIC firmware initialization failed near workload termination
+      summary: The mlx5 driver reported firmware stuck in initialization and a device initialization failure on the same NIC.
+      impact: The affected NIC may be unavailable for workload communication. The correlated pair maps to Fail InfraSW; higher-priority independent faults retain precedence.
+      action: Ask the infrastructure owner to inspect NIC firmware and driver health before reusing the affected node.
+      support_details: Include the NVIDIA Attribution diagnosis (verdict, symptom chain, and source logs), node, PCI address, and job end time.
+  technical_details: >-
+    Both active signals must originate on the same node and PCI device, each between job end and 120 seconds after
+    job end (inclusive). Collection and observation windows must admit these post-job records.
+    Producers must explicitly provide a corresponding collection and observation window.
+    The timeout value is matched numerically, not fixed to 10000. The initialization error code is not
+    restricted to -110. Missing timestamps or a missing job end time cannot establish the compound diagnosis.
+    Only matched source records become secondary evidence; the compound symptom retains their original provenance.
+    The two signals establish the compound diagnosis without requiring a QP or device-open failure.
+    The compound rule preserves QP and ibv_open_device failure symptoms and their source evidence, taking
+    precedence over their outcome mappings except for QP failures explicitly attributed to overwritten NCCL parameters.
+    Existing cascade cleanup can still demote generic QP failures to interesting evidence when Slurm node failure,
+    unexpected reboot, or Page Retirement is present.
+    Independent faults such as unexpected reboot, Page Retirement, and RDMA fabric flap retain precedence.
+    Without the compound diagnosis, QP and device-open outcome mappings remain unchanged.
+    An individual component does not independently establish this diagnosis. The classification identifies an unhealthy
+    NIC state, not proof of a firmware software defect, permanent hardware damage, or a particular network role.
+  summary: Correlated mlx5 firmware-initialization and device-initialization failures near job end.
+  signals:
+  - kind: log
+    pattern: 'mlx5_core.*Firmware over \d+ MS in initializing state, aborting'
+    note: Requires the initialization-failure message on the same node and PCI device near job end.
+  - kind: log
+    pattern: 'mlx5_core.*mlx5_init_one failed with error code'
+    note: Requires the firmware-initialization message on the same node and PCI device near job end.
+  related:
+  - ibv-event-device-fatal
+  references:
+  - title: Linux mlx5 driver initialization source
+    url: https://github.com/torvalds/linux/blob/master/drivers/net/ethernet/mellanox/mlx5/core/main.c
+  severity: high
+  verification: verified
+  last_reviewed: 2026-10-16
