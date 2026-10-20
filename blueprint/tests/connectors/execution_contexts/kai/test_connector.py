@@ -333,22 +333,26 @@ def test_hierarchical_podgroup_is_emitted_and_flagged(mocker):
     assert ctx["podgroup_shape"] == "hierarchical"
 
 
-def test_same_name_new_uid_does_not_inherit_previous_incarnation_pods(mocker):
+def test_recreated_podgroup_under_unchanged_job_is_a_known_limitation(mocker):
+    """Documents an accepted gap: Kubernetes exposes no reliable signal to
+    tell a leftover Pod from an earlier, same-named PodGroup incarnation
+    apart from a genuine new member when the owning Job is unchanged (see
+    `_member_pods`). Both pods share the live owner Job UID, so both are
+    treated as members; this is intentional, not a regression to "fix" with
+    an unreliable timestamp guard."""
     new_pg = _podgroup(uid="uid-pg-new", created="2026-05-01T14:00:00Z")
     owner_uid = "uid-job-uid-pg-new"
     pods = [
         _pod(
             "old-0",
             created="2026-05-01T12:00:00Z",
-            podgroup_assigned="2026-05-01T12:00:01Z",
             node="node-old",
             phase="Failed",
             controller=("Job", owner_uid),
         ),
         _pod(
             "new-0",
-            created="2026-05-01T13:59:59Z",
-            podgroup_assigned="2026-05-01T14:00:01Z",
+            created="2026-05-01T14:00:01Z",
             node="node-new",
             controller=("Job", owner_uid),
         ),
@@ -358,16 +362,18 @@ def test_same_name_new_uid_does_not_inherit_previous_incarnation_pods(mocker):
     [ctx] = KaiExecutionContextAdapter().discover_by_ids(["team-alpha/pg-a"])
 
     assert ctx["id"] == "uid-pg-new"
-    assert ctx["pod_names"] == ["new-0"]
-    assert ctx["nodes"] == ["node-new"]
+    assert ctx["pod_names"] == ["new-0", "old-0"]
+    assert ctx["nodes"] == ["node-new", "node-old"]
 
 
 def test_pod_created_before_its_podgroup_is_a_member(mocker):
+    """KAI can create a PodGroup after submitting its Pods, so a Pod
+    predating its PodGroup is the normal case, not stale-incarnation
+    evidence; membership must not exclude it."""
     pg = _podgroup(created="2026-05-01T12:00:00Z")
     pod = _pod(
         "early-0",
         created="2026-05-01T11:59:00Z",
-        podgroup_assigned="2026-05-01T12:00:01Z",
         node="node-early",
         controller=("Job", "uid-job-uid-pg-a"),
     )
@@ -380,7 +386,7 @@ def test_pod_created_before_its_podgroup_is_a_member(mocker):
     assert ctx["start_time"] == datetime(2026, 5, 1, 11, 59, tzinfo=timezone.utc)
 
 
-def test_pod_without_an_annotation_assignment_time_is_not_member_evidence(mocker):
+def test_pod_membership_does_not_require_managed_fields(mocker):
     pg = _podgroup()
     pod = _pod("ambiguous-0", controller=("Job", "uid-job-uid-pg-a"))
     del pod["metadata"]["managedFields"]
@@ -388,8 +394,8 @@ def test_pod_without_an_annotation_assignment_time_is_not_member_evidence(mocker
 
     [ctx] = KaiExecutionContextAdapter().discover_by_ids(["team-alpha/pg-a"])
 
-    assert "pod_names" not in ctx
-    assert ctx["nodes"] == []
+    assert ctx["pod_names"] == ["ambiguous-0"]
+    assert ctx["nodes"] == ["node001"]
 
 
 def test_time_range_uses_a_member_pod_that_predates_its_podgroup(mocker):
@@ -397,7 +403,6 @@ def test_time_range_uses_a_member_pod_that_predates_its_podgroup(mocker):
     pod = _pod(
         "early-0",
         created="2026-05-01T11:59:00Z",
-        podgroup_assigned="2026-05-01T12:00:01Z",
         controller=("Job", "uid-job-uid-pg-a"),
     )
     _wire_kubectl(mocker, [pg], [pod])
