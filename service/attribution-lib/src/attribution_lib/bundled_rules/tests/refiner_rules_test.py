@@ -4385,6 +4385,7 @@ class TestOutcomeReclassification:
         # pass vacuously regardless of whether that check is implemented
         # correctly.
         symptoms = _make_symptoms(obs_ctx, "job failed")
+        result.symptoms.update(symptoms)
         _run_post_outcome(stream, ji, symptoms, outcome=result.outcome_attr, attribution_result=result)
         assert result.outcome_attr.value().outcome == "Pass"
         assert result.outcome_attr.value().root_cause_symptom == "SLURM preempted"
