@@ -79,6 +79,16 @@ def test_legacy_event_consumption_handles_mixed_payloads_and_preserves_sources(
     assert panic_source.line_num == 18
     assert panic_source.rule == "test_rule"
 
+    event_type = stream.mgr.types.get_id("Attribution.node.bad")
+    remaining_events = list(query_events_with_source(stream, event_type))
+    assert len(remaining_events) == 1
+    _, _, remaining_payload, remaining_source = remaining_events[0]
+    assert remaining_payload == {"node": "node-001"}
+    assert remaining_source is not None
+    assert remaining_source.datum == "missing symptom evidence"
+    assert remaining_source.line_num == 19
+    assert remaining_source.rule == "test_rule"
+
 
 def test_snapshot_preserves_nested_symptom_identity_payload(tmp_path, dummy_ctx):
     payload = {

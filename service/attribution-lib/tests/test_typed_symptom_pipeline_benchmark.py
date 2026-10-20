@@ -108,29 +108,37 @@ def test_event_storage_round_trip_baseline(benchmark, event_stream, dummy_ctx):
         for index in range(EVENT_COUNT)
     ]
 
-    def store_and_clear() -> int:
-        """Store one event batch and clear it before the next round.
+    def clear_events():
+        """Clear the prior round outside the timed operation.
 
         Returns:
-            Number of persisted events.
+            Empty positional and keyword arguments for the benchmark round.
+        """
+        stream.execute("DELETE FROM events WHERE context_id=?", [stream.ctx_id])
+        return (), {}
+
+    def store_events() -> None:
+        """Store one event batch.
+
+        Returns:
+            None.
         """
         for payload, source in events:
             stream.add_event("Attribution.node.bad", payload, source)
         stream.flush()
-        count = stream.query_raw(
-            "SELECT COUNT(*) FROM events WHERE context_id=?",
-            [stream.ctx_id],
-        )[0][0]
-        stream.execute("DELETE FROM events WHERE context_id=?", [stream.ctx_id])
-        return count
 
-    stored_count = benchmark.pedantic(
-        store_and_clear,
+    benchmark.pedantic(
+        store_events,
+        setup=clear_events,
         rounds=BENCHMARK_ROUNDS,
         warmup_rounds=BENCHMARK_WARMUP_ROUNDS,
         iterations=1,
     )
 
+    stored_count = stream.query_raw(
+        "SELECT COUNT(*) FROM events WHERE context_id=?",
+        [stream.ctx_id],
+    )[0][0]
     assert stored_count == EVENT_COUNT
 
 
