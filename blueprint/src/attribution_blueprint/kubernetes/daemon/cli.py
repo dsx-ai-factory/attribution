@@ -13,6 +13,8 @@ from attribution_blueprint.kubernetes.daemon.runtime import KubernetesDaemon
 from attribution_blueprint.kubernetes.daemon.server import serve_api
 from attribution_blueprint.kubernetes.daemon.sqlite_store import SQLitePlacementStore
 
+_API_REQUEST_TIMEOUT_SECONDS = (10.0, 120.0)
+
 
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Record durable Kubernetes evidence")
@@ -33,22 +35,29 @@ def main() -> None:
     from kubernetes import client, config
 
     args = _parser().parse_args()
+    configuration = client.Configuration()
     if args.kubeconfig or args.context:
-        config.load_kube_config(config_file=args.kubeconfig, context=args.context)
+        config.load_kube_config(
+            config_file=args.kubeconfig,
+            context=args.context,
+            client_configuration=configuration,
+        )
     else:
         try:
-            config.load_incluster_config()
+            config.load_incluster_config(client_configuration=configuration)
         except config.ConfigException:
-            config.load_kube_config()
+            config.load_kube_config(client_configuration=configuration)
 
-    custom_api = client.CustomObjectsApi()
+    api_client = client.ApiClient(configuration)
+    _set_default_api_timeout(api_client)
+    custom_api = client.CustomObjectsApi(api_client)
     placement_store = SQLitePlacementStore(args.sqlite_path, retention_days=args.retention_days)
     daemon = KubernetesDaemon(
-        client.CoreV1Api(),
+        client.CoreV1Api(api_client),
         placement_store,
         args.namespace,
         owner_resolver=KubernetesOwnershipResolver(
-            client.BatchV1Api(),
+            client.BatchV1Api(api_client),
             custom_api,
             jobset_version=args.jobset_version,
         ),
@@ -66,6 +75,18 @@ def main() -> None:
     signal.signal(signal.SIGTERM, stop)
     signal.signal(signal.SIGINT, stop)
     daemon.run()
+
+
+def _set_default_api_timeout(api_client) -> None:
+    """Bound connect and read time for list, watch, and enrichment calls."""
+    call_api = api_client.call_api
+
+    def call_api_with_timeout(*args, **kwargs):
+        if kwargs.get("_request_timeout") is None:
+            kwargs["_request_timeout"] = _API_REQUEST_TIMEOUT_SECONDS
+        return call_api(*args, **kwargs)
+
+    api_client.call_api = call_api_with_timeout
 
 
 if __name__ == "__main__":
