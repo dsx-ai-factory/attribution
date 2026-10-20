@@ -27,6 +27,7 @@ def _pod() -> dict:
             "name": "trainer-0",
             "namespace": "team-a",
             "uid": "pod-uid-1",
+            "resourceVersion": "1",
             "ownerReferences": [
                 {
                     "apiVersion": "batch/v1",
@@ -440,21 +441,22 @@ def test_complete_listing_reconciles_absent_placements(mocker):
     daemon = KubernetesDaemon(core_api=None, store=store, namespace="team-a")
     pod = _pod()
 
-    daemon._enqueue(pod)
     daemon._reconcile_active_pods([pod])
+
     store.reconcile_active_pods.assert_called_once_with(
         "team-a",
         {"pod-uid-1"},
     )
-    assert daemon._pending["pod-uid-1"][0] == pod
 
 
 def test_relist_marks_queued_but_now_absent_pod_deleted(tmp_path):
     path = tmp_path / "placements.db"
     store = SQLitePlacementStore(str(path))
-    daemon = KubernetesDaemon(core_api=None, store=store, namespace="team-a")
-    daemon._enqueue(_pod())
+    daemon = KubernetesDaemon(core_api=None, store=store, namespace="team-a", cluster_id="cluster-a")
+    pod = _pod()
+    pod["metadata"]["resourceVersion"] = "42"
 
+    daemon._capture(_PodWatchSource(), pod, "SNAPSHOT")
     daemon._reconcile_active_pods([])
 
     assert store.get_by_pod_uid("pod-uid-1") is not None
