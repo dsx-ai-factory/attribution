@@ -342,12 +342,28 @@ class TestJobInfoClusterIncidentContext:
         assert candidate.total_non_job_events is None
         assert candidate.incident_start_settled is None
 
+    def test_candidate_preserves_zero_counts(self):
+        candidate = ClusterIncidentCandidate(
+            incident_scope=ClusterIncidentScope.NODE,
+            signature_class=ClusterIncidentSignature.OTHER,
+            non_job_nodes_affected=0,
+            non_job_domains_affected=0,
+            total_non_job_events=0,
+        )
+
+        assert candidate.non_job_nodes_affected == 0
+        assert candidate.non_job_domains_affected == 0
+        assert candidate.total_non_job_events == 0
+
     @pytest.mark.parametrize(
         "candidate",
         [
             {"incident_scope": "rack", "signature_class": "storage_fault"},
             {"incident_scope": "cluster", "signature_class": "unknown_fault"},
             {"incident_scope": "cluster", "signature_class": "storage_fault", "non_job_nodes_affected": -1},
+            {"incident_scope": "cluster", "signature_class": "storage_fault", "non_job_nodes_affected": True},
+            {"incident_scope": "cluster", "signature_class": "storage_fault", "non_job_domains_affected": True},
+            {"incident_scope": "cluster", "signature_class": "storage_fault", "total_non_job_events": True},
             {"incident_scope": "cluster", "signature_class": "storage_fault", "producer_only_field": "rejected"},
         ],
     )
@@ -365,6 +381,13 @@ class TestJobInfoClusterIncidentContext:
 
         with pytest.raises(TypeError, match="cluster_incident_context must be a ClusterIncidentContext"):
             builder.cluster_incident_context({"candidates": []})  # type: ignore[arg-type]
+
+    def test_builder_rejects_second_context_after_explicit_none(self, timezone):
+        builder = _builder(timezone, node_to_ranks={})
+        builder.cluster_incident_context(None)
+
+        with pytest.raises(JobInfoDuplicateFieldError):
+            builder.cluster_incident_context(ClusterIncidentContext())
 
 
 class TestJobInfoTags:

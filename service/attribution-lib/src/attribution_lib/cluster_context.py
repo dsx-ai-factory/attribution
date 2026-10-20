@@ -4,9 +4,11 @@
 """Validated cluster-incident context supplied by attribution clients."""
 
 from enum import StrEnum
-from typing import Optional
+from typing import Annotated, Optional
 
 from pydantic import BaseModel, ConfigDict, Field
+
+_NonNegativeInt = Annotated[int, Field(strict=True, ge=0)]
 
 
 class ClusterIncidentScope(StrEnum):
@@ -35,9 +37,9 @@ class ClusterIncidentCandidate(BaseModel):
 
     incident_scope: ClusterIncidentScope
     signature_class: ClusterIncidentSignature
-    non_job_nodes_affected: Optional[int] = Field(default=None, ge=0)
-    non_job_domains_affected: Optional[int] = Field(default=None, ge=0)
-    total_non_job_events: Optional[int] = Field(default=None, ge=0)
+    non_job_nodes_affected: Optional[_NonNegativeInt] = None
+    non_job_domains_affected: Optional[_NonNegativeInt] = None
+    total_non_job_events: Optional[_NonNegativeInt] = None
     failure_episode_id: Optional[str] = None
     cluster_incident_id: Optional[str] = None
     incident_start_settled: Optional[bool] = None

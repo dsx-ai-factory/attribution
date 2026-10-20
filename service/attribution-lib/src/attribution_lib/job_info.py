@@ -375,6 +375,7 @@ class JobInfoBuilder:
     _allocation_failure: Optional[SchedulerFailure] = None
     _execution_cancellation: Optional[ExecutionCancellation] = None
     _cluster_incident_context: Optional[ClusterIncidentContext] = None
+    _cluster_incident_context_set: bool
     _cluster: str
     _slurm_node_infos: dict[str, dict[str, str]] = dict()
     _job_start_time: datetime
@@ -420,6 +421,7 @@ class JobInfoBuilder:
         self._framework = framework
         self._source_name = source_name
         self._timezone = timezone
+        self._cluster_incident_context_set = False
 
         copied = {k.lower(): list(v) for k, v in node_to_ranks.items()}
 
@@ -547,11 +549,12 @@ class JobInfoBuilder:
         Raises:
             TypeError: If the client supplies an unvalidated value.
         """
-        if self._cluster_incident_context is not None:
+        if self._cluster_incident_context_set:
             raise JobInfoDuplicateFieldError("cluster_incident_context")
         if context is not None and not isinstance(context, ClusterIncidentContext):
             raise TypeError("cluster_incident_context must be a ClusterIncidentContext")
         self._cluster_incident_context = context
+        self._cluster_incident_context_set = True
         return self
 
     def slurm_node_infos(self, in_slurm_node_infos: dict[str, dict[str, str]]) -> "JobInfoBuilder":
