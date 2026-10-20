@@ -1409,6 +1409,30 @@ def test_capture_journals_deletion_before_enqueuing_bound_pod(tmp_path):
     assert daemon._pending["pod-uid-1"][0]["metadata"]["uid"] == "pod-uid-1"
 
 
+def test_failed_deleted_capture_still_starts_retention(tmp_path, mocker):
+    path = tmp_path / "placements.db"
+    store = SQLitePlacementStore(str(path))
+    daemon = KubernetesDaemon(core_api=None, store=store, namespace="team-a", cluster_id="cluster-a")
+    pod = _pod()
+    pod["metadata"]["resourceVersion"] = "17"
+    store.create(PlacementRecord.for_pod(pod))
+    mocker.patch.object(
+        store,
+        "capture_observation",
+        side_effect=OSError("synthetic storage failure"),
+    )
+
+    assert daemon._capture(_PodWatchSource(), pod, "DELETED") is False
+
+    with sqlite3.connect(path) as connection:
+        marker = connection.execute(
+            "SELECT pod_uid FROM placement_deletion"
+        ).fetchone()
+    assert marker == ("pod-uid-1",)
+    assert daemon.health.persistence_failed is True
+    assert not daemon._pending and not daemon._in_flight
+
+
 def test_saturated_placement_queue_does_not_block_journal_capture(tmp_path):
     store = SQLitePlacementStore(str(tmp_path / "placements.db"))
     _initialize_pod_coverage(store)
