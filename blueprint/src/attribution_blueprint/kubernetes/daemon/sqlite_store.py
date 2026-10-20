@@ -68,6 +68,8 @@ CREATE TABLE IF NOT EXISTS resource_observation (
 );
 CREATE INDEX IF NOT EXISTS resource_observation_identity
     ON resource_observation(cluster_id, namespace, uid, id);
+CREATE INDEX IF NOT EXISTS resource_observation_kind
+    ON resource_observation(cluster_id, namespace, kind, id);
 CREATE TABLE IF NOT EXISTS observation_owner_reference (
     observation_id INTEGER NOT NULL,
     owner_uid TEXT NOT NULL,
@@ -262,6 +264,7 @@ class SQLitePlacementStore:
                         f"resource {observation.kind} {observation.namespace}/{observation.name} "
                         f"UID {observation.uid} version {observation.resource_version} changed during replay"
                     )
+                self._prune_expired(connection)
                 return ObservationAppendResult.DUPLICATE
 
             cursor = connection.execute(
@@ -298,6 +301,7 @@ class SQLitePlacementStore:
                     for owner in observation.owner_references
                 ],
             )
+            self._prune_expired(connection)
         return ObservationAppendResult.APPENDED
 
     def list_observations_for_uid(
@@ -307,6 +311,7 @@ class SQLitePlacementStore:
         uid: str,
     ) -> list[ResourceObservation]:
         with self._connection() as connection:
+            self._prune_expired(connection)
             rows = connection.execute(
                 """
                 SELECT *
@@ -325,6 +330,7 @@ class SQLitePlacementStore:
         owner_uid: str,
     ) -> list[ResourceObservation]:
         with self._connection() as connection:
+            self._prune_expired(connection)
             rows = connection.execute(
                 """
                 SELECT observation.*
@@ -416,6 +422,124 @@ class SQLitePlacementStore:
             """,
             (f"-{self.retention_days} days",),
         )
+        rows = connection.execute(
+            """
+            WITH latest AS (
+                SELECT cluster_id, namespace, uid, MAX(id) AS observation_id
+                FROM resource_observation
+                GROUP BY cluster_id, namespace, uid
+            )
+            SELECT observation.*
+            FROM resource_observation AS observation
+            JOIN latest ON latest.observation_id = observation.id
+            """
+        ).fetchall()
+        observed = {
+            (row["cluster_id"], row["namespace"], row["uid"])
+            for row in rows
+        }
+        candidates: dict[tuple[str, str, str], sqlite3.Row] = {}
+        for row in rows:
+            controller_uid = _controller_uid(row)
+            if row["kind"] in {"Workload", "PodGroup"}:
+                root_uid = controller_uid or row["uid"]
+                key = (row["cluster_id"], row["namespace"], root_uid)
+                current = candidates.get(key)
+                if (
+                    current is None
+                    or current["kind"] not in {"Workload", "PodGroup"}
+                    or row["id"] > current["id"]
+                ):
+                    candidates[key] = row
+            elif controller_uid is None or (
+                row["cluster_id"],
+                row["namespace"],
+                controller_uid,
+            ) not in observed:
+                key = (row["cluster_id"], row["namespace"], row["uid"])
+                candidates.setdefault(key, row)
+        for (cluster_id, namespace, controller_uid), candidate in candidates.items():
+            if not _expired_terminal_resource(
+                connection,
+                candidate,
+                self.retention_days,
+            ):
+                continue
+            connection.execute(
+                """
+                WITH RECURSIVE related(uid) AS (
+                    SELECT ?
+                    UNION
+                    SELECT observation.uid
+                    FROM resource_observation AS observation
+                    JOIN observation_owner_reference AS owner
+                      ON owner.observation_id = observation.id
+                    JOIN related ON related.uid = owner.owner_uid
+                    WHERE observation.cluster_id = ?
+                      AND observation.namespace = ?
+                )
+                DELETE FROM resource_observation
+                WHERE cluster_id = ? AND namespace = ?
+                  AND uid IN (SELECT uid FROM related)
+                """,
+                (
+                    controller_uid,
+                    cluster_id,
+                    namespace,
+                    cluster_id,
+                    namespace,
+                ),
+            )
+
+
+def _controller_uid(row: sqlite3.Row) -> str | None:
+    controllers = [
+        owner.get("uid")
+        for owner in json.loads(row["owner_references_json"])
+        if owner.get("controller") is True and owner.get("uid")
+    ]
+    return controllers[0] if len(controllers) == 1 else None
+
+
+def _expired_terminal_resource(
+    connection: sqlite3.Connection,
+    row: sqlite3.Row,
+    retention_days: int,
+) -> bool:
+    terminal_at = _terminal_at(row)
+    if terminal_at is None:
+        return False
+    return bool(
+        connection.execute(
+            "SELECT datetime(?) < datetime('now', ?)",
+            (terminal_at, f"-{retention_days} days"),
+        ).fetchone()[0]
+    )
+
+
+def _terminal_at(row: sqlite3.Row) -> str | None:
+    if row["event_type"] == "DELETED":
+        return row["observed_at"]
+    status = json.loads(row["status_json"]) if row["status_json"] else {}
+    transitions = [
+        condition.get("lastTransitionTime")
+        for condition in status.get("conditions") or []
+        if condition.get("type") in {
+            "Complete",
+            "Completed",
+            "Failed",
+            "Finished",
+        }
+        and condition.get("status") == "True"
+        and condition.get("lastTransitionTime")
+    ]
+    if transitions:
+        return max(transitions)
+    if status.get("phase") in {"Failed", "Succeeded"} or status.get(
+        "terminalState"
+    ):
+        return row["source_timestamp"] or row["observed_at"]
+    return status.get("completionTime")
 
 
 def _placement_identity(record: PlacementRecord) -> tuple:

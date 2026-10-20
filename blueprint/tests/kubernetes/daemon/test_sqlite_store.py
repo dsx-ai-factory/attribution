@@ -3,6 +3,7 @@
 
 import sqlite3
 from dataclasses import replace
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
@@ -72,6 +73,31 @@ def _observation(
             ),
         ),
         selected_metadata=selected_metadata,
+        status=status,
+    )
+
+
+def _history_observation(
+    *,
+    kind: str,
+    name: str,
+    uid: str,
+    observed_at: str,
+    owners: tuple[OwnerReference, ...] = (),
+    status: dict | None = None,
+    event_type: ObservationEventType = "MODIFIED",
+) -> ResourceObservation:
+    return ResourceObservation(
+        cluster_id="cluster-a",
+        api_version="v1",
+        kind=kind,
+        namespace="team-a",
+        name=name,
+        uid=uid,
+        resource_version="1",
+        event_type=event_type,
+        observed_at=observed_at,
+        owner_references=owners,
         status=status,
     )
 
@@ -178,7 +204,8 @@ def test_deleted_placement_expires_after_retention_window(tmp_path):
             "UPDATE placement_deletion SET deleted_at = datetime('now', '-2 days')"
         )
 
-    assert store.get_by_pod_uid(record.pod_uid) is None
+    reopened = SQLitePlacementStore(str(path), retention_days=1)
+    assert reopened.get_by_pod_uid(record.pod_uid) is None
 
 
 def test_reconcile_marks_absent_pods_without_resetting_deletion_time(tmp_path):
@@ -317,6 +344,154 @@ def test_observation_journal_is_append_only_and_survives_reopen(tmp_path):
         initial,
         updated,
     ]
+
+
+def test_expired_workload_prunes_its_complete_controller_history(tmp_path):
+    path = tmp_path / "placements.db"
+    store = SQLitePlacementStore(str(path), retention_days=30)
+    old = (datetime.now(timezone.utc) - timedelta(days=2)).isoformat()
+    jobset_owner = OwnerReference(
+        api_version="jobset.x-k8s.io/v1alpha2",
+        kind="JobSet",
+        name="training",
+        uid="jobset-uid",
+        controller=True,
+    )
+    job_owner = OwnerReference(
+        api_version="batch/v1",
+        kind="Job",
+        name="worker",
+        uid="job-uid",
+        controller=True,
+    )
+    observations = [
+        _history_observation(
+            kind="JobSet",
+            name="training",
+            uid="jobset-uid",
+            observed_at=old,
+        ),
+        _history_observation(
+            kind="Job",
+            name="worker",
+            uid="job-uid",
+            observed_at=old,
+            owners=(jobset_owner,),
+        ),
+        _history_observation(
+            kind="Pod",
+            name="worker-0",
+            uid="pod-uid",
+            observed_at=old,
+            owners=(job_owner,),
+        ),
+        _history_observation(
+            kind="Workload",
+            name="training-workload",
+            uid="workload-uid",
+            observed_at=old,
+            owners=(jobset_owner,),
+            status={
+                "conditions": [
+                    {
+                        "type": "Finished",
+                        "status": "True",
+                        "lastTransitionTime": old,
+                    }
+                ]
+            },
+        ),
+    ]
+    for observation in observations:
+        store.append_observation(observation)
+
+    SQLitePlacementStore(str(path), retention_days=1)
+
+    with sqlite3.connect(path) as connection:
+        assert connection.execute(
+            "SELECT COUNT(*) FROM resource_observation"
+        ).fetchone()[0] == 0
+
+
+def test_old_active_workload_history_is_retained(tmp_path):
+    path = tmp_path / "placements.db"
+    store = SQLitePlacementStore(str(path), retention_days=1)
+    old = (datetime.now(timezone.utc) - timedelta(days=2)).isoformat()
+    workload = _history_observation(
+        kind="Workload",
+        name="training-workload",
+        uid="workload-uid",
+        observed_at=old,
+        status={"conditions": [{"type": "Admitted", "status": "True"}]},
+    )
+
+    store.append_observation(workload)
+
+    assert store.list_observations_for_uid(
+        "cluster-a",
+        "team-a",
+        "workload-uid",
+    ) == [workload]
+
+
+def test_expired_non_workload_histories_are_pruned(tmp_path):
+    path = tmp_path / "placements.db"
+    store = SQLitePlacementStore(str(path), retention_days=30)
+    old = (datetime.now(timezone.utc) - timedelta(days=2)).isoformat()
+    kai_job = OwnerReference(
+        api_version="batch/v1",
+        kind="Job",
+        name="kai-job",
+        uid="kai-job-uid",
+        controller=True,
+    )
+    missing_job = OwnerReference(
+        api_version="batch/v1",
+        kind="Job",
+        name="missing-job",
+        uid="missing-job-uid",
+        controller=True,
+    )
+    observations = [
+        _history_observation(
+            kind="Job",
+            name="standalone-job",
+            uid="standalone-job-uid",
+            observed_at=old,
+            event_type="DELETED",
+        ),
+        _history_observation(
+            kind="Pod",
+            name="orphaned-pod",
+            uid="orphaned-pod-uid",
+            observed_at=old,
+            owners=(missing_job,),
+            event_type="DELETED",
+        ),
+        _history_observation(
+            kind="Job",
+            name="kai-job",
+            uid="kai-job-uid",
+            observed_at=old,
+        ),
+        _history_observation(
+            kind="PodGroup",
+            name="kai-group",
+            uid="podgroup-uid",
+            observed_at=old,
+            owners=(kai_job,),
+            event_type="DELETED",
+        ),
+    ]
+    for observation in observations:
+        store.append_observation(observation)
+
+    SQLitePlacementStore(str(path), retention_days=1)
+
+    with sqlite3.connect(path) as connection:
+        assert connection.execute(
+            "SELECT COUNT(*) FROM resource_observation"
+        ).fetchone()[0] == 0
 
 
 def test_observation_schema_adds_selected_metadata_to_existing_journal(tmp_path):
