@@ -170,7 +170,6 @@ class Context:
     """Describes the scope of an observation."""
 
     time_interval: TimeInterval
-    resources: ResourceSet
     source: Source
     format: Format
     timezone: ZoneInfo
@@ -178,7 +177,7 @@ class Context:
     pre_filtered: bool = field(default=False, kw_only=True, compare=False)
 
     def __hash__(self) -> int:
-        return hash((self.time_interval, self.resources, self.source, self.format, self.timezone))
+        return hash((self.time_interval, self.source, self.format, self.timezone))
 
     def __post_init__(self):
         assert isinstance(self.timezone, ZoneInfo)

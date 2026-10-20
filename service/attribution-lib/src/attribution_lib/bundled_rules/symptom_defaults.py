@@ -1441,6 +1441,15 @@ outcome_symptom(
     doc="megatron-core-dist-checkpointing-core-checkpointingexception",
 )
 
+# A concrete Megatron configuration error outranks generic NVRx failure context.
+# Keep configuration values in source evidence, not in the symptom label.
+outcome_symptom(
+    "Python Exception: AssertionError: batch size not divisible",
+    outcome="Fail User",
+    priority=OutcomePriority.LOW,
+    doc="python-exception",
+)
+
 outcome_symptom(
     "Missing key in checkpoint",
     outcome="Fail User",
@@ -1720,6 +1729,7 @@ outcome_symptom(
     outcome="Fail Undetermined",
     priority=OutcomePriority.LOW_GENERIC,
     doc="nvrx-detected-failure",
+    hw_cause="Underlying failure reason unavailable from the collected evidence.",
 )
 
 outcome_symptom(

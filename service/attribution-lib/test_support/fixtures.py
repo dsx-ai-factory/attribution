@@ -25,7 +25,6 @@ from attribution_lib.observation.inbound import (
     Source as ObservationSource,
     TimeInterval,
 )
-from attribution_lib.resources.resource_set import AllJobResources
 from test_support.helpers import (
     AttributionTestResult,
     create_simple_job_info,
@@ -92,11 +91,6 @@ def obs_data(timezone):
     return _build_observation
 
 
-@pytest.fixture
-def job_resources():
-    return AllJobResources
-
-
 _COMMON_TEST_RULE_NAMES = {"test_rule", "test"}
 
 
@@ -141,10 +135,8 @@ def simple_job_factory(timezone):
 
 
 @pytest.fixture
-def inbound_context(time_interval, job_resources, timezone):
-    return InboundContext(
-        time_interval, job_resources, ObservationSource.APPLOG, ObservationFormat.ENTRY_TIMESERIES, timezone
-    )
+def inbound_context(time_interval, timezone):
+    return InboundContext(time_interval, ObservationSource.APPLOG, ObservationFormat.ENTRY_TIMESERIES, timezone)
 
 
 @pytest.fixture

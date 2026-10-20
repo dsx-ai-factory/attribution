@@ -581,7 +581,6 @@ class JobInfoBuilder:
 
         context = ObservationContext(
             TimeInterval(self._interest_start_time, self._interest_end_time),
-            AllJobResources,
             ObservationSource.JOB_INFO,
             ObservationFormat.UNDEFINED,
             self._timezone,

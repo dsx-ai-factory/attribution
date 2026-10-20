@@ -714,6 +714,21 @@ def test_csp_category_is_generated_from_committed_declarations():
     assert "running without error" not in csp_symptoms
 
 
+def test_batch_size_assertion_is_registered_above_generic_nvrx_failure():
+    registry = _load_committed_registry()
+    symptom = "Python Exception: AssertionError: batch size not divisible"
+
+    assert registry.resolve_symptom(symptom) == symptom
+    match = registry.outcome_for(["NVRx detected failure", "Python Exception", symptom])
+
+    assert match is not None
+    assert match.symptom == symptom
+    assert match.matched_prefix == symptom
+    assert match.outcome == "Fail User"
+    assert match.tier_index == OUTCOME_PRIORITIES.index(OutcomePriority.LOW)
+    assert match.doc == "python-exception"
+
+
 def test_category_membership_deduplicates_scoped_declarations():
     registry = registry_from_declarations(
         [
