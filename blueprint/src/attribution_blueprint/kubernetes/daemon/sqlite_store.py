@@ -713,7 +713,9 @@ class SQLitePlacementStore:
     def _migrate_observation_schema(connection: sqlite3.Connection) -> None:
         columns = {
             row["name"]
-            for row in connection.execute("PRAGMA table_info(resource_observation)").fetchall()
+            for row in connection.execute(
+                "PRAGMA table_info(resource_observation)"
+            ).fetchall()
         }
         if "selected_metadata_json" not in columns:
             connection.execute(
@@ -837,6 +839,15 @@ class SQLitePlacementStore:
                     namespace,
                 ),
             )
+        cutoff = f"-{self.retention_days} days"
+        connection.execute(
+            """
+            UPDATE watch_coverage
+            SET coverage_started_at = datetime('now', ?)
+            WHERE datetime(coverage_started_at) < datetime('now', ?)
+            """,
+            (cutoff, cutoff),
+        )
 
 
 def _controller_uid(row: sqlite3.Row) -> str | None:
