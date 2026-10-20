@@ -71,7 +71,7 @@ flowchart TD
 ```
 
 Proposed extensions are documented separately. See the
-[KubernetesDaemon reference](../blueprint/src/attribution_blueprint/kubernetes/daemon/docs/README.md)
+[KubernetesDaemon reference](https://github.com/dsx-ai-factory/attribution/blob/main/blueprint/src/attribution_blueprint/kubernetes/daemon/docs/README.md)
 for durable Pod-to-node placement before post-hoc Kubernetes attribution.
 
 ## End-to-end flow for one workload
