@@ -846,6 +846,9 @@ def test_watch_coverage_and_gaps_survive_reopen(tmp_path):
     assert coverage.coverage_started_at == "2026-10-14T00:00:00Z"
     assert coverage.resource_version == "20"
     assert coverage.checkpointed_at == "2026-10-14T00:01:00Z"
+    assert reopened.list_watch_coverages("cluster-a", "team-a") == [
+        coverage
+    ]
     [gap] = reopened.list_coverage_gaps("cluster-a", "team-a")
     assert gap.reason == "WATCH_SOURCE_CHANGED"
     assert gap.start_resource_version == "10"

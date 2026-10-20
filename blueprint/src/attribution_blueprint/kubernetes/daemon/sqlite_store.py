@@ -381,6 +381,23 @@ class SQLitePlacementStore:
             ).fetchone()
         return _watch_coverage_from_row(row) if row else None
 
+    def list_watch_coverages(
+        self,
+        cluster_id: str,
+        namespace: str,
+    ) -> list[WatchCoverage]:
+        with self._connection() as connection:
+            rows = connection.execute(
+                """
+                SELECT *
+                FROM watch_coverage
+                WHERE cluster_id = ? AND namespace = ?
+                ORDER BY source_name
+                """,
+                (cluster_id, namespace),
+            ).fetchall()
+        return [_watch_coverage_from_row(row) for row in rows]
+
     def begin_coverage_gap(
         self,
         *,

@@ -332,6 +332,7 @@ def test_retained_jobset_retries_flow_as_distinct_execution_contexts(
     )
     assert contexts[1]["state"] == "COMPLETED"
     assert contexts[1]["nodes"] == ["node-b"]
+    assert all(context["history_complete"] is False for context in contexts)
 
     attribution = MagicMock()
     attribution.create_attributor.side_effect = (
@@ -439,6 +440,7 @@ def test_scheduler_readmission_creates_a_new_attempt():
         KueueExecutionContextAdapter._context_from_history_attempt(
             attempt,
             [],
+            {},
         )
         for attempt in attempts
     ]
@@ -471,3 +473,45 @@ def test_scheduler_readmission_creates_a_new_attempt():
         0,
         tzinfo=timezone.utc,
     )
+
+    coverage = {
+        "sources": [
+            {
+                "sourceName": source_name,
+                "coverageStartedAt": "2026-10-14T09:00:00Z",
+                "checkpointedAt": "2026-10-14T13:00:00Z",
+            }
+            for source_name in (
+                "kueue-workloads",
+                "jobsets",
+                "jobs",
+                "pods",
+            )
+        ],
+        "gaps": [],
+        "disabledWatches": {},
+    }
+    complete_context = (
+        KueueExecutionContextAdapter._context_from_history_attempt(
+            attempts[0],
+            [],
+            coverage,
+        )
+    )
+    assert complete_context["history_complete"] is True
+
+    coverage["gaps"] = [
+        {
+            "sourceName": "pods",
+            "startedAt": "2026-10-14T10:10:00Z",
+            "recoveredAt": "2026-10-14T10:20:00Z",
+        }
+    ]
+    partial_context = (
+        KueueExecutionContextAdapter._context_from_history_attempt(
+            attempts[0],
+            [],
+            coverage,
+        )
+    )
+    assert partial_context["history_complete"] is False

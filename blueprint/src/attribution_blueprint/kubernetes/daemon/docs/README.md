@@ -156,14 +156,14 @@ kubectl -n team-a port-forward service/attribution-kubernetes-daemon 18080:8080
 curl -fsS \
   'http://127.0.0.1:18080/v1/placements?namespace=team-a&resource_uid=WORKLOAD_OR_PODGROUP_UID'
 curl -fsS \
-  'http://127.0.0.1:18080/v1/history?namespace=team-a&controller_uid=JOB_OR_JOBSET_UID'
+  'http://127.0.0.1:18080/v1/history?namespace=team-a&kind=Workload&name=WORKLOAD_NAME'
 ```
 
 The service exposes `/livez`, `/readyz`, and two namespace-scoped read
 endpoints. `/v1/placements` requires `resource_uid`, which matches a resource
-associated with a Pod by a configured integration. `/v1/history` accepts
-`controller_uid` and returns retained observations, resources, and recursive
-ownership relationships for a Job or JobSet.
+associated with a Pod by a configured integration. `/v1/history` requires a
+resource `kind`, accepts an optional `name`, and returns matching retained
+controller histories with observations, Pod placements, and watch coverage.
 
 ## Troubleshooting
 

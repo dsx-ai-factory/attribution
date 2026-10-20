@@ -141,9 +141,7 @@ class KueueExecutionContext(TypedDict):
     # garbage-collected.
     pod_names: NotRequired[list[str]]
     pod_placements: NotRequired[list[PodPlacement]]
-    owner_uid: NotRequired[str]
-    attempt_boundary: NotRequired[dict]
-    history_observation_refs: NotRequired[list[dict]]
+    history_complete: NotRequired[bool]
     # Pod name -> `.spec.nodeName`, for connectors that need per-pod node
     # identity. Unscheduled pods are absent.
     pod_nodes: NotRequired[dict[str, str]]
@@ -847,6 +845,47 @@ def _history_attempt_state(
     )
 
 
+def _history_complete(
+    attempt: WorkloadAttempt,
+    coverage: dict,
+) -> bool:
+    required_sources = {"kueue-workloads", "jobs", "pods"}
+    if attempt.owner_kind == "JobSet":
+        required_sources.add("jobsets")
+    disabled = coverage.get("disabledWatches") or {}
+    sources = {
+        item.get("sourceName"): item
+        for item in coverage.get("sources") or []
+    }
+    for source_name in required_sources:
+        if source_name in disabled:
+            return False
+        source = sources.get(source_name)
+        if source is None:
+            return False
+        coverage_start = _parse_dt(source.get("coverageStartedAt"))
+        checkpoint = _parse_dt(source.get("checkpointedAt"))
+        if (
+            coverage_start is None
+            or checkpoint is None
+            or coverage_start > attempt.start_time
+            or checkpoint < attempt.end_time
+        ):
+            return False
+    for gap in coverage.get("gaps") or []:
+        if gap.get("sourceName") not in required_sources:
+            continue
+        gap_start = _parse_dt(gap.get("startedAt"))
+        gap_end = _parse_dt(gap.get("recoveredAt"))
+        if gap_start is None:
+            return False
+        if gap_start <= attempt.end_time and (
+            gap_end is None or gap_end >= attempt.start_time
+        ):
+            return False
+    return True
+
+
 class KueueExecutionContextAdapter:
     """ExecutionContextAdapter that talks to a Kubernetes cluster over the
     Kubernetes API.
@@ -990,6 +1029,7 @@ class KueueExecutionContextAdapter:
                     self._context_from_history_attempt(
                         attempt,
                         placements.get(attempt.workload_uid, []),
+                        history.get("coverage") or {},
                     )
                 )
         return contexts
@@ -998,6 +1038,7 @@ class KueueExecutionContextAdapter:
     def _context_from_history_attempt(
         attempt: WorkloadAttempt,
         placements: list[PlacementRecord],
+        coverage: dict,
     ) -> KueueExecutionContext:
         attempt_placements = [
             placement
@@ -1042,18 +1083,11 @@ class KueueExecutionContextAdapter:
             "end_time": attempt.end_time,
             "state": state,
             "kueue_state": kueue_state,
-            "attempt_boundary": {
-                "version": 1,
-                "admission": attempt.admission_key,
-                "restartAttempt": attempt.restart_attempt,
-                "endObserved": attempt.end_observed,
-            },
-            "history_observation_refs": list(
-                attempt.observation_refs
+            "history_complete": _history_complete(
+                attempt,
+                coverage,
             ),
         }
-        if attempt.owner_uid:
-            context["owner_uid"] = attempt.owner_uid
         return context
 
     def discover_by_time_range(

@@ -477,11 +477,15 @@ def _summarize_context(ctx: dict) -> dict[str, str]:
     if job_id is None:
         job_id = context_id
     attempt_id = ctx.get("attempt_id")
-    return {
+    summary = {
         "context_id": str(context_id if context_id is not None else "?"),
         "job_id": str(job_id if job_id is not None else "?"),
         "attempt_id": str(attempt_id if attempt_id is not None else ""),
     }
+    history_complete = ctx.get("history_complete")
+    if isinstance(history_complete, bool):
+        summary["history_complete"] = str(history_complete).lower()
+    return summary
 
 
 def _summarize_result(ctx: dict, result: dict) -> dict[str, str]:
