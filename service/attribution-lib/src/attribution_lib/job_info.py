@@ -8,6 +8,7 @@ from typing import NamedTuple, Optional, TypeVar
 from zoneinfo import ZoneInfo
 
 from attribution_lib import ufmlog_common, utils
+from attribution_lib.cluster_context import ClusterIncidentContext
 from attribution_lib.exceptions import (
     InvalidRankError,
     JobInfoDuplicateFieldError,
@@ -104,7 +105,11 @@ def _coerce_tags(raw: "str | Iterable[str] | None") -> frozenset[str]:
 
 
 class JobInfo(NamedTuple):
-    """Container class for parameters extracted from the job system, intended to be given to attribution engines (and not modified)"""
+    """Immutable inputs supplied by a client to attribution engines.
+
+    Most fields describe the job system. ``cluster_incident_context`` is separately
+    validated incident context inferred from telemetry outside the job.
+    """
 
     id: str
     # Legacy workload/category token from the wire (e.g. "slurm", "runai", "",
@@ -149,8 +154,8 @@ class JobInfo(NamedTuple):
     allocation_failure: Optional[SchedulerFailure] = None
     # Associated execution evidence does not overwrite the raw allocation fields.
     execution_cancellation: Optional[ExecutionCancellation] = None
-    # Optional caller-owned cluster context available to refiner rules.
-    cluster_context: Optional[dict[str, object]] = None
+    # Optional validated non-job incident context available to refiner rules.
+    cluster_incident_context: Optional[ClusterIncidentContext] = None
 
     @property
     def attributed_cancellation(self) -> Optional[ExecutionCancellation]:
@@ -369,7 +374,7 @@ class JobInfoBuilder:
     _failed_node: Optional[str] = None
     _allocation_failure: Optional[SchedulerFailure] = None
     _execution_cancellation: Optional[ExecutionCancellation] = None
-    _cluster_context: Optional[dict[str, object]] = None
+    _cluster_incident_context: Optional[ClusterIncidentContext] = None
     _cluster: str
     _slurm_node_infos: dict[str, dict[str, str]] = dict()
     _job_start_time: datetime
@@ -530,12 +535,23 @@ class JobInfoBuilder:
         self._execution_cancellation = evidence
         return self
 
-    def cluster_context(self, context: Optional[Mapping[str, object]]) -> "JobInfoBuilder":
-        """Supply caller-owned cluster context for attribution refiners."""
-        if self._cluster_context is not None:
-            raise JobInfoDuplicateFieldError("cluster_context")
-        if context is not None:
-            self._cluster_context = dict(context)
+    def cluster_incident_context(self, context: Optional[ClusterIncidentContext]) -> "JobInfoBuilder":
+        """Supply client-projected incident context for attribution refiners.
+
+        Args:
+            context: Validated incident context projected by the client.
+
+        Returns:
+            This builder.
+
+        Raises:
+            TypeError: If the client supplies an unvalidated value.
+        """
+        if self._cluster_incident_context is not None:
+            raise JobInfoDuplicateFieldError("cluster_incident_context")
+        if context is not None and not isinstance(context, ClusterIncidentContext):
+            raise TypeError("cluster_incident_context must be a ClusterIncidentContext")
+        self._cluster_incident_context = context
         return self
 
     def slurm_node_infos(self, in_slurm_node_infos: dict[str, dict[str, str]]) -> "JobInfoBuilder":
@@ -627,7 +643,7 @@ class JobInfoBuilder:
             failed_node=self._failed_node,
             allocation_failure=self._allocation_failure,
             execution_cancellation=self._execution_cancellation,
-            cluster_context=self._cluster_context,
+            cluster_incident_context=self._cluster_incident_context,
             cluster=self._cluster,
             nodes=derived_nodes,
             slurm_node_infos=self._slurm_node_infos,
