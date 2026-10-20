@@ -79,11 +79,12 @@ class _FakeKubernetesClient:
                 matches.append(item)
         return matches
 
-    def _by_controller_uid(self, uid: str) -> list[dict]:
+    def _by_controller_uid(self, uid: str, namespace: str | None) -> list[dict]:
         return [
             p
             for p in self.pods_payload["items"]
             if (p.get("metadata") or {}).get("labels", {}).get("batch.kubernetes.io/controller-uid") == uid
+            and (not namespace or (p.get("metadata") or {}).get("namespace") == namespace)
         ]
 
     @staticmethod
@@ -153,10 +154,13 @@ class _FakeKubernetesClient:
             }
         )
         if kind == "workloads":
-            return self.workloads_payload["items"]
+            items = self.workloads_payload["items"]
+            if namespace:
+                items = [item for item in items if (item.get("metadata") or {}).get("namespace") == namespace]
+            return items
         if kind == "pods":
             if label_selector and label_selector.startswith("batch.kubernetes.io/controller-uid="):
-                return self._by_controller_uid(label_selector.split("=", 1)[1])
+                return self._by_controller_uid(label_selector.split("=", 1)[1], namespace)
             return self._by_label(self.pods_payload["items"], label_selector, namespace)
         if kind == "jobs":
             return self._by_label(self.jobs_payload["items"], label_selector, namespace)
@@ -1016,6 +1020,21 @@ def test_unscoped_list_passes_namespace_none(mocker):
     eca.discover_by_time_range(start, end)
     listing_call = fake.calls[0]
     assert listing_call["namespace"] is None
+
+
+def test_namespace_scoped_discovery_excludes_other_namespaces(mocker):
+    """A namespace-scoped adapter must only see Workloads (and their Pods)
+    in its configured namespace, exercising the same scoping the real API
+    server enforces when a namespace is supplied to `list`."""
+    _wire_kubectl(mocker)
+    eca = KueueExecutionContextAdapter(namespace="team-alpha")
+    start = datetime(2026, 5, 1, 0, 0, 0, tzinfo=timezone.utc)
+    end = datetime(2026, 5, 2, 23, 59, 0, tzinfo=timezone.utc)
+
+    contexts = eca.discover_by_time_range(start, end)
+
+    assert "job-hpl-bench-pp99" not in {c["name"] for c in contexts}
+    assert all(c["namespace"] == "team-alpha" for c in contexts)
 
 
 def test_denied_workload_list_fails_discovery(mocker):
