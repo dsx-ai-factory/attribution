@@ -799,6 +799,33 @@ def test_watch_coverage_and_gaps_survive_reopen(tmp_path):
     assert gap.recovered_at == "2026-10-14T00:01:00Z"
 
 
+def test_history_pruning_advances_coverage_boundary(tmp_path):
+    store = SQLitePlacementStore(
+        str(tmp_path / "placements.db"),
+        retention_days=1,
+    )
+    old = datetime.now(timezone.utc) - timedelta(days=2)
+    store.complete_watch_list(
+        cluster_id="cluster-a",
+        namespace="team-a",
+        source_name="pods",
+        api_version="v1",
+        kind="Pod",
+        resource_version="10",
+        completed_at=old.isoformat(),
+        gap_id=None,
+    )
+
+    store.get_by_pod_uid("missing")
+
+    coverage = store.get_watch_coverage("cluster-a", "team-a", "pods")
+    assert coverage is not None
+    boundary = datetime.fromisoformat(coverage.coverage_started_at).replace(
+        tzinfo=timezone.utc
+    )
+    assert boundary >= datetime.now(timezone.utc) - timedelta(days=1, seconds=5)
+
+
 def test_coverage_gap_migration_uses_detection_time_for_existing_rows(tmp_path):
     path = tmp_path / "placements.db"
     with sqlite3.connect(path) as connection:
