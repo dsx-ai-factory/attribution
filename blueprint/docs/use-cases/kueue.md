@@ -151,8 +151,16 @@ Pod deletion. Schedule it outside the workload failure domain so it can
 observe the final Pod update.
 
 ```bash
+docker build \
+  -f blueprint/docker/kubernetes-daemon.Dockerfile \
+  -t registry.example/kubernetes-daemon:VERSION .
+docker push registry.example/kubernetes-daemon:VERSION
+
 helm upgrade --install attribution blueprint/deploy/kubernetes-daemon \
-  --namespace team-a --set integrations.kueue.enabled=true
+  --namespace team-a \
+  --set image.repository=registry.example/kubernetes-daemon \
+  --set image.tag=VERSION \
+  --set integrations.kueue.enabled=true
 ```
 
 Enable daemon reads in the Blueprint:
