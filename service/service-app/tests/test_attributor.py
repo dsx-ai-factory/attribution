@@ -63,7 +63,7 @@ def test_attribution_context_is_reused_until_successful_ingest(monkeypatch: pyte
 
     # A deleted attributor must not serve its cached context to a request
     # that fetched it before the deletion.
-    wrapper._event_manager = SimpleNamespace(close=lambda: None)
+    wrapper._event_manager = SimpleNamespace(close=lambda **_kwargs: None)
     wrapper.close()
     with pytest.raises(HTTPException) as refused:
         wrapper.attribute()
