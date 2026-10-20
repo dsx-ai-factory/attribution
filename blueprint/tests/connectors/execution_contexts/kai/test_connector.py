@@ -1095,6 +1095,36 @@ def test_daemon_placements_restore_deleted_pod_and_node_failure(mocker):
     ]
 
 
+def test_retained_placement_does_not_overwrite_live_pod_name_mapping(mocker):
+    pod = _pod(
+        "trainer-0",
+        node="node-live",
+        controller=("Job", "uid-job-uid-pg-a"),
+    )
+    _wire_kubectl(mocker, [_podgroup()], [pod])
+    reader = mocker.Mock()
+    reader.list_for_resource.return_value = [
+        PlacementRecord(
+            namespace="team-alpha",
+            pod_name="trainer-0",
+            pod_uid="pod-uid-deleted",
+            node_name="node-old",
+            observed_at="2026-05-01T12:05:00Z",
+        )
+    ]
+    adapter = KaiExecutionContextAdapter(
+        placement_records_enabled=True,
+        placement_reader=reader,
+    )
+
+    [ctx] = adapter.discover_by_ids(["team-alpha/pg-a"])
+
+    assert ctx["pod_nodes"] == {"trainer-0": "node-live"}
+    assert {placement["pod_uid"] for placement in ctx["pod_placements"]} == {
+        "pod-uid-deleted",
+    }
+
+
 def test_denied_podgroup_lookup_fails_instead_of_skipping(mocker):
     fake = _wire_kubectl(mocker, [], [])
     fake.failures["PodGroup"] = KubernetesClientError("Forbidden")
