@@ -71,8 +71,13 @@ not retain Pod logs or Pod specifications.
 
 ### Verify recovery
 
+Run `port-forward` in its own terminal (it stays in the foreground), then query it from another:
+
 ```bash
 kubectl -n team-a port-forward service/attribution-kubernetes-daemon 18080:8080
+```
+
+```bash
 curl -fsS \
   'http://127.0.0.1:18080/v1/placements?namespace=team-a&resource_uid=PODGROUP_UID'
 ```
