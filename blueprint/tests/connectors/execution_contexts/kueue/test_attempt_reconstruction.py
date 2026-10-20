@@ -312,7 +312,7 @@ def test_retained_jobset_retries_flow_as_distinct_execution_contexts(
         31,
         tzinfo=timezone.utc,
     )
-    assert contexts[0]["state"] == "FAILED"
+    assert contexts[0]["state"] == "UNKNOWN"
     assert contexts[0]["nodes"] == ["node-a"]
     assert contexts[1]["start_time"] == datetime(
         2026,
@@ -465,6 +465,7 @@ def test_scheduler_readmission_creates_a_new_attempt():
         tzinfo=timezone.utc,
     )
     assert contexts[1]["state"] == "COMPLETED"
+
     assert contexts[1]["start_time"] == datetime(
         2026,
         10,
@@ -515,3 +516,76 @@ def test_scheduler_readmission_creates_a_new_attempt():
         )
     )
     assert partial_context["history_complete"] is False
+
+
+def test_child_job_completion_does_not_finish_jobset_attempt():
+    history = {
+        "observations": [
+            {
+                "kind": "Workload",
+                "metadata": {
+                    "namespace": "team-a",
+                    "name": "training-workload",
+                    "uid": "workload-uid",
+                    "ownerReferences": [
+                        {
+                            "kind": "JobSet",
+                            "name": "training",
+                            "uid": "jobset-uid",
+                            "controller": True,
+                        }
+                    ],
+                },
+                "observedAt": "2026-10-14T10:00:00Z",
+                "status": {
+                    "conditions": [
+                        _condition("Admitted", "2026-10-14T10:00:00Z")
+                    ]
+                },
+            },
+            {
+                "kind": "Job",
+                "metadata": {"uid": "child-job-uid"},
+                "observedAt": "2026-10-14T10:10:00Z",
+                "status": {
+                    "conditions": [
+                        _condition("Complete", "2026-10-14T10:10:00Z")
+                    ]
+                },
+            },
+            {
+                "kind": "Workload",
+                "metadata": {
+                    "namespace": "team-a",
+                    "name": "training-workload",
+                    "uid": "workload-uid",
+                },
+                "observedAt": "2026-10-14T11:00:00Z",
+                "status": {
+                    "conditions": [
+                        _condition(
+                            "Finished",
+                            "2026-10-14T11:00:00Z",
+                            reason="Succeeded",
+                        )
+                    ]
+                },
+            },
+        ]
+    }
+
+    [attempt] = attempts_from_workload_history(
+        history,
+        now=datetime(2026, 10, 14, 12, 0, tzinfo=timezone.utc),
+        workload_name="training-workload",
+    )
+
+    assert attempt.end_time == datetime(
+        2026,
+        10,
+        14,
+        11,
+        0,
+        tzinfo=timezone.utc,
+    )
+    assert attempt.terminal["kind"] == "Workload"
