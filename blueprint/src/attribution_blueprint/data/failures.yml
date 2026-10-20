@@ -16392,8 +16392,9 @@ failures:
     as `clean with errors`. When writeback cannot allocate blocks for delayed-allocation pages, ext4 prints `Delayed block
     allocation failed for inode ... with error <errno>` followed by `This should not happen!! Data will be lost`. Error 117
     (EUCLEAN, which ext4 uses as EFSCORRUPTED) means the allocation failed on corrupted metadata and the dirty pages were
-    dropped. Error 28 (ENOSPC) on the same line is a full disk, not corruption. Repair requires unmounting the filesystem and
-    running `e2fsck`, or recreating it.
+    dropped. Error 28 (ENOSPC) on the same line is a full disk, not corruption. The case that prompted this entry was a kernel
+    bug that a reboot cleared. If `errors_count` is still nonzero after a reboot, repair requires unmounting the filesystem
+    and running `e2fsck`, or recreating it.
 
     '
   summary: The Linux kernel detected ext4 metadata corruption on a node filesystem; data written there may be lost.
