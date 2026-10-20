@@ -91,6 +91,7 @@ class ObservationJournal(Protocol):
         kind: str,
         reason: CoverageGapReason,
         start_resource_version: str,
+        started_at: str,
         detected_at: str,
     ) -> int: ...
 
