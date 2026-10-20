@@ -2050,3 +2050,30 @@ def test_incomplete_discovery_returns_failure_even_after_output_succeeds(
     monkeypatch.setattr(cli, "build_config", incomplete_config)
     assert cli.main(["--connector", "eca", "slurm", "ids", "1"]) == 1
     patched_pipeline.return_value.analyze.assert_called_once()
+
+
+def test_run_summary_warns_for_incomplete_scheduler_history(mocker):
+    warning = mocker.patch("attribution_blueprint.cli.logger.warning")
+    summaries = [
+        {
+            "job_id": "job-1",
+            "status": "attributed",
+            "evidence_status": "complete",
+            "history_complete": "false",
+        },
+        {
+            "job_id": "job-2",
+            "status": "attributed",
+            "evidence_status": "complete",
+            "history_complete": "true",
+        },
+    ]
+
+    cli._write_run_summary(
+        {"attempted": 2, "succeeded": 2, "conflicted": 0},
+        summaries,
+    )
+
+    warning.assert_called_once_with(
+        "1 of 2 verdicts may have incomplete scheduler history."
+    )

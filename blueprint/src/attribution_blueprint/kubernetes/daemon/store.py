@@ -60,13 +60,6 @@ class ObservationJournal(Protocol):
         uid: str,
     ) -> list[ResourceObservation]: ...
 
-    def list_observations_for_owner(
-        self,
-        cluster_id: str,
-        namespace: str,
-        owner_uid: str,
-    ) -> list[ResourceObservation]: ...
-
     def list_latest_observations_for_kind(
         self,
         cluster_id: str,
@@ -80,6 +73,12 @@ class ObservationJournal(Protocol):
         namespace: str,
         source_name: str,
     ) -> WatchCoverage | None: ...
+
+    def list_watch_coverages(
+        self,
+        cluster_id: str,
+        namespace: str,
+    ) -> list[WatchCoverage]: ...
 
     def begin_coverage_gap(
         self,

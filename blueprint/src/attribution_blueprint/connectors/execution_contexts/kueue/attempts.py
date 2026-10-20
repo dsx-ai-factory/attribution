@@ -18,16 +18,14 @@ class WorkloadAttempt:
     workload_uid: str
     namespace: str
     workload_name: str
-    owner_uid: str | None
+    owner_kind: str | None
     admission_key: str
     restart_attempt: str
     start_time: datetime
     end_time: datetime
     terminal: dict | None
-    end_observed: bool
     open: bool
     pod_uids: frozenset[str]
-    observation_refs: tuple[dict, ...]
 
     @property
     def attempt_id(self) -> str:
@@ -68,10 +66,10 @@ def attempts_from_workload_history(
             {
                 "key": "observed",
                 "time": timeline[0]["observedAt"],
-                "reference": _reference(timeline[0]),
             }
         ]
         starts = _starts(admissions, restart_starts)
+        owner = _controller_owner(latest_metadata)
         for index, start in enumerate(starts):
             next_start = (
                 starts[index + 1]["time"]
@@ -86,21 +84,17 @@ def attempts_from_workload_history(
                 if next_start is not None
                 else now
             )
-            refs = [start["reference"]]
-            if terminal is not None:
-                refs.append(terminal["reference"])
             attempts.append(
                 WorkloadAttempt(
                     workload_uid=workload_uid,
                     namespace=latest_metadata.get("namespace") or "",
                     workload_name=workload_name,
-                    owner_uid=_controller_uid(latest_metadata),
+                    owner_kind=owner.get("kind") if owner else None,
                     admission_key=start["admission_key"],
                     restart_attempt=start["restart_attempt"],
                     start_time=_parse_time(start["time"]),
                     end_time=end_time,
                     terminal=terminal,
-                    end_observed=terminal is not None,
                     open=terminal is None and next_start is None,
                     pod_uids=frozenset(
                         uid
@@ -112,7 +106,6 @@ def attempts_from_workload_history(
                             next_start,
                         )
                     ),
-                    observation_refs=tuple(refs),
                 )
             )
     return sorted(
@@ -138,7 +131,6 @@ def _admissions(timeline: list[dict]) -> list[dict]:
                 boundaries[key] = {
                     "key": key,
                     "time": transition,
-                    "reference": _reference(observation),
                 }
     return sorted(boundaries.values(), key=lambda item: _parse_time(item["time"]))
 
@@ -191,7 +183,6 @@ def _starts(admissions: list[dict], restarts: dict[str, str]) -> list[dict]:
                         timestamp,
                         key=_parse_time,
                     ),
-                    "reference": admission["reference"],
                 }
             )
     return starts
@@ -225,7 +216,6 @@ def _terminal_events(observations: list[dict]) -> list[dict]:
                         if kind == "Job"
                         else None
                     ),
-                    "reference": _reference(observation),
                 }
             )
     return sorted(events, key=lambda item: _parse_time(item["time"]))
@@ -296,22 +286,15 @@ def _restart_attempt(observation: dict) -> str | None:
     return str(value) if value is not None else None
 
 
-def _controller_uid(metadata: dict) -> str | None:
+def _controller_owner(metadata: dict) -> dict | None:
     controllers = [
-        owner.get("uid")
+        owner
         for owner in metadata.get("ownerReferences") or []
-        if owner.get("controller") is True and owner.get("uid")
+        if owner.get("controller") is True
+        and owner.get("uid")
+        and owner.get("kind")
     ]
     return controllers[0] if len(controllers) == 1 else None
-
-
-def _reference(observation: dict) -> dict:
-    metadata = observation.get("metadata") or {}
-    return {
-        "kind": observation.get("kind"),
-        "uid": metadata.get("uid"),
-        "resourceVersion": metadata.get("resourceVersion"),
-    }
 
 
 def _by_uid(observations) -> dict[str, list[dict]]:

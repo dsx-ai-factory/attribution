@@ -165,7 +165,7 @@ def test_readiness_reports_disabled_optional_watches(tmp_path):
     }
 
 
-def test_history_endpoint_returns_controller_descendants_and_relationships(tmp_path):
+def test_history_endpoint_discovers_controller_observations(tmp_path):
     store = SQLitePlacementStore(str(tmp_path / "placements.db"))
     job = ResourceObservation(
         cluster_id="cluster-a",
@@ -205,6 +205,37 @@ def test_history_endpoint_returns_controller_descendants_and_relationships(tmp_p
     )
     _capture(store, job)
     _capture(store, pod)
+    store.complete_watch_list(
+        cluster_id="cluster-a",
+        namespace="team-a",
+        source_name="pods",
+        api_version="v1",
+        kind="Pod",
+        resource_version="2",
+        completed_at="2026-10-13T23:59:00Z",
+        gap_id=None,
+    )
+    gap_id = store.begin_coverage_gap(
+        cluster_id="cluster-a",
+        namespace="team-a",
+        source_name="pods",
+        api_version="v1",
+        kind="Pod",
+        reason="RESOURCE_VERSION_EXPIRED",
+        start_resource_version="2",
+        started_at="2026-10-14T00:00:00Z",
+        detected_at="2026-10-14T00:00:02Z",
+    )
+    store.complete_watch_list(
+        cluster_id="cluster-a",
+        namespace="team-a",
+        source_name="pods",
+        api_version="v1",
+        kind="Pod",
+        resource_version="3",
+        completed_at="2026-10-14T00:00:03Z",
+        gap_id=gap_id,
+    )
     server = serve_api(
         HealthState(),
         store,
@@ -215,7 +246,11 @@ def test_history_endpoint_returns_controller_descendants_and_relationships(tmp_p
     try:
         response = requests.get(
             f"http://127.0.0.1:{server.server_port}/v1/history",
-            params={"namespace": "team-a", "controller_uid": "job-uid-1"},
+            params={
+                "namespace": "team-a",
+                "kind": "Job",
+                "name": "trainer",
+            },
             timeout=2,
         )
     finally:
@@ -223,41 +258,42 @@ def test_history_endpoint_returns_controller_descendants_and_relationships(tmp_p
         server.server_close()
 
     assert response.status_code == 200
-    history = response.json()
-    assert history["clusterId"] == "cluster-a"
+    [history] = response.json()["items"]
     assert history["namespace"] == "team-a"
-    assert history["controllerUid"] == "job-uid-1"
-    assert [resource["uid"] for resource in history["resources"]] == [
-        "job-uid-1",
-        "pod-uid-1",
-    ]
-    assert history["relationships"] == [
-        {
-            "owner": {
-                "apiVersion": "batch/v1",
-                "kind": "Job",
-                "namespace": "team-a",
-                "name": "trainer",
-                "uid": "job-uid-1",
-            },
-            "resource": {
-                "apiVersion": "v1",
-                "kind": "Pod",
-                "namespace": "team-a",
-                "name": "trainer-abcde",
-                "uid": "pod-uid-1",
-            },
-            "controller": True,
-        }
-    ]
     assert [observation["metadata"]["uid"] for observation in history["observations"]] == [
         "job-uid-1",
         "pod-uid-1",
     ]
     assert history["observations"][1]["selectedMetadata"] == pod.selected_metadata
+    assert history["coverage"] == {
+        "sources": [
+            {
+                "sourceName": "pods",
+                "apiVersion": "v1",
+                "kind": "Pod",
+                "coverageStartedAt": "2026-10-13T23:59:00Z",
+                "resourceVersion": "3",
+                "checkpointedAt": "2026-10-14T00:00:03Z",
+            }
+        ],
+        "gaps": [
+            {
+                "sourceName": "pods",
+                "apiVersion": "v1",
+                "kind": "Pod",
+                "reason": "RESOURCE_VERSION_EXPIRED",
+                "startResourceVersion": "2",
+                "startedAt": "2026-10-14T00:00:00Z",
+                "detectedAt": "2026-10-14T00:00:02Z",
+                "endResourceVersion": "3",
+                "recoveredAt": "2026-10-14T00:00:03Z",
+            }
+        ],
+        "disabledWatches": {},
+    }
 
 
-def test_daemon_client_reads_controller_history(tmp_path):
+def test_daemon_client_finds_retained_history(tmp_path):
     store = SQLitePlacementStore(str(tmp_path / "placements.db"))
     observation = ResourceObservation(
         cluster_id="cluster-a",
@@ -280,10 +316,13 @@ def test_daemon_client_reads_controller_history(tmp_path):
     )
     try:
         client = KubernetesDaemonClient(f"http://127.0.0.1:{server.server_port}")
-        history = client.get_history("team-a", "job-uid-1")
+        [history] = client.find_histories(
+            "team-a",
+            "Job",
+            name="trainer",
+        )
     finally:
         server.shutdown()
         server.server_close()
 
-    assert history["controllerUid"] == "job-uid-1"
     assert [item["metadata"]["uid"] for item in history["observations"]] == ["job-uid-1"]
