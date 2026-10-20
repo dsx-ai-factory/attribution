@@ -38,8 +38,6 @@ from attribution_lib.observation.inbound import (
     TimeInterval,
 )
 from attribution_lib.prefilters import PreFilterSpec
-from attribution_lib.resources.node import Node as NodeResource
-from attribution_lib.resources.resource_set import AllJobResources, ResourceSetClass
 from attribution_lib.rule_types.definitions import EventTriple, ExtractorRule, RuleLocation
 from attribution_lib.rules_engine import RuleLoader
 from test_support.helpers import line_entries, make_node_to_ranks, make_syslog_entry
@@ -88,10 +86,8 @@ def make_inbound_observation(
     time_interval = TimeInterval(
         start=datetime(2024, 1, 1, 12, 0, tzinfo=timezone), end=datetime(2024, 1, 1, 13, 0, tzinfo=timezone)
     )
-    resources = AllJobResources
     context = ObservationContext(
         time_interval=time_interval,
-        resources=resources,
         source=source,
         format=fmt,
         timezone=timezone,
@@ -174,7 +170,6 @@ def test_initiated_reboot_log_produces_infra_sw_with_raw_evidence(request, event
     reboot_time = job_info.job_start_time + timedelta(minutes=1)
     context = ObservationContext(
         time_interval=TimeInterval(job_info.job_start_time, job_info.job_end_time),
-        resources=AllJobResources,
         source=ObservationSource.SYSLOG,
         format=ObservationFormat.ENTRY_TIMESERIES,
         timezone=job_info.timezone,
@@ -271,7 +266,6 @@ def test_unhandled_sources(request, event_manager, job_info):
 def make_syslog_observation(job_info, entries):
     context = ObservationContext(
         time_interval=TimeInterval(job_info.job_start_time, job_info.job_end_time),
-        resources=AllJobResources,
         source=ObservationSource.SYSLOG,
         format=ObservationFormat.ENTRY_TIMESERIES,
         timezone=job_info.timezone,
@@ -307,7 +301,6 @@ def test_ingest_records_accepted_and_dropped_entries_on_the_ingested_observation
     after_window_ns = (job_info.job_end_time + timedelta(minutes=1)).timestamp() * 1e9
     context = ObservationContext(
         time_interval=TimeInterval(job_info.job_start_time, job_info.job_end_time),
-        resources=AllJobResources,
         source=ObservationSource.SYSLOG,
         format=ObservationFormat.ENTRY_TIMESERIES,
         timezone=job_info.timezone,
@@ -644,7 +637,6 @@ def test_saved_fingerprint_includes_extraction_context(request, event_manager, j
                 end=context.time_interval.end + timedelta(days=1),
             ),
         ),
-        replace(context, resources=ResourceSetClass([NodeResource(hostname="node1")])),
     ]
     for index, changed_context in enumerate(context_variants):
         backend = MemoryCheckpointBackend()
@@ -748,7 +740,6 @@ def test_incremental_xid140_replaces_poisoned_gsp_and_retains_evidence(request, 
     ]
     context = ObservationContext(
         time_interval=TimeInterval(job_info.job_start_time, job_info.job_end_time),
-        resources=AllJobResources,
         source=ObservationSource.SYSLOG,
         format=ObservationFormat.ENTRY_TIMESERIES,
         timezone=job_info.timezone,

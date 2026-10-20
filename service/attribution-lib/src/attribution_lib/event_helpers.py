@@ -192,7 +192,6 @@ class EventQueryHelper:
 
                 self._obs_context_cache[obs_id] = ObservationContext(
                     time_interval=time_interval,
-                    resources=AllJobResources,
                     source=obs_source,
                     format=obs_format,
                     timezone=obs_timezone,

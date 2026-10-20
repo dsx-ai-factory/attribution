@@ -52,19 +52,16 @@ LINE_NAMING_JOB_NODE = (
 
 
 @pytest.fixture
-def applog_context(time_interval, job_resources, timezone):
+def applog_context(time_interval, timezone):
     """Standard APPLOG context fixture."""
-    return InboundContext(
-        time_interval, job_resources, ObservationSource.APPLOG, ObservationFormat.ENTRY_TIMESERIES, timezone
-    )
+    return InboundContext(time_interval, ObservationSource.APPLOG, ObservationFormat.ENTRY_TIMESERIES, timezone)
 
 
 @pytest.fixture
-def timeseries_context(job_resources, timezone):
+def timeseries_context(timezone):
     """The format declares its own window, so these tests pin it open and let each entry carry its own ts."""
     return InboundContext(
         TimeInterval(None, None),
-        job_resources,
         ObservationSource.SYSLOG,
         ObservationFormat.ENTRY_TIMESERIES,
         timezone,
@@ -142,7 +139,6 @@ class TestInboundContext:
         context1 = applog_context
         context2 = InboundContext(
             applog_context.time_interval,
-            applog_context.resources,
             applog_context.source,
             applog_context.format,
             applog_context.timezone,
@@ -151,7 +147,6 @@ class TestInboundContext:
 
         different_context = InboundContext(
             applog_context.time_interval,
-            applog_context.resources,
             ObservationSource.SYSLOG,  # Different source
             applog_context.format,
             applog_context.timezone,
@@ -162,7 +157,6 @@ class TestInboundContext:
         context1 = applog_context
         context2 = InboundContext(
             applog_context.time_interval,
-            applog_context.resources,
             applog_context.source,
             applog_context.format,
             applog_context.timezone,
@@ -194,15 +188,13 @@ class TestObservation:
         observation2 = Observation.from_inbound(applog_context, ["line1"])
         assert observation1.context.id == observation2.context.id
 
-    def test_hash_with_undefined_format(self, time_interval, job_resources, timezone):
+    def test_hash_with_undefined_format(self, time_interval, timezone):
         """Test hashing observation with undefined format raises exception"""
-        context = InboundContext(
-            time_interval, job_resources, ObservationSource.APPLOG, ObservationFormat.UNDEFINED, timezone
-        )
+        context = InboundContext(time_interval, ObservationSource.APPLOG, ObservationFormat.UNDEFINED, timezone)
         with pytest.raises(UnknownObservationSourceError):
             _ = Observation.from_inbound(context, ["line1"])
 
-    def test_make_source_unknown_formats(self, time_interval, job_resources, timezone):
+    def test_make_source_unknown_formats(self, time_interval, timezone):
         """Test make_source with unknown formats"""
         formats: list[str] = [
             "INVALID_FORMAT",
@@ -210,7 +202,7 @@ class TestObservation:
 
         for format in formats:
             typed_format: ObservationFormat = format  # type: ignore
-            context = InboundContext(time_interval, job_resources, ObservationSource.APPLOG, typed_format, timezone)
+            context = InboundContext(time_interval, ObservationSource.APPLOG, typed_format, timezone)
             observation = Observation.from_inbound(context, ["line1"])
 
             with pytest.raises(UnknownObservationFormatError):
