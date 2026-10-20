@@ -154,6 +154,7 @@ class KubernetesDaemon:
                     )
                     if pending_gap_reason is not None:
                         assert pending_gap_resource_version is not None
+                        assert coverage is not None
                         gap_id = self.store.begin_coverage_gap(
                             cluster_id=self.cluster_id,
                             namespace=self.namespace,
@@ -162,6 +163,7 @@ class KubernetesDaemon:
                             kind=source.kind,
                             reason=pending_gap_reason,
                             start_resource_version=pending_gap_resource_version,
+                            started_at=coverage.checkpointed_at,
                             detected_at=_utc_now(),
                         )
                     elif coverage is not None:
@@ -177,6 +179,7 @@ class KubernetesDaemon:
                                 kind=source.kind,
                                 reason="WATCH_SOURCE_CHANGED",
                                 start_resource_version=coverage.resource_version,
+                                started_at=coverage.checkpointed_at,
                                 detected_at=_utc_now(),
                             )
                         else:

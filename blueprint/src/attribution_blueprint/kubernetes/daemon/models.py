@@ -67,6 +67,7 @@ class CoverageGap:
     namespace: str
     reason: CoverageGapReason
     start_resource_version: str
+    started_at: str
     detected_at: str
     end_resource_version: str | None
     recovered_at: str | None
