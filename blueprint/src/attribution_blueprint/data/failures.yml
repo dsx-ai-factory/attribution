@@ -602,6 +602,7 @@ failures:
   title: Batch size not divisible
   aliases:
   - Megatron batch-size validation
+  - 'Python Exception: AssertionError: batch size not divisible'
   category: application
   likely_owner: user
   personas:
@@ -617,6 +618,9 @@ failures:
   technical_details: Megatron validates that the global batch size is divisible by the required product, such as
     micro_batch_size times data_parallel_size. Use the exact factors in the assertion for the affected configuration.
     NVIDIA Attribution groups these assertions under a stable symptom and retains the original values in source evidence.
+    This symptom maps to Fail User at LOW priority, ahead of generic NVRx failure context at LOW_GENERIC.
+    Higher-priority outcomes and existing cancellation policy still apply. Generic NVRx failure detection without a
+    more specific selected cause remains Fail Undetermined; it does not establish the underlying failure reason.
   severity: medium
   summary: A batch-size configuration assertion prevented the workload from proceeding.
   signals:
