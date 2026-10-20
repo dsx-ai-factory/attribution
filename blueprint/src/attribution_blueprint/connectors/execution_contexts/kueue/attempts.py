@@ -195,9 +195,10 @@ def _terminal_events(observations: list[dict]) -> list[dict]:
     events = []
     for observation in observations:
         kind = observation.get("kind")
-        if kind not in {"Workload", "Job"}:
+        if kind not in {"Workload", "Job", "JobSet"}:
             continue
-        for condition in (observation.get("status") or {}).get("conditions") or []:
+        status = observation.get("status") or {}
+        for condition in status.get("conditions") or []:
             condition_type = condition.get("type")
             transition = condition.get("lastTransitionTime")
             supported = (
@@ -205,6 +206,12 @@ def _terminal_events(observations: list[dict]) -> list[dict]:
                 and condition_type in {"Evicted", "Finished"}
                 or kind == "Job"
                 and condition_type in {"Failed", "Complete"}
+                or kind == "JobSet"
+                and condition_type in {
+                    "RestartingJobSet",
+                    "Completed",
+                    "Failed",
+                }
             )
             if condition.get("status") != "True" or not transition or not supported:
                 continue
@@ -218,6 +225,9 @@ def _terminal_events(observations: list[dict]) -> list[dict]:
                     "restart_attempt": (
                         _restart_attempt(observation)
                         if kind == "Job"
+                        else str(max(int(status.get("restarts") or 0) - 1, 0))
+                        if kind == "JobSet"
+                        and condition_type == "RestartingJobSet"
                         else None
                     ),
                 }
@@ -243,6 +253,10 @@ def _terminal_for(
                 or owner is not None
                 and owner.get("kind") == "Job"
                 and terminal["kind"] == "Job"
+                and terminal["uid"] == owner.get("uid")
+                or owner is not None
+                and owner.get("kind") == "JobSet"
+                and terminal["kind"] == "JobSet"
                 and terminal["uid"] == owner.get("uid")
             )
             and _terminal_within(

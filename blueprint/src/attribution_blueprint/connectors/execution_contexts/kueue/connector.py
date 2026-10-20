@@ -765,6 +765,10 @@ def _history_attempt_state(
         )
     terminal_type = terminal["type"]
     reason = str(terminal.get("reason") or "")
+    if terminal["kind"] == "JobSet":
+        if terminal_type == "Completed":
+            return "COMPLETED", "FINISHED_SUCCEEDED"
+        return "FAILED", "FINISHED_FAILED"
     if terminal["kind"] == "Job":
         if terminal_type == "Complete":
             return "COMPLETED", "FINISHED_SUCCEEDED"
