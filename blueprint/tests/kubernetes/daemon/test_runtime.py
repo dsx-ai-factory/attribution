@@ -515,6 +515,24 @@ def test_deleted_event_starts_placement_retention(tmp_path):
     assert marker == ("pod-uid-1",)
 
 
+def test_failed_deleted_capture_still_starts_retention(tmp_path, mocker):
+    path = tmp_path / "placements.db"
+    store = SQLitePlacementStore(str(path))
+    daemon = KubernetesDaemon(core_api=None, store=store, namespace="team-a")
+    daemon._capture_placement(_pod())
+    mocker.patch.object(store, "create", side_effect=OSError("synthetic storage failure"))
+
+    daemon._enqueue(_pod(), deleted=True)
+
+    with sqlite3.connect(path) as connection:
+        marker = connection.execute(
+            "SELECT pod_uid FROM placement_deletion"
+        ).fetchone()
+    assert marker == ("pod-uid-1",)
+    assert daemon.health.persistence_failed is True
+    assert daemon.items.empty()
+
+
 def test_resource_version_expiry_resets_readiness_before_relisting(mocker):
     """A relist triggered by an expired watch resourceVersion (HTTP 410) must
     clear `initial_list_complete` until the relist completes, so `/readyz`
