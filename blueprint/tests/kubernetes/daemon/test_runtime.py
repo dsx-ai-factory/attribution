@@ -256,6 +256,27 @@ def test_relist_marks_queued_but_now_absent_pod_deleted(tmp_path):
     assert marker == ("pod-uid-1",)
 
 
+def test_saturated_enrichment_queue_does_not_lose_placement(tmp_path):
+    store = SQLitePlacementStore(str(tmp_path / "placements.db"))
+    daemon = KubernetesDaemon(
+        core_api=None,
+        store=store,
+        namespace="team-a",
+        queue_size=1,
+    )
+    daemon.items.put((_pod(), -1))
+    replacement = _pod()
+    replacement["metadata"]["uid"] = "pod-uid-2"
+    replacement["metadata"]["name"] = "trainer-1"
+
+    daemon._enqueue(replacement)
+
+    record = store.get_by_pod_uid("pod-uid-2")
+    assert record is not None
+    assert record.node_name == "node-a"
+    assert daemon.health.queue_saturated is True
+
+
 def test_retains_owner_when_optional_scheduler_resolution_exhausts(tmp_path):
     store = SQLitePlacementStore(str(tmp_path / "placements.db"))
     daemon = KubernetesDaemon(

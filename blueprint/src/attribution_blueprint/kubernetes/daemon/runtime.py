@@ -139,15 +139,16 @@ class KubernetesDaemon:
         if pod_uid:
             with self._generation_lock:
                 self._latest_generation[pod_uid] = generation
-        while not self.stop_event.is_set():
-            try:
-                self.items.put((pod, generation), timeout=0.5)
-                self.health.update(queue_saturated=False)
-                return
-            except queue.Full:
-                self.health.update(queue_saturated=True)
-                logger.error("KubernetesDaemon work queue is saturated; readiness is failing")
-        self._complete_generation(pod_uid, generation)
+        try:
+            self.items.put_nowait((pod, generation))
+            self.health.update(queue_saturated=False)
+        except queue.Full:
+            self._complete_generation(pod_uid, generation)
+            self.health.update(queue_saturated=True)
+            logger.error(
+                "KubernetesDaemon enrichment queue is saturated; "
+                "placement was persisted but owner/scheduler enrichment was not queued"
+            )
 
     def _worker(self) -> None:
         while not self.stop_event.is_set() or not self.items.empty():
