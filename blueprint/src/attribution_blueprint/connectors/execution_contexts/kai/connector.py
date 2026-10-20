@@ -482,6 +482,11 @@ class KaiExecutionContextAdapter:
                         f"use `<namespace>/<name>` or configure eca.kai.namespace"
                     )
                 ns, name = self.namespace, ref
+            if self.placement_records_enabled and self.namespace and ns != self.namespace:
+                raise ValueError(
+                    f"kai ECA --ids: {ref!r} is outside configured namespace "
+                    f"{self.namespace!r}"
+                )
             obj = self._kubernetes.get_one(
                 _PODGROUP_RESOURCE,
                 name,
