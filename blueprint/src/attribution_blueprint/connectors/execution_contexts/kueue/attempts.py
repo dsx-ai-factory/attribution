@@ -76,7 +76,13 @@ def attempts_from_workload_history(
                 if index + 1 < len(starts)
                 else None
             )
-            terminal = _terminal_for(start, next_start, terminals)
+            terminal = _terminal_for(
+                start,
+                next_start,
+                terminals,
+                workload_uid=workload_uid,
+                owner=owner,
+            )
             end_time = (
                 _parse_time(terminal["time"])
                 if terminal is not None
@@ -208,6 +214,7 @@ def _terminal_events(observations: list[dict]) -> list[dict]:
             events.append(
                 {
                     "kind": kind,
+                    "uid": (observation.get("metadata") or {}).get("uid"),
                     "type": condition_type,
                     "reason": condition.get("reason"),
                     "time": transition,
@@ -225,12 +232,23 @@ def _terminal_for(
     start: dict,
     next_start: str | None,
     terminals: list[dict],
+    *,
+    workload_uid: str,
+    owner: dict | None,
 ) -> dict | None:
     return next(
         (
             terminal
             for terminal in terminals
-            if _terminal_within(
+            if (
+                terminal["kind"] == "Workload"
+                and terminal["uid"] == workload_uid
+                or owner is not None
+                and owner.get("kind") == "Job"
+                and terminal["kind"] == "Job"
+                and terminal["uid"] == owner.get("uid")
+            )
+            and _terminal_within(
                 terminal["time"],
                 start["time"],
                 next_start,
