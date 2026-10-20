@@ -104,6 +104,7 @@ CREATE TABLE IF NOT EXISTS coverage_gap (
     kind TEXT NOT NULL,
     reason TEXT NOT NULL,
     start_resource_version TEXT NOT NULL,
+    started_at TEXT NOT NULL,
     detected_at TEXT NOT NULL,
     end_resource_version TEXT,
     recovered_at TEXT
@@ -138,6 +139,7 @@ class SQLitePlacementStore:
         with self._connection() as connection:
             connection.executescript(_SCHEMA)
             self._migrate_observation_schema(connection)
+            self._migrate_coverage_gap_schema(connection)
             connection.execute("PRAGMA user_version = 4")
             self._prune_expired(connection)
 
@@ -359,6 +361,7 @@ class SQLitePlacementStore:
         kind: str,
         reason: CoverageGapReason,
         start_resource_version: str,
+        started_at: str,
         detected_at: str,
     ) -> int:
         with self._connection() as connection:
@@ -380,8 +383,8 @@ class SQLitePlacementStore:
                 """
                 INSERT INTO coverage_gap(
                     cluster_id, namespace, source_name, api_version, kind,
-                    reason, start_resource_version, detected_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    reason, start_resource_version, started_at, detected_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     cluster_id,
@@ -391,6 +394,7 @@ class SQLitePlacementStore:
                     kind,
                     reason,
                     start_resource_version,
+                    started_at,
                     detected_at,
                 ),
             )
@@ -714,6 +718,26 @@ class SQLitePlacementStore:
         if "selected_metadata_json" not in columns:
             connection.execute(
                 "ALTER TABLE resource_observation ADD COLUMN selected_metadata_json TEXT"
+            )
+
+    @staticmethod
+    def _migrate_coverage_gap_schema(connection: sqlite3.Connection) -> None:
+        columns = {
+            row["name"]
+            for row in connection.execute(
+                "PRAGMA table_info(coverage_gap)"
+            ).fetchall()
+        }
+        if "started_at" not in columns:
+            connection.execute(
+                "ALTER TABLE coverage_gap ADD COLUMN started_at TEXT"
+            )
+            connection.execute(
+                """
+                UPDATE coverage_gap
+                SET started_at = detected_at
+                WHERE started_at IS NULL
+                """
             )
 
     def _prune_expired(self, connection: sqlite3.Connection) -> None:
@@ -1041,6 +1065,7 @@ def _coverage_gap_from_row(row: sqlite3.Row) -> CoverageGap:
         namespace=row["namespace"],
         reason=row["reason"],
         start_resource_version=row["start_resource_version"],
+        started_at=row["started_at"],
         detected_at=row["detected_at"],
         end_resource_version=row["end_resource_version"],
         recovered_at=row["recovered_at"],

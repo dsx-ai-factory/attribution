@@ -770,6 +770,7 @@ def test_watch_coverage_and_gaps_survive_reopen(tmp_path):
         kind="Pod",
         reason="WATCH_SOURCE_CHANGED",
         start_resource_version="10",
+        started_at="2026-10-13T23:59:30Z",
         detected_at="2026-10-14T00:00:00Z",
     )
     store.complete_watch_list(
@@ -792,9 +793,57 @@ def test_watch_coverage_and_gaps_survive_reopen(tmp_path):
     [gap] = reopened.list_coverage_gaps("cluster-a", "team-a")
     assert gap.reason == "WATCH_SOURCE_CHANGED"
     assert gap.start_resource_version == "10"
+    assert gap.started_at == "2026-10-13T23:59:30Z"
     assert gap.detected_at == "2026-10-14T00:00:00Z"
     assert gap.end_resource_version == "20"
     assert gap.recovered_at == "2026-10-14T00:01:00Z"
+
+
+def test_coverage_gap_migration_uses_detection_time_for_existing_rows(tmp_path):
+    path = tmp_path / "placements.db"
+    with sqlite3.connect(path) as connection:
+        connection.execute(
+            """
+            CREATE TABLE coverage_gap (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                cluster_id TEXT NOT NULL,
+                namespace TEXT NOT NULL,
+                source_name TEXT NOT NULL,
+                api_version TEXT NOT NULL,
+                kind TEXT NOT NULL,
+                reason TEXT NOT NULL,
+                start_resource_version TEXT NOT NULL,
+                detected_at TEXT NOT NULL,
+                end_resource_version TEXT,
+                recovered_at TEXT
+            )
+            """
+        )
+        connection.execute(
+            """
+            INSERT INTO coverage_gap(
+                cluster_id, namespace, source_name, api_version, kind,
+                reason, start_resource_version, detected_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "cluster-a",
+                "team-a",
+                "pods",
+                "v1",
+                "Pod",
+                "RESOURCE_VERSION_EXPIRED",
+                "10",
+                "2026-10-14T00:00:00Z",
+            ),
+        )
+
+    store = SQLitePlacementStore(str(path))
+
+    [gap] = store.list_coverage_gaps("cluster-a", "team-a")
+    assert gap.started_at == gap.detected_at
+    with sqlite3.connect(path) as connection:
+        assert connection.execute("PRAGMA user_version").fetchone()[0] == 4
 
 
 def test_atomic_capture_does_not_advance_checkpoint_when_placement_conflicts(tmp_path):

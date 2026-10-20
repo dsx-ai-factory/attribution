@@ -507,14 +507,16 @@ def test_transient_placement_read_failure_still_enriches_owner(tmp_path):
         namespace="team-a",
         owner_resolver=_OwnerResolver(),
     )
-    daemon._capture_placement(_pod())
+    pod = _pod()
+    pod["metadata"]["resourceVersion"] = "1"
+    daemon._capture(_PodWatchSource(), pod, "SNAPSHOT")
 
-    daemon._record(_pod())
+    daemon._record(pod)
 
     assert backing_store.get_by_pod_uid("pod-uid-1").owner.uid == "job-uid-1"
 
 
-def test_complete_listing_reconciles_absent_placements(mocker):
+def test_pod_snapshot_reconciles_absent_placements(mocker):
     store = mocker.Mock()
     daemon = KubernetesDaemon(core_api=None, store=store, namespace="team-a")
     pod = _pod()
@@ -1621,6 +1623,7 @@ def test_expired_watch_records_coverage_gap_around_relist(tmp_path):
     assert gap.source_name == "pods"
     assert gap.reason == "RESOURCE_VERSION_EXPIRED"
     assert gap.start_resource_version == "10"
+    assert gap.started_at <= gap.detected_at
     assert gap.end_resource_version == "10"
     assert gap.recovered_at is not None
 
@@ -1663,6 +1666,7 @@ def test_changed_watch_source_relists_instead_of_reusing_checkpoint(tmp_path):
     [gap] = store.list_coverage_gaps("cluster-a", "team-a")
     assert gap.reason == "WATCH_SOURCE_CHANGED"
     assert gap.start_resource_version == "10"
+    assert gap.started_at == "2026-10-14T00:00:00Z"
     assert gap.end_resource_version == "20"
 
 
