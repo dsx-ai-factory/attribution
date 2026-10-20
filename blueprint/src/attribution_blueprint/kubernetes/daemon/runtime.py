@@ -263,37 +263,30 @@ class KubernetesDaemon:
         enriched = owned
         for resolver in self.resource_resolvers:
             resolver_name = type(resolver).__name__
-            for attempt in range(self.max_resolution_attempts):
-                try:
-                    resources = resolver.resolve(pod, owner)
-                    enriched = enriched.enriched(associated_resources=resources)
-                    resource_result = self._persist_enrichment(
-                        enriched,
-                        f"resources from {resolver_name}",
-                        generation,
+            try:
+                resources = resolver.resolve(pod, owner)
+                enriched = enriched.enriched(associated_resources=resources)
+                resource_result = self._persist_enrichment(
+                    enriched,
+                    f"resources from {resolver_name}",
+                    generation,
+                )
+                if resource_result is not None and resource_result != CreateResult.DUPLICATE:
+                    logger.info(
+                        f"{resource_result.value} resources from {resolver_name} for "
+                        f"Pod {self.namespace}/{metadata.get('name')}"
                     )
-                    if resource_result is None:
-                        break
-                    if resource_result != CreateResult.DUPLICATE:
-                        logger.info(
-                            f"{resource_result.value} resources from {resolver_name} for "
-                            f"Pod {self.namespace}/{metadata.get('name')}"
-                        )
-                    break
-                except ResolutionPending as error:
-                    if attempt + 1 == self.max_resolution_attempts or self.stop_event.is_set():
-                        logger.warning(f"retained Pod placement without resources from {resolver_name}: {error}")
-                        break
-                    self.stop_event.wait(min(2**attempt, 8))
-                except UnsupportedOwner as error:
-                    logger.info(f"retained Pod placement without resources from {resolver_name}: {error}")
-                    break
-                except Exception:
-                    logger.exception(
-                        f"failed to enrich resources from {resolver_name}; "
-                        "scheduler-neutral evidence was retained"
-                    )
-                    break
+            except ResolutionPending as error:
+                logger.info(
+                    f"retained Pod placement with pending resources from {resolver_name}: {error}"
+                )
+            except UnsupportedOwner as error:
+                logger.info(f"retained Pod placement without resources from {resolver_name}: {error}")
+            except Exception:
+                logger.exception(
+                    f"failed to enrich resources from {resolver_name}; "
+                    "scheduler-neutral evidence was retained"
+                )
 
     def _persist_enrichment(
         self,

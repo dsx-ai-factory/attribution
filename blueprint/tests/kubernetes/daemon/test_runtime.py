@@ -149,7 +149,11 @@ class _BlockingResourceResolver:
 
 
 class _PendingResourceResolver:
+    def __init__(self):
+        self.calls = 0
+
     def resolve(self, pod, owner):
+        self.calls += 1
         raise ResolutionPending("Workload has not appeared")
 
 
@@ -277,20 +281,22 @@ def test_saturated_enrichment_queue_does_not_lose_placement(tmp_path):
     assert daemon.health.queue_saturated is True
 
 
-def test_retains_owner_when_optional_scheduler_resolution_exhausts(tmp_path):
+def test_pending_scheduler_resolution_retries_only_on_later_pod_events(tmp_path):
     store = SQLitePlacementStore(str(tmp_path / "placements.db"))
+    resolver = _PendingResourceResolver()
     daemon = KubernetesDaemon(
         core_api=None,
         store=store,
         namespace="team-a",
         owner_resolver=_OwnerResolver(),
-        resource_resolvers=(_PendingResourceResolver(),),
-        max_resolution_attempts=1,
+        resource_resolvers=(resolver,),
+        max_resolution_attempts=5,
     )
 
     daemon._capture_placement(_pod())
     daemon._record(_pod())
 
+    assert resolver.calls == 1
     record = store.get_by_pod_uid("pod-uid-1")
     assert record is not None
     assert record.owner == ResourceIdentity("batch/v1", "Job", "team-a", "trainer", "job-uid-1")
