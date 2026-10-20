@@ -77,7 +77,7 @@ for durable Pod-to-node placement before post-hoc Kueue attribution.
 ## End-to-end flow for one workload
 
 1. **Discover.** The Blueprint's execution-context adapter (Slurm shells to `sacct`, Kueue shells to `kubectl`, Static hand-feeds one workload) returns one or more `ExecutionContext` objects.
-2. **Collect.** For each context, every configured log and metric collector runs `collect(ctx)` and returns zero or more `Observation` objects. Each `Observation` carries a `Source` enum value (`applog`, `syslog`, `node_metrics`) and a body in one of the wire-format `Format` values.
+2. **Collect.** For each context, every configured log and metric collector runs `collect(ctx)` and returns zero or more `Observation` objects. Each `Observation` carries a `Source` enum value (`applog`, `syslog`, `node_metrics`) and an `entry_timeseries` body; the entry shape is in [Observation entry format](https://github.com/dsx-ai-factory/attribution/blob/main/service/service-app/docs/api/observation-format.md).
 3. **Open attributor.** `POST /v2/attributor` creates a per-context handle. On a duplicate-session 409, the connector raises `AttributorConflictError` with the original HTTP error as its cause. The Blueprint preserves the existing session, records that context as `conflicted` in the run statistics and summaries, and continues with other contexts. Retry after the existing session's owner finishes and deletes it.
 4. **Submit observations.** Each `Observation` goes via `POST /v2/attributor/{id}/observation`. Individual failures are logged and skipped. A duplicate-observation 409 counts as delivered. Per-connector delivery outcomes land in `ingestion_reports`.
 5. **Get verdict.** `GET /v2/attributor/{id}/attribution` returns the raw verdict.

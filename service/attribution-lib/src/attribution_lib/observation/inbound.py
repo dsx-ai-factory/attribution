@@ -91,96 +91,28 @@ class Source(str, Enum):
 
 
 class Format(str, Enum):
-    r"""Specifies the format the 'lines' in an observation are in.
+    """Specifies the format the 'lines' in an observation are in.
 
     `job_keywords` takes `string_list`; every other implemented source takes `entry_timeseries`.
 
-    Rank-like prefixes match the following regex: "^\[rank\s*:?\s*(?P<rank>\d+)\]" or have an integer followed by a colon at the start of the line.
+    - `string_list`: lines of text separated by newlines. No host associations.
 
-    Examples:
+    - `entry_timeseries`: a JSON array of entry objects, each with
+        - a required `body` string,
+        - an optional `ts` (Unix nanoseconds, meaning "this entry occurred no later than this time") and
+        - an optional `resources` (the exact string `"AllJobResources"`, or an array naming exactly one
+            `{"kind": "node", "hostname": ...}` optionally alongside `{"kind": "replica", "name": ...}`
+            objects).
+        Any other key is rejected.
 
-        [rank3] Message
-         3: another message
-        [rank :10] a third message
+      Entries are time-filtered only by the context's `time_interval`; a null bound is unbounded on that
+      side. What each source does with a missing `ts` or node, and what it parses out of the body
+      instead, is the per-source `SourceProcessingConfig` registered in `core.py`. A declared node that
+      is not usable (several nodes, or a hostname outside the job) skips body parsing: `applog` counts
+      the entry against every job node, every other source drops it.
 
-
-    - `string_list`:
-
-        Raw text
-
-        Lines of text separated by newlines. No hosts associations.
-
-    - `entry_timeseries`:
-
-      JSON-based.
-
-      Top-Level Structure:
-      - An array of entry objects.
-
-      Details:
-      - Each entry object contains:
-        - `body` (string): *Required*. Matched verbatim. Parsed only as the per-source fallback
-          described below.
-        - `ts` (int or null): Unix timestamp in **nanoseconds**, or null/absent when the producer
-          has no timestamp for this entry. It means "this entry occurred no later than this time".
-          May be parsed from body and/or dropped if none given for some sources.
-        - `resources` (optional): What this entry is about. Either the exact string `"AllJobResources"`
-          or an array naming exactly one `{"kind": "node", "hostname": ...}`, optionally alongside
-          `{"kind": "replica", "name": ...}` objects, which are recorded but not attributed on. An array
-          naming several nodes, or a hostname outside the job, is invalid and handled like an entry naming
-          no node. Node may be parsed from body and/or dropped if none given for some sources.
-      - Any other key in an entry is rejected.
-
-      Entries are time-filtered only by the observation context's `time_interval`. That interval is the
-      producer's declared intent: a null bound means unbounded on that side, so an interval of two nulls
-      disables time filtering for the observation entirely.
-
-      Key Source Behavior:
-
-      The sources listed below read an entry the same way unless noted; a source not listed requires
-      nothing and parses nothing out of the body.
-      - `ts` is required: an entry without it is dropped.
-      - A declared node is used as-is, so a host specifier in IP form must be resolved by the producer. If
-        no node is declared, the node is parsed out of the body instead, keeping any declared replicas. An
-        entry that still names no node is dropped.
-      - `body` is the line as received. The library never parses its shape beyond the fallbacks
-        noted below; what a body must look like is whatever the source's rules match.
-
-      Deviations:
-      - `applog`:
-        - `ts` can be null, in which case the body is parsed for a timestamp. Year-less formats resolve it
-          against the workload's `job_end_time`.
-        - The body node is parsed from the rank-like or node-name text prefix. An entry that still names no node,
-          or names an invalid one, is recorded against every job resource instead of dropped. An explicit
-          `"AllJobResources"` skips the prefix parse altogether.
-      - `syslog` & `health_check`: the node is parsed from the hostname field of the body.
-      - `ufmlog`:
-        - `ts` can be null, in which case the entry is kept and treated as untimed.
-        - The body node is parsed from either the link form `(Computer:<node> (<guid>))` or the node
-          form `(<node>) node is Down`.
-      - `node_metrics` and `nvlink_metrics`:
-        - `ts` can be null, in which case the entry is kept and treated as untimed.
-        - `resources` must name the node; the body is never parsed for one.
-      - `csp_event`:
-        - `ts` must be set; the body is never parsed for one. An entry without it is dropped.
-        - `resources` must name the node; the body is never parsed for one.
-        - There is no received line: producers render the body as
-          `csp_event: category=<category>, reason=<reason>, status=<status>`, optionally followed by
-          `, source_event=<compact JSON, sorted keys>` carrying the provider payload.
-
-      Example:
-      ```json
-      [
-        {
-          "ts": 1744734437830498000,
-          "resources": [{"kind": "node", "hostname": "host-a1b2c3d4"}],
-          "body": "some log message"
-        },
-        {
-          "body": "an untimed entry; kept or dropped per the source rules above"
-        }
-      ]
-      ```
+      Per-source behavior and examples are fully documented in
+      `service/service-app/docs/api/observation-format.md`.
     """
 
     UNDEFINED = ""
