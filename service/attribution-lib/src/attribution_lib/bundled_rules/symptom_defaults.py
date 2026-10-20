@@ -1718,6 +1718,7 @@ outcome_symptom(
     outcome="Fail Undetermined",
     priority=OutcomePriority.LOW_GENERIC,
     doc="nvrx-detected-failure",
+    hw_cause="Underlying failure reason unavailable from the collected evidence.",
 )
 
 outcome_symptom(

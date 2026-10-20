@@ -21,6 +21,7 @@ _ERROR = (
     "eval_micro_batch_size (4) * data_parallel_size (8)"
 )
 _SYMPTOM = "Python Exception: AssertionError: batch size not divisible"
+_UNAVAILABLE_REASON = "Underlying failure reason unavailable from the collected evidence."
 _NVRX = "0: Cycle: 1 Event: failure_detected Node: node01 Rank: 0 Time: 2024-01-01 10:01:00.000 UTC"
 _NO_PROGRESS = "0: progress_tracker.py:248 EARLY TERMINATION: 3 consecutive training cycles without progress"
 _STEP_TIMEOUT = "0: rank_monitor_server.py:523 [Cycle 1] Section 'step' has been open for 121 seconds. Timeout is 120"
@@ -190,6 +191,7 @@ def test_assertion_priority_and_decision_graph(attribute_cycle, nvrx_line):
 
     assert result.outcome_attr.value().outcome == "Fail User"
     assert result.outcome_attr.value().root_cause_symptom == _SYMPTOM
+    assert result.outcome_attr.value().hw_cause != _UNAVAILABLE_REASON
     assert result.outcome_attr.one_source().datum == line
     if nvrx_line is not None:
         assert any(s.startswith("NVRx ") for s in result.symptoms.symptoms())
@@ -269,10 +271,12 @@ def test_batch_sizes_share_a_label_and_preserve_each_source(attribute_cycle):
     ],
 )
 def test_generic_nvrx_failure_remains_undetermined(attribute_cycle, lines, job_options):
+    """Report an unavailable reason explicitly without inventing a cause."""
     result, _ = attribute_cycle(line_entries([*lines, _NVRX]), **job_options)
 
     assert result.outcome_attr.value().outcome == "Fail Undetermined"
     assert result.outcome_attr.value().root_cause_symptom == "NVRx detected failure"
+    assert result.outcome_attr.value().hw_cause == _UNAVAILABLE_REASON
     assert "NVRx detected failure" in result.symptoms
 
 

@@ -175,6 +175,28 @@ def test_batch_size_failure_has_specific_diagnose_guidance(tmp_path):
     assert any(entry["text"] == line for entry in result["log"])
 
 
+def test_generic_nvrx_failure_reports_unavailable_reason(tmp_path):
+    """Keep the unavailable-reason detail visible in the report and Diagnose cards."""
+    detail = "Underlying failure reason unavailable from the collected evidence."
+    run = _seed_one(
+        tmp_path,
+        catalog_id="nvrx-detected-failure",
+        symptom="NVRx detected failure",
+        rule="NVRXFailureDetected",
+        line="Cycle: 1 Event: failure_detected Node: node-a Rank: 0",
+        detail=detail,
+    )
+    run.raw_result["verdict"]["attribution_outcome"] = "Fail Undetermined"
+
+    result = bootstrap.run_to_react(run)
+
+    assert result["verdictLabel"] == "Unattributed"
+    assert result["detail"] == detail
+    assert result["rootSymptom"]["symptom"] == "NVRx detected failure"
+    assert result["diagnose"]["summary"] == detail
+    assert result["operatorDiagnose"]["summary"] == detail
+
+
 def test_symptom_text_without_catalog_id_yields_no_persona_card(tmp_path):
     # Default seed: symptom "GpuFell" / line "Xid 79" regex-matches the xid-79
     # signal, but carries no typed catalog_id.
