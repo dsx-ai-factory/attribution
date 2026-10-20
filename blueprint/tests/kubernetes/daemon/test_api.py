@@ -1,6 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
+import pytest
 import requests
 
 from attribution_blueprint.kubernetes.daemon.health import HealthState
@@ -87,6 +88,75 @@ def test_placement_endpoint_queries_pod_uid(tmp_path):
 
     assert response.status_code == 200
     assert response.json()["items"] == [_record().to_resource()]
+
+
+class _FailingReader:
+    """A `PlacementReader` whose methods always raise, for exercising the
+    endpoint's 500 branch without depending on a real storage failure."""
+
+    def list_for_pod(self, namespace, pod_uid):
+        raise RuntimeError("synthetic storage failure")
+
+    def list_for_owner(self, namespace, owner_uid):
+        raise RuntimeError("synthetic storage failure")
+
+    def list_for_resource(self, namespace, resource_uid):
+        raise RuntimeError("synthetic storage failure")
+
+
+@pytest.mark.parametrize(
+    ("params", "status"),
+    [
+        ({"pod_uid": "pod-uid-1"}, 400),
+        ({"namespace": "team-a"}, 400),
+        ({"namespace": "team-a", "pod_uid": "p", "owner_uid": "o"}, 400),
+        ({"namespace": "team-b", "pod_uid": "pod-uid-1"}, 403),
+    ],
+)
+def test_placement_endpoint_rejects_invalid_queries(tmp_path, params, status):
+    store = SQLitePlacementStore(str(tmp_path / "placements.db"))
+    server = serve_api(HealthState(), store, 0, "team-a")
+    try:
+        response = requests.get(
+            f"http://127.0.0.1:{server.server_port}/v1/placements",
+            params=params,
+            timeout=2,
+        )
+    finally:
+        server.shutdown()
+        server.server_close()
+
+    assert response.status_code == status
+
+
+def test_placement_endpoint_returns_500_on_reader_failure():
+    server = serve_api(HealthState(), _FailingReader(), 0, "team-a")
+    try:
+        response = requests.get(
+            f"http://127.0.0.1:{server.server_port}/v1/placements",
+            params={"namespace": "team-a", "pod_uid": "pod-uid-1"},
+            timeout=2,
+        )
+    finally:
+        server.shutdown()
+        server.server_close()
+
+    assert response.status_code == 500
+
+
+def test_unknown_path_returns_404(tmp_path):
+    store = SQLitePlacementStore(str(tmp_path / "placements.db"))
+    server = serve_api(HealthState(), store, 0, "team-a")
+    try:
+        response = requests.get(
+            f"http://127.0.0.1:{server.server_port}/v1/unknown",
+            timeout=2,
+        )
+    finally:
+        server.shutdown()
+        server.server_close()
+
+    assert response.status_code == 404
 
 
 def test_placement_endpoint_can_enable_a_resource_query_alias(tmp_path):
