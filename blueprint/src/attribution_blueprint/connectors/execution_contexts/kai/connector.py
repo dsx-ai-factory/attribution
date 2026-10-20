@@ -644,7 +644,8 @@ class KaiExecutionContextAdapter:
             set(context.get("pod_names") or []) | {placement["pod_name"] for placement in merged}
         )
         pod_nodes = dict(context.get("pod_nodes") or {})
-        pod_nodes.update({placement["pod_name"]: placement["node_name"] for placement in merged})
+        for placement in placements:
+            pod_nodes.setdefault(placement["pod_name"], placement["node_name"])
         context["pod_nodes"] = pod_nodes
 
         node_loss_nodes = {
