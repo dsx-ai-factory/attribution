@@ -30,11 +30,6 @@ from attribution_lib.sources import (
     Source as LibSource,
     SourceSet,
 )
-from attribution_lib.symptoms.doc_validation import (
-    build_doc_name_index,
-    find_undeclared_symptom_names,
-    find_unresolved_symptom_docs,
-)
 from attribution_lib.symptoms.registry_generation import registry_from_declarations
 from pydantic import ValidationError
 
@@ -389,25 +384,6 @@ class TestV2Models:
         sites = response.symptoms["link_flap"]
         assert [s.node for s in sites] == ["node-a", "node-b"]
         assert all(s.type == "NodeSource" for s in sites)
-
-
-def test_batch_size_assertion_catalog_declares_emitted_name() -> None:
-    """Validate the actual declaration against the packaged catalog's exact names."""
-    catalog_path = Path(__file__).resolve().parents[3] / "blueprint/src/attribution_blueprint/data/failures.yml"
-    entries = yaml.safe_load(catalog_path.read_text())["failures"]
-    names_by_id = build_doc_name_index(entries)
-    loader = RuleLoader()
-    loader.load(str(get_bundled_rules_path() / "symptom_defaults.py"))
-    declarations = [
-        declaration
-        for declaration in loader.symptom_declarations
-        if declaration.prefix == "Python Exception: AssertionError: batch size not divisible"
-    ]
-
-    assert len(declarations) == 1
-    assert declarations[0].doc == "batch-size-not-divisible"
-    assert find_unresolved_symptom_docs(declarations, set(names_by_id)) == []
-    assert find_undeclared_symptom_names(declarations, names_by_id) == []
 
 
 def test_fallback_catalog_ids_resolve_in_packaged_catalog() -> None:

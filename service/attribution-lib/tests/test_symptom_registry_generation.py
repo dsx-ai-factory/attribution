@@ -726,7 +726,7 @@ def test_batch_size_assertion_is_registered_above_generic_nvrx_failure():
     assert match.matched_prefix == symptom
     assert match.outcome == "Fail User"
     assert match.tier_index == OUTCOME_PRIORITIES.index(OutcomePriority.LOW)
-    assert match.doc == "batch-size-not-divisible"
+    assert match.doc == "python-exception"
 
 
 def test_category_membership_deduplicates_scoped_declarations():

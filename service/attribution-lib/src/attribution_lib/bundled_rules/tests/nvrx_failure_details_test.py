@@ -116,7 +116,7 @@ def test_assertion_accepts_supported_rank_prefixes(attribute_cycle, prefix, batc
     outcome = result.outcome_attr.value()
     assert outcome.outcome == "Fail User"
     assert outcome.root_cause_symptom == _SYMPTOM
-    assert outcome.doc == "batch-size-not-divisible"
+    assert outcome.doc == "python-exception"
     source = result.symptoms[_SYMPTOM].one_source()
     assert source.datum == line
     assert {resource.hostname for resource in source.resources} == {"node02"}

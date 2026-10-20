@@ -1436,7 +1436,7 @@ outcome_symptom(
     "Python Exception: AssertionError: batch size not divisible",
     outcome="Fail User",
     priority=OutcomePriority.LOW,
-    doc="batch-size-not-divisible",
+    doc="python-exception",
 )
 
 outcome_symptom(
