@@ -64,6 +64,8 @@ Enable one or both scheduler-specific resource resolvers per installation:
 ```bash
 helm upgrade --install attribution blueprint/deploy/kubernetes-daemon \
   --namespace team-a \
+  --set image.repository=registry.example/kubernetes-daemon \
+  --set image.tag=VERSION \
   --set integrations.kueue.enabled=true \
   --set integrations.kai.enabled=true
 ```
