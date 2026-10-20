@@ -908,6 +908,7 @@ class KueueExecutionContextAdapter:
                         f"use `<namespace>/<name>` or configure eca.kueue.namespace"
                     )
                 ns, name = self.namespace, ref
+            histories = []
             if self.history_reader is not None:
                 histories = self.history_reader.find_histories(
                     ns,
@@ -921,20 +922,62 @@ class KueueExecutionContextAdapter:
                             workload_name=name,
                         )
                     )
-                    continue
             try:
-                workloads.append(
-                    self._kubernetes.get_one(
-                        "Workload", name, namespace=ns, api_version=self.workload_api_version
-                    )
+                obj = self._kubernetes.get_one(
+                    "Workload",
+                    name,
+                    namespace=ns,
+                    api_version=self.workload_api_version,
                 )
             except KubernetesClientError as error:
-                if error.status != 404:
-                    raise
-        return [
-            *retained_contexts,
-            *self._finalize(workloads),
-        ]
+                if histories:
+                    logger.warning(
+                        f"live Workload lookup failed for {ns}/{name}; "
+                        "using retained history"
+                    )
+                    continue
+                if error.status == 404:
+                    continue
+                raise
+            if obj is not None:
+                workloads.append(obj)
+        return self._reconcile_live_contexts(
+            retained_contexts,
+            self._finalize(workloads),
+        )
+
+    @staticmethod
+    def _reconcile_live_contexts(
+        retained: list[KueueExecutionContext],
+        live_contexts: list[KueueExecutionContext],
+    ) -> list[KueueExecutionContext]:
+        reconciled = list(retained)
+        for live in live_contexts:
+            matching = [
+                index
+                for index, context in enumerate(reconciled)
+                if context["workload_uid"] == live["workload_uid"]
+            ]
+            open_index = next(
+                (
+                    index
+                    for index in reversed(matching)
+                    if reconciled[index]["state"] == "RUNNING"
+                ),
+                None,
+            )
+            if open_index is not None:
+                updated = dict(reconciled[open_index])
+                for field in ("state", "kueue_state", "end_time"):
+                    if field in live:
+                        updated[field] = live[field]
+                reconciled[open_index] = updated
+            elif (
+                not matching
+                or reconciled[matching[-1]]["state"] != live["state"]
+            ):
+                reconciled.append(live)
+        return reconciled
 
     def _contexts_from_histories(
         self,

@@ -62,12 +62,9 @@ def attempts_from_workload_history(
     attempts = []
     for workload_uid, timeline in workloads.items():
         latest_metadata = timeline[-1].get("metadata") or {}
-        admissions = _admissions(timeline) or [
-            {
-                "key": "observed",
-                "time": timeline[0]["observedAt"],
-            }
-        ]
+        admissions = _admissions(timeline)
+        if not admissions:
+            continue
         starts = _starts(admissions, restart_starts)
         owner = _controller_owner(latest_metadata)
         for index, start in enumerate(starts):

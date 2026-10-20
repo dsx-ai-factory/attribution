@@ -265,8 +265,14 @@ def test_retained_jobset_retries_flow_as_distinct_execution_contexts(
             placement_records_enabled=True,
             placement_reader=client,
         )
+        live_lookup = mocker.patch.object(
+            adapter._kubernetes,
+            "get_one",
+            return_value=None,
+        )
         contexts = adapter.discover_by_ids(["training-workload"])
         replayed = adapter.discover_by_ids(["training-workload"])
+        assert live_lookup.call_count == 2
         history = client.find_histories(
             "team-a",
             "Workload",
@@ -589,3 +595,65 @@ def test_child_job_completion_does_not_finish_jobset_attempt():
         tzinfo=timezone.utc,
     )
     assert attempt.terminal["kind"] == "Workload"
+
+
+def test_never_admitted_history_does_not_invent_running_attempt():
+    history = {
+        "observations": [
+            {
+                "kind": "Workload",
+                "metadata": {
+                    "namespace": "team-a",
+                    "name": "pending-workload",
+                    "uid": "workload-uid",
+                },
+                "observedAt": "2026-10-14T10:00:00Z",
+                "status": {"conditions": []},
+            }
+        ]
+    }
+
+    assert attempts_from_workload_history(
+        history,
+        now=datetime(2026, 10, 14, 12, 0, tzinfo=timezone.utc),
+        workload_name="pending-workload",
+    ) == []
+
+
+def test_live_state_replaces_open_retained_attempt():
+    start = datetime(2026, 10, 14, 10, 0, tzinfo=timezone.utc)
+    retained = {
+        "workload_uid": "workload-uid",
+        "state": "RUNNING",
+        "id": "retained-attempt",
+        "attempt_id": "retained-attempt",
+        "start_time": start,
+        "end_time": start,
+        "kueue_state": "RUNNING",
+        "nodes": ["node-b"],
+        "pod_names": ["retry-pod"],
+        "history_complete": False,
+    }
+    live = {
+        "workload_uid": "workload-uid",
+        "state": "COMPLETED",
+        "id": "workload-uid",
+        "attempt_id": "workload-uid",
+        "start_time": start,
+        "end_time": datetime(2026, 10, 14, 11, 0, tzinfo=timezone.utc),
+        "kueue_state": "FINISHED_SUCCEEDED",
+        "nodes": ["node-a", "node-b"],
+        "pod_names": ["first-pod", "retry-pod"],
+    }
+
+    [reconciled] = KueueExecutionContextAdapter._reconcile_live_contexts(
+        [retained],
+        [live],
+    )
+
+    assert reconciled["state"] == "COMPLETED"
+    assert reconciled["kueue_state"] == "FINISHED_SUCCEEDED"
+    assert reconciled["attempt_id"] == "retained-attempt"
+    assert reconciled["nodes"] == ["node-b"]
+    assert reconciled["pod_names"] == ["retry-pod"]
+    assert reconciled["history_complete"] is False
