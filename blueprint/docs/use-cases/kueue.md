@@ -234,11 +234,15 @@ pod labels to confirm which pods belong to the workload. For a Job, Kubernetes
 uses `batch.kubernetes.io/controller-uid`. For a JobSet, the adapter uses
 `jobset.sigs.k8s.io/jobset-name`.
 
-To verify daemon recovery, query `kubernetes-daemon` with the exact Workload UID:
+To verify daemon recovery, query `kubernetes-daemon` with the exact Workload UID.
+Run `port-forward` in its own terminal (it stays in the foreground), then query it from another:
 
 ```bash
 kubectl -n "${NAMESPACE}" port-forward \
   service/attribution-kubernetes-daemon 18080:8080
+```
+
+```bash
 curl -fsS \
   "http://127.0.0.1:18080/v1/placements?namespace=${NAMESPACE}&resource_uid=WORKLOAD_UID"
 ```

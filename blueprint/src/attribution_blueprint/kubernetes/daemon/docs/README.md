@@ -132,7 +132,15 @@ authenticated proxy in front of it.
 ```bash
 kubectl -n team-a rollout status statefulset/attribution-kubernetes-daemon
 kubectl -n team-a logs -l app.kubernetes.io/name=kubernetes-daemon --tail=100
+```
+
+Run `port-forward` in its own terminal (it stays in the foreground), then query it from another:
+
+```bash
 kubectl -n team-a port-forward service/attribution-kubernetes-daemon 18080:8080
+```
+
+```bash
 curl -fsS \
   'http://127.0.0.1:18080/v1/placements?namespace=team-a&resource_uid=WORKLOAD_OR_PODGROUP_UID'
 ```
