@@ -118,6 +118,43 @@ def test_deleted_event_starts_placement_retention(tmp_path):
     assert marker == ("pod-uid-1",)
 
 
+def test_resource_version_expiry_resets_readiness_before_relisting(mocker):
+    """A relist triggered by an expired watch resourceVersion (HTTP 410) must
+    clear `initial_list_complete` until the relist completes, so `/readyz`
+    does not report ready while the daemon cannot currently reconcile."""
+    from kubernetes.client.exceptions import ApiException
+
+    store = mocker.Mock()
+    core_api = mocker.Mock()
+    daemon = KubernetesDaemon(core_api=core_api, store=store, namespace="team-a", workers=1)
+
+    readiness_during_lists = []
+
+    def list_namespaced_pod(namespace):
+        readiness_during_lists.append(daemon.health.initial_list_complete)
+        return SimpleNamespace(items=[], metadata=SimpleNamespace(resource_version="1"))
+
+    core_api.list_namespaced_pod.side_effect = list_namespaced_pod
+
+    watcher = mocker.Mock()
+    calls = {"count": 0}
+
+    def stream(*args, **kwargs):
+        calls["count"] += 1
+        if calls["count"] == 1:
+            raise ApiException(status=410, reason="resource version expired")
+        daemon.stop()
+        return iter(())
+
+    watcher.stream.side_effect = stream
+    mocker.patch("kubernetes.watch.Watch", return_value=watcher)
+
+    daemon.run()
+
+    assert readiness_during_lists == [False, False]
+    assert daemon.health.initial_list_complete is True
+
+
 def test_owner_enrichment_write_failure_does_not_escape_or_kill_recording():
     store = _FailOnEnrichmentStore()
     daemon = KubernetesDaemon(

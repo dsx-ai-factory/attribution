@@ -94,6 +94,7 @@ class KubernetesDaemon:
                 if error.status == 410:
                     logger.warning("Pod watch resourceVersion expired; relisting")
                     resource_version = None
+                    self.health.update(initial_list_complete=False)
                     continue
                 logger.warning(f"Pod watch failed: {error}")
             except Exception:
