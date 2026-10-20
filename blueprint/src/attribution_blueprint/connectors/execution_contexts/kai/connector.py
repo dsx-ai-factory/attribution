@@ -527,7 +527,7 @@ class KaiExecutionContextAdapter:
             namespace=self.namespace,
             group=_PODGROUP_GROUP,
         )
-        contexts = [c for c in self._finalize(listing) if c["start_time"] <= end and c["end_time"] >= start]
+        contexts = self._finalize(listing, time_range=(start, end))
         if not nodelist:
             return contexts
         wanted: set[str] = set()
@@ -539,7 +539,12 @@ class KaiExecutionContextAdapter:
 
     # --- internals ---------------------------------------------------------
 
-    def _finalize(self, podgroups: list[dict]) -> list[KaiExecutionContext]:
+    def _finalize(
+        self,
+        podgroups: list[dict],
+        *,
+        time_range: tuple[datetime, datetime] | None = None,
+    ) -> list[KaiExecutionContext]:
         # Unsupported owners cannot supply an end time, so drop them before
         # fetching Pods or owners.
         owned: list[tuple[dict, dict, str]] = []
@@ -598,9 +603,14 @@ class KaiExecutionContextAdapter:
                 owner_object,
                 now,
             )
-            if ctx is not None:
-                self._merge_placement_records(ctx)
-                contexts.append(ctx)
+            if ctx is None:
+                continue
+            if time_range is not None:
+                start, end = time_range
+                if ctx["start_time"] > end or ctx["end_time"] < start:
+                    continue
+            self._merge_placement_records(ctx)
+            contexts.append(ctx)
         return contexts
 
     def _fetch_placement_records(self, context: KaiExecutionContext) -> list[PlacementRecord]:

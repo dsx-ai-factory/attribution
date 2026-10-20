@@ -882,6 +882,49 @@ def test_time_range_keeps_only_intersecting_podgroups(mocker):
     assert [c["id"] for c in contexts] == ["uid-in"]
 
 
+def test_time_range_skips_placement_reads_for_excluded_podgroups(mocker):
+    later = _podgroup(created="2026-05-03T12:00:00Z")
+    _wire_kubectl(
+        mocker,
+        [later],
+        [],
+        [_job("pg-a-job", "uid-job-uid-pg-a", completed="2026-05-03T13:00:00Z")],
+    )
+    reader = mocker.Mock()
+    reader.list_for_resource.side_effect = RuntimeError("must not be called")
+    adapter = KaiExecutionContextAdapter(
+        namespace="team-alpha",
+        placement_records_enabled=True,
+        placement_reader=reader,
+    )
+
+    assert adapter.discover_by_time_range(START, END) == []
+    reader.list_for_resource.assert_not_called()
+
+
+def test_time_range_nodelist_includes_retained_nodes(mocker):
+    _wire_kubectl(mocker, [_podgroup()], [], [_job("pg-a-job", "uid-job-uid-pg-a")])
+    reader = mocker.Mock()
+    reader.list_for_resource.return_value = [
+        PlacementRecord(
+            namespace="team-alpha",
+            pod_name="deleted-0",
+            pod_uid="pod-uid-deleted",
+            node_name="node009",
+            observed_at="2026-05-01T12:05:00Z",
+        )
+    ]
+    adapter = KaiExecutionContextAdapter(
+        namespace="team-alpha",
+        placement_records_enabled=True,
+        placement_reader=reader,
+    )
+
+    contexts = adapter.discover_by_time_range(START, END, nodelist=["node009"])
+
+    assert [context["id"] for context in contexts] == ["uid-pg-a"]
+
+
 def test_time_range_nodelist_filters_on_member_pod_nodes(mocker):
     a = _podgroup(name="pg-a", uid="uid-a")
     b = _podgroup(name="pg-b", uid="uid-b")
