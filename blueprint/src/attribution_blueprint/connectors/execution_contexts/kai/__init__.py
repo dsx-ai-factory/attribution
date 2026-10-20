@@ -45,8 +45,9 @@ _registry.register_component(
         "kubeconfig": _PARAM,
         # Optional context name within the resolved kubeconfig.
         "context": _PARAM,
-        # Optional namespace scope. The empty string (or unset) queries every
-        # namespace.
+        # Namespace scope. Required for time-range discovery and for bare
+        # `<name>` IDs. Without it, ID discovery accepts only
+        # `<namespace>/<name>`. The adapter never scans the whole cluster.
         "namespace": _PARAM,
         "timeout_seconds": _PARAM,
     },
