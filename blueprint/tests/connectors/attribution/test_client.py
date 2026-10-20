@@ -11,7 +11,11 @@ from pathlib import Path
 import pytest
 from nvidia_attribution_client import ApiException, AttributorInfoV2, DuplicateAttributorError, ObservationV2
 
-from attribution_blueprint.connectors.attribution import AttributionConnector, AttributorConflictError
+from attribution_blueprint.connectors.attribution import (
+    AttributionConnector,
+    AttributorConflictError,
+    ObservationConflictError,
+)
 from attribution_blueprint.orchestrator import AttributionOrchestrator
 
 FIXTURES = json.loads((Path(__file__).parents[2] / "fixtures" / "service_responses.json").read_text())
@@ -148,14 +152,13 @@ def test_duplicate_blueprint_run_does_not_claim_or_delete_existing_session(mocke
     )
 
 
-def test_ingest_observation_posts_and_returns_id(mocker):
+def test_ingest_observation_posts_and_returns_response(mocker):
     request = _transport(mocker, _FakeResponse(HTTPStatus.OK, FIXTURES["ingest_response"]))
 
     conn = AttributionConnector("http://svc:8000")
     result = conn.ingest_observation("attr-7", _observation())
 
-    assert result == FIXTURES["ingest_response"]["observation_id"]
-    assert isinstance(result, int)
+    assert result.observation_id == FIXTURES["ingest_response"]["observation_id"]
     args, kwargs = request.call_args
     assert args == ("POST", "http://svc:8000/v2/attributor/attr-7/observation")
     assert kwargs["body"]["context"]["source"] == "syslog"
@@ -170,6 +173,16 @@ def test_ingest_observation_http_error_raises_bounded_message(mocker):
 
     assert str(excinfo.value).startswith("HTTP 422")
     assert len(str(excinfo.value)) < 400
+
+
+def test_ingest_observation_duplicate_conflict_raises_observation_conflict(mocker):
+    _transport(mocker, _FakeResponse(HTTPStatus.CONFLICT, {"model_type": "DuplicateObservationError", "obs_id": 42}))
+
+    conn = AttributionConnector("http://svc:8000")
+    with pytest.raises(ObservationConflictError) as excinfo:
+        conn.ingest_observation("attr-7", _observation())
+
+    assert excinfo.value.observation_id == 42
 
 
 def test_get_attribution_returns_full_dict(mocker):

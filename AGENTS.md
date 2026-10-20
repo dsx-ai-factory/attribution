@@ -64,26 +64,13 @@ If required work is outside these limits, stop and ask the human owner.
 
 ## Build and test commands
 
-Run commands from the repository root unless a command says otherwise. The
-full test gate requires `uv`, Node.js 22, pnpm 10.11, and Docker:
+Follow [Run the test gate in CONTRIBUTING.md](CONTRIBUTING.md#run-the-test-gate)
+for prerequisites, tool and runtime setup, staged-source requirements, and
+full and focused test commands. Maintain those shared requirements in
+`CONTRIBUTING.md`.
 
-```bash
-bash .ci/run-tests.sh all
-```
-
-Use one of these exact suite commands for a focused check:
-
-```bash
-bash .ci/run-tests.sh attribution-lib
-bash .ci/run-tests.sh service-app
-bash .ci/run-tests.sh service-app-client-drift
-bash .ci/run-tests.sh blueprint
-bash .ci/run-tests.sh frontend
-bash .ci/run-tests.sh end-to-end
-```
-
-The `frontend` suite installs locked dependencies, runs the frontend tests,
-and builds the frontend. Build the documented bundle image with:
+Run commands from the repository root unless a command says otherwise. Build
+the documented bundle image with:
 
 ```bash
 export ATTRIBUTION_IMAGE="attribution-blueprint-web:local"

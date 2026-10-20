@@ -1,0 +1,89 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+# Publishes the Fern documentation site from the default branch.
+#
+# Runs when a merge to main changes the published docs or the Fern config, and
+# on manual dispatch. The site is not versioned: it always reflects main. This
+# repository releases components independently with component-prefixed tags
+# (see RELEASE.md) and does not create GitHub Releases, so the release-driven,
+# version-registry publish flow does not apply.
+#
+# Publishing to the Fern instance only. Pointing docs.nvidia.com at that
+# instance is configured outside this repository's CI.
+#
+# Required configuration:
+# - Organization secret: FERN_TOKEN (from `fern token` for the nvidia Fern org)
+
+name: Publish Fern Docs
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'docs/**'
+      # The walkthrough is a separate Pages site, not part of the Fern docs.
+      - '!docs/attribution-tour/**'
+      - 'fern/**'
+      - '.github/workflows/publish-fern-docs.yml'
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+# Serialize publishes. Each run publishes the tip of main, so a queued run
+# supersedes an older one without cancelling a publish that is already running.
+concurrency:
+  group: fern-publish
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    name: Publish
+    # Forks do not have the FERN_TOKEN secret.
+    if: ${{ !github.event.repository.fork }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: main
+          persist-credentials: false
+
+      # The publish step below runs with FERN_TOKEN, and Fern reads any file a
+      # page or its configuration names. Refuse to publish if one reaches outside
+      # docs/. fern/docs.yml points at ../docs/index.yml by design, and that is
+      # the only path allowed to leave its directory. This step runs before the
+      # token is in any environment.
+      - name: Check docs paths stay inside docs
+        run: >-
+          python3 tools/check-docs-paths
+          --exclude 'docs/attribution-tour/*'
+          --exclude 'docs/github-pages.md'
+          --allow '../docs/index.yml'
+          docs fern
+
+      - name: Setup Node.js
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: '22'
+
+      - name: Install Fern CLI
+        # Intentionally unpinned: Fern ships often with no LTS channel and the
+        # NVIDIA global theme tracks the latest CLI, so a pin goes stale and
+        # breaks more than it protects. Do not pin.
+        run: npm install -g fern-api@latest
+
+      - name: Publish docs
+        env:
+          FERN_TOKEN: ${{ secrets.FERN_TOKEN }}
+        working-directory: ./fern
+        run: |
+          set -eo pipefail
+          fern generate --docs 2>&1 | tee /tmp/fern-output.log
+          URL=$(grep -oP 'Published docs to \K\S+' /tmp/fern-output.log | tail -1 || true)
+          if [ -n "$URL" ]; then
+            echo "### Published: [$URL]($URL)" >> "$GITHUB_STEP_SUMMARY"
+          fi

@@ -22,11 +22,30 @@ Attribution output quality scales with the quantity and coverage of the logs the
 
 | `evidence_status` | When |
 |---|---|
-| `complete` | No collector reported `status: "error"` and every ingestion report has `status: "ok"`. This includes runs that collected zero observations. |
-| `partial` | Something failed, but at least one connector delivered evidence (an ingestion report with `submitted > 0` and `status` `ok` or `partial`). |
-| `none` | Something failed and no evidence reached the Service. |
+| `complete` | At least one observation was sent, no collector reported `status: "error"`, and every ingestion report has `status: "ok"`. |
+| `partial` | Something failed, but at least one connector delivered evidence (an ingestion report with `attempted > 0` and `status` of `ok` or `partial`). |
+| `none` | No evidence reached the Service: something failed, or the collectors returned zero observations so nothing was sent. |
 
-* **Anything other than `complete` means the verdict was issued without some of its evidence.** Check `connector_reports` and `ingestion_reports` for the connector and reason.
+**NOTE:** Anything other than `complete` means the verdict was issued without some of its evidence. Check `connector_reports` and `ingestion_reports` for the connector and reason.
+
+Each entry in `ingestion_reports` describes one connector's delivery to the Service:
+
+| Field | Meaning |
+|---|---|
+| `attempted` | Observation POSTs made, failed ones included. |
+| `failed` | POSTs that did not reach the Service. A duplicate rejection (HTTP 409) is not treated as a failure: the Service already holds that observation. |
+| `empty` | Delivered observations from which the Service accepted 0 entries. |
+| `accepted` | Entries the Service read, summed over delivered observations. |
+| `dropped` | Entries the Service discarded, counted by reason. |
+| `reason` | The first transport failure, or reports when nothing failed but nothing was accepted. |
+| `status` | Delivery outcome, one of `ok`, `partial`, `error`, `empty`. See below. |
+
+| `status` | When |
+|---|---|
+| `ok` | Everything delivered, every observation had accepted entries. |
+| `partial` | Some observations delivered with accepted entries; the rest failed or were empty. |
+| `error` | Something failed and nothing was delivered with accepted entries. |
+| `empty` | Nothing failed, but the Service accepted 0 entries from every observation. |
 
 Two further consequences:
 

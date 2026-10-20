@@ -21,7 +21,6 @@ from attribution_lib.symptoms.declarations import (
     SymptomCategory,
     SymptomDeclaration,
 )
-from attribution_lib.symptoms.doc_validation import symptom_requires_doc
 from attribution_lib.symptoms.family import SymptomFamily
 from attribution_lib.symptoms.predicate_registry import SymptomPredicate
 from attribution_lib.symptoms.selector import SymptomSelector
@@ -309,6 +308,19 @@ class GeneratedSymptomRegistry:
             Selected outcome match, or None if no mapping matches.
         """
         normalized_symptoms = sorted(symptoms)
+        # Supersede only outcome mappings; retain symptoms and their evidence.
+        superseded_mappings: set[str] = set()
+        if "detected bad NIC state" in normalized_symptoms:
+            superseded_mappings.update(
+                (
+                    "Call to ibv_modify_qp failed",
+                    "Call to ibv_modify_qp failed: eno 110 timeout",
+                    "Call to ibv_modify_qp failed: eno 22 invalid argument(Mismatched GID)",
+                    "Call to ibv_modify_qp failed: eno 22 invalid argument",
+                    "Call to ibv_modify_qp failed: eno 11 resource unavailable",
+                    "ibv_open_device failed",
+                )
+            )
         for tier_index, mapping_list in enumerate(self.outcome_rules):
             tier_matches: list[GeneratedOutcomeMatch] = []
             for symptom in normalized_symptoms:
@@ -316,6 +328,9 @@ class GeneratedSymptomRegistry:
                     continue
                 for mapping, outcome_data in mapping_list.items():
                     if symptom.startswith(mapping):
+                        if mapping in superseded_mappings:
+                            # Do not fall through to a broader mapping in this tier.
+                            break
                         outcome, hw_cause = outcome_data
                         doc = self.symptom_docs.get(mapping)
                         tier_matches.append(
@@ -372,8 +387,8 @@ def outcome_rules_from_declarations(declarations: Iterable[SymptomDeclaration]) 
 def symptom_docs_from_declarations(declarations: Iterable[SymptomDeclaration]) -> dict[str, str]:
     """Map symptom prefixes to their documentation slug.
 
-    Mirrors outcome_rules_from_declarations, carrying only the documentation slug
-    for declarations that require documentation and actually declare one.
+    Preserve explicit documentation for outcome declarations, including fallback
+    prefixes. Fallback prefixes do not require a doc but can declare one.
 
     Args:
         declarations: Symptom declarations in insertion order.
@@ -383,9 +398,9 @@ def symptom_docs_from_declarations(declarations: Iterable[SymptomDeclaration]) -
     """
     docs: dict[str, str] = {}
     for declaration in declarations:
-        if not symptom_requires_doc(declaration):
+        if declaration.cascade_noop or declaration.outcome is None:
             continue
-        if declaration.doc is None or declaration.doc == "":
+        if declaration.doc is None or declaration.doc.strip() == "":
             continue
         docs[declaration.prefix] = declaration.doc
     return docs

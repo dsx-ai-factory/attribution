@@ -872,7 +872,7 @@ outcome_symptom(
     family=XID_FAMILY_SCHEMA,
     outcome="Fail InfraHW",
     priority=OutcomePriority.MEDIUM_BROAD,
-    doc="xid",
+    doc=None,
     hw_cause="Known HW Cause - Node",
     fallback_prefix=True,
     cascade_discards=(
@@ -924,12 +924,18 @@ outcome_symptom(
     hw_cause="Driver bug",
 )
 
+# The driver returns this after a prior GPU fault left the GPU awaiting reset, so
+# later NVLink queries against that GPU fail as a consequence. Fallback prefix so
+# file-suffixed variants (e.g. "NV_ERR_RESET_REQUIRED p2p_api.c") resolve here for cascades.
+# Own tier so other NV_ERR_* codes from the same GPU cannot win the sorted tie in MEDIUM_SW.
 outcome_symptom(
     "NV_ERR_RESET_REQUIRED",
-    outcome="Fail InfraSW",
-    priority=OutcomePriority.MEDIUM_SW,
+    outcome="Fail InfraHW",
+    priority=OutcomePriority.MEDIUM_RESET_REQUIRED,
     doc="gpu-reset-required",
-    hw_cause="Driver bug",
+    hw_cause="Known HW Cause - Node",
+    cascade_discards=("Failed to collect nvlink status info", "Failed to update Rx Detect Link mask!"),
+    fallback_prefix=True,
 )
 
 outcome_symptom(
@@ -1029,6 +1035,17 @@ outcome_symptom(
     priority=OutcomePriority.HIGH_KERNEL_PANIC,
     doc="kernel-panic",
     hw_cause="Kernel panic",
+    cascade_discards=NODE_FAILURE_CASCADE_TARGETS,
+)
+
+# Corrupted node-local files surface in the application as unrelated errors
+# (e.g. JIT compilation failing on a truncated header); the kernel line is the root cause.
+outcome_symptom(
+    "ext4 filesystem corruption",
+    outcome="Fail InfraSW",
+    priority=OutcomePriority.MEDIUM_SW,
+    doc="ext4-filesystem-corruption",
+    hw_cause="ext4 filesystem corruption",
     cascade_discards=NODE_FAILURE_CASCADE_TARGETS,
 )
 
@@ -1424,6 +1441,15 @@ outcome_symptom(
     doc="megatron-core-dist-checkpointing-core-checkpointingexception",
 )
 
+# A concrete Megatron configuration error outranks generic NVRx failure context.
+# Keep configuration values in source evidence, not in the symptom label.
+outcome_symptom(
+    "Python Exception: AssertionError: batch size not divisible",
+    outcome="Fail User",
+    priority=OutcomePriority.LOW,
+    doc="python-exception",
+)
+
 outcome_symptom(
     "Missing key in checkpoint",
     outcome="Fail User",
@@ -1526,7 +1552,7 @@ outcome_symptom(
     "NV_ERR_",
     outcome="Fail Undetermined",
     priority=OutcomePriority.LOW_GENERIC,
-    doc="nv-err",
+    doc=None,
     hw_cause="Driver bug",
     fallback_prefix=True,
 )
@@ -1594,7 +1620,7 @@ outcome_symptom(
     "cudaError",
     outcome="Fail User",
     priority=OutcomePriority.LOW_GENERIC,
-    doc="cudaerror",
+    doc=None,
     fallback_prefix=True,
 )
 
@@ -1658,7 +1684,7 @@ outcome_symptom(
     "IB Error-",
     outcome="Fail InfraSW",
     priority=OutcomePriority.LOW_GENERIC,
-    doc="ib-error",
+    doc=None,
     fallback_prefix=True,
 )
 
@@ -1666,7 +1692,7 @@ outcome_symptom(
     "EFA Error-",
     outcome="Fail MultiCategory",
     priority=OutcomePriority.LOW_GENERIC,
-    doc="efa-error",
+    doc=None,
     fallback_prefix=True,
 )
 
@@ -1703,6 +1729,7 @@ outcome_symptom(
     outcome="Fail Undetermined",
     priority=OutcomePriority.LOW_GENERIC,
     doc="nvrx-detected-failure",
+    hw_cause="Underlying failure reason unavailable from the collected evidence.",
 )
 
 outcome_symptom(
@@ -1710,6 +1737,38 @@ outcome_symptom(
     outcome="Fail MultiCategory",
     priority=OutcomePriority.LOW_GENERIC,
     doc="nvrx-unhealthy-node",
+)
+
+# The check or action name follows these two prefixes, e.g.
+# "NVRx node health check failed: example_check".
+outcome_symptom(
+    "NVRx node health check failed",
+    outcome="Fail MultiCategory",
+    priority=OutcomePriority.LOW_GENERIC,
+    doc=None,
+    fallback_prefix=True,
+)
+
+outcome_symptom(
+    "NVRx GPU recovery action",
+    outcome="Fail MultiCategory",
+    priority=OutcomePriority.LOW_GENERIC,
+    doc=None,
+    fallback_prefix=True,
+)
+
+outcome_symptom(
+    "NVRx step section timeout",
+    outcome="Fail MultiCategory",
+    priority=OutcomePriority.LOW_GENERIC,
+    doc="nvrx-step-section-timeout",
+)
+
+outcome_symptom(
+    "NVRx no progress across restarts",
+    outcome="Fail MultiCategory",
+    priority=OutcomePriority.LOW_GENERIC,
+    doc="nvrx-no-progress-across-restarts",
 )
 
 outcome_symptom(
@@ -2571,8 +2630,6 @@ known_symptom("IB firmware outdated")
 
 known_symptom("NV_ERR_INVALID_STATE nv_gpu_ops.c")
 
-known_symptom("NVRx step section timeout")
-
 known_symptom("NVRx GPU memory reclamation timeout")
 
 known_symptom("OOM kill (other)")
@@ -2767,3 +2824,16 @@ known_symptom("plr_tx_bw_loss_high_1m_5pct")
 known_symptom("plr_tx_bw_loss_high_5m_1pct")
 
 known_symptom("pyxis: cancelled by SIGTERM")
+
+known_symptom("mlx5 firmware in initialization state")
+known_symptom("mlx5 device initialization failed")
+
+outcome_symptom(
+    "detected bad NIC state",
+    outcome="Fail InfraSW",
+    # Independent MEDIUM_SW faults retain precedence. Outcome selection
+    # handles the QP and device-open failures superseded by this symptom.
+    priority=OutcomePriority.LOW,
+    doc="detected-bad-nic-state",
+    hw_cause="NIC firmware initialization failure",
+)

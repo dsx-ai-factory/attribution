@@ -102,6 +102,25 @@ def test_run_summary_reports_context():
     assert sum("incomplete evidence" in msg for msg in messages) == 1
 
 
+_INCOMPLETE_VERDICT = {"status": "attributed", "evidence_status": "none"}
+_CONFLICTED_CONTEXT = {"status": "conflicted"}
+
+
+@pytest.mark.parametrize(
+    ("summary", "flags", "expected_rc"),
+    [
+        (_INCOMPLETE_VERDICT, ["--strict"], 1),
+        (_CONFLICTED_CONTEXT, ["--strict"], 0),
+    ],
+)
+def test_strict_fails_run_only_on_incomplete_attributed_evidence(
+    patched_pipeline, clean_env, summary, flags, expected_rc
+):
+    patched_pipeline.return_value.last_run_summaries = [summary]
+
+    assert cli.main(flags) == expected_rc
+
+
 def test_time_range_passes_raw_nodelist_to_connector(patched_pipeline, clean_env):
     rc = cli.main(
         [

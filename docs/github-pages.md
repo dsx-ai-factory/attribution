@@ -22,6 +22,16 @@ corepack pnpm dev
 The terminal prints the local URL. Use `corepack pnpm build` in the same
 directory to verify a production build.
 
+The build writes `assets/THIRD_PARTY_NOTICES.txt`. It contains
+[the repository notices](../THIRD_PARTY_NOTICES.md) and the license and NOTICE
+texts of every npm package whose code or icon data ships in the bundle. The
+build fails if a bundled package has no license text. For a package that does
+not ship one, add its upstream license to
+`attribution-tour/third-party-licenses/` and map the exact package version to
+it in `attribution-tour/vite.config.ts`. The published site serves this file
+with the deck, and the Pages landing page links to it. The Blueprint WebUI
+build uses the same plugin.
+
 ## Review a pull request
 
 For a same-repository pull request, the `Attribution Process Walkthrough PR

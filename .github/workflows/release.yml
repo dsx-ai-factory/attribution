@@ -3,63 +3,55 @@
 
 name: Release
 
+# Fires only when a merge to main touches a `__version__` literal, so an ordinary
+# merge never shows a tag run. The script still gates on the literal moving: a
+# touch that leaves the version unchanged prints NOOP rows and creates nothing.
 on:
   push:
-    # Same reasoning as tests.yml: "pull_request" events are not permitted on
-    # the self-hosted runners, so every branch (including copy-pr-bot
-    # "pull-request/<N>" mirrors) gets its advisory check from the push event.
     branches:
-      - "**"
-  workflow_dispatch:
+      - main
+    paths:
+      - service/attribution-lib/src/attribution_lib/__init__.py
+      - service/service-app/app/__init__.py
+      - blueprint/src/attribution_blueprint/__init__.py
 
+# Serialise tag runs so two quick merges never race on the latest-tag lookup.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
-
-permissions:
-  contents: read
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
+  queue: max
 
 env:
-  # Same interpreter tests.yml uses, so release.py runs on what the service ships.
+  # Same interpreter release-checks.yml uses, so release.py runs on what the service ships.
   UV_PYTHON: "3.14.6"
 
 jobs:
-  check:
+  tag:
+    name: tag-on-merge
+    if: github.ref == 'refs/heads/main'
     runs-on: linux-arm64-cpu16
+    # GITHUB_TOKEN with contents:write creates the tags; its pushes do not
+    # trigger workflows (nothing listens on tags anyway).
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
-          # Latest tags and distance need the full history and the tags.
+          # Full history + tags: latest-tag lookup, distance, and `git show <before>:` need them.
+          # Credentials stay persisted so `git push` of the tag works.
           fetch-depth: 0
           fetch-tags: true
-          persist-credentials: false
       - uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7.6.0
         with:
           version: "0.12.3"
           enable-cache: true
       - name: Install Python
         run: uv python install "$UV_PYTHON"
-      - name: Test CI tooling
-        run: bash .ci/run-tests.sh ci-tests
-      - name: Release status
+      - name: Configure git identity for annotated tags
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+      - name: Tag released components
         env:
           BEFORE: ${{ github.event.before }}
-          CREATED: ${{ github.event.created }}
-          FORCED: ${{ github.event.forced }}
-        run: |
-          # Branches pass origin/main; release.py compares at its merge-base with
-          # HEAD, so a branch behind main is not blamed for main's bumps. On main the base is the push's
-          # `before` SHA, which is not trustworthy for a created or forced ref; a
-          # dispatch has no `before` at all. Comparing HEAD to itself reports "not a release PR".
-          base=origin/main
-          if [ "$GITHUB_REF" = refs/heads/main ]; then
-            base="$BEFORE"
-            if [ "$CREATED" = true ] || [ "$FORCED" = true ]; then
-              base=HEAD
-            fi
-          fi
-          if [ "$GITHUB_EVENT_NAME" = workflow_dispatch ]; then
-            base=HEAD
-          fi
-          echo "base=$base" >> "$GITHUB_ENV"
-          uv run .ci/release.py status --base "$base"
+        run: uv run .ci/release.py tag --before "$BEFORE"

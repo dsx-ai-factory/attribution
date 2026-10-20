@@ -11,6 +11,8 @@ from nvidia_attribution_client import (
     Configuration,
     DefaultApi,
     DuplicateAttributorError,
+    DuplicateObservationError,
+    ObservationResponseV2,
     ObservationV2,
 )
 
@@ -32,6 +34,14 @@ class AttributorConflictError(RuntimeError):
     def __reduce__(self):
         """Rebuild from the session ID rather than the formatted message."""
         return type(self), (self.attributor_id,), self.__dict__
+
+
+class ObservationConflictError(RuntimeError):
+    """The attributor already holds an identical observation, so this POST added nothing new."""
+
+    def __init__(self, observation_id: int):
+        super().__init__(f"observation {observation_id} already ingested")
+        self.observation_id = observation_id
 
 
 class AttributionConnector:
@@ -63,16 +73,22 @@ class AttributionConnector:
             raise
         return response.attributor_id
 
-    def ingest_observation(self, attributor_id: str, observation: ObservationV2) -> int:
-        """POST /v2/attributor/{attributor_id}/observation. Returns observation_id."""
+    def ingest_observation(self, attributor_id: str, observation: ObservationV2) -> ObservationResponseV2:
+        """POST /v2/attributor/{attributor_id}/observation. Returns the service response.
+
+        Raises:
+            ObservationConflictError: The service rejected the POST as a duplicate (HTTP 409).
+        """
         try:
             response = self._api.ingest_v2_attributor_att_id_observation_post(
                 attributor_id, observation, _request_timeout=self._request_timeout
             )
         except ApiException as e:
+            if e.status == HTTPStatus.CONFLICT and isinstance(e.data, DuplicateObservationError):
+                raise ObservationConflictError(e.data.obs_id) from e
             body = e.body or ""
             raise RuntimeError(f"HTTP {e.status} {e.reason}: {body[:300]}") from e
-        return response.observation_id
+        return response
 
     def get_attribution(self, attributor_id: str) -> dict:
         """GET /v2/attributor/{attributor_id}/attribution. Returns response JSON."""

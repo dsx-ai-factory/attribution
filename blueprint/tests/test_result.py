@@ -39,7 +39,7 @@ def test_enrich_attribution_result_adds_contract_fields():
             },
         },
         [{"connector": "LokiConnector", "source": "syslog", "status": "ok", "reason": "", "observation_count": 1}],
-        [{"connector": "LokiConnector", "source": "syslog", "status": "ok", "submitted": 1, "failed": 0, "reason": ""}],
+        [{"connector": "LokiConnector", "source": "syslog", "status": "ok", "attempted": 1, "failed": 0, "reason": ""}],
     )
 
     assert result["terminal_state"] == "fail"
@@ -115,13 +115,13 @@ def _connector(source: str, status: str, observation_count: int) -> dict:
     }
 
 
-def _ingestion(source: str, status: str, submitted: int, failed: int) -> dict:
+def _ingestion(source: str, status: str, attempted: int, failed: int) -> dict:
     reason = "" if failed == 0 else "boom"
     return {
         "connector": "C",
         "source": source,
         "status": status,
-        "submitted": submitted,
+        "attempted": attempted,
         "failed": failed,
         "reason": reason,
     }
@@ -138,7 +138,7 @@ def _ingestion(source: str, status: str, submitted: int, failed: int) -> dict:
         ),
         ([_connector("applog", "ok", 2)], [_ingestion("applog", "error", 2, 2)], "none"),
         ([_connector("applog", "error", 0)], [_ingestion("applog", "ok", 0, 0)], "none"),
-        ([_connector("applog", "ok", 0)], [_ingestion("applog", "ok", 0, 0)], "complete"),
+        ([_connector("applog", "ok", 0)], [_ingestion("applog", "ok", 0, 0)], "none"),
     ],
     ids=[
         "partial-delivery",

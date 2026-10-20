@@ -7,13 +7,21 @@ on:
   pull_request_target:
     types:
       - opened
+      - ready_for_review
+      - review_requested
+      - review_request_removed
+  schedule:
+    # Hourly check for overdue reviews.
+    - cron: "0 * * * *"
 
 permissions:
+  contents: read
   pull-requests: write
 
 jobs:
   assign:
     name: Assign Author
+    if: ${{ github.event.action == 'opened' }}
     runs-on: ubuntu-latest
     steps:
       - name: Assign pull request author
@@ -29,3 +37,65 @@ jobs:
               issue_number: pullRequest.number,
               assignees: [pullRequest.user.login],
             });
+
+  primary-reviewer:
+    name: Assign Primary Reviewer
+    # Run on the schedule and on every reviewer request. Anyone with write
+    # access can hand the review over by removing the primary. Removing the
+    # team request is the bot's own cleanup and needs no action.
+    if: >-
+      ${{
+        github.event_name == 'schedule' ||
+        contains(fromJSON('["opened", "ready_for_review", "review_requested"]'), github.event.action) ||
+        (github.event.action == 'review_request_removed' && !github.event.requested_team)
+      }}
+    runs-on: ubuntu-latest
+    outputs:
+      messages: ${{ steps.assign.outputs.messages }}
+    concurrency:
+      # Serialize runs per pull request. Each run re-reads live state, so a
+      # superseded pending run is safe to drop. A dropped re-request run loses
+      # only its Slack DM; GitHub still notifies the reviewer.
+      group: primary-reviewer-${{ github.event.pull_request.number || 'schedule' }}
+      cancel-in-progress: false
+    steps:
+      # pull_request_target checks out the base branch, never the PR's code.
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+          sparse-checkout: .github/scripts
+      - name: Assign primary reviewer or post overdue reminders
+        id: assign
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          TEAM_TOKEN: ${{ secrets.PR_ASSIGNER_TOKEN }}
+          SLACK_USER_IDS: ${{ vars.REVIEWER_SLACK_IDS }}
+          ONCALL_SLACK: ${{ vars.REVIEWER_ONCALL_SLACK }}
+        run: python3 .github/scripts/assign_reviewer.py
+
+  slack-dm:
+    name: Slack message to ${{ matrix.message.channel }}
+    needs: primary-reviewer
+    # The script queues no messages without the Slack repository variables. A
+    # failed reminder run still sends the messages for the comments it posted.
+    if: >-
+      ${{
+        !cancelled() &&
+        needs.primary-reviewer.outputs.messages != '' &&
+        needs.primary-reviewer.outputs.messages != '[]'
+      }}
+    runs-on: ubuntu-latest
+    # Sends Slack messages only; needs no GitHub token access.
+    permissions: {}
+    strategy:
+      fail-fast: false
+      matrix:
+        message: ${{ fromJSON(needs.primary-reviewer.outputs.messages) }}
+    steps:
+      # A failed DM is retried with "Re-run failed jobs", which reuses the
+      # assignment job's output instead of picking again.
+      - uses: dsx-ai-factory/dsx-github-actions/.github/actions/slack-notify@79ee22291ed2c112fdc492d086ea40ed162bb7e1 # v1.25.1
+        with:
+          slack-bot-token: ${{ secrets.SLACK_BOT_TOKEN }}
+          channel-id: ${{ matrix.message.channel }}
+          message: ${{ matrix.message.text }}

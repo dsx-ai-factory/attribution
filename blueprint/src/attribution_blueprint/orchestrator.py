@@ -9,7 +9,11 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from loguru import logger
 from nvidia_attribution_client import AttributorInfoV2, ObservationV2, Scheduler
 
-from attribution_blueprint.connectors.attribution import AttributionConnector, AttributorConflictError
+from attribution_blueprint.connectors.attribution import (
+    AttributionConnector,
+    AttributorConflictError,
+    ObservationConflictError,
+)
 from attribution_blueprint.connectors.execution_contexts import ExecutionContextAdapter
 from attribution_blueprint.connectors.logs import LogConnector
 from attribution_blueprint.connectors.metrics import MetricsConnector
@@ -191,21 +195,41 @@ class AttributionOrchestrator:
         ingestion_reports: list[IngestionReport] = []
         for report, collected in batches:
             failed = 0
+            empty = 0
+            accepted = 0
+            dropped: dict[str, int] = {}
             first_reason = ""
             for obs in collected:
                 try:
                     service_obs = ObservationV2.model_validate(obs)
-                    self.attribution.ingest_observation(attributor_id, service_obs)
+                    response = self.attribution.ingest_observation(attributor_id, service_obs)
+                except ObservationConflictError:
+                    # The identical observation already reached the service, so this one is delivered, not failed.
+                    continue
                 except Exception as e:
-                    obs_context = obs.get("context")
-                    obs_source = obs_context.get("source", "?") if isinstance(obs_context, dict) else "?"
-                    obs_source_value = obs_source.value if hasattr(obs_source, "value") else obs_source
-                    logger.warning(f"ingest_observation failed for ctx {ctx['id']} source={obs_source_value}: {e}")
+                    logger.warning(
+                        f"ingest_observation failed for ctx {ctx['id']} source={_observation_source(obs)}: {e}"
+                    )
                     if failed == 0:
                         first_reason = str(e) or type(e).__name__
                     failed += 1
+                    continue
+                ingest = response.ingest
+                accepted += ingest.accepted
+                for drop_reason, count in ingest.dropped.items():
+                    dropped[drop_reason] = dropped.get(drop_reason, 0) + count
+                if ingest.accepted == 0:
+                    empty += 1
             ingestion_reports.append(
-                _ingestion_report(report, submitted=len(collected), failed=failed, reason=first_reason)
+                _ingestion_report(
+                    report,
+                    attempted=len(collected),
+                    failed=failed,
+                    empty=empty,
+                    accepted=accepted,
+                    dropped=dropped,
+                    reason=first_reason,
+                )
             )
 
         # Get the verdict, then ALWAYS clean up via a finally so we don't
@@ -252,8 +276,11 @@ class AttributionOrchestrator:
         """Write each observation body to disk as `<ctx_id>.<source>.json` for review."""
         self.dump_observations_dir.mkdir(parents=True, exist_ok=True)
         for obs in observations:
-            source = obs["context"]["source"]
-            source_value = source.value if hasattr(source, "value") else source
+            source_value = _observation_source(obs)
+            obs_context = obs.get("context")
+            time_interval = obs_context.get("time_interval") if isinstance(obs_context, dict) else None
+            if not isinstance(time_interval, dict):
+                time_interval = {}
             path = self.dump_observations_dir / f"{ctx['id']}.{source_value}.json"
             # Bundled connector bodies are JSON-encoded (`entry_timeseries`); a
             # third-party connector may still send plain text. Preserve a
@@ -269,8 +296,8 @@ class AttributionOrchestrator:
                 "context": {
                     "source": source_value,
                     "time_interval": {
-                        "start": _isoformat_or_none(obs["context"]["time_interval"]["start"]),
-                        "end": _isoformat_or_none(obs["context"]["time_interval"]["end"]),
+                        "start": _isoformat_or_none(time_interval.get("start")),
+                        "end": _isoformat_or_none(time_interval.get("end")),
                     },
                 },
                 **body_field,
@@ -357,6 +384,15 @@ def _isoformat_or_none(value: datetime | None) -> str | None:
     return value.isoformat() if value is not None else None
 
 
+def _observation_source(obs: dict) -> str:
+    """Return the observation's source value, or "unknown" when its context lacks one."""
+    obs_context = obs.get("context")
+    source = obs_context.get("source") if isinstance(obs_context, dict) else None
+    if source is None:
+        return "unknown"
+    return str(source.value if hasattr(source, "value") else source)
+
+
 def _context_with_workload_gpu_defaults(ctx: dict, gpus_per_node: int | None) -> dict:
     """Add workload GPU metadata to the output context when available.
 
@@ -399,19 +435,37 @@ def _connector_report(
     }
 
 
-def _ingestion_report(report: ConnectorReport, submitted: int, failed: int, reason: str) -> IngestionReport:
-    if failed == 0:
+def _ingestion_report(
+    report: ConnectorReport,
+    attempted: int,
+    failed: int,
+    empty: int,
+    accepted: int,
+    dropped: dict[str, int],
+    reason: str,
+) -> IngestionReport:
+    if failed == 0 and empty == 0 and accepted > 0:
         status = "ok"
-    elif failed < submitted:
+    elif accepted > 0:
         status = "partial"
-    else:
+    elif failed > 0:
+        # A failed POST outranks empty deliveries: that evidence never reached the service at all.
         status = "error"
+    else:
+        status = "empty"
+
+    if status == "empty":
+        reason = "service accepted 0 entries"
+
     return {
         "connector": report["connector"],
         "source": report["source"],
         "status": status,
-        "submitted": submitted,
+        "attempted": attempted,
         "failed": failed,
+        "empty": empty,
+        "accepted": accepted,
+        "dropped": dropped,
         "reason": reason[:_MAX_REASON_CHARS],
     }
 

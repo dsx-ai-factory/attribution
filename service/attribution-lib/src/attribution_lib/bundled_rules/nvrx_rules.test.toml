@@ -87,3 +87,131 @@ expect = "interesting"
 expected_node = "host-9ad02e1b"
 expected_symptom = "NVRx GPU memory reclamation timeout"
 expected_rule = "NVRXGpuMemReclaimTimeout"
+
+[[cases]]
+description = "nvrx node health check names the failed check on the reporting node"
+job_variant = "named_hosts"
+line = "2026-01-15 10:00:00,000 [WARNING] [testnode0-001] [workload:3(0) infra:12(0)] health_check.py:1558 Node health check failed: fail_count=1, failed_checks=['example_check']"
+expect = "bad"
+expected_node = "testnode0-001"
+expected_symptom = "NVRx node health check failed: example_check"
+expected_rule = "NVRXNodeHealthCheckFailed"
+
+[[cases]]
+description = "nvrx node health check with two failed checks emits the first check"
+job_variant = "named_hosts"
+line = "2026-01-15 10:00:00,000 [WARNING] [testnode0-002] [workload:3(0) infra:12(0)] health_check.py:1564 Node health check failed: fail_count=2, failed_checks=['example_check', 'example_gpu_check']"
+expect = "bad"
+expected_node = "testnode0-002"
+expected_symptom = "NVRx node health check failed: example_check"
+expected_rule = "NVRXNodeHealthCheckFailed"
+
+[[cases]]
+description = "nvrx node health check with two failed checks emits the second check"
+job_variant = "named_hosts"
+line = "2026-01-15 10:00:00,000 [WARNING] [testnode0-002] [workload:3(0) infra:12(0)] health_check.py:1564 Node health check failed: fail_count=2, failed_checks=['example_check', 'example_gpu_check']"
+expect = "bad"
+expected_node = "testnode0-002"
+expected_symptom = "NVRx node health check failed: example_gpu_check"
+expected_rule = "NVRXNodeHealthCheckFailed"
+
+[[cases]]
+description = "nvrx node health check success is not a failure"
+line = "2026-01-15 10:00:00,000 [DEBUG] [host-9ad02e1b] [workload:3(0) infra:12(0)] health_check.py:1567 Node health check: success (fail_count=0, failed_checks=[])"
+expect = "no_match"
+
+[[cases]]
+description = "nvrx gpu recovery action names the gpu state on the reporting node"
+job_variant = "named_hosts"
+line = "2026-01-15 10:00:00,000 [WARNING] [testnode0-003] [workload:3(0) infra:12(0)] health_check.py:431 GPU 3: Operating at reduced capacity. Drain existing work and reset the GPU."
+expect = "bad"
+expected_node = "testnode0-003"
+expected_symptom = "NVRx GPU recovery action: Operating at reduced capacity"
+expected_rule = "NVRXGpuRecoveryAction"
+
+[[cases]]
+description = "nvrx gpu recovery action requiring a reset"
+job_variant = "named_hosts"
+line = "2026-01-15 10:00:00,000 [WARNING] [testnode0-003] [workload:3(0) infra:12(0)] health_check.py:431 GPU 0: Requires a reset to recover. Terminate GPU processes and reset the GPU."
+expect = "bad"
+expected_node = "testnode0-003"
+expected_symptom = "NVRx GPU recovery action: Requires a reset to recover"
+expected_rule = "NVRXGpuRecoveryAction"
+
+[[cases]]
+description = "nvrx step section timeout is temporarily attributed for job-level aggregation"
+line = "2026-01-15 10:00:00,000 [WARNING] [host-9ad02e1b] [workload:3(0) infra:12(0)] rank_monitor_server.py:523 [Cycle 0] Section 'step' has been open for 121.03 seconds. Timeout is 120.00 seconds."
+expect = "bad"
+expected_symptom = "NVRx step section timeout"
+expected_rule = "NVRXStepSectionTimeout"
+
+[[cases]]
+description = "nvrx sections still open at shutdown are not a timeout"
+line = "2026-01-15 10:00:00,000 [WARNING] [host-9ad02e1b] [workload:3(0) infra:12(0)] rank_monitor_server.py:610 Section(s) ['step'] were still open. Use `.end_all_sections()` to avoid this."
+expect = "no_match"
+
+[[cases]]
+description = "nvrx early termination without progress is temporarily attributed for job-level aggregation"
+line = "2026-01-15 10:00:00,000 [ERROR] [host-9ad02e1b] [workload:3(0) infra:12(0)] progress_tracker.py:248 EARLY TERMINATION: 3 consecutive training cycles without progress (threshold: 3). Training stuck at iteration ~1000. This may indicate a non-recoverable failure (hardware issue, bad data, configuration problem, etc.)"
+expect = "bad"
+expected_symptom = "NVRx no progress across restarts"
+expected_rule = "NVRXNoProgressTermination"
+
+[[cases]]
+description = "nvrx per-cycle no-progress warning alone does not end the run"
+line = "2026-01-15 10:00:00,000 [WARNING] [host-9ad02e1b] [workload:3(0) infra:12(0)] progress_tracker.py:212 Training cycle #0 made NO progress: 1000 → 1000 (0 iterations, need 1). Consecutive cycles without progress: 1/3"
+expect = "no_match"
+
+[[cases]]
+description = "nvrx node health check keeps a check name that is not single-quoted"
+job_variant = "named_hosts"
+line = "2026-01-15 10:00:00,000 [WARNING] [testnode0-001] [workload:3(0) infra:12(0)] health_check.py:1558 Node health check failed: fail_count=1, failed_checks=[3]"
+expect = "bad"
+expected_node = "testnode0-001"
+expected_symptom = "NVRx node health check failed: 3"
+expected_rule = "NVRXNodeHealthCheckFailed"
+
+[[cases]]
+description = "nvrx node health check keeps every entry of a mixed list"
+job_variant = "named_hosts"
+line = "2026-01-15 10:00:00,000 [WARNING] [testnode0-001] [workload:3(0) infra:12(0)] health_check.py:1558 Node health check failed: fail_count=2, failed_checks=[3, 'example_check']"
+expect = "bad"
+expected_node = "testnode0-001"
+expected_symptom = "NVRx node health check failed: 3"
+expected_rule = "NVRXNodeHealthCheckFailed"
+
+[[cases]]
+description = "nvrx node health check keeps the quoted entry of a mixed list"
+job_variant = "named_hosts"
+line = "2026-01-15 10:00:00,000 [WARNING] [testnode0-001] [workload:3(0) infra:12(0)] health_check.py:1558 Node health check failed: fail_count=2, failed_checks=[3, 'example_check']"
+expect = "bad"
+expected_node = "testnode0-001"
+expected_symptom = "NVRx node health check failed: example_check"
+expected_rule = "NVRXNodeHealthCheckFailed"
+
+[[cases]]
+description = "nvrx node health check reads a double-quoted check name"
+job_variant = "named_hosts"
+line = "2026-01-15 10:00:00,000 [WARNING] [testnode0-001] [workload:3(0) infra:12(0)] health_check.py:1558 Node health check failed: fail_count=1, failed_checks=[\"gpu's_check\"]"
+expect = "bad"
+expected_node = "testnode0-001"
+expected_symptom = "NVRx node health check failed: gpu's_check"
+expected_rule = "NVRXNodeHealthCheckFailed"
+
+[[cases]]
+description = "nvrx node health check without a fail count still names the check"
+job_variant = "named_hosts"
+line = "2026-01-15 10:00:00,000 [WARNING] [testnode0-001] [workload:3(0) infra:12(0)] health_check.py:1572 Node health check failed: fail_count=None, failed_checks=['example_check']"
+expect = "bad"
+expected_node = "testnode0-001"
+expected_symptom = "NVRx node health check failed: example_check"
+expected_rule = "NVRXNodeHealthCheckFailed"
+
+[[cases]]
+description = "nvrx node health check service failure names the exit code"
+job_variant = "named_hosts"
+line = "2026-01-15 10:00:00,000 [WARNING] [testnode0-001] [workload:3(0) infra:12(0)] health_check.py:1551 Node health check failed (exit_code=2). Output: example output Error: example error"
+expect = "bad"
+expected_node = "testnode0-001"
+expected_symptom = "NVRx node health check failed: exit_code=2"
+expected_rule = "NVRXNodeHealthCheckFailed"

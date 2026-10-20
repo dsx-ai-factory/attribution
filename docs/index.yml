@@ -1,0 +1,25 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+navigation:
+  - section: Get started
+    contents:
+      - page: Overview
+        path: overview.md
+
+  - section: Concepts
+    contents:
+      - page: How Attribution Works
+        path: attribution.md
+      - page: Architecture
+        path: ARCHITECTURE.md
+
+  - section: Operate
+    contents:
+      - page: Service Operator Guide
+        path: service-operators.md
+
+  - section: Reference
+    contents:
+      - page: FAQ
+        path: FAQ.md

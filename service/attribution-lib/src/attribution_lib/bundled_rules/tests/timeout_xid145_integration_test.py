@@ -46,7 +46,6 @@ def test_terminal_rxpipe_after_raw_slurm_timeout_finishes_as_pass(
     syslog = InboundObservation(
         context=InboundContext(
             time_interval=interval,
-            resources=AllJobResources,
             source=ObservationSource.SYSLOG,
             format=ObservationFormat.ENTRY_TIMESERIES,
             timezone=timezone,
@@ -64,7 +63,6 @@ def test_terminal_rxpipe_after_raw_slurm_timeout_finishes_as_pass(
     applog = InboundObservation(
         context=InboundContext(
             time_interval=interval,
-            resources=AllJobResources,
             source=ObservationSource.APPLOG,
             format=ObservationFormat.ENTRY_TIMESERIES,
             timezone=timezone,
@@ -119,7 +117,6 @@ def test_timeout_cascades_and_unused_xid_leave_only_timeout_failure(
     syslog = InboundObservation(
         context=InboundContext(
             time_interval=interval,
-            resources=AllJobResources,
             source=ObservationSource.SYSLOG,
             format=ObservationFormat.ENTRY_TIMESERIES,
             timezone=timezone,
@@ -160,7 +157,6 @@ def test_timeout_cascades_and_unused_xid_leave_only_timeout_failure(
     applog = InboundObservation(
         context=InboundContext(
             time_interval=interval,
-            resources=AllJobResources,
             source=ObservationSource.APPLOG,
             format=ObservationFormat.ENTRY_TIMESERIES,
             timezone=timezone,

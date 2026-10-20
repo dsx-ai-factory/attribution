@@ -5,6 +5,7 @@
   },
   "ingest_response": {
     "observation_id": 2681252656797335323,
+    "ingest": {"accepted": 1, "dropped": {}},
     "model_type": "ObservationResponseV2"
   },
   "attribution_response": {

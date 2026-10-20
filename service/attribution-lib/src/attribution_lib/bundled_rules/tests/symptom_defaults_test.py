@@ -130,3 +130,18 @@ def test_cuda_illegal_address_resolves_its_own_guidance():
         assert match.symptom == expected_symptom
         assert match.outcome == expected_outcome
         assert match.doc == expected_doc
+
+
+def test_ext4_corruption_outranks_the_application_errors_it_causes():
+    """Corrupted node-local files break the application; the kernel corruption is the root cause."""
+    loader = RuleLoader()
+    loader.load(str(get_bundled_rules_path() / "symptom_defaults.py"))
+    registry = registry_from_declarations(loader.symptom_declarations)
+
+    match = registry.outcome_for(
+        ["cudaErrorInvalidPtx", "No such file or directory", "IO error", "ext4 filesystem corruption"]
+    )
+    assert match is not None
+    assert match.symptom == "ext4 filesystem corruption"
+    assert match.outcome == "Fail InfraSW"
+    assert match.doc == "ext4-filesystem-corruption"

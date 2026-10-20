@@ -5,6 +5,7 @@ import glob
 import hashlib
 import importlib.util
 import sys
+from collections import Counter
 from collections.abc import Generator, Iterable, Mapping
 from contextlib import AbstractContextManager, contextmanager
 from dataclasses import dataclass, replace
@@ -12,16 +13,21 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Optional, cast
 
+from loguru import logger
+
 from attribution_lib.declarative import load_toml_rules
 from attribution_lib.declarative.context import DeclarativeContext, _using_module_globals, _using_rule_loader
 from attribution_lib.events import EventStream
 from attribution_lib.exceptions import (
     DuplicateRuleError,
+    InvalidRankError,
     RuleIngestionError,
     UninitializedRuleEngineError,
+    UnknownNodeError,
     UnknownResourceError,
     UnknownRuleTypeError,
 )
+from attribution_lib.ingest_summary import DropReason, IngestSummary
 from attribution_lib.job_info import JobInfo
 from attribution_lib.logline_filtering import log_ignored_node_line, log_ignored_time_line
 from attribution_lib.observation.inbound import (
@@ -29,6 +35,8 @@ from attribution_lib.observation.inbound import (
 )
 from attribution_lib.observation.processing import BodyFallbacks, EntryProtocol, EntrySourceBase
 from attribution_lib.prefilters import MetricSpec, PreFilterCallable, PreFilterSpec
+from attribution_lib.resources.node import Node as NodeResource
+from attribution_lib.resources.resource_set import ResourceSetClass
 from attribution_lib.rule_types.bases import (
     _RULE_TYPE_REGISTRY,
     LoaderBase,
@@ -505,6 +513,11 @@ def _apply_pre_filter(
     return False, keywords
 
 
+def _node_drop_reason(error: UnknownResourceError) -> DropReason:
+    """`UNKNOWN_NODE` when the entry names a node or rank outside the job, else `NO_NODE`."""
+    return DropReason.UNKNOWN_NODE if isinstance(error, (UnknownNodeError, InvalidRankError)) else DropReason.NO_NODE
+
+
 def _time_filter_reason(
     entry_time: Optional[datetime],
     time_start: Optional[datetime],
@@ -529,12 +542,14 @@ def process_observation_source(
     job_info: JobInfo,
     rules_engine: RuleEngine,
     pre_filtered: bool,
+    summary: Optional[IngestSummary] = None,
 ) -> set[str]:
     """Process an observation source through the rules engine.
 
     Args:
         pre_filtered: If True, skip all pre-filter logic (keyword exclude/include
             and callables). Caller is responsible for any filtering.
+        summary: When given, the accepted and dropped entry counts are added to it.
 
     Returns:
         Set of content-derived raw_keywords collected from include term matches
@@ -549,6 +564,8 @@ def process_observation_source(
     require_timestamp = config.body_fallbacks.require_timestamp if config else False
 
     raw_keywords: set[str] = set()
+    accepted = 0
+    dropped: Counter[DropReason] = Counter()
 
     # Build pre-filter state (once, not per-entry)
     pre_filter_spec = None if pre_filtered else rules_engine.pre_filters.get(source_type)
@@ -564,12 +581,14 @@ def process_observation_source(
             skip, entry_keywords = _apply_pre_filter(entry, job_info, exclude_set, include_set, pf_callables)
             raw_keywords.update(entry_keywords)
             if skip:
+                dropped[DropReason.PRE_FILTERED] += 1
                 continue
 
         # Time filtering
         dropped_for = _time_filter_reason(entry.time(), time_start, time_end, require_timestamp)
         if dropped_for is not None:
             log_ignored_time_line(entry, job_info, dropped_for, entry.context().source)
+            dropped[DropReason.NO_TIMESTAMP if dropped_for == "no_timestamp" else DropReason.OUTSIDE_WINDOW] += 1
             continue
 
         # Node resolution and source building
@@ -579,19 +598,43 @@ def process_observation_source(
             except UnknownResourceError as e:
                 log_ignored_node_line(e, entry, job_info, entry.context().source)
                 att_src_base = entry.attribution_source_base(None)
+            if att_src_base.resources == ResourceSetClass.ANY and len(job_info.nodes) == 1:
+                # Unlabelled output (no ``srun --label`` prefix) of a single-node
+                # job can only have come from its sole allocated node. Without a
+                # node, symptoms are silently dropped when node attributions are
+                # built, so infer it as SchedulerNodeFailure does for NODE_FAIL.
+                # This covers both a prefix that is not a job node (raised above)
+                # and a line that parses to neither node nor rank (resolved to ANY).
+                att_src_base = att_src_base.derived(
+                    resources=ResourceSetClass([NodeResource(hostname=job_info.nodes[0])])
+                )
         else:
             try:
                 node = entry.node(job_info)
             except UnknownResourceError as e:
                 log_ignored_node_line(e, entry, job_info, entry.context().source)
+                dropped[_node_drop_reason(e)] += 1
                 continue
 
             if not node:
+                dropped[DropReason.NO_NODE] += 1
                 continue
 
             att_src_base = entry.attribution_source_base(job_info)
 
         processor.process_line(att_src_base)
+        accepted += 1
 
     processor.finalize()
+    if summary is not None:
+        summary.accepted += accepted
+        summary.dropped.update(dropped)
+    if dropped:
+        logger.warning(
+            "ingest {} observation {}: accepted {} entries, dropped {}",
+            source_type.value,
+            observation_source.context.id,
+            accepted,
+            {reason.value: count for reason, count in sorted(dropped.items())},
+        )
     return raw_keywords

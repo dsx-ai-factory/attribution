@@ -47,7 +47,6 @@ def obs_ctx():
             datetime(2024, 1, 1, 9, 0, 0, tzinfo=ZoneInfo("UTC")),
             datetime(2024, 1, 1, 12, 0, 0, tzinfo=ZoneInfo("UTC")),
         ),
-        resources=ResourceSet([Node(hostname="node01")]),
         source=ObsSource.SYSLOG,
         format=ObsFormat.ENTRY_TIMESERIES,
         timezone=ZoneInfo("UTC"),
@@ -213,6 +212,24 @@ class TestCascadeCleanupBadNodeFanout:
         assert bad_nodes["node01"].attributions["hist15_high"].has_interesting()
         assert bad_nodes["node02"].attributions["XID-149.0-NETIR_LINK_DOWN-TIMEOUT-0"].has_interesting()
         assert bad_nodes["node03"].attributions["effective_ber_high"].has_interesting()
+
+    def test_clean_bad_nodes_of_cascaded_symptoms_reaches_job_level(self, obs_ctx):
+        bad_nodes = _make_bad_nodes(obs_ctx, {"node01": ["XID-149.4-NETIR_LINK_DOWN-ALIGNMENT_LOSS-0"]})
+        bad_nodes.job_level.add(SourceSet("hist15_high").add(_make_source(obs_ctx)))
+
+        clean_bad_nodes_of_cascaded_symptoms(bad_nodes, ["XID-149.4-NETIR_LINK_DOWN-ALIGNMENT_LOSS-0"])
+
+        assert "hist15_high" not in bad_nodes.job_level
+        assert bad_nodes.job_level["hist15_high"].has_interesting()
+
+    def test_discard_matching_from_all_nodes_reaches_job_level(self, obs_ctx):
+        bad_nodes = _make_bad_nodes(obs_ctx, {"node01": ["cudaErrorLaunchFailure"]})
+        bad_nodes.job_level.add(SourceSet("cudaErrorLaunchFailure").add(_make_source(obs_ctx)))
+
+        bad_nodes.discard_matching_from_all_nodes(["cudaErrorLaunchFailure"])
+
+        assert "cudaErrorLaunchFailure" not in bad_nodes["node01"]
+        assert "cudaErrorLaunchFailure" not in bad_nodes.job_level
 
     def test_get_clean_bad_nodes_removes_multi_node_nccl_job_wide_fanout(self, obs_ctx):
         bad_nodes = _make_bad_nodes(

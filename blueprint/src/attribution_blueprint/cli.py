@@ -94,6 +94,11 @@ def _build_parser() -> argparse.ArgumentParser:
         metavar="DIR",
         help="Write each observation body to DIR/<ctx-id>.<source>.json before submitting.",
     )
+    parser.add_argument(
+        "--strict",
+        action="store_true",
+        help="Exit 1 when any verdict was issued with evidence_status other than complete.",
+    )
     return parser
 
 
@@ -225,7 +230,7 @@ def _run_config(
         cli_dict: Settings parsed from CLI connector overrides.
         dump_observations: Optional directory for observation debug dumps.
         parser: Parser used to report configuration errors.
-        aggregate_runs: Optional collector for multi-config aggregate logging.
+        aggregate_runs: Optional collector of per-config stats and summaries.
 
     Returns:
         Process-style return code for this config run.
@@ -373,10 +378,7 @@ def main(argv: list[str] | None = None) -> int:
     except MCAError as e:
         parser.error(str(e))
 
-    aggregate_runs: list[tuple[dict[str, int], list[dict[str, str]]]] | None = []
-    if len(config_paths) <= 1:
-        aggregate_runs = None
-
+    run_results: list[tuple[dict[str, int], list[dict[str, str]]]] = []
     for toml_path in config_paths:
         rc = _run_config(
             toml_path=toml_path,
@@ -384,12 +386,19 @@ def main(argv: list[str] | None = None) -> int:
             cli_dict=cli_dict,
             dump_observations=args.dump_observations,
             parser=parser,
-            aggregate_runs=aggregate_runs,
+            aggregate_runs=run_results,
         )
         if rc != 0:
             return rc
-    if aggregate_runs is not None:
-        _write_aggregate_run_summary(aggregate_runs)
+    if len(config_paths) > 1:
+        _write_aggregate_run_summary(run_results)
+    if args.strict and any(
+        summary.get("status") == "attributed" and summary.get("evidence_status") != "complete"
+        for _stats, summaries in run_results
+        for summary in summaries
+    ):
+        logger.error("--strict: at least one verdict was issued with incomplete evidence")
+        return 1
     return 0
 
 

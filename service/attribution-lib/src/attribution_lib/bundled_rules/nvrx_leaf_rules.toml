@@ -30,3 +30,31 @@ symptom = "NVRx synthetic fault injection"
 expect  = "bad"
 line    = "5: CRITICAL:nvidia_resiliency_ext.shared_utils.inject_fault:asynchronously raising <class 'nvidia_resiliency_ext.shared_utils.inject_fault.InjectedException'>"
 symptom = "NVRx synthetic fault injection"
+
+
+# --- job-level NVRx events (temporary node attribution, aggregated into job symptoms) ---
+# Both symptoms are listed in NON_NODE_ATTRIBUTABLE_SYMPTOM_MARKERS, so the
+# reporting node is never kept as a bad node.
+[[extractor]]
+name     = "NVRXStepSectionTimeout"
+match_re = '''rank_monitor_server\.py:\d+\s+\[Cycle \d+\] Section 'step' has been open for \d+(?:\.\d+)? seconds\. Timeout is'''
+emit     = { type = "bad_node", symptom = "NVRx step section timeout" }
+[[extractor.cases]]
+expect  = "bad"
+line    = "2026-01-15 10:00:00,000 [WARNING] [node06-T17] [workload:3(0) infra:12(0)] rank_monitor_server.py:523 [Cycle 0] Section 'step' has been open for 121.03 seconds. Timeout is 120.00 seconds."
+symptom = "NVRx step section timeout"
+[[extractor.cases]]
+expect  = "none"
+line    = "2026-01-15 10:00:00,000 [WARNING] [node06-T17] [workload:3(0) infra:12(0)] rank_monitor_server.py:523 [Cycle 0] Section 'checkpointing' has been open for 451.00 seconds. Timeout is 450.00 seconds."
+
+[[extractor]]
+name     = "NVRXNoProgressTermination"
+match_re = 'progress_tracker\.py:\d+\s+EARLY TERMINATION: \d+ consecutive training cycles without progress'
+emit     = { type = "bad_node", symptom = "NVRx no progress across restarts" }
+[[extractor.cases]]
+expect  = "bad"
+line    = "2026-01-15 10:00:00,000 [ERROR] [node92-T04] [workload:3(0) infra:12(0)] progress_tracker.py:248 EARLY TERMINATION: 3 consecutive training cycles without progress (threshold: 3). Training stuck at iteration ~1000."
+symptom = "NVRx no progress across restarts"
+[[extractor.cases]]
+expect  = "none"
+line    = "2026-01-15 10:00:00,000 [WARNING] [node92-T04] [workload:3(0) infra:12(0)] progress_tracker.py:212 Training cycle #0 made NO progress: 1000 → 1000 (0 iterations, need 1). Consecutive cycles without progress: 1/3"

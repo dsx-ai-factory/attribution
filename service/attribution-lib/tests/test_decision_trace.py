@@ -42,7 +42,6 @@ def _make_obs_context(
 ) -> ObservationContext:
     return ObservationContext(
         time_interval=TIME_INTERVAL,
-        resources=AllJobResources,
         source=source,
         format=fmt,
         timezone=TZ,

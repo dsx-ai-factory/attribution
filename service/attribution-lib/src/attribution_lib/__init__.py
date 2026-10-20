@@ -15,7 +15,7 @@ if TYPE_CHECKING:
     from attribution_lib.rules_engine import RuleEngine
     from attribution_lib.symptoms.registry_generation import GeneratedSymptomRegistry
 
-__version__ = "0.5.0.dev0"
+__version__ = "0.5.0"
 
 ip_to_nodenames: dict[str, str] = {}
 ignored_hostname_prefixes: list[str] = []

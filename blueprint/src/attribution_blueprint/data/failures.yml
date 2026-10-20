@@ -150,6 +150,9 @@ failures:
   - IBV_WC_RETRY_EXC_ERR
   - IB Error-12 Vendor-129
   - NCCL port retry exceeded
+  - Irrecoverable NET/IB communicator error
+  - Irrecoverable receive communicator error
+  - Irrecoverable send communicator error
   category: distributed_comm
   likely_owner: infrastructure
   personas:
@@ -157,15 +160,19 @@ failures:
       title: RDMA transport retry exceeded
       summary: One node could not receive acknowledgements from another node within RDMA retry limits.
       impact: NCCL or distributed collectives may surface this as a remote/system error.
-      action: Contact your cluster administrator or cloud provider. Include the NVIDIA Attribution diagnosis (verdict, symptom
-        chain, and source logs).
-      support_details: Include NCCL logs, rank-to-node mapping, peer IPs, and job size.
+      action: Contact your cluster administrator or cloud provider. Include the NVIDIA Attribution diagnosis (verdict,
+        symptom chain, and source logs).
+      support_details: Include the NVIDIA Attribution diagnosis (verdict, symptom chain, and source logs), plus NCCL logs,
+        rank-to-node mapping, peer IPs, localGid, remoteGid, HCA name, and job size.
   recommended_action:
     operational_state: drain
     remediation_actions:
     - service_required
-  technical_details: 'IB Error-12 maps to IBV_WC_RETRY_EXC_ERR. It occurs when the sender cannot receive acknowledgement from
-    the receiver before retries are exhausted.
+  technical_details: 'IB Error-12 maps to IBV_WC_RETRY_EXC_ERR. It occurs when the sender cannot receive acknowledgement
+    from the receiver before retries are exhausted. NCCL may surface the same condition as an irrecoverable NET/IB communicator
+    error with status IBV_WC_RETRY_EXC_ERR(12) or numeric status 12, a peer IP and port, vendor_err, localGid, remoteGid,
+    qpn, and HCA name. When both GIDs are IPv4-mapped, NVIDIA Attribution can attach device IPs for both sides of the failing
+    pair; otherwise it records the local and peer nodes.
 
     '
   severity: high
@@ -181,6 +188,16 @@ failures:
   - kind: log
     pattern: Vendor[ -]?129
     note: vendor-specific completion
+  - kind: log
+    pattern: Irrecoverable (?:send|receive) communicator error.*status[= ].*IBV_WC_RETRY_EXC_ERR\(12\)
+    note: NCCL NET/IB communicator warning
+  - kind: log
+    pattern: Irrecoverable (?:send|receive) communicator error.*status[= ](?:IBV_WC_RETRY_EXC_ERR\(12\)|\b12\b).*vendor[
+      _]err[ =]0\b
+    note: NCCL NET/IB communicator warning with numeric status and no vendor syndrome
+  - kind: log
+    pattern: 'Irrecoverable (?:send|receive) communicator error.*localGid[: ].*remoteGid[: ].*hca[= ]'
+    note: peer-pair metadata from NCCL NET/IB
   related:
   - rdma-fabric-flap
   - pytorch-nccl-watchdog
@@ -1759,35 +1776,37 @@ failures:
   - ETIMEDOUT
   - errno 110
   category: distributed_comm
-  likely_owner: infrastructure
+  likely_owner: ambiguous
   personas:
     tenant_sre:
-      title: A peer node never answered the socket connection
-      summary: A socket connect or receive to another rank timed out because the peer never answered.
-      impact: The collective fails and the job aborts.
-      action: Capture the peer IP and port from the NCCL WARN and contact your cluster administrator with the NVIDIA Attribution
-        diagnosis.
-      support_details: NCCL trace excerpt showing the peer IP, rank-to-node mapping, hostlist, job ID, and the time the error
-        occurred.
-  recommended_action:
-    operational_state: monitor
-  technical_details: 'errno 110 (ETIMEDOUT) is surfaced verbatim by NCCL socket calls; it is a low-priority peer-gone signal
-    that is discarded when a root-cause symptom such as Fabric Manager errors, ibv_modify_qp or ibv_set_ece failures, or Mellanox
-    links down is present.
+      title: A connection did not complete before its timeout
+      summary: A socket operation reported a timeout. The message alone does not establish whether the peer, network path,
+        or application configuration caused it.
+      impact: Distributed startup or communication can fail when a rank cannot reach its peer.
+      action: Capture the first timeout and the peer IP and port, then compare logs from both ranks for an earlier exit
+        or stall. Check the job's network settings against the supported configuration before retrying. If the cause remains
+        unclear or the failure recurs, contact your cluster administrator or cloud provider with the evidence below.
+      support_details: Include the NVIDIA Attribution diagnosis (verdict, symptom chain, and source logs), plus job ID,
+        timestamps, rank-to-node mapping, the complete socket warning, and relevant job-script settings.
+  technical_details: '`Connection timed out` is an operating-system error description associated with a connection timeout
+    (`ETIMEDOUT`). NVIDIA Attribution''s socket processors emit the captured error reason, including the reason in a `socketPollConnect`
+    warning. The registered symptom has outcome `Fail MultiCategory` and priority `LOW_GENERIC`; a more specific symptom
+    may determine the final attribution instead.
+
+
+    This is distinct from `ncclTimeout` and the `Call to ibv_modify_qp failed: eno 110 timeout` variants. Those have separate
+    detection paths and documentation. A socket timeout alone does not prove a failed NIC, an NCCL parameter override,
+    or a particular peer-side failure.
 
     '
-  summary: A peer never answered a socket connect or receive; investigate the remote node and the network path, not the rank
-    reporting the error.
+  summary: A socket operation timed out; correlate the peer and network evidence before assigning a cause.
   signals:
   - kind: log
-    pattern: Connection timed out
-    note: errno ETIMEDOUT surfaced by NCCL
+    pattern: socketPollConnect:.*returned [0-9]+\(Connection timed out\) errno
+    note: The socket processor captures Connection timed out as the emitted reason.
   - kind: log
-    pattern: NCCL WARN.*socket(StartConnect|PollConnect|ProgressOpt).*Connection timed out
-    note: standard NCCL WARN for this condition
-  - kind: log
-    pattern: Connect to \d+\.\d+\.\d+\.\d+<\d+> returned 110\(Connection timed out\)
-    note: peer IP and port appear in the warning
+    pattern: 'socketProgressOpt:.*failed : Connection timed out'
+    note: Generic socket-progress error reason.
   related:
   - connection-reset-by-peer
   - broken-pipe
@@ -1808,33 +1827,37 @@ failures:
   - EPIPE
   - errno 32
   category: distributed_comm
-  likely_owner: infrastructure
+  likely_owner: ambiguous
   personas:
     tenant_sre:
-      title: A peer node closed the socket before the write completed
-      summary: A write to another rank's socket failed because the peer had already closed it.
-      impact: The collective fails and the job aborts.
-      action: Capture the peer IP and port from the NCCL WARN and contact your cluster administrator with the NVIDIA Attribution
-        diagnosis.
-      support_details: NCCL trace excerpt showing the peer IP, rank-to-node mapping, hostlist, job ID, and the time the error
-        occurred.
-  recommended_action:
-    operational_state: monitor
-  technical_details: 'errno 32 (EPIPE) is surfaced verbatim by NCCL socket calls; it is handled like Connection reset by peer
-    and discarded when a root-cause symptom is present.
+      title: Communication encountered a closed pipe or socket
+      summary: The communication endpoint was no longer available. Look for the first process exit or shutdown rather than
+        assuming the reporting rank caused the failure.
+      impact: The affected operation fails, and other ranks can terminate during distributed-job cleanup.
+      action: Compare the error timestamp with logs from the peer and launcher. Investigate earlier application exceptions,
+        memory exhaustion, cancellation, or node loss before retrying. If the cause remains unclear or the failure recurs,
+        contact your cluster administrator or cloud provider with the evidence below.
+      support_details: Include the NVIDIA Attribution diagnosis (verdict, symptom chain, and source logs), plus the full
+        warning, peer IP and port if present, both ranks' logs, exit codes, job ID, and timestamps.
+  technical_details: '`Broken pipe` is the generic operating-system error description for `EPIPE`, associated with writing
+    to a pipe without a reader or to a socket shut down for writing. NVIDIA Attribution''s socket processors preserve the
+    captured error reason as a symptom name. The declaration for `Broken pipe` has outcome `Fail MultiCategory` and priority
+    `LOW_GENERIC`; stronger related evidence can supersede it.
+
+
+    The separately documented Python exception `BrokenPipeError` can describe the same operating-system condition, but
+    it is a distinct registered name. This page documents the exact `Broken pipe` symptom and does not change either name''s
+    runtime classification.
 
     '
-  summary: A peer closed the socket before a write completed; investigate the remote node, not the rank reporting the error.
+  summary: A pipe or socket was no longer available for communication; investigate the preceding endpoint failure or shutdown.
   signals:
   - kind: log
-    pattern: Broken pipe
-    note: errno EPIPE surfaced by NCCL or by the framework
+    pattern: 'socketProgressOpt:.*failed : Broken pipe'
+    note: The socket processor captures Broken pipe as the emitted reason.
   - kind: log
-    pattern: NCCL WARN.*socketProgressOpt.*Broken pipe
-    note: standard NCCL WARN for this condition
-  - kind: log
-    pattern: 'Call to recv from \d+\.\d+\.\d+\.\d+<\d+> failed : Broken pipe'
-    note: peer IP and port appear in the warning
+    pattern: socketPollConnect:.*returned [0-9]+\(Broken pipe\) errno
+    note: Captured operating-system reason when reported by the socket connection path.
   related:
   - connection-reset-by-peer
   - connection-timed-out
@@ -1900,6 +1923,7 @@ failures:
   - Vendor-129
   - IBV_WC_RETRY_EXC_ERR
   - retry exceeded
+  - Irrecoverable NET/IB communicator error with vendor_err=129
   category: distributed_comm
   likely_owner: infrastructure
   personas:
@@ -1908,14 +1932,18 @@ failures:
       summary: An RDMA send exhausted its transport retries without an ACK from the peer. The fabric or the peer node dropped
         the traffic.
       impact: The collective aborts. The job must restart, ideally on a different allocation if a specific node is suspect.
-      action: Adjust NCCL_IB_TIMEOUT or NCCL_IB_RETRY_CNT only after physical faults are ruled out.
-      support_details: NCCL trace excerpt with the verbs error, HCA and port, peer IP if present, hostlist, job ID, and time.
+      action: Capture the NCCL warning and the local HCA/port and peer IP, if available. Contact your cluster administrator
+        or cloud provider with this evidence before changing NCCL transport settings.
+      support_details: Include the NVIDIA Attribution diagnosis (verdict, symptom chain, and source logs), plus the NCCL
+        trace excerpt with the verbs error, HCA and port, peer IP if present, localGid, remoteGid, hostlist, job ID, and time.
   recommended_action:
     operational_state: ready
-  technical_details: 'Verbs work-completion status 12 is IBV_WC_RETRY_EXC_ERR. Vendor syndrome 0x81 (decimal 129) is the Mellanox-specific
-    code reported alongside it. It means the RC sender retransmitted a packet up to the configured retry count without receiving
-    an ACK, so the QP transitions to error state. Common physical causes are cable/transceiver faults, switch port flaps,
-    congestion-induced loss, or a peer HCA in an unhealthy state.
+  technical_details: 'Verbs work-completion status 12 is IBV_WC_RETRY_EXC_ERR. Vendor syndrome 0x81 (decimal 129) is the
+    Mellanox-specific code reported alongside it. It means the RC sender retransmitted a packet up to the configured retry
+    count without receiving an ACK, so the QP transitions to error state. Common physical causes are cable/transceiver
+    faults, switch port flaps, congestion-induced loss, or a peer HCA in an unhealthy state. NCCL can report this in older
+    "Got completion with error" warnings or in newer irrecoverable NET/IB communicator warnings when the line includes
+    vendor_err=129.
 
     '
   summary: An InfiniBand RC connection exceeded its transport retry budget; the path or the peer is failing - report it to
@@ -1930,6 +1958,13 @@ failures:
   - kind: log
     pattern: NCCL WARN NET/IB.*ibv_poll_cq.*status=12
     note: typical NCCL WARN line
+  - kind: log
+    pattern: Irrecoverable (?:send|receive) communicator error.*status[= ](?:IBV_WC_RETRY_EXC_ERR\(12\)|\b12\b).*vendor[
+      _]err[ =]129\b
+    note: NCCL NET/IB communicator warning
+  - kind: log
+    pattern: Got completion with error \b12\b.*vendor err \b129\b
+    note: legacy NCCL completion warning
   related:
   - ib-error-12
   - port-error
@@ -3765,31 +3800,38 @@ failures:
   - PBDMA Error
   - Push Buffer DMA Error
   - PCIe DMA fault
+  - XID-32-
   category: gpu
   likely_owner: infrastructure
   personas:
     tenant_sre:
-      title: GPU PCIe DMA error during your job
-      summary: The GPU's PCI-Express DMA controller reported a fault while moving data between the driver and the GPU. This
-        is a platform-level signal, not your kernel code.
-      action: Restart the application using the GPU; the GPU itself is not considered faulted. If the job still fails on this
-        node, contact your cluster administrator or cloud provider. Include the NVIDIA Attribution diagnosis (verdict, symptom
-        chain, and source logs).
-      impact: Your CUDA context is lost and the job aborts. Repeat occurrences on the same host strongly suggest a sick PCIe
-        link or slot.
-      support_details: Attach job ID, node hostname, GPU PCI BDF, the dmesg XID 32 line, and whether peer ranks on the same
-        node also failed.
+      title: GPU push-buffer DMA error during your job
+      summary: The GPU reported a push-buffer DMA error. NVIDIA Attribution classifies this symptom as Fail MultiCategory;
+        the error alone does not establish which component caused it.
+      action: Save the application error log and restart the affected application. Check the application and CUDA environment
+        as described in the NVIDIA XID catalog. If the failure recurs, contact your cluster administrator or cloud provider
+        with the job ID, node and retry results; note whether the failure follows the workload or the allocation.
+      impact: The affected application may stop. A repeated failure needs investigation, but XID 32 alone does not prove
+        that a GPU or PCIe component needs hardware service.
+      support_details: Include the NVIDIA Attribution diagnosis (verdict, symptom chain, and source logs), plus job ID,
+        node hostname, application error excerpt, CUDA and container versions, any XID line supplied by your cluster
+        administrator or cloud provider, and retry results across allocations.
   recommended_action:
     operational_state: drain
     remediation_actions:
     - restart_app
     - service_required
-  technical_details: 'XID 32 (PBDMA Error) is logged when the GPU''s push-buffer DMA controller reports a fault on the PCI-Express
-    link. The catalog notes these are primarily PCIe-quality issues and are not generally caused by user application actions.
-    Recurrent XID 32 on the same node typically points to a PCIe slot, riser, cable, or GPU PCIe interface problem.
+  technical_details: 'XID 32 (PBDMA Error) reports an invalid or corrupted push-buffer stream. The NVIDIA catalog lists
+    `RESTART_APP` and `CHECK_APP/CUDA` as its immediate and investigative guidance, while also describing a common PCIe-quality
+    association. Preserve both lines of investigation rather than assuming a hardware verdict.
+
+
+    NVIDIA Attribution''s `XID-32-` declaration is `Fail MultiCategory`. The common PCIe association does not narrow that
+    runtime classification or identify the faulty component on its own.
 
     '
-  summary: GPU PCIe DMA controller reported a fault (XID 32); a PCIe-quality issue requiring infrastructure action.
+  summary: XID 32 reports a GPU push-buffer DMA error; NVIDIA Attribution classifies it as Fail MultiCategory and the symptom
+    alone does not identify the cause.
   signals:
   - kind: xid
     pattern: 'Xid.*: 32,'
@@ -4517,34 +4559,40 @@ failures:
   - GPU is lost
   - Slurm GPU lost
   - GPU disappeared
+  - GPU is lost reported by slurm
   category: gpu
-  likely_owner: infrastructure
+  likely_owner: ambiguous
   personas:
     tenant_sre:
       title: Slurm reported "GPU is lost" during your job
-      summary: Slurm saw a GPU disappear from the node during your job. This is usually correlated with XID 79 (GPU off the
-        bus) or another fatal hardware event.
-      action: Your remediation system should first restart the affected node's operating system (a VM reboot on a virtualized
-        GPU, a host-level reboot on bare metal). If the job still fails on this node, contact your cluster administrator or
-        cloud provider. Include the NVIDIA Attribution diagnosis (verdict, symptom chain, and source logs).
-      impact: Job dies.
-      support_details: Job ID, node, slurmctld / slurmd excerpt with "GPU is lost", and dmesg around the same time including
-        any XIDs.
-  recommended_action:
-    operational_state: drain
-    remediation_actions:
-    - restart_os
-    - service_required
-  technical_details: Slurm logs "GPU is lost" when the device is no longer enumerable on the host. NVIDIA Attribution often
-    observes XID 79 (GPU has fallen off the bus) for the same GPU in the same window, though the correlation is not guaranteed.
-  summary: Slurm reported "GPU is lost"; the GPU disappeared from the node and typically requires reset or hardware service.
+      summary: Slurm reported that a GPU was unavailable during your job. The message does not establish XID 79 or a hardware
+        fault; platform logs are needed to determine the cause.
+      action: Retry on a different allocation. Do not retry on the same node until your cluster administrator or cloud
+        provider clears the GPU.
+      impact: The affected rank may exit and interrupt the job. Your cluster administrator or cloud provider must check
+        the GPU's current state before the affected allocation is reused.
+      support_details: Include the NVIDIA Attribution diagnosis (verdict, symptom chain, and source logs), plus job ID,
+        node, timestamp, application or scheduler error excerpt containing "GPU is lost", and retry results. Ask your
+        cluster administrator or cloud provider to correlate host logs.
+  technical_details: 'The scheduler-reported "GPU is lost" observation indicates that the GPU was unavailable to the job.
+    Check driver logs and device visibility to determine its current state. XID 79 may occur for the same GPU and time
+    window, but it is separate evidence and is not guaranteed to be present.
+
+
+    The exact `GPU is lost reported by slurm` declaration is `Fail MultiCategory`, not the `Fail InfraHW` classification
+    of `XID-79-`. The scheduler observation alone does not establish that XID 79 occurred or that hardware replacement
+    is warranted.
+
+    '
+  summary: Slurm reported "GPU is lost"; this Fail MultiCategory observation does not establish a hardware fault or a particular
+    recovery action.
   signals:
   - kind: log
     pattern: GPU is lost
     note: slurmd / slurmctld log
   - kind: xid
     pattern: 'Xid.*: 79,'
-    note: kernel log / dmesg
+    note: optional corroborating kernel evidence; not required for the scheduler symptom
   related:
   - xid-79
   - gpu-reset-required
@@ -5817,52 +5865,39 @@ failures:
 - id: call-to-ibv-modify-qp-failed-eno-110-timeout-overwrite-nccl-parameters
   title: 'Call to ibv_modify_qp failed: errno 110 (ETIMEDOUT) - NCCL parameter override'
   aliases:
-  - NCCL_IB_MQP_RETRY_ALL workaround
-  - ibv_modify_qp ETIMEDOUT after NCCL retry tuning
+  - 'Call to ibv_modify_qp failed: eno 110 timeout(Overwrite NCCL parameters)'
   category: distributed_comm
-  likely_owner: infrastructure
+  likely_owner: user
   personas:
     tenant_sre:
-      title: ETIMEDOUT persists after applying the NCCL modify-QP retry override
-      summary: Even with `NCCL_IB_MQP_RETRY_ALL=1` set, `ibv_modify_qp` still returns ETIMEDOUT, which means the underlying
-        fabric problem is not transient.
-      impact: The job cannot make progress on this node set; rerunning blindly will keep hitting the same nodes and waste
-        GPU hours.
-      action: Remove unsupported NCCL overrides from the job script. Rerun with supported settings.
-      support_details: NCCL log showing the override is set, the failing source/destination ranks, and the runtime NCCL version.
-  recommended_action:
-    operational_state: ready
-  technical_details: '`NCCL_IB_MQP_RETRY_ALL=1` is a NCCL runtime override that retries
+      title: QP timeout with NCCL parameter names found in the job script
+      summary: NVIDIA Attribution observed an ibv_modify_qp timeout and found a restricted NCCL parameter name in the available
+        job-script text. This variant is classified as `Fail User`.
+      impact: Communicator setup can fail; this classification directs investigation to the job's NCCL configuration first.
+      action: Compare the submitted script with the supported cluster configuration and remove unintended overrides. Capture
+        the effective environment and rerun with supported settings. If the timeout persists, contact your cluster administrator
+        or cloud provider with the evidence below.
+      support_details: Include the NVIDIA Attribution diagnosis (verdict, symptom chain, and source logs), plus the failing
+        log line, full submitted script, effective NCCL environment, rank-to-node mapping, and NCCL version.
+  technical_details: 'When `ibv_modify_qp` returns errno 110, NVIDIA Attribution appends `(Overwrite NCCL parameters)`
+    if the available job-script text contains any of `NCCL_IB_TC`, `NCCL_IB_GID_INDEX`, `NCCL_IB_HCA`, `NCCL_IB_SL`, `NCCL_CROSS_NIC`,
+    `NCCL_IB_ADDR_RANGE`, `NCCL_IB_ADDR_FAMILY`, `NCCL_IB_ROCE_VERSION_NUM`, or `NCCL_IB_FIFO_TC`.
 
-    `ibv_modify_qp` across every attribute-mask grouping when a
 
-    transient kernel-level error is reported. It papers over short
-
-    fabric blips but cannot mask a sustained ETIMEDOUT. When the
-
-    override is set and ETIMEDOUT is still observed, the cause is
-
-    not retryable from user space - the path is genuinely broken
-
-    (link flap, EAP de-auth, dead remote QP) and the only release-
-
-    grade remediation is to drain the node and clear the underlying
-
-    fault.
+    This is a substring check, not shell evaluation. It does not prove that a variable was assigned or that its value caused
+    the timeout. `NCCL_IB_MQP_RETRY_ALL` is not one of the names checked. The suffixed declaration is `Fail User`; without
+    a matching parameter name, the processor emits the separately documented unsuffixed timeout, classified as `Fail InfraHW`.
 
     '
-  summary: ibv_modify_qp keeps returning ETIMEDOUT even with NCCL_IB_MQP_RETRY_ALL=1, indicating a sustained fabric fault
-    rather than a transient drop.
+  summary: An ibv_modify_qp timeout coincided with a restricted NCCL parameter name in job-script text; NVIDIA Attribution
+    selects the Fail User variant.
   signals:
   - kind: log
-    pattern: NCCL_IB_MQP_RETRY_ALL=1
-    note: Confirms the override was active during the failed run.
+    pattern: 'Call to ibv_modify_qp failed: eno 110 timeout\(Overwrite NCCL parameters\)'
+    note: Exact emitted symptom, including the job-script classification suffix.
   - kind: log
-    pattern: NCCL WARN Call to ibv_modify_qp failed.*110
-    note: Errno-110 warning that survived the retry override.
-  - kind: metric
-    pattern: switchport.*deauthorized|link flap
-    note: Persistent port event on the implicated switch interface.
+    pattern: Call to ibv_modify_qp failed.*110
+    note: Timeout evidence; the processor also requires a matching parameter name in job-script text to emit this variant.
   related:
   - call-to-ibv-modify-qp-failed-eno-110-timeout
   - call-to-ibv-modify-qp-failed
@@ -6376,29 +6411,42 @@ failures:
   likely_owner: infrastructure
   personas:
     tenant_sre:
-      title: If you arrived from a job log find the specific XID entry for recovery guidance
-      summary: This is the platform-team recovery procedure for NVLink5 faults (XID 144-150); it is not an application-side
-        failure. If you reached this page from a job log, look up the specific XID number for guidance you can act on.
-      impact: From the job's perspective, the affected rank dies and any collective spanning that node fails; the job is held
-        or requeued until your cluster administrator or cloud provider finishes the recovery.
-      action: Contact your cluster administrator or cloud provider. Include the NVIDIA Attribution diagnosis (verdict, symptom
-        chain, and source logs).
-      support_details: Job ID, failing rank/node mapping, NCCL log excerpt, dmesg Xid line if available, scheduler reason
-        string for the affected node.
-  technical_details: 'XID 144 through XID 150 cover the NVLink5 fault family on GB200 platforms (NVLINK SAW, RLW, TLW,
-    TREX, NVLPW_CTRL, NETIR, MSE). Recovery depends on the error status, not the XID number alone. Decode `<intrInfo>`
-    and `<errorStatus>` from the XID message with the XID 144-150 Decode table in the NVIDIA XID catalog. The table
-    gives one of three immediate actions: IGNORE, RESET_GPU, or XID_154_EVAL (follow a co-occurring XID 154; otherwise
-    restart the application). No single sequence covers the whole family.'
-  summary: Decode the XID 144-150 error status with the NVIDIA XID catalog's decode table to choose the recovery action.
-    The action depends on the error status.
+      title: Report the specific NVLink5 error and its job impact
+      summary: XID 144-150 events have different recovery requirements. Your cluster administrator or cloud provider decodes
+        the full event; the XID number alone does not determine whether the node needs a reset.
+      impact: Some events interrupt the job; others need no immediate recovery. The error details and observed job state
+        determine the impact.
+      action: Save the specific XID or scheduler message available in your job output, the timestamp and NCCL log. If the
+        job failed, retry on a healthy allocation and ask your cluster administrator or cloud provider to correlate the
+        host event.
+      support_details: Include the NVIDIA Attribution diagnosis (verdict, symptom chain, and source logs), plus job ID,
+        failing rank/node mapping, application log excerpt, scheduler reason string, and any XID payload supplied by your
+        cluster administrator or cloud provider.
+  technical_details: 'WORKFLOW_NVLINK5_ERR is the resolution bucket for XID 144-150. It is a decoding workflow, not a mandatory
+    reset sequence. Use the NVIDIA XID 144-150 Decode table with the event''s subcomponent, intrInfo and errorStatus, including
+    the local and remote effects.
+
+
+    Decoded actions include `IGNORE`, `RESET_GPU`, or `XID_154_EVAL`. For `XID_154_EVAL`, follow the accompanying XID 154
+    recovery action; if no XID 154 is present, restart the affected application. `IGNORE` means no immediate recovery for
+    that decoded event, not ignoring other faults or any investigative guidance.
+
+
+    An NVIDIA Attribution classification suffix identifies the attribution outcome, not a recovery command. Software-classified
+    errors can still require recovery. Your cluster administrator or cloud provider selects any node-level recovery from
+    the decoded action and validates GPU and link health afterward. Do not reset shared GPUs or restart infrastructure
+    services without authorization.
+
+    '
+  summary: Decode the XID payload for NVLink5 errors 144-150 before selecting recovery; the error number alone does not
+    mandate a node drain or GPU reset.
   signals:
   - kind: xid
     pattern: 'Xid \(PCI:[0-9a-fA-F:.]+\): 1(4[4-9]|50),'
-    note: any XID 144-150 line triggers this workflow
+    note: identifies an event to decode; does not by itself require drain or reset
   - kind: log
     pattern: WORKFLOW_NVLINK5_ERR
-    note: bucket label
+    note: NVIDIA Attribution bucket label
   related:
   - nvlink5-errors
   - xid-144
@@ -6427,22 +6475,28 @@ failures:
   likely_owner: infrastructure
   personas:
     tenant_sre:
-      title: Index entry for GB200 NVLink5 faults; look up the specific XID 144-150 for recovery guidance
-      summary: NVLink5 Errors is the family index for GB200 NVLink faults (XID 144-150). It is a workflow page for your cluster
-        administrator or cloud provider; if you arrived from a job log, find the specific XID number and open that entry for
-        guidance you can act on.
-      impact: Fatal error statuses break the fabric path, so NCCL collectives that cross the failing link fail.
-        Non-fatal error statuses do not. The H100-era XID 74 NVLINK_ERROR does not fire on this platform.
-      action: Contact your cluster administrator or cloud provider. Include the NVIDIA Attribution diagnosis (verdict, symptom
-        chain, and source logs).
-      support_details: Job ID, rank/node mapping, dmesg Xid line, NCCL log excerpt, GB200 cluster name.
-  technical_details: 'On GB200/NVLink5 platforms the legacy XID 74 (NVLINK_ERROR) is replaced by a per-block family: XID 144
-    NVLINK_SAW_ERROR, 145 NVLINK_RLW_ERROR, 146 NVLINK_TLW_ERROR, 147 NVLINK_TREX_ERROR, 148 NVLINK_NVLPW_CTRL_ERROR, 149
-    NVLINK_NETIR_ERROR and 150 NVLINK_MSE_ERROR. Recovery depends on the error status, not the XID number alone.
-    Decode `<intrInfo>` and `<errorStatus>` from the XID message with the XID 144-150 Decode table in the NVIDIA XID catalog.
-    The table gives IGNORE, RESET_GPU, or XID_154_EVAL.'
-  summary: Map any GB200 NVLink fault to one of XID 144-150 (SAW, RLW, TLW, TREX, NVLPW_CTRL, NETIR, MSE) instead of the H100
-    XID 74.
+      title: Identify the NVLink5 event affecting your job
+      summary: GB200 NVLink5 events use XID 144-150. Keep the specific XID and job output so your cluster administrator
+        or cloud provider can decode the event and assess its impact.
+      impact: The family includes events with different effects; an XID number alone does not prove that the fabric path
+        is unusable or that every collective will fail.
+      action: Save your job output and NCCL log, including any reported XID number. If the job failed, retry on a healthy
+        allocation and send the timestamp, job ID and rank/node mapping to your cluster administrator or cloud provider.
+      support_details: Include the NVIDIA Attribution diagnosis (verdict, symptom chain, and source logs), plus job ID,
+        rank/node mapping, application or scheduler error excerpt, retry results and any XID details supplied by your
+        cluster administrator or cloud provider.
+  technical_details: 'GB200/NVLink5 reports a per-block family: XID 144 SAW, 145 RLW, 146 TLW, 147 TREX, 148 NVLPW_CTRL,
+    149 NETIR and 150 MSE. The shared WORKFLOW_NVLINK5_ERR bucket requires decoding before selecting recovery; it does
+    not make the events equivalent.
+
+
+    Decode the subcomponent, intrInfo and errorStatus using the NVIDIA XID catalog. Follow the resulting local and remote
+    actions, including XID 154 when directed, instead of prescribing the same drain, reset or Fabric Manager restart for
+    the whole family.
+
+    '
+  summary: The GB200 NVLink5 family (XID 144-150) requires decoding before selecting recovery; sharing a workflow does
+    not mean every event needs the same action.
   signals:
   - kind: xid
     pattern: 'Xid \(PCI:[0-9a-fA-F:.]+\): 1(4[4-9]|50),'
@@ -7136,27 +7190,52 @@ failures:
   - pyxis mount setup failed
   - bpf cgroup device filter error
   - nvidia-container-toolkit 1.17.7 enroot break
+  - 'pyxis: enroot mount failure from system directory'
+  - 'pyxis: enroot mount failure from user directory'
   category: container
-  likely_owner: infrastructure
+  likely_owner: ambiguous
   personas:
     tenant_sre:
       title: Container could not be mounted on the node
-      summary: Pyxis tried to start the container and enroot was unable to set up the mount namespace before your code ran.
-      impact: The job exits at startup with no application output; rerunning on the same node usually fails the same way.
-      action: Check space and permissions in /run/enroot/user-$UID.
-      support_details: Provide job ID, node list, the full `pyxis:` log line, and whether `--container-mounts` paths exist
-        and are readable by your UID.
-  recommended_action:
-    operational_state: ready
-  technical_details: Pyxis invokes enroot start during the SPANK job_init hook. enroot performs NVIDIA device injection through
-    libnvidia-container, applies a cgroup v2 BPF device filter, and then bind-mounts user-supplied paths into the rootfs.
-    Failure in any of these steps aborts container creation before the entrypoint runs. nvidia-container-toolkit 1.17.7-1
-    issues a BPF cgroup device-filter query that fails on DGX H100 with EOPNOTSUPP; pinning to 1.17.6-1 restores function.
-    Permission denied on `/run/enroot` and missing `/dev/nvidiactl` reproduce the same Pyxis log line.
+      summary: Enroot could not mount a path before the container started. NVIDIA Attribution distinguishes failures under
+        user directories from failures under system directories.
+      impact: Startup fails before the entrypoint runs; that timing alone does not establish infrastructure ownership.
+      action: Read the failing source path and emitted symptom. For a user-directory or missing-path failure, check that
+        the path exists, is accessible to your job user and is correctly specified in the mount arguments, then retry.
+        For a system-directory failure, or if the corrected job still fails, contact your cluster administrator or cloud
+        provider with the mount error and affected node. Do not change system directories or container-runtime settings
+        without authorization.
+      support_details: Include the NVIDIA Attribution diagnosis (verdict, symptom chain, and source logs), plus job ID,
+        node list, the full `pyxis:` log line, and whether `--container-mounts` paths exist and are readable by your UID.
+  technical_details: 'Pyxis invokes enroot during container startup. A mount failure prevents the entrypoint from running,
+    but it can originate in either a job-supplied path or the platform''s runtime configuration.
+
+
+    NVIDIA Attribution examines `enroot-mount: failed to mount: <source> at <target>`:
+
+
+    - Sources beginning with `/home/` or `/lustre/` emit `pyxis: enroot mount failure from user directory`, classified
+    as `Fail User`.
+
+    - Other source paths emit `pyxis: enroot mount failure from system directory`, classified as `Fail InfraSW`, unless
+    the line contains `No such file or directory`. That case emits the separate `pyxis: enroot mount path not found` symptom.
+
+
+    This is a path-based heuristic, not proof of the underlying cause. An outage of shared storage can affect a user path.
+    Preserve the exact symptom, source path, and error text, then use runtime and storage evidence to choose the remediation.
+    The two aliases declare documentation coverage only; they do not merge the outcomes.
+
+    '
   severity: high
-  summary: enroot could not complete its mount setup under Pyxis; the container never started so the failure is infrastructure,
-    not application code.
+  summary: Enroot could not mount a container path; NVIDIA Attribution distinguishes user-directory (Fail User) and system-directory
+    (Fail InfraSW) failures.
   signals:
+  - kind: log
+    pattern: 'enroot-mount: failed to mount:\s*/(?:home|lustre)/\S+\s+at\s+'
+    note: User-directory branch.
+  - kind: log
+    pattern: '^(?!.*No such file or directory).*enroot-mount: failed to mount:\s*(?!/home/)(?!/lustre/)\S+\s+at\s+'
+    note: System-directory failure on a single log line; excludes user paths and the separate missing-path branch.
   - kind: log
     pattern: 'pyxis: enroot mount failure'
     note: slurmd.log
@@ -8018,33 +8097,41 @@ failures:
   aliases:
   - unscheduled reboot
   - missing epilog reboot
+  - Node reboot initiated
   category: unknown
   likely_owner: infrastructure
   personas:
     tenant_sre:
-      title: Your job ended because the host rebooted
-      summary: The compute node restarted without going through a graceful shutdown while your job was running.
-      impact: All ranks on that host died; collectives on other ranks abort and the job fails.
-      action: Contact your cluster administrator or cloud provider. Include the NVIDIA Attribution diagnosis (verdict, symptom
-        chain, and source logs).
-      support_details: Job ID, node hostname, last application log lines, scheduler state for the node, timestamp.
-  recommended_action:
-    operational_state: drain
-    remediation_actions:
-    - service_required
-  technical_details: 'An unexpected reboot is detected when a node''s `last reboot` entry has no corresponding clean shutdown
-    record (no systemd `Reached target Shutdown` and no scheduler epilog). Causes include kernel panic, NMI hard lockup with
-    `hardlockup_panic`, hardware watchdog timeout, BMC-initiated reset, PSU loss, or thermal trip.
+      title: The node rebooted during the job
+      summary: NVIDIA Attribution distinguishes an explicit reboot initiation from evidence that the node rebooted unexpectedly.
+      impact: '`Node reboot initiated` is an infrastructure-software lifecycle event; `Node unexpectedly rebooted` indicates
+        an unplanned host reset and receives the hardware outcome.'
+      action: Check the emitted symptom and contact your cluster administrator or cloud provider with the evidence below.
+        For an initiated reboot, ask whether maintenance or automation requested it. For an unexpected reboot, request
+        host investigation and retry on a healthy allocation when available; do not reboot shared nodes yourself.
+      support_details: Include the NVIDIA Attribution diagnosis (verdict, symptom chain, and source logs), plus the emitted
+        symptom, job ID, node hostname, timestamp, scheduler state, and last application log lines.
+  technical_details: 'This page covers two distinct emitted symptoms. `Node reboot initiated` comes from explicit reboot
+    lifecycle evidence such as `System is rebooting`, `systemd-shutdown[1]: Rebooting`, `reboot: Restarting system`, or
+    a recorded `systemctl reboot` command. It is classified as `Fail InfraSW` with low priority and cascade-discards `Node
+    unexpectedly rebooted` on the same node. `Node unexpectedly rebooted` comes from reboot telemetry without a corresponding
+    graceful shutdown or epilog record. It is classified as `Fail InfraHW`. The explicit initiated signal is not evidence
+    of an unexpected reset.
 
     '
-  summary: Node booted without a graceful shutdown, indicating panic, watchdog timeout, or hardware/BMC reset.
+  summary: NVIDIA Attribution distinguishes an explicitly initiated infrastructure-software reboot from an unexpected reboot
+    with a hardware outcome.
   signals:
   - kind: log
+    pattern: 'System is rebooting|systemd-shutdown\[1\]: Rebooting|reboot: Restarting system|COMMAND=/usr/bin/systemctl
+      reboot'
+    note: Explicit lifecycle evidence for `Node reboot initiated`.
+  - kind: log
     pattern: Kernel panic - not syncing
-    note: previous-boot dmesg
+    note: Possible previous-boot cause for `Node unexpectedly rebooted`.
   - kind: log
     pattern: last reboot
-    note: utmp/wtmp record
+    note: Reboot telemetry used with the absence of a graceful shutdown record.
   related:
   - nmi-watchdog-hard-lockup
   - general-protection-fault
@@ -16276,3 +16363,102 @@ failures:
   severity: critical
   verification: verified
   last_reviewed: 2026-07-23
+- id: ext4-filesystem-corruption
+  title: ext4 filesystem corruption
+  aliases:
+  - EXT4-fs error
+  - EFSCORRUPTED
+  category: storage
+  likely_owner: infrastructure
+  personas:
+    tenant_sre:
+      title: A node-local filesystem was corrupted while your job was running
+      summary: The Linux kernel reported ext4 metadata corruption on a filesystem of the node running one of your ranks.
+      impact: Files on the affected filesystem (for example container image layers, caches, or headers used for JIT
+        compilation) can be truncated or unreadable, so the application fails with errors that look unrelated to storage.
+      action: Your remediation system should first restart the affected node's operating system (a VM reboot on a
+        virtualized GPU, a host-level reboot on bare metal). If `/sys/fs/ext4/<device>/errors_count` is still nonzero
+        after the restart, or the job still fails on this node, contact your cluster administrator or cloud provider.
+        Include the NVIDIA Attribution diagnosis (verdict, symptom chain, and source logs).
+      support_details: Job ID, node hostname, the `EXT4-fs` kernel log lines, and the contents of
+        `/sys/fs/ext4/<device>/errors_count`, `first_error_func`, and `first_error_time`.
+  recommended_action:
+    operational_state: drain
+    remediation_actions:
+    - restart_os
+    - service_required
+  technical_details: 'ext4 prints `EXT4-fs error (device <dev>): <function>:<line>: ...` from `ext4_error()` when it detects
+    inconsistent metadata, and increments `/sys/fs/ext4/<dev>/errors_count`; `dumpe2fs -h` then reports the filesystem state
+    as `clean with errors`. When writeback cannot allocate blocks for delayed-allocation pages, ext4 prints `Delayed block
+    allocation failed for inode ... with error <errno>` followed by `This should not happen!! Data will be lost`. Error 117
+    (EUCLEAN, which ext4 uses as EFSCORRUPTED) means the allocation failed on corrupted metadata and the dirty pages were
+    dropped. Error 28 (ENOSPC) on the same line is a full disk, not corruption. The case that prompted this entry was a kernel
+    bug that a reboot cleared. If `errors_count` is still nonzero after a reboot, repair requires unmounting the filesystem
+    and running `e2fsck`, or recreating it.
+
+    '
+  summary: The Linux kernel detected ext4 metadata corruption on a node filesystem; data written there may be lost.
+  signals:
+  - kind: log
+    pattern: 'EXT4-fs error \(device [^)]+\): '
+    note: ext4_error() report; also increments /sys/fs/ext4/<dev>/errors_count
+  - kind: log
+    pattern: 'EXT4-fs \([^)]+\): Delayed block allocation failed for inode \d+ .* with error 117\b'
+    note: delayed allocation failed with EFSCORRUPTED; followed by "This should not happen!! Data will be lost"
+  related:
+  - io-error
+  - kernel-panic
+  references:
+  - title: Linux kernel admin guide - ext4
+    url: https://www.kernel.org/doc/html/latest/admin-guide/ext4.html
+  - title: Linux ext4 inode implementation (delayed allocation writeback)
+    url: https://github.com/torvalds/linux/blob/master/fs/ext4/inode.c
+  severity: high
+  verification: verified
+  last_reviewed: 2026-10-19
+- id: detected-bad-nic-state
+  title: detected bad NIC state
+  aliases:
+  - mlx5 firmware in initialization state
+  - mlx5 device initialization failed
+  category: distributed_comm
+  likely_owner: infrastructure
+  personas:
+    tenant_sre:
+      title: NIC firmware initialization failed near workload termination
+      summary: The mlx5 driver reported firmware stuck in initialization and a device initialization failure on the same NIC.
+      impact: The affected NIC may be unavailable for workload communication. The correlated pair maps to Fail InfraSW; higher-priority independent faults retain precedence.
+      action: Ask the infrastructure owner to inspect NIC firmware and driver health before reusing the affected node.
+      support_details: Include the NVIDIA Attribution diagnosis (verdict, symptom chain, and source logs), node, PCI address, and job end time.
+  technical_details: >-
+    Both active signals must originate on the same node and PCI device, each between job end and 120 seconds after
+    job end (inclusive). Collection and observation windows must admit these post-job records.
+    Producers must explicitly provide a corresponding collection and observation window.
+    The timeout value is matched numerically, not fixed to 10000. The initialization error code is not
+    restricted to -110. Missing timestamps or a missing job end time cannot establish the compound diagnosis.
+    Only matched source records become secondary evidence; the compound symptom retains their original provenance.
+    The two signals establish the compound diagnosis without requiring a QP or device-open failure.
+    The compound rule preserves QP and ibv_open_device failure symptoms and their source evidence, taking
+    precedence over their outcome mappings except for QP failures explicitly attributed to overwritten NCCL parameters.
+    Existing cascade cleanup can still demote generic QP failures to interesting evidence when Slurm node failure,
+    unexpected reboot, or Page Retirement is present.
+    Independent faults such as unexpected reboot, Page Retirement, and RDMA fabric flap retain precedence.
+    Without the compound diagnosis, QP and device-open outcome mappings remain unchanged.
+    An individual component does not independently establish this diagnosis. The classification identifies an unhealthy
+    NIC state, not proof of a firmware software defect, permanent hardware damage, or a particular network role.
+  summary: Correlated mlx5 firmware-initialization and device-initialization failures near job end.
+  signals:
+  - kind: log
+    pattern: 'mlx5_core.*Firmware over \d+ MS in initializing state, aborting'
+    note: Requires the initialization-failure message on the same node and PCI device near job end.
+  - kind: log
+    pattern: 'mlx5_core.*mlx5_init_one failed with error code'
+    note: Requires the firmware-initialization message on the same node and PCI device near job end.
+  related:
+  - ibv-event-device-fatal
+  references:
+  - title: Linux mlx5 driver initialization source
+    url: https://github.com/torvalds/linux/blob/master/drivers/net/ethernet/mellanox/mlx5/core/main.c
+  severity: high
+  verification: verified
+  last_reviewed: 2026-10-16

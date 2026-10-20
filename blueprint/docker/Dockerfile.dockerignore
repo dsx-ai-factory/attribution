@@ -1,6 +1,7 @@
 **
 
 !LICENSE
+!THIRD_PARTY_NOTICES.md
 !blueprint/
 !blueprint/LICENSE
 !blueprint/pyproject.toml

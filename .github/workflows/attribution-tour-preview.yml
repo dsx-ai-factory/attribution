@@ -14,6 +14,9 @@ on:
       - .github/workflows/attribution-tour-pages.yml
       - .github/workflows/attribution-tour-preview.yml
       - docs/attribution-tour/**
+      - THIRD_PARTY_NOTICES.md
+      - blueprint/src/attribution_blueprint/webui/frontend/third-party-notices.ts
+      - blueprint/src/attribution_blueprint/webui/frontend/third-party-licenses/**
 
 # Production and preview deployments share gh-pages. Serialize their pushes so
 # one deployment cannot overwrite another deployment's branch update.

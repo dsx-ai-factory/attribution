@@ -23,9 +23,12 @@ EvidenceStatus = Literal["complete", "partial", "none"]
 class IngestionReport(TypedDict):
     connector: str
     source: str
-    status: Literal["ok", "partial", "error"]
-    submitted: int
+    status: Literal["ok", "partial", "error", "empty"]
+    attempted: int
     failed: int
+    empty: int
+    accepted: int
+    dropped: dict[str, int]
     reason: str
 
 
@@ -84,10 +87,12 @@ def _evidence_status(
     ingestion_reports: list[IngestionReport],
 ) -> EvidenceStatus:
     """Classify how much collected evidence reached the service for this verdict."""
+    if all(report["attempted"] == 0 for report in ingestion_reports):
+        return "none"
     collectors_ok = all(report["status"] == "ok" for report in connector_reports)
     if collectors_ok and all(report["status"] == "ok" for report in ingestion_reports):
         return "complete"
-    if any(report["submitted"] > 0 and report["status"] in ("ok", "partial") for report in ingestion_reports):
+    if any(report["attempted"] > 0 and report["status"] in ("ok", "partial") for report in ingestion_reports):
         return "partial"
     return "none"
 

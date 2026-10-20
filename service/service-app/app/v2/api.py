@@ -17,6 +17,7 @@ from app.exceptions import (
 from app.v2.models import (
     AttributionResponseV2,
     AttributorInfoV2,
+    IngestSummaryV2,
     NewResponseV2,
     ObservationResponseV2,
 )
@@ -60,9 +61,14 @@ def ingest(
     att_id: AttributorId, obs_data: ObservationV2, request: Request, response: Response
 ) -> ObservationResponseV2:
     """Pass observation to specified attributor and return an id that identifies it. It is an error to provide a duplicate observation. When the id is returned, the observation has been successfully ingested."""
-    ingested = request.app.state.aim.get_attributor(att_id).ingest(obs_data)
+    attributor = request.app.state.aim.get_attributor(att_id)
+    observation_id = attributor.ingest(obs_data)
+    summary = attributor.ingest_summary(observation_id)
     response.status_code = 201
-    return ObservationResponseV2(observation_id=ingested)
+    return ObservationResponseV2(
+        observation_id=observation_id,
+        ingest=IngestSummaryV2.from_lib(summary),
+    )
 
 
 @router.get(

@@ -29,6 +29,7 @@ from attribution_lib.extraction_cache import (
     load_or_update_extraction_cache,
     save_extraction_cache,
 )
+from attribution_lib.ingest_summary import DropReason, IngestSummary
 from attribution_lib.job_info import JobInfo
 from attribution_lib.observation import (
     Context as ObservationContext,
@@ -50,10 +51,12 @@ class ConsumedObservation:
 
     context: ObservationContext
     result: CalcBadNodesAttributionResult
+    summary: IngestSummary
 
-    def __init__(self, context: ObservationContext, result: CalcBadNodesAttributionResult):
+    def __init__(self, context: ObservationContext, result: CalcBadNodesAttributionResult, summary: IngestSummary):
         self.context = context
         self.result = result
+        self.summary = summary
 
     @classmethod
     def new(
@@ -73,6 +76,7 @@ class ConsumedObservation:
         context = observation.context
         _validate_source_format(context)
         result = CalcBadNodesAttributionResult()
+        summary = IngestSummary()
 
         if context.source != ObservationSource.JOB_KEYWORDS:
             entry_source = EntrySourceBase.from_observation(
@@ -80,7 +84,12 @@ class ConsumedObservation:
             )
             config = SOURCE_CONFIGS.get(entry_source.context.source)
             if config is not None and config.requires_job_nodes and not job_info.nodes:
-                pass
+                logger.warning(
+                    "ingest {} observation {}: skipped every entry, the source needs job nodes and the job has none",
+                    context.source.value,
+                    context.id,
+                )
+                summary.dropped[DropReason.SOURCE_SKIPPED_NO_JOB_NODES] += sum(1 for _ in entry_source.lines)
             else:
                 source_raw_keywords = process_observation_source(
                     event_stream=event_stream,
@@ -88,11 +97,12 @@ class ConsumedObservation:
                     job_info=job_info,
                     rules_engine=_attribution_lib.get_rules_engine(),
                     pre_filtered=pre_filtered,
+                    summary=summary,
                 )
                 for keyword in source_raw_keywords:
                     result.raw_keywords.add(job_info.source_value(keyword, datum=None, rule="pre-filter include"))
 
-        return cls(context, result)
+        return cls(context, result, summary)
 
 
 class IngestedObservation:
@@ -103,11 +113,13 @@ class IngestedObservation:
     # this is clumsy and I'd like a better way to represent it
     unconsumed: Optional[Observation]
     consumed: Optional[ConsumedObservation]
+    summary: Optional[IngestSummary]
 
     def __init__(self, observation: Observation):
         self.unconsumed = observation
         self.ingestion_time = datetime.now(ZoneInfo("UTC"))
         self.consumed = None
+        self.summary = None
 
     def is_processed(self) -> Optional[ConsumedObservation]:
         if self.consumed is not None:
@@ -200,6 +212,7 @@ class Attributor:
             new_observation,
             pre_filtered=new_observation.context.pre_filtered,
         )
+        ingested.summary = ingested.consumed.summary
         ingested.unconsumed = None
         self.ingested_observations[new_observation.context.id] = ingested
         return new_observation.context.id

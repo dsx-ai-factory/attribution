@@ -27,7 +27,7 @@ The Blueprint's attribution connector calls the Service over HTTP with `service_
 
 ## Can I extend the rule set?
 
-Propose changes to the bundled rules through [CONTRIBUTING.md](../CONTRIBUTING.md). The Library and Blueprint do not offer stable external interfaces. Upstream bug reports must reproduce on the unmodified main branch, as described in [SUPPORT.md](../SUPPORT.md).
+Propose changes to the bundled rules through [CONTRIBUTING.md](https://github.com/dsx-ai-factory/attribution/blob/main/CONTRIBUTING.md). The Library and Blueprint do not offer stable external interfaces. Upstream bug reports must reproduce on the unmodified main branch, as described in [SUPPORT.md](https://github.com/dsx-ai-factory/attribution/blob/main/SUPPORT.md).
 
 ## What's the schema-versioning policy?
 

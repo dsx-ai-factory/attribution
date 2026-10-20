@@ -13,7 +13,6 @@ from attribution_lib.observation.inbound import (
     Source as ObservationSource,
     TimeInterval as LibTimeInterval,
 )
-from attribution_lib.resources import AllJobResources
 from pydantic import ConfigDict, Field, model_validator
 
 from app.entry_timeseries import decode_timeseries_entries
@@ -50,7 +49,6 @@ class ObservationContextV2(HashableModel):
         """Convert the observation context to a lib context."""
         return InboundContext(
             LibTimeInterval(start=self.time_interval.start, end=self.time_interval.end),
-            AllJobResources,
             self.source,
             ObservationFormat.ENTRY_TIMESERIES,
             timezone,

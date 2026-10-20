@@ -70,7 +70,6 @@ def obs_ctx():
             datetime(2024, 1, 1, 9, 0, 0, tzinfo=ZoneInfo("UTC")),
             datetime(2024, 1, 1, 12, 0, 0, tzinfo=ZoneInfo("UTC")),
         ),
-        resources=ResourceSet([Node(hostname="node01")]),
         source=ObsSource.APPLOG,
         format=ObsFormat.ENTRY_TIMESERIES,
         timezone=ZoneInfo("UTC"),
@@ -304,6 +303,93 @@ class TestPoisonedGspComposite:
         assert self._RESET in bad_nodes["node02"]
         assert self._XID94 in symptoms
         assert self._RESET in symptoms
+
+
+class TestDetectBadNicState:
+    _COMPONENTS = ("mlx5 firmware in initialization state", "mlx5 device initialization failed")
+
+    @pytest.mark.parametrize("missing", ["timestamp", "job_end", "pci", "active_component"])
+    def test_incomplete_context_does_not_combine(self, stream, obs_ctx, job_info, missing):
+        bad_nodes = JobNodeAttributions()
+        for i, symptom in enumerate(self._COMPONENTS):
+            source = _make_source(
+                obs_ctx,
+                source_time=job_info.job_end_time,
+                datum=f"mlx5_core 0000:01:00.0: {symptom}",
+                line_num=i + 1,
+            )
+            if missing == "timestamp" and i == 0:
+                source = source._replace(time=None)
+            if missing == "pci" and i == 0:
+                source = source._replace(datum=symptom)
+            bad_nodes.add(["node01"], SourceSet.new_one(symptom, source))
+        if missing == "job_end":
+            job_info = job_info._replace(job_end_time=None)
+        if missing == "active_component":
+            bad_nodes["node01"].discard(self._COMPONENTS[0])
+
+        _run_scrub(stream, job_info, bad_nodes)
+
+        assert "detected bad NIC state" not in bad_nodes["node01"]
+
+    def test_provenance_and_stale_sources_are_preserved(self, stream, obs_ctx, job_info):
+        bad_nodes = JobNodeAttributions()
+        for i, symptom in enumerate(self._COMPONENTS):
+            source = _make_source(
+                obs_ctx,
+                source_time=job_info.job_end_time,
+                datum=f"mlx5_core 0000:01:00.0: {symptom}",
+                line_num=i + 1,
+            )
+            bad_nodes.add(["node01"], SourceSet.new_one(symptom, source))
+        stale = source._replace(time=job_info.job_end_time - timedelta(minutes=3), line_num=3)
+        bad_nodes.add(["node01"], SourceSet.new_one(self._COMPONENTS[1], stale))
+        recorder = DecisionRecorder(job_info.id)
+
+        _run_scrub(stream, job_info, bad_nodes, recorder=recorder)
+
+        symptoms = bad_nodes["node01"].attributions
+        assert {source.line_num for source in symptoms["detected bad NIC state"]} == {1, 2}
+        assert list(symptoms[self._COMPONENTS[1]]) == [stale]
+        assert all(symptoms[component].has_interesting() for component in self._COMPONENTS)
+        created = [
+            event
+            for event in recorder.events
+            if event.rule_name == "DetectBadNicState" and event.action is Action.CREATED
+        ]
+        assert len(created) == 1
+        assert created[0].symptom == "detected bad NIC state"
+        assert created[0].hostname == "node01"
+
+    @pytest.mark.parametrize(
+        "offset,expected",
+        [(-120, False), (-1, False), (0, True), (4, True), (26, True), (120, True), (121, False)],
+    )
+    def test_post_job_window(self, stream, obs_ctx, job_info, offset, expected):
+        bad_nodes = JobNodeAttributions()
+        for i, symptom in enumerate(self._COMPONENTS):
+            source = _make_source(
+                obs_ctx,
+                source_time=job_info.job_end_time + timedelta(seconds=offset),
+                datum=f"mlx5_core 0000:01:00.0: {symptom}",
+                line_num=i + 1,
+            )
+            bad_nodes.add(["node01"], SourceSet.new_one(symptom, source))
+        _run_scrub(stream, job_info, bad_nodes)
+        assert ("detected bad NIC state" in bad_nodes["node01"]) is expected
+
+    def test_missing_job_start_does_not_prevent_detection(self, stream, obs_ctx, job_info):
+        bad_nodes = JobNodeAttributions()
+        for i, component in enumerate(self._COMPONENTS):
+            source = _make_source(
+                obs_ctx,
+                source_time=job_info.job_end_time,
+                datum=f"mlx5_core 0000:01:00.0: {component}",
+                line_num=i + 1,
+            )
+            bad_nodes.add(["node01"], SourceSet.new_one(component, source))
+        _run_scrub(stream, job_info._replace(job_start_time=None), bad_nodes)
+        assert "detected bad NIC state" in bad_nodes["node01"]
 
 
 class TestScrubBadNodes:
@@ -557,6 +643,25 @@ class TestScrubBadNodes:
         _run_scrub(stream, job_info, bad_nodes)
         assert "DataLoader Exception" in bad_nodes["node01"]
 
+    def test_job_level_cascade_is_scrubbed_like_a_node(self, stream, obs_ctx, job_info):
+        """An unlabelled APPLOG line of a multi-node job lands in the job-level set.
+
+        The same cascade rules must apply there: a DataLoader crash under a node
+        failure is discarded whether or not its line named a node.
+        """
+        bad_nodes = _make_bad_nodes(obs_ctx, {"node01": ["Node failure reported by slurm"]})
+        bad_nodes.job_level.add(SourceSet("DataLoader Exception").add(_make_source(obs_ctx)))
+        _run_scrub(stream, job_info, bad_nodes)
+        assert "Node failure reported by slurm" in bad_nodes["node01"]
+        assert "DataLoader Exception" not in bad_nodes.job_level
+
+    def test_job_level_symptom_preserved_without_its_cascade_root(self, stream, obs_ctx, job_info):
+        """A job-level symptom with no discarding root on any node survives the scrub."""
+        bad_nodes = JobNodeAttributions()
+        bad_nodes.job_level.add(SourceSet("DataLoader Exception").add(_make_source(obs_ctx)))
+        _run_scrub(stream, job_info, bad_nodes)
+        assert "DataLoader Exception" in bad_nodes.job_level
+
     def test_false_positive_xid64_discards_cascaded(self, stream, obs_ctx, job_info):
         bad_nodes = _make_bad_nodes(
             obs_ctx,
@@ -722,6 +827,40 @@ class TestIBSymptomCleanup:
         outcome = calculate_outcome(symptoms).value()
         assert outcome.outcome == "Fail InfraSW"
         assert outcome.root_cause_symptom == lifecycle
+
+    def test_job_level_root_cause_discards_ib_errors(self, stream, obs_ctx, job_info):
+        """A root cause from an unlabelled applog line (job-level set) still discards cascaded IB errors.
+
+        Mirrors test_non_ib_root_cause_discards_ib_errors with the root cause in the
+        job-level set instead of on a node: the cascade leaves the job-level symptoms
+        and the root cause's own group, exactly as it does for a per-node root cause.
+        """
+        ib12 = "IB Error-12 Vendor-129 (IBV_WC_RETRY_EXC_ERR)"
+        symptoms = _make_symptoms(obs_ctx, "cudaErrorECCUncorrectable", ib12, "EFA Error-107")
+        bad_nodes = JobNodeAttributions()
+        for symptom in ("cudaErrorECCUncorrectable", ib12, "EFA Error-107"):
+            bad_nodes.job_level.add(SourceSet(symptom).add(_make_source(obs_ctx)))
+
+        _run_ib_cleanup(stream, job_info, symptoms, bad_nodes)
+
+        assert "cudaErrorECCUncorrectable" in symptoms
+        assert ib12 not in symptoms
+        assert "EFA Error-107" not in symptoms
+        assert "cudaErrorECCUncorrectable" in bad_nodes.job_level
+        assert ib12 not in bad_nodes.job_level
+        assert "EFA Error-107" not in bad_nodes.job_level
+
+    def test_ibv_modify_qp_removes_network_cascade_from_job_level(self, stream, obs_ctx, job_info):
+        """The network-cascade discard reaches job-level symptoms too."""
+        trigger = "Call to ibv_modify_qp failed"
+        symptoms = _make_symptoms(obs_ctx, trigger, "PyTorch NCCL watchdog")
+        bad_nodes = _make_bad_nodes(obs_ctx, {"node01": [trigger]})
+        bad_nodes.job_level.add(SourceSet("PyTorch NCCL watchdog").add(_make_source(obs_ctx)))
+
+        _run_ib_cleanup(stream, job_info, symptoms, bad_nodes)
+
+        assert "PyTorch NCCL watchdog" not in symptoms
+        assert "PyTorch NCCL watchdog" not in bad_nodes.job_level
 
     def test_non_ib_root_cause_cleans_all_nodes(self, stream, obs_ctx, job_info):
         """Per-node root cause cleanup iterates ALL nodes, not just the first match."""
@@ -1210,6 +1349,25 @@ class TestKernelCrashIbCascadeCleanup:
 
         assert ib5 in symptoms
         assert ib5 in bad_nodes["node02"].attributions
+
+    def test_job_level_ib_error_12_is_preserved_under_kernel_crash(self, stream, obs_ctx, two_node_job):
+        """Unlabelled IB Error-12 (job-level set) has no known origin, so it is kept like crashed-node evidence.
+
+        The labelled peer report is still discarded. The preserved job-level copy
+        keeps the symptom in the job-level set, rather than leaving ``job_level``
+        bad while the verdict drops it.
+        """
+        ib12 = "IB Error-12 (IBV_WC_RETRY_EXC_ERR)"
+        symptoms = _make_symptoms(obs_ctx, "kernel panic", ib12)
+        bad_nodes = _make_bad_nodes(obs_ctx, {"node01": ["kernel panic"], "node02": [ib12]})
+        bad_nodes.job_level.add(SourceSet(ib12).add(_make_source(obs_ctx)))
+
+        _run(stream, two_node_job, symptoms, bad_nodes)
+
+        assert "kernel panic" in symptoms
+        assert ib12 not in bad_nodes["node02"].attributions
+        assert ib12 in bad_nodes.job_level
+        assert ib12 in symptoms
 
 
 class TestSlurmStateSymptoms:
@@ -2855,6 +3013,12 @@ class TestConnectionClosedCascade:
         symptoms = _make_symptoms(obs_ctx, "NaN reported by Megatron", "Connection closed")
         _run(stream, job_info, symptoms)
         assert "NaN reported by Megatron" in symptoms
+        assert "Connection closed" not in symptoms
+
+    def test_cuda_out_of_memory_discards_connection_closed(self, stream, obs_ctx, job_info):
+        symptoms = _make_symptoms(obs_ctx, "cudaError out of memory", "Connection closed")
+        _run(stream, job_info, symptoms)
+        assert "cudaError out of memory" in symptoms
         assert "Connection closed" not in symptoms
 
     def test_nccl_invalid_nic_selection_keeps_connection_closed(self, stream, obs_ctx, job_info):

@@ -12,6 +12,7 @@ from typing import Union
 from attribution_lib.core import setup_rules
 from attribution_lib.exceptions import (
     AttributionError as LibAttributionError,
+    InvalidEventStorageSizeError,
     InvalidRuleParams,
     JobInfoError,
     RuleAcceptsNoParamsError,
@@ -27,6 +28,7 @@ import app.attributor_manager as attributor_manager
 import app.v1.api as v1
 import app.v2.api as v2
 from app import __version__
+from app.attributor import validate_event_storage_configuration
 from app.exceptions import AttributionHTTPException
 from app.logging_config import setup_logging
 from app.metrics import VERSION_INFO
@@ -68,22 +70,31 @@ def create_app() -> FastAPI:
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
-        instrumentator.expose(app)
-        # Keep a strong ref to avoid garbage collection of the task.
-        app.state.cleanup_task = asyncio.create_task(_cleanup_expired_attributors(global_aim))
+        cleanup_task = None
         try:
+            validate_event_storage_configuration()
+            instrumentator.expose(app)
+            # Keep a strong ref to avoid garbage collection of the task.
+            cleanup_task = app.state.cleanup_task = asyncio.create_task(_cleanup_expired_attributors(global_aim))
             yield
         finally:
-            app.state.cleanup_task.cancel()
             try:
-                with suppress(asyncio.CancelledError):
-                    await app.state.cleanup_task
+                if cleanup_task is not None:
+                    cleanup_task.cancel()
+                    with suppress(asyncio.CancelledError):
+                        await cleanup_task
             finally:
-                if otlp_provider is not None:
-                    try:
-                        otlp_provider.force_flush(timeout_millis=5000)
-                    finally:
-                        otlp_provider.shutdown()
+                try:
+                    global_aim.close()
+                finally:
+                    # Finish telemetry even if cleanup fails, but propagate the
+                    # cleanup failure: shutdown must not report success with
+                    # outstanding owned resources. The manager retains retries.
+                    if otlp_provider is not None:
+                        try:
+                            otlp_provider.force_flush(timeout_millis=5000)
+                        finally:
+                            otlp_provider.shutdown()
 
     lapp = FastAPI(
         title="NVIDIA Attribution Service",
@@ -140,6 +151,20 @@ def create_app() -> FastAPI:
                 "errors": [str(exception)],
                 "body": repr(exception),
                 "message": "Rule parameter validation failed.",
+            },
+        )
+
+    @lapp.exception_handler(InvalidEventStorageSizeError)
+    async def invalid_storage_size(_request: Request, exception: InvalidEventStorageSizeError):
+        variable = f"ATTRIBUTOR_DUCKDB_{exception.setting.upper()}"
+        logger.error(f"Invalid service configuration: {exception}")
+        return JSONResponse(
+            status_code=500,
+            content={
+                "detail": (
+                    f"Invalid server setting {variable}. Use a DuckDB size such as 128MB or 1GiB. "
+                    "Correct the service environment and restart the service."
+                )
             },
         )
 

@@ -22,3 +22,13 @@ processor = "nvrx:NVRXFailureDetected"
 name      = "NVRXUnhealthyNode"
 match_re  = '''UnhealthyNodeException:\s+Node\s+(?P<reported_node>[A-Za-z0-9_-]+)(?:\.[^\s]+)?\s+'''
 processor = "nvrx:NVRXUnhealthyNode"
+
+[[extractor]]
+name      = "NVRXNodeHealthCheckFailed"
+match_re  = '''(?:\[[A-Z]+\]\s+\[(?P<reported_node>[A-Za-z0-9_.-]+)\]\s+)?(?:\[[^\]]+\]\s+)*health_check\.py:\d+\s+Node health check failed(?: \(exit_code=(?P<exit_code>-?\d+)\)|: fail_count=(?:\d+|None), failed_checks=\[(?P<checks>[^\]]+)\])'''
+processor = "nvrx:NVRXNodeHealthCheckFailed"
+
+[[extractor]]
+name      = "NVRXGpuRecoveryAction"
+match_re  = '''(?:\[[A-Z]+\]\s+\[(?P<reported_node>[A-Za-z0-9_.-]+)\]\s+)?(?:\[[^\]]+\]\s+)*health_check\.py:\d+\s+GPU \d+: (?P<action>Requires a reset to recover|Requires a node reboot to recover|Requires peer-to-peer traffic to be drained|Operating at reduced capacity)\.'''
+processor = "nvrx:NVRXGpuRecoveryAction"

@@ -7,9 +7,9 @@ from unittest.mock import MagicMock, call
 from zoneinfo import ZoneInfo
 
 import pytest
-from nvidia_attribution_client import ApiException, AttributorInfoV2
+from nvidia_attribution_client import ApiException, AttributorInfoV2, IngestSummaryV2, ObservationResponseV2
 
-from attribution_blueprint.connectors.attribution import AttributorConflictError
+from attribution_blueprint.connectors.attribution import AttributorConflictError, ObservationConflictError
 from attribution_blueprint.orchestrator import AttributionOrchestrator
 from attribution_blueprint.types import Source
 
@@ -47,10 +47,15 @@ def _make_obs(source: Source = Source.SYSLOG) -> dict:
     }
 
 
+def _ingest_response(ingest: IngestSummaryV2 | None = None) -> ObservationResponseV2:
+    ingest = ingest or IngestSummaryV2(accepted=1, dropped={})
+    return ObservationResponseV2(observation_id=1, ingest=ingest, model_type="ObservationResponseV2")
+
+
 def _make_attribution_mock():
     attr = MagicMock()
     attr.create_attributor.side_effect = lambda info: f"attr-{info.workload.id}"
-    attr.ingest_observation.return_value = 1
+    attr.ingest_observation.return_value = _ingest_response()
     attr.get_attribution.return_value = {"verdict": {"attribution_outcome": "Fail User"}}
     attr.delete_attributor.return_value = None
     return attr
@@ -136,7 +141,7 @@ def test_analyze_records_run_summaries():
             "sub_domain": "hardware",
             "root_symptom": "XID-79",
             "symptoms": "XID-79",
-            "evidence_status": "complete",
+            "evidence_status": "none",
         }
     ]
 
@@ -602,7 +607,7 @@ def test_failing_ingest_is_recorded_and_does_not_block_other_observations():
     coll.collect.return_value = [obs, obs, obs]
 
     attr = _make_attribution_mock()
-    attr.ingest_observation.side_effect = [1, Exception("boom"), 3]
+    attr.ingest_observation.side_effect = [_ingest_response(), Exception("boom"), _ingest_response()]
 
     output = _ListOutput()
     pipeline = _make_pipeline(eca, [coll], attribution=attr, output=output)
@@ -612,8 +617,59 @@ def test_failing_ingest_is_recorded_and_does_not_block_other_observations():
     assert attr.get_attribution.call_count == 1
     [(_, result)] = output.entries
     [report] = result["ingestion_reports"]
-    assert (report["status"], report["submitted"], report["failed"]) == ("partial", 3, 1)
+    assert (report["status"], report["attempted"], report["failed"]) == ("partial", 3, 1)
     assert result["evidence_status"] == "partial"
+
+
+_EMPTY_INGEST = _ingest_response(IngestSummaryV2(accepted=0, dropped={"unknown_node": 3}))
+
+
+@pytest.mark.parametrize(
+    ("ingest_outcomes", "expected_report", "expected_reason", "expected_evidence"),
+    [
+        # A 409 duplicate is delivered, not failed.
+        ([_ingest_response(), ObservationConflictError(1)], ("ok", 0, 0, {}), "", "complete"),
+        # A failed POST outranks an empty delivery, and its message is the reason.
+        ([Exception("boom"), _EMPTY_INGEST], ("error", 1, 1, {"unknown_node": 3}), "boom", "none"),
+        ([_EMPTY_INGEST, _EMPTY_INGEST], ("empty", 0, 2, {"unknown_node": 6}), "service accepted 0 entries", "none"),
+        # A duplicate's acceptance is unknown, so it cannot turn an empty delivery into evidence.
+        (
+            [_EMPTY_INGEST, ObservationConflictError(1)],
+            ("empty", 0, 1, {"unknown_node": 3}),
+            "service accepted 0 entries",
+            "none",
+        ),
+        ([_ingest_response(), _EMPTY_INGEST], ("partial", 0, 1, {"unknown_node": 3}), "", "partial"),
+        # Only duplicates means nothing confirmed as accepted, so there is no evidence.
+        (
+            [ObservationConflictError(1), ObservationConflictError(2)],
+            ("empty", 0, 0, {}),
+            "service accepted 0 entries",
+            "none",
+        ),
+    ],
+    ids=["duplicate", "failed-and-empty", "all-empty", "empty-and-duplicate", "accepted-and-empty", "all-duplicates"],
+)
+def test_ingestion_report_status_follows_delivery_outcomes(
+    ingest_outcomes, expected_report, expected_reason, expected_evidence
+):
+    eca = MagicMock()
+    eca.discover_by_ids.return_value = [_make_ctx("1")]
+    coll = MagicMock(source="APPLOG")
+    coll.collect.return_value = [_make_obs(), _make_obs()]
+    attr = _make_attribution_mock()
+    attr.ingest_observation.side_effect = ingest_outcomes
+
+    output = _ListOutput()
+    pipeline = _make_pipeline(eca, [coll], attribution=attr, output=output)
+    pipeline.analyze(ids=["1"])
+
+    [(_, result)] = output.entries
+    [report] = result["ingestion_reports"]
+    assert (report["status"], report["failed"], report["empty"], report["dropped"]) == expected_report
+    assert report["attempted"] == 2
+    assert report["reason"] == expected_reason
+    assert result["evidence_status"] == expected_evidence
 
 
 def test_every_ingest_failing_persists_verdict_flagged_no_evidence():
@@ -860,3 +916,23 @@ def test_dump_observations_tolerates_non_json_body(tmp_path):
     payload = _json.loads(dump_path.read_text())
     assert payload["body_raw"] == "line1\nline2 not json\n"
     assert "body" not in payload  # the JSON-decode key is absent for raw bodies
+
+
+def test_dump_observations_tolerates_missing_context(tmp_path):
+    eca = MagicMock()
+    eca.discover_by_ids.return_value = [_make_ctx("dumpme")]
+    coll = MagicMock(source="APPLOG")
+    coll.collect.return_value = [{"body": "line"}]
+    output = _ListOutput()
+
+    pipeline = AttributionOrchestrator(
+        execution_context_adapters=[eca],
+        log_connectors=[coll],
+        metrics_connectors=[],
+        attribution=_make_attribution_mock(),
+        outputs=[output],
+        dump_observations_dir=tmp_path,
+    )
+    pipeline.analyze(ids=["dumpme"])
+
+    assert (tmp_path / "dumpme.unknown.json").exists()

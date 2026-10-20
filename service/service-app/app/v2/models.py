@@ -26,6 +26,7 @@ from attribution_lib.decision_trace_recorder import (
     Action as LibAction,
     NodeType as LibNodeType,
 )
+from attribution_lib.ingest_summary import DropReason, IngestSummary
 from attribution_lib.job_info import JobInfo, JobInfoBuilder, Scheduler
 from attribution_lib.observation.inbound import Id as ObservationId
 from attribution_lib.sources import (
@@ -121,10 +122,24 @@ class NewResponseV2(ResponseModel):
     attributor_id: AttributorId
 
 
+class IngestSummaryV2(BaseModel):
+    """How many entries of an observation were read, and how many were dropped and why."""
+
+    accepted: int = Field(description="Entries read and passed to the extraction rules.")
+    dropped: dict[DropReason, int] = Field(
+        description="Entries discarded before the extraction rules, counted by reason.",
+    )
+
+    @classmethod
+    def from_lib(cls, summary: IngestSummary) -> "IngestSummaryV2":
+        return cls(accepted=summary.accepted, dropped=dict(summary.dropped))
+
+
 class ObservationResponseV2(ResponseModel):
     """Response to performing an ingestion."""
 
     observation_id: ObservationId
+    ingest: IngestSummaryV2 = Field(description="Entry counts for this observation.")
 
 
 def _source_sort_key(s: LibSource) -> tuple:

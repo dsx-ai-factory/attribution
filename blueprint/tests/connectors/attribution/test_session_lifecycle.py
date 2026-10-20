@@ -78,7 +78,9 @@ def test_duplicate_run_preserves_active_session_and_evidence(service_url, ctx):
     owner = AttributionConnector(service_url)
     attributor_id = owner.create_attributor(pipeline._build_attributor_info(ctx))
     try:
-        observation_id = owner.ingest_observation(attributor_id, ObservationV2.model_validate(_observation()))
+        observation_id = owner.ingest_observation(
+            attributor_id, ObservationV2.model_validate(_observation())
+        ).observation_id
         before = owner.get_attribution(attributor_id)
         assert before["observation_context"] == [observation_id]
         assert before["symptoms"][_XID_SYMPTOM][0]["source"]["observation_id"] == observation_id
@@ -106,7 +108,7 @@ def test_duplicate_run_preserves_active_session_and_evidence(service_url, ctx):
         next_id = owner.ingest_observation(
             attributor_id,
             ObservationV2.model_validate(_observation(source="applog", body="[rank 0] training stopped")),
-        )
+        ).observation_id
         assert set(owner.get_attribution(attributor_id)["observation_context"]) == {observation_id, next_id}
     finally:
         owner.delete_attributor(attributor_id)

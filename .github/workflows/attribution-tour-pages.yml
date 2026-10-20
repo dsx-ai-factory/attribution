@@ -10,6 +10,9 @@ on:
     paths:
       - .github/workflows/attribution-tour-pages.yml
       - docs/attribution-tour/**
+      - THIRD_PARTY_NOTICES.md
+      - blueprint/src/attribution_blueprint/webui/frontend/third-party-notices.ts
+      - blueprint/src/attribution_blueprint/webui/frontend/third-party-licenses/**
   workflow_dispatch:
 
 # Production and preview deployments share gh-pages. Serialize their pushes so

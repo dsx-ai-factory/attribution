@@ -98,6 +98,13 @@ CREATE TABLE IF NOT EXISTS attribution_run (
 Blueprint taxonomy fields derived from that outcome. `raw_result_json` stores
 the full enriched result payload, including connector reports, ingestion
 reports, and `evidence_status`.
+
+Each ingestion report counts that connector's observation POSTs in `attempted`
+(failed POSTs included) and the failures in `failed`. It also carries the
+Service's ingest counts for that connector: `accepted` (entries read, summed), `dropped` (discarded entries by
+reason), and `empty` (delivered observations with zero accepted entries). See
+[Missing signals and data gaps](../ATTRIBUTION_GUIDE.md#missing-signals-and-data-gaps)
+for how these set `status`.
 `responsible_nodes_json` stores the extracted responsible-node list as JSON.
 
 ## Indexes

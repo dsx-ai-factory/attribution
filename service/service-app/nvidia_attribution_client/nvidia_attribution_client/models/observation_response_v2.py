@@ -9,8 +9,9 @@ import pprint
 import re  # noqa: F401
 import json
 
-from pydantic import BaseModel, ConfigDict, StrictInt, StrictStr, field_validator
+from pydantic import BaseModel, ConfigDict, Field, StrictInt, StrictStr, field_validator
 from typing import Any, ClassVar, Dict, List
+from nvidia_attribution_client.models.ingest_summary_v2 import IngestSummaryV2
 from typing import Optional, Set
 from typing_extensions import Self
 from pydantic_core import to_jsonable_python
@@ -20,8 +21,9 @@ class ObservationResponseV2(BaseModel):
     Response to performing an ingestion.
     """ # noqa: E501
     observation_id: StrictInt
+    ingest: IngestSummaryV2 = Field(description="Entry counts for this observation.")
     model_type: StrictStr
-    __properties: ClassVar[List[str]] = ["observation_id", "model_type"]
+    __properties: ClassVar[List[str]] = ["observation_id", "ingest", "model_type"]
 
     @field_validator('model_type')
     def model_type_validate_enum(cls, value):
@@ -69,6 +71,9 @@ class ObservationResponseV2(BaseModel):
             exclude=excluded_fields,
             exclude_none=True,
         )
+        # override the default output from pydantic by calling `to_dict()` of ingest
+        if self.ingest:
+            _dict['ingest'] = self.ingest.to_dict()
         return _dict
 
     @classmethod
@@ -82,6 +87,7 @@ class ObservationResponseV2(BaseModel):
 
         _obj = cls.model_validate({
             "observation_id": obj.get("observation_id"),
+            "ingest": IngestSummaryV2.from_dict(obj["ingest"]) if obj.get("ingest") is not None else None,
             "model_type": obj.get("model_type")
         })
         return _obj

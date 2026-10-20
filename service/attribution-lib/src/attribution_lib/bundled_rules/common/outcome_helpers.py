@@ -30,15 +30,18 @@ def apply_user_cancellation_reclassification(
     """
 
     current_outcome = attribution_result.outcome_attr.value().outcome
-    if job_info.cancelled_by is None or current_outcome != "Fail User":
+    if job_info.attributed_cancelled_by is None or current_outcome != "Fail User":
         return False
 
-    cancelled_by = job_info.cancelled_by
+    cancelled_by = job_info.attributed_cancelled_by
     if cancelled_by in _SYSTEM_CANCEL_FLAGS or cancelled_by.startswith("svc-"):
         return False
 
-    previous_source = attribution_result.outcome_attr.one_source() or job_info.source(
-        cancelled_by, "slurmdb cancelled_by"
+    cancellation = job_info.attributed_cancellation
+    previous_source = (
+        cancellation.source
+        if cancellation is not None
+        else attribution_result.outcome_attr.one_source() or job_info.source(cancelled_by, "slurmdb cancelled_by")
     )
 
     new_outcome = OutcomeAttribution(
@@ -67,7 +70,8 @@ def apply_outcome_reclassification_rules(
     # Kueue preemption must not mask evidence-backed failures. Other scheduler
     # types retain their historical PREEMPTED reclassification behavior.
     if (
-        (job_info.scheduler is not Scheduler.KUEUE or kueue_has_only_preemption_fallback)
+        job_info.attributed_cancellation is None
+        and (job_info.scheduler is not Scheduler.KUEUE or kueue_has_only_preemption_fallback)
         and job_info.state is not None
         and job_info.state.upper() == "PREEMPTED"
     ):

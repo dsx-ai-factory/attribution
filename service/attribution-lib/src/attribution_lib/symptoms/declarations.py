@@ -30,6 +30,7 @@ class OutcomePriority(IntEnum):
     MEDIUM = 600
     MEDIUM_XID = 700
     MEDIUM_BROAD = 800
+    MEDIUM_RESET_REQUIRED = 850
     MEDIUM_SW = 900
     LOW = 1000
     LOW_GENERIC = 1100

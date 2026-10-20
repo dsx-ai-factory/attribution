@@ -53,6 +53,51 @@ expect  = "bad"
 line    = "omegaconf.errors.KeyValidationError: ListConfig indices must be integers or slices, not NoneType"
 symptom = "Python Exception"
 
+# Recognize the Megatron configuration assertion with a stable symptom label.
+# Keep the full assertion and batch sizes in the source evidence.
+[[extractor]]
+name     = "BatchSizeAssertion"
+match_re = '^\s*(?:\d+:\s*)?(?:\[rank\s*:?\s*\d+\]:\s*)?AssertionError: (?:eval_)?global_batch_size \(\d+\) must be divisible by [^\r\n]+\s*$'
+emit     = { type = "bad_node", symptom = "Python Exception: AssertionError: batch size not divisible" }
+[[extractor.cases]]
+expect  = "bad"
+line    = "AssertionError: global_batch_size (12) must be divisible by micro_batch_size (4) * data_parallel_size (8)"
+symptom = "Python Exception: AssertionError: batch size not divisible"
+[[extractor.cases]]
+expect  = "bad"
+line    = " 3: AssertionError: eval_global_batch_size (12) must be divisible by eval_micro_batch_size (4) * data_parallel_size (8)\n"
+symptom = "Python Exception: AssertionError: batch size not divisible"
+[[extractor.cases]]
+expect  = "bad"
+line    = "[rank3]: AssertionError: global_batch_size (12) must be divisible by micro_batch_size (4)"
+symptom = "Python Exception: AssertionError: batch size not divisible"
+[[extractor.cases]]
+expect  = "bad"
+line    = "[rank 3]: AssertionError: global_batch_size (12) must be divisible by micro_batch_size (4) * data_parallel_size (8)"
+symptom = "Python Exception: AssertionError: batch size not divisible"
+[[extractor.cases]]
+expect  = "bad"
+line    = "[rank: 3]: AssertionError: eval_global_batch_size (12) must be divisible by eval_micro_batch_size (4) * data_parallel_size (8)"
+symptom = "Python Exception: AssertionError: batch size not divisible"
+[[extractor.cases]]
+expect = "none"
+line   = "AssertionError: process group is not initialized"
+[[extractor.cases]]
+expect = "none"
+line   = "3: handled AssertionError: global_batch_size (12) must be divisible by micro_batch_size (4)"
+[[extractor.cases]]
+expect = "none"
+line   = '3: print("AssertionError: global_batch_size (12) must be divisible by micro_batch_size (4)")'
+[[extractor.cases]]
+expect = "none"
+line   = "[rank 3]: handled AssertionError: global_batch_size (12) must be divisible by micro_batch_size (4)"
+[[extractor.cases]]
+expect = "none"
+line   = '[rank: 3]: print("AssertionError: global_batch_size (12) must be divisible by micro_batch_size (4)")'
+[[extractor.cases]]
+expect = "none"
+line   = "3: global_batch_size (12) must be divisible by micro_batch_size (4)"
+
 [[extractor]]
 name     = "BusErrorSignal"
 match_re = "Caught signal \\d+ \\(Bus error: nonexistent physical address\\)"

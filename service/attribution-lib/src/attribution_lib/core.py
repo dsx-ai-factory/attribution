@@ -306,6 +306,8 @@ def calculate_symptoms(
     for _node, node_group in my_bad_nodes.items():
         for symptom_str in list(node_group.symptoms()):
             symptoms.add(node_group.attributions[symptom_str])
+    for symptom_str in list(my_bad_nodes.job_level.symptoms()):
+        symptoms.add(my_bad_nodes.job_level[symptom_str])
 
     node_symptoms_base, skipped_symptom_ids = run_pre_outcome_refiners(
         event_stream,

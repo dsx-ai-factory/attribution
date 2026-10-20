@@ -212,6 +212,8 @@ class TestEndpoints:
         response = client.post(f"/{version}/attributor/{att_id}/observation", content=obs.model_dump_json())
 
         assert response.status_code == 201
+        if version == "v2":
+            assert response.json()["ingest"] == {"accepted": 2, "dropped": {}}
 
     def test_post_observation_duplicate_rejected(self, client, version):
         att_id = post_attributor(client, make_up_attributor_info(version))

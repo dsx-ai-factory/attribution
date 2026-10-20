@@ -778,6 +778,25 @@ line = "[1234.567890] slurmd: Internal error: Oops handler invoked but no callba
 expect = "no_match"
 
 [[cases]]
+description = "ext4 delayed allocation failure with EFSCORRUPTED is filesystem corruption"
+line = "<2>1 2026-10-15T21:53:07.933349-07:00 test-node-001 kernel - - -  EXT4-fs (md0): Delayed block allocation failed for inode 285219254 at logical offset 0 with max blocks 1 with error 117"
+expect = "bad"
+expected_symptom = "ext4 filesystem corruption"
+expected_rule = "ext4-filesystem-corruption"
+
+[[cases]]
+description = "ext4_error() report is filesystem corruption"
+line = "Oct 15 21:53:07 test-node-001 kernel: EXT4-fs error (device md0): ext4_mb_complex_scan_group:2312: group 4352, 32768 free clusters as per group info. But got 0 blocks"
+expect = "bad"
+expected_symptom = "ext4 filesystem corruption"
+expected_rule = "ext4-filesystem-corruption"
+
+[[cases]]
+description = "ext4 delayed allocation failure on a full disk (ENOSPC) is not corruption"
+line = "EXT4-fs (md0): Delayed block allocation failed for inode 285219254 at logical offset 0 with max blocks 1 with error 28"
+expect = "no_match"
+
+[[cases]]
 description = "nv warn is interesting"
 line = "[2321]: hadda stop; [NV_WARN_WIDGETS_GIZMOING_TOO_HARD]: returned from status @ mem_multicast_fabric.c:2917"
 expect = "interesting"
