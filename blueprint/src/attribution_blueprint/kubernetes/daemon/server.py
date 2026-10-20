@@ -37,38 +37,6 @@ def serve_api(
             elif parsed.path == "/v1/history":
                 query = parse_qs(parsed.query)
                 requested_namespace = (query.get("namespace") or [""])[0]
-                controller_uid = (query.get("controller_uid") or [""])[0]
-                if not requested_namespace or not controller_uid:
-                    status, body = 400, {
-                        "error": "namespace and controller_uid are required"
-                    }
-                elif requested_namespace != namespace:
-                    status, body = 403, {
-                        "error": f"this daemon only serves namespace {namespace!r}, got {requested_namespace!r}"
-                    }
-                else:
-                    try:
-                        observations = evidence_store.list_observations_for_controller(
-                            cluster_id,
-                            requested_namespace,
-                            controller_uid,
-                        )
-                        status, body = 200, _history_response(
-                            cluster_id,
-                            requested_namespace,
-                            controller_uid,
-                            observations,
-                            _placements_for_observations(
-                                evidence_store,
-                                observations,
-                            ),
-                        )
-                    except Exception:
-                        logger.exception("execution history lookup failed")
-                        status, body = 500, {"error": "execution history lookup failed"}
-            elif parsed.path == "/v1/histories":
-                query = parse_qs(parsed.query)
-                requested_namespace = (query.get("namespace") or [""])[0]
                 kind = (query.get("kind") or [""])[0]
                 name = (query.get("name") or [None])[0]
                 if not requested_namespace or not kind:
@@ -106,13 +74,17 @@ def serve_api(
                             )
                             histories.append(
                                 _history_response(
-                                    cluster_id,
                                     requested_namespace,
-                                    controller_uid,
                                     observations,
                                     _placements_for_observations(
                                         evidence_store,
                                         observations,
+                                    ),
+                                    _coverage_response(
+                                        state,
+                                        evidence_store,
+                                        cluster_id,
+                                        requested_namespace,
                                     ),
                                 )
                             )
@@ -161,45 +133,16 @@ def serve_api(
 
 
 def _history_response(
-    cluster_id: str,
     namespace: str,
-    controller_uid: str,
     observations: list[ResourceObservation],
     placements: list[dict],
+    coverage: dict,
 ) -> dict:
-    resources: dict[str, dict] = {}
-    relationships: dict[tuple[str, str, bool], dict] = {}
-    for observation in observations:
-        resource = _resource_identity(
-            observation.api_version,
-            observation.kind,
-            observation.namespace,
-            observation.name,
-            observation.uid,
-        )
-        resources[observation.uid] = resource
-        for owner in observation.owner_references:
-            owner_resource = _resource_identity(
-                owner.api_version,
-                owner.kind,
-                observation.namespace,
-                owner.name,
-                owner.uid,
-            )
-            resources.setdefault(owner.uid, owner_resource)
-            relationships[(owner.uid, observation.uid, owner.controller)] = {
-                "owner": owner_resource,
-                "resource": resource,
-                "controller": owner.controller,
-            }
     return {
-        "clusterId": cluster_id,
         "namespace": namespace,
-        "controllerUid": controller_uid,
-        "resources": list(resources.values()),
-        "relationships": list(relationships.values()),
         "observations": [_observation_response(observation) for observation in observations],
         "placements": placements,
+        "coverage": coverage,
     }
 
 
@@ -235,22 +178,6 @@ def _observation_response(observation: ResourceObservation) -> dict:
     return result
 
 
-def _resource_identity(
-    api_version: str,
-    kind: str,
-    namespace: str,
-    name: str,
-    uid: str,
-) -> dict:
-    return {
-        "apiVersion": api_version,
-        "kind": kind,
-        "namespace": namespace,
-        "name": name,
-        "uid": uid,
-    }
-
-
 def _controller_uid(observation: ResourceObservation) -> str | None:
     controllers = [
         owner.uid
@@ -275,3 +202,45 @@ def _placements_for_observations(
         records[pod_uid].to_resource()
         for pod_uid in sorted(records)
     ]
+
+
+def _coverage_response(
+    state: HealthState,
+    evidence_store: PlacementStore,
+    cluster_id: str,
+    namespace: str,
+) -> dict:
+    return {
+        "sources": [
+            {
+                "sourceName": item.source_name,
+                "apiVersion": item.api_version,
+                "kind": item.kind,
+                "coverageStartedAt": item.coverage_started_at,
+                "resourceVersion": item.resource_version,
+                "checkpointedAt": item.checkpointed_at,
+            }
+            for item in evidence_store.list_watch_coverages(
+                cluster_id,
+                namespace,
+            )
+        ],
+        "gaps": [
+            {
+                "sourceName": item.source_name,
+                "apiVersion": item.api_version,
+                "kind": item.kind,
+                "reason": item.reason,
+                "startResourceVersion": item.start_resource_version,
+                "startedAt": item.started_at,
+                "detectedAt": item.detected_at,
+                "endResourceVersion": item.end_resource_version,
+                "recoveredAt": item.recovered_at,
+            }
+            for item in evidence_store.list_coverage_gaps(
+                cluster_id,
+                namespace,
+            )
+        ],
+        "disabledWatches": state.disabled_watch_status(),
+    }

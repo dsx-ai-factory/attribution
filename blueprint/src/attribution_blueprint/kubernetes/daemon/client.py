@@ -65,34 +65,6 @@ class KubernetesDaemonClient:
             raise ValueError("daemon returned a placement outside the requested resource")
         return records
 
-    def get_history(self, namespace: str, controller_uid: str) -> dict:
-        if not namespace:
-            raise ValueError("namespace must not be empty")
-        if not controller_uid:
-            raise ValueError("controller_uid must not be empty")
-        response = self.session.get(
-            f"{self.endpoint}/v1/history",
-            params={
-                "namespace": namespace,
-                "controller_uid": controller_uid,
-            },
-            timeout=self.timeout_seconds,
-        )
-        response.raise_for_status()
-        payload = response.json()
-        if not isinstance(payload, dict):
-            raise ValueError("daemon history response must be an object")
-        if payload.get("namespace") != namespace:
-            raise ValueError("daemon returned history outside the requested namespace")
-        if payload.get("controllerUid") != controller_uid:
-            raise ValueError("daemon returned history for a different controller")
-        for field in ("resources", "relationships", "observations"):
-            if not isinstance(payload.get(field), list):
-                raise ValueError(f"daemon history response must contain a {field} list")
-        if "placements" in payload and not isinstance(payload["placements"], list):
-            raise ValueError("daemon history response placements must be a list")
-        return payload
-
     def find_histories(
         self,
         namespace: str,
@@ -109,7 +81,7 @@ class KubernetesDaemonClient:
         if name:
             params["name"] = name
         response = self.session.get(
-            f"{self.endpoint}/v1/histories",
+            f"{self.endpoint}/v1/history",
             params=params,
             timeout=self.timeout_seconds,
         )
@@ -123,16 +95,22 @@ class KubernetesDaemonClient:
                 raise ValueError("daemon histories items must be objects")
             if history.get("namespace") != namespace:
                 raise ValueError("daemon returned history outside the requested namespace")
-            for field in ("resources", "relationships", "observations"):
-                if not isinstance(history.get(field), list):
-                    raise ValueError(
-                        f"daemon history response must contain a {field} list"
-                    )
+            if not isinstance(history.get("observations"), list):
+                raise ValueError(
+                    "daemon history response must contain an observations list"
+                )
             if "placements" in history and not isinstance(
                 history["placements"],
                 list,
             ):
                 raise ValueError(
                     "daemon history response placements must be a list"
+                )
+            if "coverage" in history and not isinstance(
+                history["coverage"],
+                dict,
+            ):
+                raise ValueError(
+                    "daemon history response coverage must be an object"
                 )
         return histories

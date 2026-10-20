@@ -53,6 +53,9 @@ class ExecutionContext(TypedDict):
     # Per-Pod scheduler placement with source provenance. Kueue populates
     # this from live Pods and durable PlacementRecords when available.
     pod_placements: NotRequired[list[dict]]
+    # True only when every scheduler-required Kubernetes watch continuously
+    # covered this reconstructed attempt's full time interval.
+    history_complete: NotRequired[bool]
 
 
 # Wire-format enums. Values mirror the service observation API contract.

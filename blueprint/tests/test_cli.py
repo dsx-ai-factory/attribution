@@ -2031,3 +2031,30 @@ def test_only_attributed_summaries_count_as_evidence_verdicts(mocker, non_verdic
         )
     else:
         warning.assert_not_called()
+
+
+def test_run_summary_warns_for_incomplete_scheduler_history(mocker):
+    warning = mocker.patch("attribution_blueprint.cli.logger.warning")
+    summaries = [
+        {
+            "job_id": "job-1",
+            "status": "attributed",
+            "evidence_status": "complete",
+            "history_complete": "false",
+        },
+        {
+            "job_id": "job-2",
+            "status": "attributed",
+            "evidence_status": "complete",
+            "history_complete": "true",
+        },
+    ]
+
+    cli._write_run_summary(
+        {"attempted": 2, "succeeded": 2, "conflicted": 0},
+        summaries,
+    )
+
+    warning.assert_called_once_with(
+        "1 of 2 verdicts may have incomplete scheduler history."
+    )
