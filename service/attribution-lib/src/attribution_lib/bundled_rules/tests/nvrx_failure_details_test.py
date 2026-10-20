@@ -104,6 +104,27 @@ def test_assertion_survives_nvrx_and_teardown(attribute_cycle, job_options, expe
     assert evidence[0].timestamp is None
 
 
+@pytest.mark.parametrize("prefix", ["1: ", "[rank1]: ", "[rank 1]: ", "[rank: 1]: ", "[rank : 1]: "])
+@pytest.mark.parametrize("batch_kind", ["training", "evaluation"])
+def test_assertion_accepts_supported_rank_prefixes(attribute_cycle, prefix, batch_kind):
+    """Retain the specific failure and source node for supported rank prefixes."""
+    error = _ERROR if batch_kind == "evaluation" else _ERROR.replace("eval_", "")
+    line = prefix + error
+    result, graph = attribute_cycle(line_entries([line, _NVRX]))
+
+    outcome = result.outcome_attr.value()
+    assert outcome.outcome == "Fail User"
+    assert outcome.root_cause_symptom == _SYMPTOM
+    assert outcome.doc == "batch-size-not-divisible"
+    source = result.symptoms[_SYMPTOM].one_source()
+    assert source.datum == line
+    assert {resource.hostname for resource in source.resources} == {"node02"}
+    evidence = [node for node in graph.nodes if node.rule_name == "BatchSizeAssertion" and node.hostname == "node02"]
+    assert len(evidence) == 1
+    assert evidence[0].datum == line
+    assert evidence[0].hostname == "node02"
+
+
 @pytest.mark.parametrize("has_timestamp", [False, True])
 def test_assertion_preserves_available_source_without_guessing(attribute_cycle, has_timestamp):
     # AllJobResources means the collector did not identify a node; an unmapped

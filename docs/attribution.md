@@ -413,19 +413,6 @@ Near the end of the attribution process (specifically, in the refiner phase, aft
 
 Outcome is intended to convey a category (or multiple categories) for the attribution. Each symptom has an outcome associated with it as well as a ranking. The highest-priority remaining symptom is chosen as the root cause, and the outcome selected from that.
 
-Megatron batch-size divisibility assertions have a dedicated extractor and the
-stable symptom `Python Exception: AssertionError: batch size not divisible`.
-This maps to `Fail User` at the existing `LOW` priority, above generic NVRx
-failure context (`LOW_GENERIC`). The original assertion text and available
-source context remain in the report and decision graph. Other assertions and
-application errors retain their existing detection and priority.
-
-The mapping for `NVRx detected failure` remains `Fail Undetermined`.
-Existing completion, hardware, and scheduler policies still apply. In
-particular, cancellation can still reclassify `Fail User` to `Cancelled by User`
-while retaining the assertion in the reported symptoms; this rule does not
-change cancellation ownership.
-
 ## Appendices
 
 ### Initialization order

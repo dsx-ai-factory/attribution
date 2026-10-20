@@ -144,6 +144,37 @@ def test_run_to_react_falls_back_when_catalog_is_empty(tmp_path, monkeypatch):
     assert r["operatorDiagnose"]["catalogId"] is None
 
 
+def test_batch_size_failure_has_specific_diagnose_guidance(tmp_path):
+    """Show configuration guidance and the original assertion in the UI payload."""
+    symptom = "Python Exception: AssertionError: batch size not divisible"
+    line = (
+        "[rank: 1]: AssertionError: eval_global_batch_size (12) must be divisible by "
+        "eval_micro_batch_size (4) * data_parallel_size (8)"
+    )
+    run = _seed_one(
+        tmp_path,
+        catalog_id="batch-size-not-divisible",
+        symptom=symptom,
+        rule="BatchSizeAssertion",
+        line=line,
+        detail=symptom,
+    )
+    run.raw_result["verdict"]["attribution_outcome"] = "Fail User"
+
+    result = bootstrap.run_to_react(run)
+    card = result["diagnose"]
+    assert card["hasPersona"] is True
+    assert card["catalogId"] == "batch-size-not-divisible"
+    assert card["title"] == "Batch-size validation failed"
+    assert "global_batch_size" in card["action"]
+    assert "eval_global_batch_size" in card["action"]
+    assert "divisible" in card["action"]
+    assert "validation passes" in card["action"]
+    assert result["rootSymptom"]["symptom"] == symptom
+    assert result["rootSymptom"]["line"] == line
+    assert any(entry["text"] == line for entry in result["log"])
+
+
 def test_symptom_text_without_catalog_id_yields_no_persona_card(tmp_path):
     # Default seed: symptom "GpuFell" / line "Xid 79" regex-matches the xid-79
     # signal, but carries no typed catalog_id.

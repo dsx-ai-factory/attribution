@@ -598,6 +598,38 @@ failures:
     url: https://docs.python.org/3/tutorial/errors.html
   verification: verified
   last_reviewed: 2026-04-24
+- id: batch-size-not-divisible
+  title: Batch size not divisible
+  aliases:
+  - Megatron batch-size validation
+  category: application
+  likely_owner: user
+  personas:
+    tenant_sre:
+      title: Batch-size validation failed
+      summary: The configured training or evaluation batch size failed a divisibility check.
+      impact: The workload cannot proceed past this configuration check.
+      action: Check global_batch_size or eval_global_batch_size and the factors printed in the assertion.
+        Correct the relevant batch-size or parallelism settings so the global batch size is divisible by the required
+        product. Confirm validation passes and the workload makes progress after restarting.
+      support_details: Include the full assertion, relevant batch-size and parallelism settings, framework version,
+        and whether the failure occurred during training or evaluation.
+  technical_details: Megatron validates that the global batch size is divisible by the required product, such as
+    micro_batch_size times data_parallel_size. Use the exact factors in the assertion for the affected configuration.
+    NVIDIA Attribution groups these assertions under a stable symptom and retains the original values in source evidence.
+  severity: medium
+  summary: A batch-size configuration assertion prevented the workload from proceeding.
+  signals:
+  - kind: log
+    pattern: '^\s*(?:\d+:\s*)?(?:\[rank\s*:?\s*\d+\]:\s*)?AssertionError: (?:eval_)?global_batch_size \(\d+\) must be divisible by [^\r\n]+\s*$'
+    note: Training or evaluation batch-size divisibility assertion
+  related:
+  - python-exception
+  references:
+  - title: Megatron Core microbatch calculation
+    url: https://github.com/NVIDIA/Megatron-LM/blob/main/megatron/core/num_microbatches_calculator.py
+  verification: verified
+  last_reviewed: 2026-10-20
 - id: job-failed
   title: Job failed
   aliases:

@@ -57,7 +57,7 @@ symptom = "Python Exception"
 # Keep the full assertion and batch sizes in the source evidence.
 [[extractor]]
 name     = "BatchSizeAssertion"
-match_re = '^\s*(?:\d+:\s*)?(?:\[rank\d+\]:\s*)?AssertionError: (?:eval_)?global_batch_size \(\d+\) must be divisible by [^\r\n]+\s*$'
+match_re = '^\s*(?:\d+:\s*)?(?:\[rank\s*:?\s*\d+\]:\s*)?AssertionError: (?:eval_)?global_batch_size \(\d+\) must be divisible by [^\r\n]+\s*$'
 emit     = { type = "bad_node", symptom = "Python Exception: AssertionError: batch size not divisible" }
 [[extractor.cases]]
 expect  = "bad"
@@ -72,6 +72,14 @@ expect  = "bad"
 line    = "[rank3]: AssertionError: global_batch_size (12) must be divisible by micro_batch_size (4)"
 symptom = "Python Exception: AssertionError: batch size not divisible"
 [[extractor.cases]]
+expect  = "bad"
+line    = "[rank 3]: AssertionError: global_batch_size (12) must be divisible by micro_batch_size (4) * data_parallel_size (8)"
+symptom = "Python Exception: AssertionError: batch size not divisible"
+[[extractor.cases]]
+expect  = "bad"
+line    = "[rank: 3]: AssertionError: eval_global_batch_size (12) must be divisible by eval_micro_batch_size (4) * data_parallel_size (8)"
+symptom = "Python Exception: AssertionError: batch size not divisible"
+[[extractor.cases]]
 expect = "none"
 line   = "AssertionError: process group is not initialized"
 [[extractor.cases]]
@@ -80,6 +88,12 @@ line   = "3: handled AssertionError: global_batch_size (12) must be divisible by
 [[extractor.cases]]
 expect = "none"
 line   = '3: print("AssertionError: global_batch_size (12) must be divisible by micro_batch_size (4)")'
+[[extractor.cases]]
+expect = "none"
+line   = "[rank 3]: handled AssertionError: global_batch_size (12) must be divisible by micro_batch_size (4)"
+[[extractor.cases]]
+expect = "none"
+line   = '[rank: 3]: print("AssertionError: global_batch_size (12) must be divisible by micro_batch_size (4)")'
 [[extractor.cases]]
 expect = "none"
 line   = "3: global_batch_size (12) must be divisible by micro_batch_size (4)"
