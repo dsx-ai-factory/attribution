@@ -21,6 +21,13 @@ spec:
     spec:
       serviceAccountName: {{ .Release.Name }}-kubernetes-daemon
       terminationGracePeriodSeconds: 30
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        fsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
 {{- with .Values.nodeSelector }}
       nodeSelector:
 {{ toYaml . | indent 8 }}
@@ -33,6 +40,10 @@ spec:
         - name: kubernetes-daemon
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
           args:
             - --namespace={{ .Release.Namespace }}
             - --queue-size={{ .Values.queueSize }}
