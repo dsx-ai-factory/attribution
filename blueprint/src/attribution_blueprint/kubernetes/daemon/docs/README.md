@@ -161,8 +161,8 @@ enabled, Kueue Workloads, KAI PodGroups, Jobs, and any installed JobSet API.
 
 The daemon cannot recover a Pod created and deleted entirely while it was
 unavailable. Confirm it was installed before the workload, ran in the same
-namespace, and had enough queue capacity. Then query `/v1/placements` with the
-exact Pod, owner, or resource UID.
+namespace, and had enough queue capacity. Then query `/v1/placements` with
+the associated Kueue Workload or KAI PodGroup resource UID.
 
 **A scheduler association never appears**
 
