@@ -1002,6 +1002,20 @@ def test_denied_jobset_lookup_fails_the_pass(mocker):
         KaiExecutionContextAdapter().discover_by_ids(["team-alpha/pg-a"])
 
 
+def test_out_of_namespace_id_rejected_before_kubernetes_read_when_placement_records_enabled(mocker):
+    fake = _wire_kubectl(mocker, [_podgroup()], [])
+    adapter = KaiExecutionContextAdapter(
+        namespace="team-alpha",
+        placement_records_enabled=True,
+        placement_reader=mocker.Mock(),
+    )
+
+    with pytest.raises(ValueError, match="outside configured namespace"):
+        adapter.discover_by_ids(["team-beta/pg-a"])
+
+    assert fake.calls == []
+
+
 def test_daemon_placements_restore_deleted_pod_and_node_failure(mocker):
     _wire_kubectl(mocker, [_podgroup()], [], [_job("pg-a-job", "uid-job-uid-pg-a")])
     reader = mocker.Mock()
