@@ -46,6 +46,35 @@ def test_unresolved_placement_can_be_enriched_later(tmp_path):
     assert store.list_for_resource("team-a", "admission-uid-1") == [_record(associated=True)]
 
 
+def test_verified_owner_refreshes_pod_owner_references(tmp_path):
+    store = SQLitePlacementStore(str(tmp_path / "placements.db"))
+    job = ResourceIdentity("batch/v1", "Job", "team-a", "trainer", "job-uid-1")
+    replacement_job = ResourceIdentity("batch/v1", "Job", "team-a", "trainer-2", "job-uid-2")
+    jobset = ResourceIdentity(
+        "jobset.x-k8s.io/v1alpha2",
+        "JobSet",
+        "team-a",
+        "training",
+        "jobset-uid-1",
+    )
+    initial = replace(_record(associated=True), owner_references=(job,), owner=job)
+    reassigned = replace(
+        initial,
+        owner_references=(replacement_job,),
+        owner=jobset,
+        associated_resources=(),
+    )
+
+    store.create(initial)
+    assert store.create(reassigned) == CreateResult.UPDATED
+
+    stored = store.get_by_pod_uid(initial.pod_uid)
+    assert stored.owner == jobset
+    assert stored.owner_references == (replacement_job,)
+    assert stored.associated_resources == ()
+    assert store.list_for_resource("team-a", "admission-uid-1") == []
+
+
 def test_active_placement_does_not_expire(tmp_path):
     path = tmp_path / "placements.db"
     store = SQLitePlacementStore(str(path), retention_days=1)

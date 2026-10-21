@@ -171,12 +171,26 @@ class KubernetesDaemon:
         if self.owner_resolver is None:
             return
 
+        try:
+            stored = self.store.get_by_pod_uid(base.pod_uid)
+        except Exception:
+            logger.exception("failed to read stored placement before owner resolution")
+            stored = None
+        # Unobserved relationship changes cannot be reconstructed after deletion.
+        cached_owner = (
+            stored.owner
+            if stored is not None and _stored_owner_matches_pod(stored, pod)
+            else None
+        )
         owner = None
         for attempt in range(self.max_resolution_attempts):
             try:
                 owner = self.owner_resolver.resolve(pod)
                 break
             except ResolutionPending as error:
+                if attempt == 0 and cached_owner is not None:
+                    owner = cached_owner
+                    break
                 if attempt + 1 == self.max_resolution_attempts or self.stop_event.is_set():
                     logger.warning(f"retained unresolved Pod placement: {error}")
                     return
@@ -246,6 +260,26 @@ class KubernetesDaemon:
         except Exception:
             self.health.update(persistence_failed=True)
             logger.exception(f"failed to persist deletion for Pod UID {pod_uid}")
+
+
+def _stored_owner_matches_pod(record: PlacementRecord, pod: dict) -> bool:
+    owner = record.owner
+    controllers = [
+        reference
+        for reference in (pod.get("metadata") or {}).get("ownerReferences") or []
+        if reference.get("controller") is True and reference.get("kind") == "Job"
+    ]
+    if owner is None or len(controllers) != 1:
+        return False
+    controller_uid = controllers[0].get("uid")
+    if owner.kind == "Job":
+        return owner.uid == controller_uid
+    if owner.kind == "JobSet":
+        return any(
+            reference.kind == "Job" and reference.uid == controller_uid
+            for reference in record.owner_references
+        )
+    return False
 
 
 def _as_dict(resource) -> dict:
