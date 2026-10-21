@@ -590,7 +590,7 @@ The supported log components are:
 - `loki`, query Loki over HTTP
 - `kubectl_logs`, collect Kubernetes pod logs for Kueue workloads
 
-
+Prefer [pre-shaped entries](#pre-shaped-entries) for `local_file`: a path ending in `.jsonl` is read as observation entries, one JSON object per line, each carrying its own timestamp and node. Raw log files are also accepted, as the per-source sections below describe.
 
 ### Evidence Coverage
 
@@ -606,6 +606,26 @@ The supported log components are:
 If logs are available for only some workload nodes, attribution has reduced
 evidence coverage for the missing nodes and may be unable to assign node
 responsibility accurately.
+
+### Pre-shaped Entries
+
+The most explicit way to feed `local_file`. Each line is one entry in the [Observation entry format](../../service/service-app/docs/api/observation-format.md), so the connector does not parse timestamps or infer nodes, and no per-node directories are needed. Works the same for `[log.applog.local_file]` and `[log.syslog.local_file]`:
+
+```toml
+[log.syslog.local_file]
+paths = ["/data/{job_id}/syslog.jsonl"]
+```
+
+```json
+{"ts": 1781135403000000000, "resources": [{"kind": "node", "hostname": "node-a"}], "body": "kernel: NVRM: Xid (PCI:0000:0f:00): 79, GPU has fallen off the bus."}
+```
+
+- Entries are forwarded as-is, with no timestamp or node rewriting and no time filtering
+- Blank lines are ignored
+- A file with a line that is not valid JSON is skipped, with a warning naming the file and line
+- The service validates the entry shape and rejects the observation if an entry is malformed; per-source rules for `ts` and `resources` are in [Observation entry format](../../service/service-app/docs/api/observation-format.md)
+- For `applog`, a `.jsonl` file inside a configured directory is read the same way; for `syslog`, the `.jsonl` file must be the configured path itself, and one found inside a node directory is skipped with a warning
+- `max_bytes` and the path placeholders below apply as for raw files
 
 ### Local File APPLOG
 
@@ -664,6 +684,8 @@ paths = ["/path/to/syslog"]
 ```
 
 For an execution context whose `nodes` are `["node-a", "node-b"]`, the connector reads regular files directly under `/path/to/syslog/node-a/` and `/path/to/syslog/node-b/`. Missing per-node directories are logged at debug level; the connector warns when no node directory is found under any configured base path. `max_bytes` behaves as for APPLOG (default `2GB`). Each emitted syslog observation uses `entry_timeseries`: one entry per line, dated from the line's own timestamp and tagged with the directory's node. Lines without a recognizable timestamp are dropped; see [Manually Collected Syslogs](use-cases/manually-collected-syslogs.md#syslog-file-format) for the accepted forms.
+
+A path ending in `.jsonl` is read as [pre-shaped entries](#pre-shaped-entries) instead, with no per-node directories.
 
 ### Loki SYSLOG Or APPLOG
 

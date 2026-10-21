@@ -15,7 +15,6 @@ from attribution_lib.observation.inbound import (
     Source as ObsSource,
     TimeInterval,
 )
-from attribution_lib.resources.resource_set import validate_resource_set
 
 
 @dataclass
@@ -23,7 +22,7 @@ class Context(InboundContext):
     id: Id
 
     def __hash__(self) -> int:
-        return hash((self.time_interval, self.resources, self.source, self.format, self.timezone, self.id))
+        return hash((self.time_interval, self.source, self.format, self.timezone, self.id))
 
     @classmethod
     def from_dict(cls, data: dict) -> Self:
@@ -39,7 +38,6 @@ class Context(InboundContext):
 
         return cls(
             time_interval=time_interval,
-            resources=validate_resource_set(data.get("resources") or "AllJobResources"),
             source=obs_source,
             format=obs_format,
             timezone=timezone,

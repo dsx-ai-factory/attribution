@@ -17298,3 +17298,134 @@ failures:
   severity: critical
   verification: verified
   last_reviewed: 2026-07-23
+- id: ext4-filesystem-corruption
+  title: ext4 filesystem corruption
+  aliases:
+  - EXT4-fs error
+  - EFSCORRUPTED
+  category: storage
+  likely_owner: infrastructure
+  personas:
+    tenant_sre:
+      title: A node-local filesystem was corrupted while your job was running
+      summary: The Linux kernel reported ext4 metadata corruption on a filesystem of the node running one of your ranks.
+      impact: Files on the affected filesystem (for example container image layers, caches, or headers used for JIT
+        compilation) can be truncated or unreadable, so the application fails with errors that look unrelated to storage.
+      action: Your remediation system should first restart the affected node's operating system (a VM reboot on a
+        virtualized GPU, a host-level reboot on bare metal). If `/sys/fs/ext4/<device>/errors_count` is still nonzero
+        after the restart, or the job still fails on this node, contact your cluster administrator or cloud provider.
+        Include the NVIDIA Attribution diagnosis (verdict, symptom chain, and source logs).
+      support_details: Job ID, node hostname, the `EXT4-fs` kernel log lines, and the contents of
+        `/sys/fs/ext4/<device>/errors_count`, `first_error_func`, and `first_error_time`.
+  recommended_action:
+    operational_state: drain
+    remediation_actions:
+    - restart_os
+    - service_required
+  technical_details: 'ext4 prints `EXT4-fs error (device <dev>): <function>:<line>: ...` from `ext4_error()` when it detects
+    inconsistent metadata, and increments `/sys/fs/ext4/<dev>/errors_count`; `dumpe2fs -h` then reports the filesystem state
+    as `clean with errors`. When writeback cannot allocate blocks for delayed-allocation pages, ext4 prints `Delayed block
+    allocation failed for inode ... with error <errno>` followed by `This should not happen!! Data will be lost`. Error 117
+    (EUCLEAN, which ext4 uses as EFSCORRUPTED) means the allocation failed on corrupted metadata and the dirty pages were
+    dropped. Error 28 (ENOSPC) on the same line is a full disk, not corruption. The case that prompted this entry was a kernel
+    bug that a reboot cleared. If `errors_count` is still nonzero after a reboot, repair requires unmounting the filesystem
+    and running `e2fsck`, or recreating it.
+
+    '
+  summary: The Linux kernel detected ext4 metadata corruption on a node filesystem; data written there may be lost.
+  signals:
+  - kind: log
+    pattern: 'EXT4-fs error \(device [^)]+\): '
+    note: ext4_error() report; also increments /sys/fs/ext4/<dev>/errors_count
+  - kind: log
+    pattern: 'EXT4-fs \([^)]+\): Delayed block allocation failed for inode \d+ .* with error 117\b'
+    note: delayed allocation failed with EFSCORRUPTED; followed by "This should not happen!! Data will be lost"
+  related:
+  - io-error
+  - kernel-panic
+  references:
+  - title: Linux kernel admin guide - ext4
+    url: https://www.kernel.org/doc/html/latest/admin-guide/ext4.html
+  - title: Linux ext4 inode implementation (delayed allocation writeback)
+    url: https://github.com/torvalds/linux/blob/master/fs/ext4/inode.c
+  severity: high
+  verification: verified
+  last_reviewed: 2026-10-19
+- id: detected-bad-nic-state
+  title: detected bad NIC state
+  aliases:
+  - mlx5 firmware in initialization state
+  - mlx5 device initialization failed
+  category: distributed_comm
+  likely_owner: infrastructure
+  personas:
+    tenant_sre:
+      title: NIC firmware initialization failed near workload termination
+      summary: The mlx5 driver reported firmware stuck in initialization and a device initialization failure on the same NIC.
+      impact: The affected NIC may be unavailable for workload communication. The correlated pair maps to Fail InfraSW; higher-priority independent faults retain precedence.
+      action: Ask the infrastructure owner to inspect NIC firmware and driver health before reusing the affected node.
+      support_details: Include the NVIDIA Attribution diagnosis (verdict, symptom chain, and source logs), node, PCI address, and job end time.
+  technical_details: >-
+    Both active signals must originate on the same node and PCI device, each between job end and 120 seconds after
+    job end (inclusive). Collection and observation windows must admit these post-job records.
+    Producers must explicitly provide a corresponding collection and observation window.
+    The timeout value is matched numerically, not fixed to 10000. The initialization error code is not
+    restricted to -110. Missing timestamps or a missing job end time cannot establish the compound diagnosis.
+    Only matched source records become secondary evidence; the compound symptom retains their original provenance.
+    The two signals establish the compound diagnosis without requiring a QP or device-open failure.
+    The compound rule preserves QP and ibv_open_device failure symptoms and their source evidence, taking
+    precedence over their outcome mappings except for QP failures explicitly attributed to overwritten NCCL parameters.
+    Existing cascade cleanup can still demote generic QP failures to interesting evidence when Slurm node failure,
+    unexpected reboot, or Page Retirement is present.
+    Independent faults such as unexpected reboot, Page Retirement, and RDMA fabric flap retain precedence.
+    Without the compound diagnosis, QP and device-open outcome mappings remain unchanged.
+    An individual component does not independently establish this diagnosis. The classification identifies an unhealthy
+    NIC state, not proof of a firmware software defect, permanent hardware damage, or a particular network role.
+  summary: Correlated mlx5 firmware-initialization and device-initialization failures near job end.
+  signals:
+  - kind: log
+    pattern: 'mlx5_core.*Firmware over \d+ MS in initializing state, aborting'
+    note: Requires the initialization-failure message on the same node and PCI device near job end.
+  - kind: log
+    pattern: 'mlx5_core.*mlx5_init_one failed with error code'
+    note: Requires the firmware-initialization message on the same node and PCI device near job end.
+  related:
+  - ibv-event-device-fatal
+  references:
+  - title: Linux mlx5 driver initialization source
+    url: https://github.com/torvalds/linux/blob/master/drivers/net/ethernet/mellanox/mlx5/core/main.c
+  severity: high
+  verification: verified
+  last_reviewed: 2026-10-16
+- id: irisc-not-responding
+  title: irisc not responding
+  category: distributed_comm
+  likely_owner: infrastructure
+  personas:
+    tenant_sre:
+      title: HCA firmware stopped responding
+      summary: The mlx5 driver reported an unresponsive internal HCA processor.
+      impact: Communication through the affected HCA may fail. The diagnosis maps to Fail InfraSW.
+      action: Ask the infrastructure owner to inspect HCA firmware and driver health.
+      support_details: Include the diagnosis, original health report, node, PCI address, and timestamp.
+  technical_details: >-
+    The explicit mlx5 health report "Health issue observed, irisc not responding" is sufficient
+    to identify this symptom on the reporting node within the normal execution observation window.
+    No initialization-failure pair, QP error, or post-job collection allowance is required.
+    Generic command timeouts alone do not establish this diagnosis. This classification does not
+    identify a particular firmware bug or prove that hardware damage is absent.
+    The diagnosis takes job-wide precedence over QP and device-open outcome mappings while retaining
+    their symptoms and evidence, subject to existing cascade cleanup. Independent faults such as
+    unexpected reboot, Page Retirement, and RDMA fabric flap retain precedence, as does the explicit
+    QP diagnosis for overwritten NCCL parameters. No causal relationship to peer errors is inferred.
+  summary: An explicit mlx5 health report identifies unresponsive HCA firmware.
+  signals:
+  - kind: log
+    pattern: 'mlx5_core.*Health issue observed, irisc not responding'
+    note: The report identifies the affected node and PCI function.
+  references:
+  - title: Linux mlx5 health reporting source
+    url: https://github.com/torvalds/linux/blob/master/drivers/net/ethernet/mellanox/mlx5/core/health.c
+  severity: high
+  verification: verified
+  last_reviewed: 2026-10-20

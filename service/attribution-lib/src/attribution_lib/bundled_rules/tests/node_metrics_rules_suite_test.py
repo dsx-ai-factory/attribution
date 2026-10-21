@@ -100,7 +100,6 @@ def node_metrics_context(attributor_jobinfo, timezone):
     time_interval = TimeInterval(attributor_jobinfo.job_start_time, attributor_jobinfo.job_end_time)
     return InboundContext(
         time_interval=time_interval,
-        resources=AllJobResources,
         source=ObservationSource.NODE_METRICS,
         format=ObservationFormat.ENTRY_TIMESERIES,
         timezone=timezone,
@@ -229,7 +228,6 @@ class TestAttributorIntegration:
         # Create context with wrong format
         wrong_format_context = InboundContext(
             time_interval=TimeInterval(attributor_jobinfo.job_start_time, attributor_jobinfo.job_end_time),
-            resources=AllJobResources,
             source=ObservationSource.NODE_METRICS,
             format=ObservationFormat.STRING_LIST,  # Wrong format
             timezone=node_metrics_context.timezone,

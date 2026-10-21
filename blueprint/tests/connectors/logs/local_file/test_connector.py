@@ -80,6 +80,30 @@ def test_max_bytes_reads_tail(tmp_path):
     assert head not in body
 
 
+def test_max_bytes_jsonl_forwards_trailing_complete_entries(tmp_path):
+    log = tmp_path / "big.jsonl"
+    entries = [{"body": f"entry {i:03d}"} for i in range(100)]
+    log.write_text("".join(json.dumps(entry) + "\n" for entry in entries))
+    conn = LocalFileLogConnector(log_path_templates=["{std_out}"], max_bytes_per_file=100)
+
+    obs = conn.collect(_ctx(tmp_path, str(log)))
+
+    forwarded = json.loads(obs[0]["body"])
+    assert forwarded == entries[-len(forwarded) :]
+    assert len(forwarded) > 0
+
+
+def test_max_bytes_jsonl_keeps_record_starting_exactly_at_cap(tmp_path):
+    log = tmp_path / "big.jsonl"
+    last = json.dumps({"body": "b"}) + "\n"
+    log.write_text(json.dumps({"body": "a"}) + "\n" + last)
+    conn = LocalFileLogConnector(log_path_templates=["{std_out}"], max_bytes_per_file=len(last))
+
+    obs = conn.collect(_ctx(tmp_path, str(log)))
+
+    assert json.loads(obs[0]["body"]) == [{"body": "b"}]
+
+
 def test_max_bytes_smaller_than_file_reads_all(tmp_path):
     log = tmp_path / "small.log"
     log.write_text("short content")
@@ -255,6 +279,74 @@ def test_syslog_warns_when_no_context_node_directories_exist(tmp_path):
     assert obs == []
     matching_warnings = [warning for warning in warnings if "no syslog directories found" in warning]
     assert len(matching_warnings) == 1
+
+
+def test_jsonl_applog_entries_are_forwarded_unchanged(tmp_path):
+    entries = [
+        {"ts": 1777593600000000000, "resources": [{"kind": "node", "hostname": "node-a"}], "body": "xid 79"},
+        {"body": "body only", "extra": [1, 2]},
+        "not an object",
+    ]
+    log = tmp_path / "12345" / "applog.jsonl"
+    log.parent.mkdir()
+    log.write_text("".join(json.dumps(entry) + "\n" for entry in entries) + "  \n")
+    conn = LocalFileLogConnector(log_path_templates=[str(tmp_path / "{job_id}" / "applog.jsonl")])
+
+    obs = conn.collect(_ctx(tmp_path, std_out_template=""))
+
+    assert len(obs) == 1
+    assert json.loads(obs[0]["body"]) == entries
+
+
+def test_syslog_jsonl_path_is_read_without_node_directories(tmp_path):
+    from loguru import logger
+
+    entries = [
+        {
+            "ts": 1781135403000000000,
+            "resources": [{"kind": "node", "hostname": "node-b"}],
+            "body": "node-b kernel: Xid",
+        },
+        {"body": "untimed line"},
+    ]
+    log = tmp_path / "12345" / "syslog.jsonl"
+    log.parent.mkdir()
+    log.write_text("\n".join(json.dumps(entry) for entry in entries))
+    conn = LocalFileLogConnector(log_path_templates=[str(tmp_path / "{job_id}" / "syslog.jsonl")], source=Source.SYSLOG)
+
+    warnings: list[str] = []
+    sink_id = logger.add(lambda msg: warnings.append(str(msg)), level="WARNING")
+    try:
+        obs = conn.collect(_ctx(tmp_path, std_out_template="", nodes=["node-a", "node-b"]))
+    finally:
+        logger.remove(sink_id)
+
+    assert len(obs) == 1
+    assert json.loads(obs[0]["body"]) == entries
+    assert warnings == []
+
+
+def test_jsonl_file_with_non_json_line_is_skipped_with_line_number_warning(tmp_path):
+    from loguru import logger
+
+    log_dir = tmp_path / "logs"
+    log_dir.mkdir()
+    broken = log_dir / "broken.jsonl"
+    broken.write_text('{"body": "first"}\n\n{"body": \n{"body": "fourth"}\nnot json\n')
+    (log_dir / "rank0.log").write_text("plain one")
+    conn = LocalFileLogConnector(log_path_templates=[str(log_dir)])
+
+    warnings: list[str] = []
+    sink_id = logger.add(lambda msg: warnings.append(str(msg)), level="WARNING")
+    try:
+        obs = conn.collect(_ctx(tmp_path, std_out_template=""))
+    finally:
+        logger.remove(sink_id)
+
+    assert [json.loads(o["body"]) for o in obs] == [[{"body": "plain one"}]]
+    assert len(warnings) == 1
+    assert str(broken) in warnings[0]
+    assert "line 3 " in warnings[0]
 
 
 def test_multiple_paths_emit_multiple_observations(tmp_path):
