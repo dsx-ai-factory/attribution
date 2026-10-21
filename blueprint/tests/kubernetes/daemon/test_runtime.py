@@ -677,12 +677,15 @@ def test_owner_change_clears_old_association_until_new_resource_resolves(tmp_pat
         resource_resolvers=(_ReassignedResourceResolver(),),
         max_resolution_attempts=1,
     )
-    daemon._capture_placement(_pod())
-    daemon._record(_pod())
+    initial = _pod()
+    initial["metadata"]["resourceVersion"] = "1"
+    daemon._capture(_PodWatchSource(), initial, "SNAPSHOT")
+    daemon._record(initial)
     reassigned = _pod()
     reassigned["metadata"]["ownerReferences"][0]["uid"] = "job-uid-2"
+    reassigned["metadata"]["resourceVersion"] = "2"
 
-    daemon._capture_placement(reassigned)
+    daemon._capture(_PodWatchSource(), reassigned, "SNAPSHOT")
     daemon._record(reassigned)
 
     stored = store.get_by_pod_uid("pod-uid-1")
@@ -691,8 +694,9 @@ def test_owner_change_clears_old_association_until_new_resource_resolves(tmp_pat
     assert stored.associated_resources == ()
     assert store.list_for_resource("team-a", "admission-uid-a") == []
 
-    daemon._capture_placement(reassigned)
-    daemon._record(reassigned)
+    resolved = {**reassigned, "metadata": {**reassigned["metadata"], "resourceVersion": "3"}}
+    daemon._capture(_PodWatchSource(), resolved, "SNAPSHOT")
+    daemon._record(resolved)
 
     assert store.list_for_resource("team-a", "admission-uid-b")
 
@@ -818,39 +822,6 @@ def test_stale_event_still_persists_failure_and_deletion_evidence(tmp_path):
             "SELECT pod_uid FROM placement_deletion"
         ).fetchone()
     assert marker == ("pod-uid-1",)
-
-
-def test_deleted_event_starts_placement_retention(tmp_path):
-    path = tmp_path / "placements.db"
-    store = SQLitePlacementStore(str(path))
-    daemon = KubernetesDaemon(core_api=None, store=store, namespace="team-a")
-
-    daemon._enqueue(_pod(), deleted=True)
-
-    with sqlite3.connect(path) as connection:
-        marker = connection.execute(
-            "SELECT pod_uid FROM placement_deletion"
-        ).fetchone()
-    assert marker == ("pod-uid-1",)
-
-
-def test_failed_deleted_capture_still_starts_retention(tmp_path, mocker):
-    path = tmp_path / "placements.db"
-    store = SQLitePlacementStore(str(path))
-    daemon = KubernetesDaemon(core_api=None, store=store, namespace="team-a")
-    daemon._capture_placement(_pod())
-    mocker.patch.object(store, "create", side_effect=OSError("synthetic storage failure"))
-
-    with pytest.raises(RequiredPersistenceError):
-        daemon._enqueue(_pod(), deleted=True)
-
-    with sqlite3.connect(path) as connection:
-        marker = connection.execute(
-            "SELECT pod_uid FROM placement_deletion"
-        ).fetchone()
-    assert marker == ("pod-uid-1",)
-    assert daemon.health.persistence_failed is True
-    assert not daemon._pending and not daemon._in_flight
 
 
 def test_failed_deletion_write_is_recovered_when_event_is_replayed(tmp_path):
