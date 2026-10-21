@@ -158,19 +158,24 @@ class _ReassignedResourceResolver:
 class _FailOnEnrichmentStore:
     def __init__(self):
         self.calls = 0
+        self.base = None
 
     def create(self, record):
         self.calls += 1
         if self.calls == 1:
+            self.base = record
             return CreateResult.CREATED
         raise OSError("synthetic storage failure")
+
+    def get_by_pod_uid(self, pod_uid):
+        return self.base
 
 
 def test_records_placement_before_any_resolution(tmp_path):
     store = SQLitePlacementStore(str(tmp_path / "placements.db"))
     daemon = KubernetesDaemon(core_api=None, store=store, namespace="team-a")
 
-    daemon._record(_pod())
+    daemon._capture_placement(_pod())
 
     record = store.get_by_pod_uid("pod-uid-1")
     assert record is not None
@@ -193,9 +198,28 @@ def test_complete_listing_reconciles_absent_placements(mocker):
         "team-a",
         {"pod-uid-1"},
     )
-    queued_pod, deleted, _generation = daemon.items.get_nowait()
+    queued_pod, _generation = daemon.items.get_nowait()
     assert queued_pod == pod
-    assert deleted is False
+
+
+def test_relist_marks_queued_but_now_absent_pod_deleted(tmp_path):
+    path = tmp_path / "placements.db"
+    store = SQLitePlacementStore(str(path))
+    daemon = KubernetesDaemon(core_api=None, store=store, namespace="team-a")
+    daemon._enqueue(_pod())
+    empty_listing = SimpleNamespace(
+        items=[],
+        metadata=SimpleNamespace(resource_version="43"),
+    )
+
+    daemon._enqueue_listing(empty_listing)
+
+    assert store.get_by_pod_uid("pod-uid-1") is not None
+    with sqlite3.connect(path) as connection:
+        marker = connection.execute(
+            "SELECT pod_uid FROM placement_deletion"
+        ).fetchone()
+    assert marker == ("pod-uid-1",)
 
 
 def test_retains_owner_when_optional_scheduler_resolution_exhausts(tmp_path):
@@ -209,6 +233,7 @@ def test_retains_owner_when_optional_scheduler_resolution_exhausts(tmp_path):
         max_resolution_attempts=1,
     )
 
+    daemon._capture_placement(_pod())
     daemon._record(_pod())
 
     record = store.get_by_pod_uid("pod-uid-1")
@@ -227,11 +252,14 @@ def test_reassigned_owner_refreshes_controller_reference_for_later_fallback(tmp_
         owner_resolver=resolver,
     )
     wait = mocker.patch.object(daemon.stop_event, "wait")
+    daemon._capture_placement(_pod())
     daemon._record(_pod())
     reassigned = _pod()
     reassigned["metadata"]["ownerReferences"][0]["uid"] = "job-uid-2"
 
+    daemon._capture_placement(reassigned)
     daemon._record(reassigned)
+    daemon._capture_placement(reassigned)
     daemon._record(reassigned)
 
     stored = store.get_by_pod_uid("pod-uid-1")
@@ -251,10 +279,12 @@ def test_owner_change_clears_old_association_until_new_resource_resolves(tmp_pat
         resource_resolvers=(_ReassignedResourceResolver(),),
         max_resolution_attempts=1,
     )
+    daemon._capture_placement(_pod())
     daemon._record(_pod())
     reassigned = _pod()
     reassigned["metadata"]["ownerReferences"][0]["uid"] = "job-uid-2"
 
+    daemon._capture_placement(reassigned)
     daemon._record(reassigned)
 
     stored = store.get_by_pod_uid("pod-uid-1")
@@ -263,6 +293,7 @@ def test_owner_change_clears_old_association_until_new_resource_resolves(tmp_pat
     assert stored.associated_resources == ()
     assert store.list_for_resource("team-a", "admission-uid-a") == []
 
+    daemon._capture_placement(reassigned)
     daemon._record(reassigned)
 
     assert store.list_for_resource("team-a", "admission-uid-b")
@@ -355,7 +386,9 @@ def test_stale_event_still_persists_failure_and_deletion_evidence(tmp_path):
     pod["status"]["reason"] = "NodeLost"
     daemon._latest_generation["pod-uid-1"] = 2
 
-    daemon._record(pod, deleted=True, generation=1)
+    daemon._capture_placement(pod)
+    daemon._mark_deleted("pod-uid-1")
+    daemon._record(pod, generation=1)
 
     assert store.get_by_pod_uid("pod-uid-1").node_failure_reason == "NodeLost"
     with sqlite3.connect(path) as connection:
@@ -370,7 +403,7 @@ def test_deleted_event_starts_placement_retention(tmp_path):
     store = SQLitePlacementStore(str(path))
     daemon = KubernetesDaemon(core_api=None, store=store, namespace="team-a")
 
-    daemon._record(_pod(), deleted=True)
+    daemon._enqueue(_pod(), deleted=True)
 
     with sqlite3.connect(path) as connection:
         marker = connection.execute(
@@ -425,6 +458,7 @@ def test_owner_enrichment_write_failure_does_not_escape_or_kill_recording():
         owner_resolver=_OwnerResolver(),
     )
 
+    daemon._capture_placement(_pod())
     daemon._record(_pod())
 
     assert store.calls == 2
@@ -439,8 +473,8 @@ def test_worker_survives_unexpected_recording_failure(tmp_path):
     daemon.stop_event.set()
     calls = 0
 
-    def fail_once(_pod, *, deleted=False, generation=None):
-        del deleted, generation
+    def fail_once(_pod, *, generation=None):
+        del generation
         nonlocal calls
         calls += 1
         if calls == 1:
