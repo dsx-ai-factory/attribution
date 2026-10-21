@@ -1450,6 +1450,18 @@ outcome_symptom(
     doc="python-exception",
 )
 
+# The compiler failure is specific evidence, but does not establish whether
+# application code, the toolchain, or node-local files caused it.
+# Prefer it over a peer closure attributed to the same node.
+outcome_symptom(
+    "Triton/Inductor JIT C-compilation failure",
+    outcome="Fail MultiCategory",
+    priority=OutcomePriority.LOW,
+    doc="jit-c-compilation-failure",
+    hw_cause="Underlying cause of JIT C-compilation failure is undetermined.",
+    cascade_discards=("Connection closed",),
+)
+
 outcome_symptom(
     "Missing key in checkpoint",
     outcome="Fail User",
