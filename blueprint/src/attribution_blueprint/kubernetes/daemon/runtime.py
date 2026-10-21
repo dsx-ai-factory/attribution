@@ -183,7 +183,12 @@ class KubernetesDaemon:
         generation: int | None = None,
     ) -> None:
         metadata = pod.get("metadata") or {}
-        base = self.store.get_by_pod_uid(metadata.get("uid"))
+        try:
+            base = self.store.get_by_pod_uid(metadata.get("uid"))
+        except Exception:
+            logger.exception("failed to read stored placement before enrichment")
+            failure_reason = pod_node_failure_reason(pod) or _pod_container_exit_reason(pod)
+            base = PlacementRecord.for_pod(pod, node_failure_reason=failure_reason)
         if base is None:
             logger.error(
                 f"cannot enrich Pod {self.namespace}/{metadata.get('name')}: "
