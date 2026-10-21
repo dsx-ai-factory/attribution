@@ -144,7 +144,7 @@ class KubernetesDaemon:
             self.health.update(queue_saturated=False)
         except queue.Full:
             self._complete_generation(pod_uid, generation)
-            self.health.update(queue_saturated=True)
+            self.health.update(queue_saturated=self.items.full())
             logger.error(
                 "KubernetesDaemon enrichment queue is saturated; "
                 "placement was persisted but owner/scheduler enrichment was not queued"
@@ -155,7 +155,9 @@ class KubernetesDaemon:
             try:
                 pod, generation = self.items.get(timeout=0.5)
             except queue.Empty:
+                self.health.update(queue_saturated=False)
                 continue
+            self.health.update(queue_saturated=False)
             try:
                 self._record(pod, generation=generation)
             except Exception:

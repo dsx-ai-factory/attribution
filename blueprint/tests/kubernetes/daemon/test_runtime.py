@@ -1,6 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
+import queue
 import sqlite3
 import threading
 from types import SimpleNamespace
@@ -279,6 +280,35 @@ def test_saturated_enrichment_queue_does_not_lose_placement(tmp_path):
     assert record is not None
     assert record.node_name == "node-a"
     assert daemon.health.queue_saturated is True
+
+    daemon.stop_event.set()
+    daemon._worker()
+
+    assert daemon.health.queue_saturated is False
+
+
+def test_concurrent_dequeue_prevents_stale_saturation(tmp_path, mocker):
+    store = SQLitePlacementStore(str(tmp_path / "placements.db"))
+    daemon = KubernetesDaemon(core_api=None, store=store, namespace="team-a")
+    mocker.patch.object(daemon.items, "put_nowait", side_effect=queue.Full)
+    mocker.patch.object(daemon.items, "full", return_value=False)
+
+    daemon._enqueue(_pod())
+
+    assert daemon.health.queue_saturated is False
+
+
+def test_empty_worker_clears_stale_saturation(tmp_path, mocker):
+    store = SQLitePlacementStore(str(tmp_path / "placements.db"))
+    daemon = KubernetesDaemon(core_api=None, store=store, namespace="team-a")
+    daemon.health.update(queue_saturated=True)
+    daemon.stop_event = mocker.Mock()
+    daemon.stop_event.is_set.side_effect = [False, True]
+    mocker.patch.object(daemon.items, "get", side_effect=queue.Empty)
+
+    daemon._worker()
+
+    assert daemon.health.queue_saturated is False
 
 
 def test_pending_scheduler_resolution_retries_only_on_later_pod_events(tmp_path):
