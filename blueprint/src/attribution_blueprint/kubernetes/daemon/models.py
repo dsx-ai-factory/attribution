@@ -52,6 +52,7 @@ class PlacementRecord:
         self,
         *,
         scheduled_at: str | None = None,
+        owner_references: tuple[ResourceIdentity, ...] | None = None,
         owner: ResourceIdentity | None = None,
         associated_resources: tuple[ResourceIdentity, ...] = (),
         node_failure_reason: str | None = None,
@@ -61,6 +62,7 @@ class PlacementRecord:
         return replace(
             self,
             scheduled_at=self.scheduled_at or scheduled_at,
+            owner_references=self.owner_references if owner_references is None else owner_references,
             owner=owner or self.owner,
             associated_resources=tuple(
                 sorted(
