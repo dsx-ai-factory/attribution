@@ -16462,3 +16462,35 @@ failures:
   severity: high
   verification: verified
   last_reviewed: 2026-10-16
+- id: irisc-not-responding
+  title: irisc not responding
+  category: distributed_comm
+  likely_owner: infrastructure
+  personas:
+    tenant_sre:
+      title: HCA firmware stopped responding
+      summary: The mlx5 driver reported an unresponsive internal HCA processor.
+      impact: Communication through the affected HCA may fail. The diagnosis maps to Fail InfraSW.
+      action: Ask the infrastructure owner to inspect HCA firmware and driver health.
+      support_details: Include the diagnosis, original health report, node, PCI address, and timestamp.
+  technical_details: >-
+    The explicit mlx5 health report "Health issue observed, irisc not responding" is sufficient
+    to identify this symptom on the reporting node within the normal execution observation window.
+    No initialization-failure pair, QP error, or post-job collection allowance is required.
+    Generic command timeouts alone do not establish this diagnosis. This classification does not
+    identify a particular firmware bug or prove that hardware damage is absent.
+    The diagnosis takes job-wide precedence over QP and device-open outcome mappings while retaining
+    their symptoms and evidence, subject to existing cascade cleanup. Independent faults such as
+    unexpected reboot, Page Retirement, and RDMA fabric flap retain precedence, as does the explicit
+    QP diagnosis for overwritten NCCL parameters. No causal relationship to peer errors is inferred.
+  summary: An explicit mlx5 health report identifies unresponsive HCA firmware.
+  signals:
+  - kind: log
+    pattern: 'mlx5_core.*Health issue observed, irisc not responding'
+    note: The report identifies the affected node and PCI function.
+  references:
+  - title: Linux mlx5 health reporting source
+    url: https://github.com/torvalds/linux/blob/master/drivers/net/ethernet/mellanox/mlx5/core/health.c
+  severity: high
+  verification: verified
+  last_reviewed: 2026-10-20

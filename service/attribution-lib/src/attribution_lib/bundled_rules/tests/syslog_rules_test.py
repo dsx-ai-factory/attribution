@@ -1628,3 +1628,45 @@ class TestSyslogRules:
                 match_interesting(node_attr, node, symptom, rule)
             case _:
                 raise UnknownAttr(attr)
+
+
+@pytest.mark.parametrize("offset_seconds,detected", [(1800, True), (-60, False), (3660, False)])
+def test_irisc_not_responding_execution_window(
+    request, sys_tst_bldr, simple_job_factory, offset_seconds, detected
+):
+    job_info = simple_job_factory(
+        state="FAILED",
+        framework="pytorch",
+        ranks_per_node=4,
+        start_timestamp=1746000000,
+        end_timestamp=1746003600,
+        nodes=["test-node-001", "test-node-002"],
+    )
+    line = (
+        "mlx5_core 0000:03:00.3: print_health_info:504:(pid 0): "
+        "Health issue observed, irisc not responding, severity(3) ERROR:"
+    )
+    entry = make_syslog_entry(
+        body=line,
+        node="test-node-002",
+        timestamp_ns=int((job_info.job_start_time.timestamp() + offset_seconds) * 1e9),
+    )
+    result = sys_tst_bldr(job_info, [entry], stream_id=request.node.name)
+    bad_nodes = core.CalcBadNodesAttributionResult()
+    bad_nodes.my_bad_nodes = result.get_node_attributions()
+    attribution = core.attribute(
+        event_stream=result.event_stream,
+        job_info=result.job_info,
+        bad_node_result=bad_nodes,
+        extract_job_metadata_from_logfile=False,
+    )
+    symptom = "irisc not responding"
+    assert (symptom in attribution.symptoms) == detected
+    if detected:
+        outcome = attribution.outcome_attr.value()
+        assert outcome.outcome == "Fail InfraSW"
+        assert outcome.root_cause_symptom == symptom
+        assert outcome.doc == "irisc-not-responding"
+        nodes = attribution.bad_nodes_attr.my_bad_nodes
+        assert {node for node, group in nodes.items() if symptom in group.attributions} == {"test-node-002"}
+        assert {source.datum for source in nodes["test-node-002"].attributions[symptom]} == {line}
