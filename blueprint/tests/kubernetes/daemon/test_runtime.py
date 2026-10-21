@@ -287,6 +287,25 @@ def test_saturated_enrichment_queue_does_not_lose_placement(tmp_path):
     assert daemon.health.queue_saturated is False
 
 
+def test_full_queue_keeps_queued_generation_valid(tmp_path):
+    store = SQLitePlacementStore(str(tmp_path / "placements.db"))
+    daemon = KubernetesDaemon(
+        core_api=None,
+        store=store,
+        namespace="team-a",
+        owner_resolver=_OwnerResolver(),
+        queue_size=1,
+    )
+    daemon._enqueue(_pod())
+
+    daemon._enqueue(_pod())
+
+    assert daemon.health.queue_saturated is True
+    daemon.stop_event.set()
+    daemon._worker()
+    assert store.get_by_pod_uid("pod-uid-1").owner.uid == "job-uid-1"
+
+
 def test_concurrent_dequeue_prevents_stale_saturation(tmp_path, mocker):
     store = SQLitePlacementStore(str(tmp_path / "placements.db"))
     daemon = KubernetesDaemon(core_api=None, store=store, namespace="team-a")

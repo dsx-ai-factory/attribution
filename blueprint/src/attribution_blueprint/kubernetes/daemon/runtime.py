@@ -136,19 +136,19 @@ class KubernetesDaemon:
         if not captured:
             return
         generation = next(_WORK_GENERATIONS)
-        if pod_uid:
-            with self._generation_lock:
-                self._latest_generation[pod_uid] = generation
         try:
-            self.items.put_nowait((pod, generation))
-            self.health.update(queue_saturated=False)
+            with self._generation_lock:
+                self.items.put_nowait((pod, generation))
+                if pod_uid:
+                    self._latest_generation[pod_uid] = generation
         except queue.Full:
-            self._complete_generation(pod_uid, generation)
             self.health.update(queue_saturated=self.items.full())
             logger.error(
                 "KubernetesDaemon enrichment queue is saturated; "
                 "placement was persisted but owner/scheduler enrichment was not queued"
             )
+            return
+        self.health.update(queue_saturated=False)
 
     def _worker(self) -> None:
         while not self.stop_event.is_set() or not self.items.empty():
@@ -189,7 +189,7 @@ class KubernetesDaemon:
             base = self.store.get_by_pod_uid(metadata.get("uid"))
         except Exception:
             logger.exception("failed to read stored placement before enrichment")
-            failure_reason = pod_node_failure_reason(pod) or _pod_container_exit_reason(pod)
+            failure_reason = pod_node_failure_reason(pod) or pod_container_exit_reason(pod)
             base = PlacementRecord.for_pod(pod, node_failure_reason=failure_reason)
         if base is None:
             logger.error(
