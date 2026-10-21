@@ -338,10 +338,12 @@ def _stored_owner_matches_pod(record: PlacementRecord, pod: dict) -> bool:
     if owner.kind == "Job":
         return owner.uid == controller_uid
     if owner.kind == "JobSet":
-        return any(
-            reference.kind == "Job" and reference.uid == controller_uid
+        job_references = [
+            reference
             for reference in record.owner_references
-        )
+            if reference.kind == "Job"
+        ]
+        return len(job_references) == 1 and job_references[0].uid == controller_uid
     return False
 
 

@@ -7,7 +7,10 @@ from types import SimpleNamespace
 
 from attribution_blueprint.kubernetes.daemon.models import PlacementRecord, ResourceIdentity
 from attribution_blueprint.kubernetes.daemon.resolvers import ResolutionPending
-from attribution_blueprint.kubernetes.daemon.runtime import KubernetesDaemon
+from attribution_blueprint.kubernetes.daemon.runtime import (
+    KubernetesDaemon,
+    _stored_owner_matches_pod,
+)
 from attribution_blueprint.kubernetes.daemon.sqlite_store import SQLitePlacementStore
 from attribution_blueprint.kubernetes.daemon.store import CreateResult
 
@@ -298,6 +301,27 @@ def test_reassigned_owner_refreshes_controller_reference_for_later_fallback(tmp_
     wait.assert_not_called()
     assert stored.owner.uid == "jobset-uid-1"
     assert stored.owner_references[0].uid == "job-uid-2"
+
+
+def test_jobset_cache_rejects_ambiguous_stored_job_references():
+    original = _pod()
+    job_a = ResourceIdentity("batch/v1", "Job", "team-a", "trainer-a", "job-uid-a")
+    job_b = ResourceIdentity("batch/v1", "Job", "team-a", "trainer-b", "job-uid-b")
+    jobset = ResourceIdentity(
+        "jobset.x-k8s.io/v1alpha2",
+        "JobSet",
+        "team-a",
+        "training",
+        "jobset-uid-1",
+    )
+    record = PlacementRecord.for_pod(original).enriched(
+        owner_references=(job_a, job_b),
+        owner=jobset,
+    )
+    current = _pod()
+    current["metadata"]["ownerReferences"][0]["uid"] = "job-uid-b"
+
+    assert _stored_owner_matches_pod(record, current) is False
 
 
 def test_owner_change_clears_old_association_until_new_resource_resolves(tmp_path):
