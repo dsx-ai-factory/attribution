@@ -409,6 +409,27 @@ def test_missing_generation_tracking_rejects_enrichment_write(tmp_path):
     assert store.get_by_pod_uid("pod-uid-1") is None
 
 
+def test_failed_capture_preserves_earlier_queued_generation(tmp_path, mocker):
+    store = SQLitePlacementStore(str(tmp_path / "placements.db"))
+    daemon = KubernetesDaemon(
+        core_api=None,
+        store=store,
+        namespace="team-a",
+        owner_resolver=_OwnerResolver(),
+    )
+    daemon._enqueue(_pod())
+    queued_generation = daemon._latest_generation["pod-uid-1"]
+    create = mocker.patch.object(store, "create", side_effect=OSError("synthetic storage failure"))
+
+    daemon._enqueue(_pod())
+
+    assert daemon._latest_generation["pod-uid-1"] == queued_generation
+    mocker.stop(create)
+    daemon.stop_event.set()
+    daemon._worker()
+    assert store.get_by_pod_uid("pod-uid-1").owner.uid == "job-uid-1"
+
+
 def test_stale_event_still_persists_failure_and_deletion_evidence(tmp_path):
     path = tmp_path / "placements.db"
     store = SQLitePlacementStore(str(path))
