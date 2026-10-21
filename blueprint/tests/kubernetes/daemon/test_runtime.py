@@ -797,12 +797,16 @@ def test_failed_capture_preserves_earlier_queued_generation(tmp_path, mocker):
         namespace="team-a",
         owner_resolver=_OwnerResolver(),
     )
-    daemon._enqueue(_pod())
+    first = _pod()
+    first["metadata"]["resourceVersion"] = "10"
+    second = _pod()
+    second["metadata"]["resourceVersion"] = "11"
+    daemon._capture(_PodWatchSource(), first, "SNAPSHOT")
     queued_generation = daemon._latest_generation["pod-uid-1"]
     create = mocker.patch.object(store, "create", side_effect=OSError("synthetic storage failure"))
 
     with pytest.raises(RequiredPersistenceError):
-        daemon._enqueue(_pod())
+        daemon._capture(_PodWatchSource(), second, "SNAPSHOT")
 
     assert daemon._latest_generation["pod-uid-1"] == queued_generation
     mocker.stop(create)
