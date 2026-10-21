@@ -580,11 +580,14 @@ def test_latest_pod_snapshot_always_wins_without_controller_tracking(tmp_path):
         owner_resolver=resolver,
         queue_size=1,
     )
-    daemon._enqueue(_pod())
+    first = _pod()
+    first["metadata"]["resourceVersion"] = "10"
     reassigned = _pod()
     reassigned["metadata"]["ownerReferences"][0].update({"name": "trainer-2", "uid": "job-uid-2"})
+    reassigned["metadata"]["resourceVersion"] = "11"
+    daemon._capture(_PodWatchSource(), first, "SNAPSHOT")
 
-    daemon._enqueue(reassigned)
+    daemon._capture(_PodWatchSource(), reassigned, "SNAPSHOT")
 
     # Updating an already-tracked Pod UID never consumes extra capacity.
     assert daemon._pending["pod-uid-1"][0] == reassigned
@@ -714,10 +717,12 @@ def test_stale_owner_write_cannot_overwrite_newer_event(tmp_path):
     )
     older = _pod()
     newer = _pod()
+    older["metadata"]["resourceVersion"] = "10"
+    newer["metadata"]["resourceVersion"] = "11"
     newer["metadata"]["ownerReferences"][0].update(
         {"name": "trainer-2", "uid": "job-uid-2"}
     )
-    daemon._enqueue(older)
+    daemon._capture(_PodWatchSource(), older, "SNAPSHOT")
     workers = [threading.Thread(target=daemon._worker) for _ in range(2)]
     for worker in workers:
         worker.start()
@@ -725,7 +730,7 @@ def test_stale_owner_write_cannot_overwrite_newer_event(tmp_path):
     assert resolver.started.wait(timeout=2)
     # The newer event for the same Pod UID cannot start on the other worker
     # while the older one is still in flight; it only runs after release.
-    daemon._enqueue(newer)
+    daemon._capture(_PodWatchSource(), newer, "SNAPSHOT")
     resolver.release.set()
     assert store.newer_owner_written.wait(timeout=2)
     daemon.stop_event.set()
@@ -749,16 +754,18 @@ def test_stale_resource_write_cannot_overwrite_newer_event(tmp_path):
     )
     older = _pod()
     older["metadata"]["annotations"] = {"event": "old"}
+    older["metadata"]["resourceVersion"] = "10"
     newer = _pod()
     newer["metadata"]["annotations"] = {"event": "new"}
-    daemon._enqueue(older)
+    newer["metadata"]["resourceVersion"] = "11"
+    daemon._capture(_PodWatchSource(), older, "SNAPSHOT")
     first = threading.Thread(target=daemon._worker)
     first.start()
     assert resolver.started.wait(timeout=2)
 
     # The newer event for the same Pod UID cannot start on the second worker
     # while the older one is still in flight; it only runs after release.
-    daemon._enqueue(newer)
+    daemon._capture(_PodWatchSource(), newer, "SNAPSHOT")
     second = threading.Thread(target=daemon._worker)
     second.start()
     resolver.release.set()
@@ -1217,6 +1224,16 @@ def test_capture_journals_deletion_before_enqueuing_bound_pod(tmp_path):
     observation = store.list_observations_for_uid("cluster-a", "team-a", "pod-uid-1")[0]
     assert observation.event_type == "DELETED"
     assert observation.source_timestamp == "2026-10-14T10:00:00Z"
+    # Placement is captured synchronously, before enrichment is queued, so it
+    # is retained even though this bound Pod is already being deleted.
+    record = store.get_by_pod_uid("pod-uid-1")
+    assert record is not None
+    assert record.node_name == "node-a"
+    with sqlite3.connect(tmp_path / "placements.db") as connection:
+        marker = connection.execute(
+            "SELECT pod_uid FROM placement_deletion"
+        ).fetchone()
+    assert marker == ("pod-uid-1",)
     assert daemon._pending["pod-uid-1"][0]["metadata"]["uid"] == "pod-uid-1"
 
 
