@@ -712,15 +712,20 @@ def test_reassigned_owner_refreshes_controller_reference_for_later_fallback(tmp_
         owner_resolver=resolver,
     )
     wait = mocker.patch.object(daemon.stop_event, "wait")
-    daemon._capture_placement(_pod())
-    daemon._record(_pod())
+
+    initial = _pod()
+    initial["metadata"]["resourceVersion"] = "1"
+    daemon._capture(_PodWatchSource(), initial, "SNAPSHOT")
+    daemon._record(initial)
     reassigned = _pod()
     reassigned["metadata"]["ownerReferences"][0]["uid"] = "job-uid-2"
+    reassigned["metadata"]["resourceVersion"] = "2"
 
-    daemon._capture_placement(reassigned)
+    daemon._capture(_PodWatchSource(), reassigned, "SNAPSHOT")
     daemon._record(reassigned)
-    daemon._capture_placement(reassigned)
-    daemon._record(reassigned)
+    pending = {**reassigned, "metadata": {**reassigned["metadata"], "resourceVersion": "3"}}
+    daemon._capture(_PodWatchSource(), pending, "SNAPSHOT")
+    daemon._record(pending)
 
     stored = store.get_by_pod_uid("pod-uid-1")
     assert resolver.calls == 3
