@@ -6,6 +6,7 @@ from __future__ import annotations
 import queue
 import random
 import threading
+from itertools import count
 
 from loguru import logger
 
@@ -21,6 +22,8 @@ from attribution_blueprint.kubernetes.daemon.resolvers import (
 )
 from attribution_blueprint.kubernetes.daemon.store import CreateResult, PlacementStore
 from attribution_blueprint.kubernetes.helpers import pod_node_failure_reason
+
+_WORK_GENERATIONS = count()
 
 
 class KubernetesDaemon:
@@ -51,9 +54,11 @@ class KubernetesDaemon:
         self.watch_timeout_seconds = watch_timeout_seconds
         self.max_resolution_attempts = max_resolution_attempts
         self.health = HealthState()
-        self.items: queue.Queue[tuple[dict, bool]] = queue.Queue(maxsize=queue_size)
+        self.items: queue.Queue[tuple[dict, bool, int]] = queue.Queue(maxsize=queue_size)
         self.worker_count = workers
         self.stop_event = threading.Event()
+        self._latest_generation: dict[str, int] = {}
+        self._generation_lock = threading.Lock()
 
     def run(self) -> None:
         from kubernetes.client.exceptions import ApiException
@@ -124,23 +129,29 @@ class KubernetesDaemon:
         # step 3. The placement foundation remains bound-Pod-only for now.
         if not (pod.get("spec") or {}).get("nodeName"):
             return
+        pod_uid = (pod.get("metadata") or {}).get("uid")
+        generation = next(_WORK_GENERATIONS)
+        if pod_uid:
+            with self._generation_lock:
+                self._latest_generation[pod_uid] = generation
         while not self.stop_event.is_set():
             try:
-                self.items.put((pod, deleted), timeout=0.5)
+                self.items.put((pod, deleted, generation), timeout=0.5)
                 self.health.update(queue_saturated=False)
                 return
             except queue.Full:
                 self.health.update(queue_saturated=True)
                 logger.error("KubernetesDaemon work queue is saturated; readiness is failing")
+        self._complete_generation(pod_uid, generation)
 
     def _worker(self) -> None:
         while not self.stop_event.is_set() or not self.items.empty():
             try:
-                pod, deleted = self.items.get(timeout=0.5)
+                pod, deleted, generation = self.items.get(timeout=0.5)
             except queue.Empty:
                 continue
             try:
-                self._record(pod, deleted=deleted)
+                self._record(pod, deleted=deleted, generation=generation)
             except Exception:
                 # A malformed observation or an unexpected enrichment bug
                 # must never terminate a recording worker.
@@ -149,17 +160,36 @@ class KubernetesDaemon:
             else:
                 self.health.update(recording_failed=False)
             finally:
+                pod_uid = (pod.get("metadata") or {}).get("uid")
+                self._complete_generation(pod_uid, generation)
                 self.items.task_done()
 
-    def _record(self, pod: dict, *, deleted: bool = False) -> None:
+    def _complete_generation(self, pod_uid: str | None, generation: int) -> None:
+        if pod_uid:
+            with self._generation_lock:
+                if self._latest_generation.get(pod_uid) == generation:
+                    del self._latest_generation[pod_uid]
+
+    def _record(
+        self,
+        pod: dict,
+        *,
+        deleted: bool = False,
+        generation: int | None = None,
+    ) -> None:
         pod_uid = (pod.get("metadata") or {}).get("uid")
         try:
-            self._record_placement(pod)
+            self._record_placement(pod, generation=generation)
         finally:
             if deleted and pod_uid:
                 self._mark_deleted(pod_uid)
 
-    def _record_placement(self, pod: dict) -> None:
+    def _record_placement(
+        self,
+        pod: dict,
+        *,
+        generation: int | None = None,
+    ) -> None:
         failure_reason = pod_node_failure_reason(pod) or _pod_container_exit_reason(pod)
         base = PlacementRecord.for_pod(pod, node_failure_reason=failure_reason)
         result = self._persist(base, "scheduler-neutral Pod placement")
@@ -207,7 +237,11 @@ class KubernetesDaemon:
 
         assert owner is not None
         owned = base.enriched(owner=owner, node_failure_reason=failure_reason)
-        owner_result = self._persist(owned, "Pod owner enrichment")
+        owner_result = self._persist_enrichment(
+            owned,
+            "Pod owner enrichment",
+            generation,
+        )
         if owner_result is None:
             return
         if owner_result != CreateResult.DUPLICATE:
@@ -220,7 +254,11 @@ class KubernetesDaemon:
                 try:
                     resources = resolver.resolve(pod, owner)
                     enriched = enriched.enriched(associated_resources=resources)
-                    resource_result = self._persist(enriched, f"resources from {resolver_name}")
+                    resource_result = self._persist_enrichment(
+                        enriched,
+                        f"resources from {resolver_name}",
+                        generation,
+                    )
                     if resource_result is None:
                         break
                     if resource_result != CreateResult.DUPLICATE:
@@ -243,6 +281,19 @@ class KubernetesDaemon:
                         "scheduler-neutral evidence was retained"
                     )
                     break
+
+    def _persist_enrichment(
+        self,
+        record: PlacementRecord,
+        operation: str,
+        generation: int | None,
+    ) -> CreateResult | None:
+        if generation is None:
+            return self._persist(record, operation)
+        with self._generation_lock:
+            if self._latest_generation.get(record.pod_uid) != generation:
+                return None
+            return self._persist(record, operation)
 
     def _persist(self, record: PlacementRecord, operation: str) -> CreateResult | None:
         try:
