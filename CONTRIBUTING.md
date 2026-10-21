@@ -193,6 +193,31 @@ Pull requests are squash-merged, so the PR title becomes the commit subject on `
 - Mark a removed or incompatible public API with `!` and add a `BREAKING CHANGE:` footer to the PR body that says what callers must change.
 - The type signals the version bump for the next release of each touched component: `!` is major, `feat` is minor, `fix` is patch, and other types do not bump. A component still at `0.y.z` shifts each bump down one place: `!` is minor, and `feat` and `fix` are patch.
 
+## Preview the published documentation
+
+The pages listed in `docs/index.yml` are published as a [Fern](https://buildwithfern.com) site. The interactive walkthrough in `docs/attribution-tour/` and `docs/github-pages.md` are not part of it.
+
+Install the Fern CLI with `npm install -g fern-api@latest`. The CLI is intentionally not pinned. Then run these from the repository root, the same checks that `Fern Check` runs on pull requests:
+
+```bash
+python3 tools/check-docs-mdx --exclude 'docs/attribution-tour/*' --exclude 'docs/github-pages.md' docs fern
+python3 tools/check-docs-paths --exclude 'docs/attribution-tour/*' --exclude 'docs/github-pages.md' --allow '../docs/index.yml' docs fern
+fern check
+fern docs md check
+fern docs broken-links
+```
+
+To preview the site locally, run `fern docs dev`. It needs network access to fetch the shared theme and serves the pages under `/attribution`, for example `/attribution/get-started/overview`.
+
+Keep these rules in mind when editing a published page:
+
+- Fern compiles pages as MDX, so a bare `{`, a `<digit`, an HTML comment, or an unclosed `<img>` in prose fails the build. `tools/check-docs-mdx` reports these.
+- A link to a file outside `docs/` must be an absolute GitHub URL. A relative link works on GitHub but leads to a missing page on the published site, and `fern docs broken-links` does not report it.
+- Keep every file path inside `docs/`. Fern reads any file a page names, such as the `src` of a `Code` or `Markdown` component, a markdown image, or a `path` in `docs/index.yml`, and it accepts `../` and absolute paths. The publish job runs with a repository secret in its environment, so a page that reaches outside `docs/` could expose it. `tools/check-docs-paths` rejects these paths in `docs/` and `fern/`, along with symbolic links. The one path it allows to leave its directory is the `../docs/index.yml` entry in `fern/docs.yml`. It also rejects YAML it cannot read as plain `key: value` lines, such as quoted keys, block scalars, and multi-line values, so write navigation entries in that plain form. `Fern Check` and the publish job run it.
+- A new page needs an entry in `docs/index.yml`.
+
+A pull request from a branch in this repository that changes the published pages gets a preview link in a comment. Pull requests from forks do not get a preview, because the preview build runs with a repository secret. Merging a change to the published pages, to `fern/`, or to the publish workflow itself into `main` publishes the site. A merge that touches none of these does not.
+
 ## Review interactive documentation
 
 The attribution walkthrough is a Slidev application published through GitHub

@@ -39,7 +39,6 @@ from attribution_lib.observation.inbound import (
     Format as ObservationFormat,
 )
 from attribution_lib.observation.processing import BodyFallbacks
-from attribution_lib.resources.resource_set import serialize_resource_set
 
 # Re-export types so existing callers that import from here keep working
 __all__ = [
@@ -108,18 +107,11 @@ def compute_data_fingerprint(
     indices = _sample_indices(len(entries))
     sample_hashes = tuple(_hash_entry(entries[i]) for i in indices)
     if extraction_context is not None:
-        serialized_resources = serialize_resource_set(extraction_context.resources)
-        resources: Any
-        if isinstance(serialized_resources, str):
-            resources = serialized_resources
-        else:
-            resources = [resource.model_dump(mode="json") for resource in serialized_resources]
         time_start = extraction_context.time_interval.start
         time_end = extraction_context.time_interval.end
         context_fields: dict[str, Any] = {
             "format": extraction_context.format.value,
             "pre_filtered": extraction_context.pre_filtered,
-            "resources": resources,
             "source": extraction_context.source.value,
             "time_end": time_end.isoformat() if time_end is not None else None,
             "time_start": time_start.isoformat() if time_start is not None else None,

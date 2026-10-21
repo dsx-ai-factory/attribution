@@ -13,7 +13,6 @@ from attribution_lib.observation.inbound import (
     Source as ObservationSource,
     TimeInterval,
 )
-from attribution_lib.resources.resource_set import AllJobResources
 
 # ---------------------------------------------------------------------------
 # End-to-end test through the Attributor
@@ -51,7 +50,6 @@ class TestCspEventIngestion:
         time_interval = TimeInterval(csp_job_info.job_start_time, csp_job_info.job_end_time)
         return InboundContext(
             time_interval=time_interval,
-            resources=AllJobResources,
             source=ObservationSource.CSP_EVENT,
             format=ObservationFormat.ENTRY_TIMESERIES,
             timezone=timezone,

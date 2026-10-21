@@ -53,6 +53,11 @@ reviews:
       instructions: |
         - Keep public documentation synchronized with API behavior, configuration, taxonomy, and supported capability boundaries.
         - Do not include credentials, internal endpoints, usernames, proprietary identifiers, or other sensitive environment data.
+        - Pages listed in docs/index.yml are published through Fern. A link from one of those pages to a file outside docs/ must be an absolute GitHub URL, because a relative link resolves to a missing page on the published site and fern docs broken-links does not report it.
+
+    - path: ".github/workflows/*fern*.yml"
+      instructions: |
+        - Installing the Fern CLI with npm install -g fern-api@latest is intentional. Fern has no LTS channel and the NVIDIA global theme tracks the latest CLI. Do not recommend pinning the Fern CLI version.
 
     - path: "**/tests/**"
       instructions: |

@@ -109,7 +109,6 @@ def configured_node_domain_resolver(monkeypatch):
 class DummyInbound:
     def __init__(self):
         self.time_interval = 0
-        self.resources = None
         self.source = None
         self.format = None
         self.timezone = ZoneInfo("UTC")

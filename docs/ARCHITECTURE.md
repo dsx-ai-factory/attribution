@@ -71,13 +71,13 @@ flowchart TD
 ```
 
 Proposed extensions are documented separately. See the
-[Kueue Pod placement recorder reference](../blueprint/src/attribution_blueprint/connectors/execution_contexts/kueue/pod_placement/recorder/docs/README.md)
+[Kueue Pod placement recorder reference](https://github.com/dsx-ai-factory/attribution/blob/main/blueprint/src/attribution_blueprint/connectors/execution_contexts/kueue/pod_placement/recorder/docs/README.md)
 for durable Pod-to-node placement before post-hoc Kueue attribution.
 
 ## End-to-end flow for one workload
 
 1. **Discover.** The Blueprint's execution-context adapter (Slurm shells to `sacct`, Kueue shells to `kubectl`, Static hand-feeds one workload) returns one or more `ExecutionContext` objects.
-2. **Collect.** For each context, every configured log and metric collector runs `collect(ctx)` and returns zero or more `Observation` objects. Each `Observation` carries a `Source` enum value (`applog`, `syslog`, `node_metrics`) and a body in one of the wire-format `Format` values.
+2. **Collect.** For each context, every configured log and metric collector runs `collect(ctx)` and returns zero or more `Observation` objects. Each `Observation` carries a `Source` enum value (`applog`, `syslog`, `node_metrics`) and an `entry_timeseries` body; the entry shape is in [Observation entry format](https://github.com/dsx-ai-factory/attribution/blob/main/service/service-app/docs/api/observation-format.md).
 3. **Open attributor.** `POST /v2/attributor` creates a per-context handle. On a duplicate-session 409, the connector raises `AttributorConflictError` with the original HTTP error as its cause. The Blueprint preserves the existing session, records that context as `conflicted` in the run statistics and summaries, and continues with other contexts. Retry after the existing session's owner finishes and deletes it.
 4. **Submit observations.** Each `Observation` goes via `POST /v2/attributor/{id}/observation`. Individual failures are logged and skipped. A duplicate-observation 409 counts as delivered. Per-connector delivery outcomes land in `ingestion_reports`.
 5. **Get verdict.** `GET /v2/attributor/{id}/attribution` returns the raw verdict.
@@ -101,7 +101,7 @@ detect partial conflicts must inspect the summaries; a zero exit code alone
 does not mean every context was attributed. With `--strict`, the CLI also
 exits nonzero when any attributed context's `evidence_status` is not
 `complete`. See the
-[session lifecycle guidance](../blueprint/docs/rest-api.md) for retry and
+[session lifecycle guidance](https://github.com/dsx-ai-factory/attribution/blob/main/blueprint/docs/rest-api.md) for retry and
 abandoned-session handling.
 
 ## Connector frameworks
@@ -129,7 +129,7 @@ The Service returns a raw verdict. The Blueprint enriches it with normalized fie
 | sub_domain | string | none, hardware, system_software, application, ambiguous, unattributed, expected, artificial, unclassified, plus cancellation/incomplete variants |
 | tenant_sre_action | string | Reserved field that is currently emitted as an empty string. |
 | cloud_operator_sre_action | string | Reserved field that is currently emitted as an empty string. |
-| connector_reports | list | List of {connector: str, source: str, status: "ok" or "error", reason: str, observation_count: int} |
+| connector_reports | list | List of `{connector: str, source: str, status: "ok" or "error", reason: str, observation_count: int}` |
 
 `terminal_state` and `sub_domain` are mapped from the service verdict via `taxonomy.py`. The mapping is deterministic. Downstream consumers should branch on these normalized fields.
 

@@ -90,7 +90,26 @@ def test_symptom_declarations_register_during_load(tmp_path):
     assert cascade_decl.cascade_discards == ("IB Error-12",)
 
 
-def test_outcome_symptom_requires_doc_anchor(tmp_path):
+@pytest.mark.parametrize(
+    ("doc", "fallback_prefix", "valid"),
+    [
+        ("", False, False),
+        ("", True, False),
+        ("   ", False, False),
+        ("\t\n", True, False),
+        (None, False, False),
+        (None, True, True),
+    ],
+)
+def test_outcome_symptom_requires_doc_anchor(tmp_path, doc, fallback_prefix, valid):
+    """Allow an absent documentation link only for fallback declarations.
+
+    Args:
+        tmp_path: Temporary rule directory.
+        doc: Documentation value to validate.
+        fallback_prefix: Whether the declaration is a fallback.
+        valid: Whether registration must succeed.
+    """
     rule_file = tmp_path / "bad_symptom_rules.py"
     rule_file.write_text(
         "\n".join(
@@ -102,15 +121,20 @@ def test_outcome_symptom_requires_doc_anchor(tmp_path):
                 "    'bus error',",
                 "    outcome='Fail MultiCategory',",
                 "    priority=OutcomePriority.LOW_USER,",
-                "    doc='',",
+                f"    doc={doc!r},",
+                f"    fallback_prefix={fallback_prefix!r},",
                 ")",
             ]
         )
     )
 
     loader = RuleLoader()
-    with pytest.raises(RuleIngestionError, match="requires a non-empty doc anchor"):
+    if valid:
         loader.load(str(rule_file))
+        assert loader.symptom_declarations[0].doc is None
+    else:
+        with pytest.raises(RuleIngestionError, match="requires a non-empty doc anchor"):
+            loader.load(str(rule_file))
 
 
 def test_known_symptom_registers_vocabulary_only_declaration(tmp_path):

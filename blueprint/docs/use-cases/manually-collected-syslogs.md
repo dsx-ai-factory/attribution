@@ -22,6 +22,22 @@ blueprint assigns this interval to every local log observation.
 The node names are especially important. Each name in the static context must
 exactly match a directory name under the syslog base directory.
 
+## Preferred: Pre-shaped Entries
+
+If your collection can produce timestamped, node-tagged records, save them as
+JSON Lines and point `paths` at the file. This is the most explicit input: each
+entry names its own node and time, so no per-node directories are needed and
+nothing is parsed out of the line.
+
+```toml
+[log.syslog.local_file]
+paths = ["/data/manual-syslog-case/syslog.jsonl"]
+```
+
+How `.jsonl` files are read is in
+[Pre-shaped entries](../CONFIGURATION.md#pre-shaped-entries). The rest of this
+page covers raw syslog files, for when that is all you have.
+
 ## Required Directory Structure
 
 Create one child directory per workload node. Put the files collected from a

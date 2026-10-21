@@ -31,9 +31,38 @@ docker build \
   "$PWD"
 ```
 
-The Dockerfile expects the release bundle layout: service source at the bundle
-root, the blueprint under `blueprint/`, and the attribution library under
-`service/attribution-lib/`.
+The Dockerfile expects the release bundle layout: the service application under
+`service/service-app/`, the blueprint under `blueprint/`, and the attribution
+library under `service/attribution-lib/`.
+
+### Service-only image
+
+To run only the attribution service, without the web UI or SQLite database,
+build the service image from the same bundle root:
+
+```bash
+docker build \
+  -f service/service-app/Dockerfile \
+  -t attribution-service:local \
+  "$PWD"
+
+docker run -d --rm \
+  --name attribution-service \
+  -p 127.0.0.1:8000:8000 \
+  attribution-service:local
+```
+
+This image listens on port `8000` and does not read `ATTRIBUTION_DB`,
+`ATTRIBUTION_SERVICE_PORT`, or `ATTRIBUTION_WEB_PORT`. Use it for a shared
+attribution endpoint that Blueprint runs elsewhere call over HTTP. Pass the
+service variables in [Service environment variables](#service-environment-variables)
+with `-e` as needed.
+
+The `BASE_IMAGE` build argument sets only the final runtime image. The build
+stage still pulls `python:3.14.6-slim-trixie` and `ghcr.io/astral-sh/uv:0.10.12`,
+installs Debian packages with `apt-get`, and downloads Python dependencies with
+`uv`. For a build with no internet access, mirror those images and package
+sources as well, and point the build at them.
 
 ## Run The Container
 
@@ -103,6 +132,29 @@ Attributor creation also validates the settings. If configuration changes after
 startup, an invalid size returns HTTP 500 with a `detail` naming the server
 setting and giving valid examples; no attributor is registered.
 
+<a id="service-environment-variables"></a>
+
+### Service environment variables
+
+The attribution service also reads these variables in both the bundled image and
+the service-only image. The DuckDB event storage variables are described in
+[DuckDB Event Storage](#duckdb-event-storage).
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `LOG_LEVEL` | `INFO` | Service log level. An unrecognized value falls back to `INFO`. |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | unset | OTLP gRPC endpoint for log export. When unset, logs go to stdout only. |
+| `OTEL_EXPORTER_OTLP_TOKEN` | unset | Optional bearer token sent with exported logs. |
+| `OTEL_EXPORTER_OTLP_PROTOCOL` | unset | Ignored with a warning. The service exports over gRPC only. |
+
+With `ATTRIBUTOR_ALLOW_DISK_SPILL` at `false`, an attributor that exceeds
+`ATTRIBUTOR_DUCKDB_MEMORY_LIMIT` fails with an event-storage overflow error
+scoped to that one request, not a generic 500. Enable disk spill only where the
+container has writable local disk.
+
+The Blueprint CLI has its own log level, `ATTRIBUTION_LOG_LEVEL` (default
+`INFO`). See [CONFIGURATION.md](https://github.com/dsx-ai-factory/attribution/blob/main/blueprint/docs/CONFIGURATION.md).
+
 ## Health Checks
 
 Check the service:
@@ -139,7 +191,7 @@ uv run --project blueprint --frozen nvidia-attribution-blueprint \
 ```
 
 For a real deployment, replace the sample configs with the environment-specific
-TOML described in [CONFIGURATION.md](../blueprint/docs/CONFIGURATION.md).
+TOML described in [CONFIGURATION.md](https://github.com/dsx-ai-factory/attribution/blob/main/blueprint/docs/CONFIGURATION.md).
 
 ## Data Management
 
@@ -194,7 +246,7 @@ the backup taken before the upgrade.
 
 ## Related Docs
 
-- [quickstart.md](../blueprint/docs/quickstart.md), sample Docker workflow
-- [README.md](../README.md), end-user workflow
-- [CONFIGURATION.md](../blueprint/docs/CONFIGURATION.md), connector configuration
-- [SCHEDULER_REQUIREMENTS.md](../blueprint/docs/SCHEDULER_REQUIREMENTS.md), scheduler access checklist
+- [quickstart.md](https://github.com/dsx-ai-factory/attribution/blob/main/blueprint/docs/quickstart.md), sample Docker workflow
+- [README.md](https://github.com/dsx-ai-factory/attribution/blob/main/README.md), end-user workflow
+- [CONFIGURATION.md](https://github.com/dsx-ai-factory/attribution/blob/main/blueprint/docs/CONFIGURATION.md), connector configuration
+- [SCHEDULER_REQUIREMENTS.md](https://github.com/dsx-ai-factory/attribution/blob/main/blueprint/docs/SCHEDULER_REQUIREMENTS.md), scheduler access checklist
