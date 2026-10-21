@@ -211,6 +211,30 @@ expect  = "bad"
 line    = "[1234.567890] Internal error: Oops - SError: 0000000096000045 [#1] SMP"
 symptom = "kernel oops"
 
+# ext4 metadata corruption on a node-local filesystem. `EXT4-fs error (device X):`
+# is printed by ext4_error() (the same path that bumps /sys/fs/ext4/<dev>/errors_count);
+# the delayed-allocation line with error 117 (EFSCORRUPTED) means dirty pages were
+# dropped. Other delayed-allocation errors (e.g. 28, ENOSPC on a full disk) are not
+# corruption and are not matched.
+[[extractor]]
+name         = "SyslogExt4FilesystemCorruption"
+match_re     = 'EXT4-fs error \(device [^)]+\): |EXT4-fs \([^)]+\): Delayed block allocation failed for inode \d+ .* with error 117\b'
+emit         = { type = "bad_node", symptom = "ext4 filesystem corruption", derived_rule = "ext4-filesystem-corruption" }
+[[extractor.cases]]
+expect  = "bad"
+line    = "<2>1 2026-10-15T21:53:07.933349-07:00 test-node-001 kernel - - -  EXT4-fs (md0): Delayed block allocation failed for inode 285219254 at logical offset 0 with max blocks 1 with error 117"
+symptom = "ext4 filesystem corruption"
+[[extractor.cases]]
+expect  = "bad"
+line    = "EXT4-fs error (device md0): ext4_mb_complex_scan_group:2312: group 4352, 32768 free clusters as per group info. But got 0 blocks"
+symptom = "ext4 filesystem corruption"
+[[extractor.cases]]
+expect = "none"
+line   = "EXT4-fs (md0): Delayed block allocation failed for inode 285219254 at logical offset 0 with max blocks 1 with error 28"
+[[extractor.cases]]
+expect = "none"
+line   = "EXT4-fs (md0): mounted filesystem 5f1c0e9a-1d2b-4c3d-8e4f-0a1b2c3d4e5f r/w with ordered data mode. Quota mode: none."
+
 [[extractor]]
 name         = "SyslogMlx5PortLinkDown"
 match_re     = '\bmlx5_core\s+[0-9a-fA-F:.]+\s+mlx5_[0-9]+:\s+Port:\s+[0-9]+\s+Link\s+DOWN\b'

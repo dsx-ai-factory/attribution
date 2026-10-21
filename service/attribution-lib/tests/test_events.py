@@ -893,7 +893,6 @@ class TestEventRule:
         # Create a valid observation context
         context = ObservationContext(
             time_interval=TimeInterval(datetime.now() - timedelta(minutes=15), datetime.now()),
-            resources=resources,
             source=ObsSource.APPLOG,
             format=ObsFormat.ENTRY_TIMESERIES,
             timezone=ZoneInfo("UTC"),
@@ -965,7 +964,6 @@ class TestTimestampAndTimezoneFlow:
         resources = ResourceSet(nodes)
         context = ObservationContext(
             time_interval=TimeInterval(datetime(2025, 1, 17, 10, 0, 0), datetime(2025, 1, 17, 18, 0, 0)),
-            resources=resources,
             source=ObsSource.SYSLOG,
             format=ObsFormat.ENTRY_TIMESERIES,
             timezone=est,
@@ -1042,7 +1040,6 @@ class TestTimestampAndTimezoneFlow:
         for tz, time_val in [(est, time_est), (utc, time_utc), (pst, time_pst)]:
             context = ObservationContext(
                 time_interval=TimeInterval(datetime(2025, 1, 17, 10, 0, 0), datetime(2025, 1, 17, 18, 0, 0)),
-                resources=resources,
                 source=ObsSource.SYSLOG,
                 format=ObsFormat.ENTRY_TIMESERIES,
                 timezone=tz,
@@ -1095,7 +1092,6 @@ class TestTimestampAndTimezoneFlow:
         resources = ResourceSet(nodes)
         context = ObservationContext(
             time_interval=TimeInterval(datetime(2025, 1, 17, 10, 0, 0), datetime(2025, 1, 17, 18, 0, 0)),
-            resources=resources,
             source=ObsSource.SYSLOG,
             format=ObsFormat.ENTRY_TIMESERIES,
             timezone=est,

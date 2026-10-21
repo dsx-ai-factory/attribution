@@ -542,6 +542,38 @@ class TestKernelFailureCascade:
         )
         assert "kernel oops" not in attribution.symptoms
 
+    def test_ext4_data_loss_resolves_to_fail_infra_sw(self, request, sys_tst_bldr, job_info):
+        """The delayed-allocation failure pair from a corrupted node-local md0 produces Fail InfraSW."""
+        attribution = self._run_attribution(
+            request,
+            sys_tst_bldr,
+            job_info,
+            [
+                "<2>1 2026-10-15T21:53:07.933349-07:00 test-node-001 kernel - - -  EXT4-fs (md0): Delayed block "
+                "allocation failed for inode 285219254 at logical offset 0 with max blocks 1 with error 117",
+                "<2>1 2026-10-15T21:53:07.933746-07:00 test-node-001 kernel - - -  EXT4-fs (md0): This should not "
+                "happen!! Data will be lost",
+            ],
+        )
+        assert "ext4 filesystem corruption" in attribution.symptoms
+        outcome = attribution.outcome_attr.value()
+        assert outcome.outcome == "Fail InfraSW"
+        assert outcome.root_cause_symptom == "ext4 filesystem corruption"
+
+    def test_ext4_enospc_data_loss_does_not_fire(self, request, sys_tst_bldr, job_info):
+        """A delayed-allocation failure on a full disk (ENOSPC) is not corruption."""
+        attribution = self._run_attribution(
+            request,
+            sys_tst_bldr,
+            job_info,
+            [
+                "EXT4-fs (md0): Delayed block allocation failed for inode 285219254 at logical offset 0 with max "
+                "blocks 1 with error 28",
+                "EXT4-fs (md0): This should not happen!! Data will be lost",
+            ],
+        )
+        assert "ext4 filesystem corruption" not in attribution.symptoms
+
 
 class TestXid140Outcome:
     """Exercise XID-140 classification and node-scoped cleanup from raw syslog."""

@@ -16363,6 +16363,59 @@ failures:
   severity: critical
   verification: verified
   last_reviewed: 2026-07-23
+- id: ext4-filesystem-corruption
+  title: ext4 filesystem corruption
+  aliases:
+  - EXT4-fs error
+  - EFSCORRUPTED
+  category: storage
+  likely_owner: infrastructure
+  personas:
+    tenant_sre:
+      title: A node-local filesystem was corrupted while your job was running
+      summary: The Linux kernel reported ext4 metadata corruption on a filesystem of the node running one of your ranks.
+      impact: Files on the affected filesystem (for example container image layers, caches, or headers used for JIT
+        compilation) can be truncated or unreadable, so the application fails with errors that look unrelated to storage.
+      action: Your remediation system should first restart the affected node's operating system (a VM reboot on a
+        virtualized GPU, a host-level reboot on bare metal). If `/sys/fs/ext4/<device>/errors_count` is still nonzero
+        after the restart, or the job still fails on this node, contact your cluster administrator or cloud provider.
+        Include the NVIDIA Attribution diagnosis (verdict, symptom chain, and source logs).
+      support_details: Job ID, node hostname, the `EXT4-fs` kernel log lines, and the contents of
+        `/sys/fs/ext4/<device>/errors_count`, `first_error_func`, and `first_error_time`.
+  recommended_action:
+    operational_state: drain
+    remediation_actions:
+    - restart_os
+    - service_required
+  technical_details: 'ext4 prints `EXT4-fs error (device <dev>): <function>:<line>: ...` from `ext4_error()` when it detects
+    inconsistent metadata, and increments `/sys/fs/ext4/<dev>/errors_count`; `dumpe2fs -h` then reports the filesystem state
+    as `clean with errors`. When writeback cannot allocate blocks for delayed-allocation pages, ext4 prints `Delayed block
+    allocation failed for inode ... with error <errno>` followed by `This should not happen!! Data will be lost`. Error 117
+    (EUCLEAN, which ext4 uses as EFSCORRUPTED) means the allocation failed on corrupted metadata and the dirty pages were
+    dropped. Error 28 (ENOSPC) on the same line is a full disk, not corruption. The case that prompted this entry was a kernel
+    bug that a reboot cleared. If `errors_count` is still nonzero after a reboot, repair requires unmounting the filesystem
+    and running `e2fsck`, or recreating it.
+
+    '
+  summary: The Linux kernel detected ext4 metadata corruption on a node filesystem; data written there may be lost.
+  signals:
+  - kind: log
+    pattern: 'EXT4-fs error \(device [^)]+\): '
+    note: ext4_error() report; also increments /sys/fs/ext4/<dev>/errors_count
+  - kind: log
+    pattern: 'EXT4-fs \([^)]+\): Delayed block allocation failed for inode \d+ .* with error 117\b'
+    note: delayed allocation failed with EFSCORRUPTED; followed by "This should not happen!! Data will be lost"
+  related:
+  - io-error
+  - kernel-panic
+  references:
+  - title: Linux kernel admin guide - ext4
+    url: https://www.kernel.org/doc/html/latest/admin-guide/ext4.html
+  - title: Linux ext4 inode implementation (delayed allocation writeback)
+    url: https://github.com/torvalds/linux/blob/master/fs/ext4/inode.c
+  severity: high
+  verification: verified
+  last_reviewed: 2026-10-19
 - id: detected-bad-nic-state
   title: detected bad NIC state
   aliases:

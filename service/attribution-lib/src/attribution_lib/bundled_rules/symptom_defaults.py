@@ -1038,6 +1038,17 @@ outcome_symptom(
     cascade_discards=NODE_FAILURE_CASCADE_TARGETS,
 )
 
+# Corrupted node-local files surface in the application as unrelated errors
+# (e.g. JIT compilation failing on a truncated header); the kernel line is the root cause.
+outcome_symptom(
+    "ext4 filesystem corruption",
+    outcome="Fail InfraSW",
+    priority=OutcomePriority.MEDIUM_SW,
+    doc="ext4-filesystem-corruption",
+    hw_cause="ext4 filesystem corruption",
+    cascade_discards=NODE_FAILURE_CASCADE_TARGETS,
+)
+
 outcome_symptom(
     "Failed to collect nvlink status info",
     outcome="Fail InfraSW",
