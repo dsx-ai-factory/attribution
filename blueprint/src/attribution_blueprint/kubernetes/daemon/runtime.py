@@ -58,6 +58,7 @@ class KubernetesDaemon:
         self.worker_count = workers
         self.stop_event = threading.Event()
         self._latest_generation: dict[str, int] = {}
+        self._latest_controller: dict[str, tuple[str, str] | None] = {}
         self._generation_lock = threading.Lock()
 
     def run(self) -> None:
@@ -136,12 +137,25 @@ class KubernetesDaemon:
         if not captured:
             return
         generation = next(_WORK_GENERATIONS)
-        try:
-            with self._generation_lock:
+        controller = _pod_controller(pod)
+        queue_full = False
+        with self._generation_lock:
+            try:
                 self.items.put_nowait((pod, generation))
+            except queue.Full:
+                queue_full = True
+                if pod_uid:
+                    if (
+                        pod_uid in self._latest_controller
+                        and self._latest_controller[pod_uid] != controller
+                    ):
+                        self._latest_generation.pop(pod_uid, None)
+                        self._latest_controller.pop(pod_uid, None)
+            else:
                 if pod_uid:
                     self._latest_generation[pod_uid] = generation
-        except queue.Full:
+                    self._latest_controller[pod_uid] = controller
+        if queue_full:
             self.health.update(queue_saturated=self.items.full())
             logger.error(
                 "KubernetesDaemon enrichment queue is saturated; "
@@ -177,6 +191,7 @@ class KubernetesDaemon:
             with self._generation_lock:
                 if self._latest_generation.get(pod_uid) == generation:
                     del self._latest_generation[pod_uid]
+                    self._latest_controller.pop(pod_uid, None)
 
     def _record(
         self,
@@ -341,6 +356,19 @@ def _stored_owner_matches_pod(record: PlacementRecord, pod: dict) -> bool:
         ]
         return len(job_references) == 1 and job_references[0].uid == controller_uid
     return False
+
+
+def _pod_controller(pod: dict) -> tuple[str, str] | None:
+    controllers = [
+        reference
+        for reference in (pod.get("metadata") or {}).get("ownerReferences") or []
+        if reference.get("controller") is True
+        and reference.get("kind")
+        and reference.get("uid")
+    ]
+    if len(controllers) != 1:
+        return None
+    return controllers[0]["kind"], controllers[0]["uid"]
 
 
 def _as_dict(resource) -> dict:

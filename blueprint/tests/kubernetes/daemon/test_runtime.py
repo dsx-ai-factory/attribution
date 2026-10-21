@@ -306,6 +306,48 @@ def test_full_queue_keeps_queued_generation_valid(tmp_path):
     assert store.get_by_pod_uid("pod-uid-1").owner.uid == "job-uid-1"
 
 
+def test_full_queue_invalidates_queued_generation_after_controller_change(tmp_path):
+    store = SQLitePlacementStore(str(tmp_path / "placements.db"))
+    daemon = KubernetesDaemon(
+        core_api=None,
+        store=store,
+        namespace="team-a",
+        owner_resolver=_OwnerResolver(),
+        queue_size=1,
+    )
+    daemon._enqueue(_pod())
+    reassigned = _pod()
+    reassigned["metadata"]["ownerReferences"][0]["uid"] = "job-uid-2"
+
+    daemon._enqueue(reassigned)
+
+    assert "pod-uid-1" not in daemon._latest_generation
+    daemon.stop_event.set()
+    daemon._worker()
+    assert store.get_by_pod_uid("pod-uid-1").owner is None
+
+
+def test_full_queue_invalidates_queued_generation_after_controller_removal(tmp_path):
+    store = SQLitePlacementStore(str(tmp_path / "placements.db"))
+    daemon = KubernetesDaemon(
+        core_api=None,
+        store=store,
+        namespace="team-a",
+        owner_resolver=_OwnerResolver(),
+        queue_size=1,
+    )
+    daemon._enqueue(_pod())
+    orphaned = _pod()
+    orphaned["metadata"]["ownerReferences"] = []
+
+    daemon._enqueue(orphaned)
+
+    assert "pod-uid-1" not in daemon._latest_generation
+    daemon.stop_event.set()
+    daemon._worker()
+    assert store.get_by_pod_uid("pod-uid-1").owner is None
+
+
 def test_concurrent_dequeue_prevents_stale_saturation(tmp_path, mocker):
     store = SQLitePlacementStore(str(tmp_path / "placements.db"))
     daemon = KubernetesDaemon(core_api=None, store=store, namespace="team-a")
