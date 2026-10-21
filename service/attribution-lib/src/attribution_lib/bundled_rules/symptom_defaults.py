@@ -1038,6 +1038,17 @@ outcome_symptom(
     cascade_discards=NODE_FAILURE_CASCADE_TARGETS,
 )
 
+# Corrupted node-local files surface in the application as unrelated errors
+# (e.g. JIT compilation failing on a truncated header); the kernel line is the root cause.
+outcome_symptom(
+    "ext4 filesystem corruption",
+    outcome="Fail InfraSW",
+    priority=OutcomePriority.MEDIUM_SW,
+    doc="ext4-filesystem-corruption",
+    hw_cause="ext4 filesystem corruption",
+    cascade_discards=NODE_FAILURE_CASCADE_TARGETS,
+)
+
 outcome_symptom(
     "Failed to collect nvlink status info",
     outcome="Fail InfraSW",
@@ -1430,6 +1441,15 @@ outcome_symptom(
     doc="megatron-core-dist-checkpointing-core-checkpointingexception",
 )
 
+# A concrete Megatron configuration error outranks generic NVRx failure context.
+# Keep configuration values in source evidence, not in the symptom label.
+outcome_symptom(
+    "Python Exception: AssertionError: batch size not divisible",
+    outcome="Fail User",
+    priority=OutcomePriority.LOW,
+    doc="python-exception",
+)
+
 outcome_symptom(
     "Missing key in checkpoint",
     outcome="Fail User",
@@ -1709,6 +1729,7 @@ outcome_symptom(
     outcome="Fail Undetermined",
     priority=OutcomePriority.LOW_GENERIC,
     doc="nvrx-detected-failure",
+    hw_cause="Underlying failure reason unavailable from the collected evidence.",
 )
 
 outcome_symptom(
@@ -2803,3 +2824,16 @@ known_symptom("plr_tx_bw_loss_high_1m_5pct")
 known_symptom("plr_tx_bw_loss_high_5m_1pct")
 
 known_symptom("pyxis: cancelled by SIGTERM")
+
+known_symptom("mlx5 firmware in initialization state")
+known_symptom("mlx5 device initialization failed")
+
+outcome_symptom(
+    "detected bad NIC state",
+    outcome="Fail InfraSW",
+    # Independent MEDIUM_SW faults retain precedence. Outcome selection
+    # handles the QP and device-open failures superseded by this symptom.
+    priority=OutcomePriority.LOW,
+    doc="detected-bad-nic-state",
+    hw_cause="NIC firmware initialization failure",
+)

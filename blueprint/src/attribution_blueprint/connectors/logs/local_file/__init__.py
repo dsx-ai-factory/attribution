@@ -3,8 +3,10 @@
 
 """Read log evidence from local files on the same host as the blueprint."""
 
+import json
 import re
 from pathlib import Path
+from typing import Optional
 
 from loguru import logger
 
@@ -15,6 +17,7 @@ from attribution_blueprint.types import (
     ExecutionContext,
     Observation,
     Source,
+    TimeseriesEntry,
     assert_aware,
 )
 
@@ -65,6 +68,9 @@ class LocalFileLogConnector:
     resolves to a file, that file is read. For SYSLOG, each path is a base
     directory containing one child directory per context node. Missing APPLOG
     paths are skipped silently, while missing SYSLOG node directories warn.
+    A file whose name ends in ``.jsonl`` is read as one JSON entry per line
+    and sent unchanged; for SYSLOG such a path names the file directly
+    instead of a base directory.
 
     ``max_bytes_per_file`` defaults to :data:`DEFAULT_MAX_BYTES` (2 GB) so a
     runaway multi-GB training log can't OOM the blueprint. Larger files are
@@ -107,37 +113,45 @@ class LocalFileLogConnector:
                 if resolved in seen:
                     continue
                 seen.add(resolved)
-                # Distinguish "file does not exist" (silent skip) from
-                # "file exists but we can't read it" (warn). `path.is_file()`
-                # alone collapses both EACCES and ENOENT to False; check
-                # explicitly so permission-denied attempts are visible in logs
-                # (and downstream eval filters can exclude them deliberately).
-                try:
-                    is_file = path.is_file()
-                except PermissionError as e:
-                    logger.warning(f"local_file: permission denied stat'ing {path} for ctx {context.get('id')}: {e}")
-                    continue
-                if not is_file:
-                    if path.exists():
-                        logger.warning(f"local_file: {path} exists but is not a regular file (ctx {context.get('id')})")
-                    else:
-                        logger.debug(f"local_file: no file at {path} for ctx {context.get('id')}")
-                    continue
-                try:
-                    body = self._read(path)
-                except PermissionError as e:
-                    logger.warning(f"local_file: permission denied reading {path} for ctx {context.get('id')}: {e}")
-                    continue
-                if not body:
-                    continue
-                observations.append(
-                    log_observation(
-                        source=self._source,
-                        entries=entries_from_text(body),
-                        context=context,
-                    )
-                )
+                observation = self._file_observation(path, context)
+                if observation is not None:
+                    observations.append(observation)
         return observations
+
+    def _file_observation(self, path: Path, context: ExecutionContext) -> Optional[Observation]:
+        """Read one file into an observation, or ``None`` when there is nothing to send."""
+        # Distinguish "file does not exist" (silent skip) from
+        # "file exists but we can't read it" (warn). `path.is_file()`
+        # alone collapses both EACCES and ENOENT to False; check
+        # explicitly so permission-denied attempts are visible in logs
+        # (and downstream eval filters can exclude them deliberately).
+        try:
+            is_file = path.is_file()
+        except PermissionError as e:
+            logger.warning(f"local_file: permission denied stat'ing {path} for ctx {context.get('id')}: {e}")
+            return None
+        if not is_file:
+            if path.exists():
+                logger.warning(f"local_file: {path} exists but is not a regular file (ctx {context.get('id')})")
+            else:
+                logger.debug(f"local_file: no file at {path} for ctx {context.get('id')}")
+            return None
+        try:
+            body = self._read(path)
+        except PermissionError as e:
+            logger.warning(f"local_file: permission denied reading {path} for ctx {context.get('id')}: {e}")
+            return None
+        if not body:
+            return None
+
+        if path.suffix == ".jsonl":
+            entries = _jsonl_entries(path, body, context)
+            if not entries:
+                return None
+        else:
+            entries = entries_from_text(body)
+
+        return log_observation(source=self._source, entries=entries, context=context)
 
     def _collect_syslog(self, context: ExecutionContext) -> list[Observation]:
         """Collect static syslog files from one child directory per context node.
@@ -151,12 +165,31 @@ class LocalFileLogConnector:
         """
         observations: list[Observation] = []
         seen: set[Path] = set()
-        found_node_dir = False
+        found_syslog_input = False
         for template in self._templates:
             rendered = self._render_template(template, context)
             if rendered is None:
                 continue
             base = Path(rendered)
+            if base.suffix == ".jsonl":
+                resolved = base.resolve()
+                if resolved in seen:
+                    continue
+                seen.add(resolved)
+                found_syslog_input = True
+                try:
+                    is_file = base.is_file()
+                except PermissionError:
+                    is_file = True  # _file_observation reports the denial
+                if not is_file:
+                    logger.warning(
+                        f"local_file SYSLOG: expected syslog file {base} for ctx {context.get('id')}; skipping"
+                    )
+                    continue
+                observation = self._file_observation(base, context)
+                if observation is not None:
+                    observations.append(observation)
+                continue
             try:
                 base_is_dir = base.is_dir()
             except PermissionError as e:
@@ -184,7 +217,7 @@ class LocalFileLogConnector:
                         f"for node {node} ctx {context.get('id')}"
                     )
                     continue
-                found_node_dir = True
+                found_syslog_input = True
                 try:
                     paths = sorted(p for p in node_dir.iterdir() if p.is_file())
                 except PermissionError as e:
@@ -197,6 +230,16 @@ class LocalFileLogConnector:
                 for path in paths:
                     resolved = path.resolve()
                     if resolved in seen:
+                        continue
+                    if path.suffix == ".jsonl":
+                        # Node directories hold raw logs; pre-shaped entries are configured
+                        # as the path itself. Parsing this as raw syslog would drop every line.
+                        # Not recorded in `seen`, so the same file still reads when it is also
+                        # configured as a path, in either order.
+                        logger.warning(
+                            f"local_file SYSLOG: skipping {path}, a .jsonl file is read only when "
+                            f"configured as the path itself (ctx {context.get('id')})"
+                        )
                         continue
                     seen.add(resolved)
                     try:
@@ -211,7 +254,7 @@ class LocalFileLogConnector:
                         continue
                     entries = syslog_entries_from_text(body, context, node=node)
                     observations.append(log_observation(source=self._source, entries=entries, context=context))
-        if found_node_dir is False:
+        if found_syslog_input is False:
             logger.warning(f"local_file SYSLOG: no syslog directories found for ctx {context.get('id')}")
         return observations
 
@@ -300,8 +343,21 @@ class LocalFileLogConnector:
                     logger.debug(
                         f"local_file: {path} is {filesize}B > cap {self._max_bytes}B, reading last {self._max_bytes}B"
                     )
-                    fh.seek(filesize - self._max_bytes)
-                data = fh.read()
+                    start = filesize - self._max_bytes
+                    if path.suffix == ".jsonl":
+                        # The tail usually starts mid-record, and that fragment would fail JSON
+                        # parsing and skip the whole file, so drop everything up to the first
+                        # newline. Starting one byte early makes an aligned tail cut only that
+                        # newline. Trimming the capped buffer keeps memory bounded.
+                        fh.seek(start - 1)
+                        data = fh.read()
+                        cut = data.find(b"\n")
+                        data = data[cut + 1 :] if cut >= 0 else b""
+                    else:
+                        fh.seek(start)
+                        data = fh.read()
+                else:
+                    data = fh.read()
         return data.decode("utf-8", errors="replace")
 
 
@@ -331,6 +387,23 @@ _registry.register_component(
     schema={"paths": _PARAM, "max_bytes": _PARAM},
     build=_build,
 )
+
+
+def _jsonl_entries(path: Path, body: str, context: ExecutionContext) -> Optional[list[TimeseriesEntry]]:
+    """Parse one JSON value per non-blank line, or `None` when any line is not JSON."""
+    entries: list[TimeseriesEntry] = []
+    # Not splitlines(): raw U+2028/U+2029 are legal inside JSON strings and would split a line.
+    for line_number, line in enumerate(body.split("\n"), start=1):
+        if line.strip() == "":
+            continue
+        try:
+            entries.append(json.loads(line))
+        except json.JSONDecodeError:
+            logger.warning(
+                f"local_file: skipping {path}, line {line_number} is not valid JSON (ctx {context.get('id')})"
+            )
+            return None
+    return entries
 
 
 __all__ = ["LocalFileLogConnector", "DEFAULT_MAX_BYTES", "parse_size"]

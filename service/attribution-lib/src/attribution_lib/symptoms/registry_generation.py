@@ -308,6 +308,19 @@ class GeneratedSymptomRegistry:
             Selected outcome match, or None if no mapping matches.
         """
         normalized_symptoms = sorted(symptoms)
+        # Supersede only outcome mappings; retain symptoms and their evidence.
+        superseded_mappings: set[str] = set()
+        if "detected bad NIC state" in normalized_symptoms:
+            superseded_mappings.update(
+                (
+                    "Call to ibv_modify_qp failed",
+                    "Call to ibv_modify_qp failed: eno 110 timeout",
+                    "Call to ibv_modify_qp failed: eno 22 invalid argument(Mismatched GID)",
+                    "Call to ibv_modify_qp failed: eno 22 invalid argument",
+                    "Call to ibv_modify_qp failed: eno 11 resource unavailable",
+                    "ibv_open_device failed",
+                )
+            )
         for tier_index, mapping_list in enumerate(self.outcome_rules):
             tier_matches: list[GeneratedOutcomeMatch] = []
             for symptom in normalized_symptoms:
@@ -315,6 +328,9 @@ class GeneratedSymptomRegistry:
                     continue
                 for mapping, outcome_data in mapping_list.items():
                     if symptom.startswith(mapping):
+                        if mapping in superseded_mappings:
+                            # Do not fall through to a broader mapping in this tier.
+                            break
                         outcome, hw_cause = outcome_data
                         doc = self.symptom_docs.get(mapping)
                         tier_matches.append(

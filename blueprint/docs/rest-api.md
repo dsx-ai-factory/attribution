@@ -95,11 +95,14 @@ recovery would require a separate Service lifecycle change.
 The outer observation is JSON, but `body` is always a string. For
 `entry_timeseries`, that string is a JSON array with one object per log line:
 * `body` (required)
-* `ts` (unix nanoseconds, or omitted when the producer has no timestamp)
-* `resources` (omitted unless the producer knows the node; `[{"kind": "node", "hostname": ...}]`, optionally with `{"kind": "replica", "name": ...}` objects)
+* `ts` (unix nanoseconds; optional in the schema, but `syslog`, `health_check` and `csp_event` drop an entry without it)
+* `resources` (`[{"kind": "node", "hostname": ...}]`, optionally with `{"kind": "replica", "name": ...}` objects)
 
-If no `resources` are declared, application log lines can include a rank or node prefix so the service can associate evidence more specifically. A `null` bound in 
-`time_interval` is unbounded on that side; **entries outside the declared interval are dropped.**
+[Observation entry format](../../service/service-app/docs/api/observation-format.md) is the authority
+on these fields: what each source does when `ts` or the node is missing, what
+it parses out of the body instead, and why a 201 does not mean the entries were
+used. A `null` bound in `time_interval` is unbounded on that side; **entries
+outside the declared interval are dropped.**
 
 ```bash
 curl --fail-with-body --silent --show-error \

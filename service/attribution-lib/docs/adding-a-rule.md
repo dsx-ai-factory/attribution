@@ -38,7 +38,7 @@ Extend an existing rule when the new input has the same meaning and output as ev
 
 ## Key Terms
 
-- **Observation:** One submission of related evidence plus context describing its source, format, time interval, timezone, and associated resources, such as nodes. An observation can contain application-log lines, syslog entries, Prometheus samples, or cloud-provider events.
+- **Observation:** One submission of related evidence plus context describing its source, format, time interval, and timezone. Each entry can name the resources it concerns, such as a node. An observation can contain application-log lines, syslog entries, Prometheus samples, or cloud-provider events.
 - **Observation source:** The kind of evidence in an observation, such as `APPLOG`, `SYSLOG`, `NODE_METRICS`, or `CSP_EVENT`. Extractor rules declare which sources they accept.
 - **Observation entry:** One item within an observation, such as one log line or metric sample. Most extractors evaluate entries individually.
 - **Extractor rule:** A rule that looks for a pattern in observation entries and emits a structured event when it matches. A simple extractor can be declarative TOML, where the pattern and output are configuration data. More complex processing can use Python referenced from TOML.
