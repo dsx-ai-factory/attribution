@@ -130,16 +130,15 @@ class KubernetesDaemon:
         if not (pod.get("spec") or {}).get("nodeName"):
             return
         pod_uid = (pod.get("metadata") or {}).get("uid")
-        generation = next(_WORK_GENERATIONS)
-        if pod_uid:
-            with self._generation_lock:
-                self._latest_generation[pod_uid] = generation
         captured = self._capture_placement(pod)
         if deleted and pod_uid:
             self._mark_deleted(pod_uid)
         if not captured:
-            self._complete_generation(pod_uid, generation)
             return
+        generation = next(_WORK_GENERATIONS)
+        if pod_uid:
+            with self._generation_lock:
+                self._latest_generation[pod_uid] = generation
         while not self.stop_event.is_set():
             try:
                 self.items.put((pod, generation), timeout=0.5)
