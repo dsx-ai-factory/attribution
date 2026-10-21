@@ -4,7 +4,14 @@
 from datetime import datetime, timedelta
 
 import pytest
+from pydantic import ValidationError
 
+from attribution_lib.cluster_context import (
+    ClusterIncidentCandidate,
+    ClusterIncidentContext,
+    ClusterIncidentScope,
+    ClusterIncidentSignature,
+)
 from attribution_lib.exceptions import (
     InvalidRankError,
     JobInfoDuplicateFieldError,
@@ -279,6 +286,108 @@ class TestNodeToRanksLookup:
 
         assert job_info.verify_node("Node-A") == "node-a"
         assert job_info.verify_node("node-b") == "node-b"
+
+
+class TestJobInfoClusterIncidentContext:
+    """Validated cluster context available to attribution refiners."""
+
+    def test_defaults_to_none(self, simple_job_factory):
+        assert simple_job_factory().cluster_incident_context is None
+
+    def test_builder_preserves_explicit_none(self, timezone):
+        builder = _builder(timezone, node_to_ranks={})
+        builder.job_end_time(datetime.fromtimestamp(1700001000, tz=timezone))
+
+        assert builder.cluster_incident_context(None).build().cluster_incident_context is None
+
+    def test_builder_accepts_empty_context(self, timezone):
+        builder = _builder(timezone, node_to_ranks={})
+        builder.job_end_time(datetime.fromtimestamp(1700001000, tz=timezone))
+
+        assert (
+            builder.cluster_incident_context(ClusterIncidentContext()).build().cluster_incident_context
+            == ClusterIncidentContext()
+        )
+
+    def test_builder_preserves_cluster_incident_context(self, timezone):
+        context = ClusterIncidentContext(
+            candidates=(
+                ClusterIncidentCandidate(
+                    incident_scope=ClusterIncidentScope.CLUSTER,
+                    signature_class=ClusterIncidentSignature.STORAGE_FAULT,
+                    non_job_nodes_affected=4,
+                    non_job_domains_affected=2,
+                    total_non_job_events=6,
+                    failure_episode_id="storage_fault:2026-10-20T12:00:00",
+                    cluster_incident_id="test-cluster:storage_fault:2026-10-20T12:00:00",
+                    incident_start_settled=True,
+                ),
+            )
+        )
+        builder = _builder(timezone, node_to_ranks={})
+        builder.job_end_time(datetime.fromtimestamp(1700001000, tz=timezone))
+
+        job_info = builder.cluster_incident_context(context).build()
+
+        assert job_info.cluster_incident_context is context
+
+    def test_candidate_keeps_unsupplied_metrics_unknown(self):
+        candidate = ClusterIncidentCandidate(
+            incident_scope=ClusterIncidentScope.NODE,
+            signature_class=ClusterIncidentSignature.OTHER,
+        )
+
+        assert candidate.non_job_nodes_affected is None
+        assert candidate.non_job_domains_affected is None
+        assert candidate.total_non_job_events is None
+        assert candidate.incident_start_settled is None
+
+    def test_candidate_preserves_zero_counts(self):
+        candidate = ClusterIncidentCandidate(
+            incident_scope=ClusterIncidentScope.NODE,
+            signature_class=ClusterIncidentSignature.OTHER,
+            non_job_nodes_affected=0,
+            non_job_domains_affected=0,
+            total_non_job_events=0,
+        )
+
+        assert candidate.non_job_nodes_affected == 0
+        assert candidate.non_job_domains_affected == 0
+        assert candidate.total_non_job_events == 0
+
+    @pytest.mark.parametrize(
+        "candidate",
+        [
+            {"incident_scope": "rack", "signature_class": "storage_fault"},
+            {"incident_scope": "cluster", "signature_class": "unknown_fault"},
+            {"incident_scope": "cluster", "signature_class": "storage_fault", "non_job_nodes_affected": -1},
+            {"incident_scope": "cluster", "signature_class": "storage_fault", "non_job_nodes_affected": True},
+            {"incident_scope": "cluster", "signature_class": "storage_fault", "non_job_domains_affected": True},
+            {"incident_scope": "cluster", "signature_class": "storage_fault", "total_non_job_events": True},
+            {"incident_scope": "cluster", "signature_class": "storage_fault", "producer_only_field": "rejected"},
+        ],
+    )
+    def test_candidate_rejects_invalid_fields(self, candidate):
+        with pytest.raises(ValidationError):
+            ClusterIncidentCandidate.model_validate(candidate)
+
+    def test_context_rejects_unknown_fields(self):
+        with pytest.raises(ValidationError):
+            ClusterIncidentContext.model_validate({"producer_only_field": "rejected"})
+
+    def test_builder_rejects_unvalidated_mapping(self, timezone):
+        builder = _builder(timezone, node_to_ranks={})
+        builder.job_end_time(datetime.fromtimestamp(1700001000, tz=timezone))
+
+        with pytest.raises(TypeError, match="cluster_incident_context must be a ClusterIncidentContext"):
+            builder.cluster_incident_context({"candidates": []})  # type: ignore[arg-type]
+
+    def test_builder_rejects_second_context_after_explicit_none(self, timezone):
+        builder = _builder(timezone, node_to_ranks={})
+        builder.cluster_incident_context(None)
+
+        with pytest.raises(JobInfoDuplicateFieldError):
+            builder.cluster_incident_context(ClusterIncidentContext())
 
 
 class TestJobInfoTags:
