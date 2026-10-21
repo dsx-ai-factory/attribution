@@ -54,7 +54,7 @@ class KubernetesDaemon:
         self.watch_timeout_seconds = watch_timeout_seconds
         self.max_resolution_attempts = max_resolution_attempts
         self.health = HealthState()
-        self.items: queue.Queue[tuple[dict, bool, int]] = queue.Queue(maxsize=queue_size)
+        self.items: queue.Queue[tuple[dict, int]] = queue.Queue(maxsize=queue_size)
         self.worker_count = workers
         self.stop_event = threading.Event()
         self._latest_generation: dict[str, int] = {}
@@ -134,9 +134,15 @@ class KubernetesDaemon:
         if pod_uid:
             with self._generation_lock:
                 self._latest_generation[pod_uid] = generation
+        captured = self._capture_placement(pod)
+        if deleted and pod_uid:
+            self._mark_deleted(pod_uid)
+        if not captured:
+            self._complete_generation(pod_uid, generation)
+            return
         while not self.stop_event.is_set():
             try:
-                self.items.put((pod, deleted, generation), timeout=0.5)
+                self.items.put((pod, generation), timeout=0.5)
                 self.health.update(queue_saturated=False)
                 return
             except queue.Full:
@@ -147,11 +153,11 @@ class KubernetesDaemon:
     def _worker(self) -> None:
         while not self.stop_event.is_set() or not self.items.empty():
             try:
-                pod, deleted, generation = self.items.get(timeout=0.5)
+                pod, generation = self.items.get(timeout=0.5)
             except queue.Empty:
                 continue
             try:
-                self._record(pod, deleted=deleted, generation=generation)
+                self._record(pod, generation=generation)
             except Exception:
                 # A malformed observation or an unexpected enrichment bug
                 # must never terminate a recording worker.
@@ -174,42 +180,43 @@ class KubernetesDaemon:
         self,
         pod: dict,
         *,
-        deleted: bool = False,
         generation: int | None = None,
     ) -> None:
-        pod_uid = (pod.get("metadata") or {}).get("uid")
-        try:
-            self._record_placement(pod, generation=generation)
-        finally:
-            if deleted and pod_uid:
-                self._mark_deleted(pod_uid)
+        metadata = pod.get("metadata") or {}
+        base = self.store.get_by_pod_uid(metadata.get("uid"))
+        if base is None:
+            logger.error(
+                f"cannot enrich Pod {self.namespace}/{metadata.get('name')}: "
+                "base placement is not persisted"
+            )
+            return
+        self._enrich_placement(pod, base, generation)
 
-    def _record_placement(
-        self,
-        pod: dict,
-        *,
-        generation: int | None = None,
-    ) -> None:
+    def _capture_placement(self, pod: dict) -> bool:
         failure_reason = pod_node_failure_reason(pod) or _pod_container_exit_reason(pod)
         base = PlacementRecord.for_pod(pod, node_failure_reason=failure_reason)
         result = self._persist(base, "scheduler-neutral Pod placement")
         if result is None:
-            return
+            return False
 
         metadata = pod.get("metadata") or {}
-        logger.info(f"{result.value} placement for Pod {self.namespace}/{metadata.get('name')}")
+        if result != CreateResult.DUPLICATE:
+            logger.info(f"{result.value} placement for Pod {self.namespace}/{metadata.get('name')}")
+        return True
+
+    def _enrich_placement(
+        self,
+        pod: dict,
+        base: PlacementRecord,
+        generation: int | None,
+    ) -> None:
+        metadata = pod.get("metadata") or {}
         if self.owner_resolver is None:
             return
-
-        try:
-            stored = self.store.get_by_pod_uid(base.pod_uid)
-        except Exception:
-            logger.exception("failed to read stored placement before owner resolution")
-            stored = None
         # Unobserved relationship changes cannot be reconstructed after deletion.
         cached_owner = (
-            stored.owner
-            if stored is not None and _stored_owner_matches_pod(stored, pod)
+            base.owner
+            if _stored_owner_matches_pod(base, pod)
             else None
         )
         owner = None
@@ -236,7 +243,8 @@ class KubernetesDaemon:
                 return
 
         assert owner is not None
-        owned = base.enriched(owner=owner, node_failure_reason=failure_reason)
+        current = PlacementRecord.for_pod(pod)
+        owned = current.enriched(owner=owner)
         owner_result = self._persist_enrichment(
             owned,
             "Pod owner enrichment",
