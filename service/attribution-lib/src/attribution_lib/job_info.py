@@ -154,7 +154,9 @@ class JobInfo(NamedTuple):
     allocation_failure: Optional[SchedulerFailure] = None
     # Associated execution evidence does not overwrite the raw allocation fields.
     execution_cancellation: Optional[ExecutionCancellation] = None
-    # Optional validated non-job incident context available to refiner rules.
+    # Temporary bridge until cluster context enters as native CLUSTER_CONTEXT
+    # observations scoped to non-job cluster resources, where rules can consume
+    # it through normal event, scrub, and cascade processing. Remove this field then.
     cluster_incident_context: Optional[ClusterIncidentContext] = None
 
     @property
