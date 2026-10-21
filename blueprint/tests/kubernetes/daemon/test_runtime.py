@@ -106,6 +106,21 @@ class _OwnerTrackingStore:
         return getattr(self.delegate, name)
 
 
+class _FailReadOnceStore:
+    def __init__(self, delegate):
+        self.delegate = delegate
+        self.failed = False
+
+    def get_by_pod_uid(self, pod_uid):
+        if not self.failed:
+            self.failed = True
+            raise OSError("synthetic read failure")
+        return self.delegate.get_by_pod_uid(pod_uid)
+
+    def __getattr__(self, name):
+        return getattr(self.delegate, name)
+
+
 class _BlockingResourceResolver:
     def __init__(self):
         self.started = threading.Event()
@@ -182,6 +197,22 @@ def test_records_placement_before_any_resolution(tmp_path):
     assert record.node_name == "node-a"
     assert record.owner is None
     assert record.associated_resources == ()
+
+
+def test_transient_placement_read_failure_still_enriches_owner(tmp_path):
+    backing_store = SQLitePlacementStore(str(tmp_path / "placements.db"))
+    store = _FailReadOnceStore(backing_store)
+    daemon = KubernetesDaemon(
+        core_api=None,
+        store=store,
+        namespace="team-a",
+        owner_resolver=_OwnerResolver(),
+    )
+    daemon._capture_placement(_pod())
+
+    daemon._record(_pod())
+
+    assert backing_store.get_by_pod_uid("pod-uid-1").owner.uid == "job-uid-1"
 
 
 def test_complete_listing_reconciles_absent_placements(mocker):
