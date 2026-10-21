@@ -7,6 +7,7 @@ import json
 import sqlite3
 from collections.abc import Iterator
 from contextlib import contextmanager
+from dataclasses import replace
 from pathlib import Path
 
 from attribution_blueprint.kubernetes.daemon.models import PlacementRecord
@@ -119,8 +120,12 @@ class SQLitePlacementStore:
             failure_reason = existing.node_failure_reason
             if _failure_evidence_rank(record.node_failure_reason) > _failure_evidence_rank(failure_reason):
                 failure_reason = record.node_failure_reason
-            merged = existing.enriched(
+            merge_base = existing
+            if record.owner is not None and record.owner != existing.owner:
+                merge_base = replace(existing, associated_resources=())
+            merged = merge_base.enriched(
                 scheduled_at=record.scheduled_at,
+                owner_references=record.owner_references if record.owner is not None else None,
                 owner=record.owner,
                 associated_resources=record.associated_resources,
                 node_failure_reason=failure_reason,

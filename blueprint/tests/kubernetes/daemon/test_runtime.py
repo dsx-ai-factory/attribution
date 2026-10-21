@@ -35,13 +35,67 @@ def _pod() -> dict:
 
 
 class _OwnerResolver:
+    def __init__(self):
+        self.calls = 0
+
     def resolve(self, pod):
+        self.calls += 1
         return ResourceIdentity("batch/v1", "Job", "team-a", "trainer", "job-uid-1")
+
+
+class _ReassignedThenPendingResolver(_OwnerResolver):
+    def resolve(self, pod):
+        self.calls += 1
+        if self.calls == 1:
+            return ResourceIdentity("batch/v1", "Job", "team-a", "trainer", "job-uid-1")
+        if self.calls == 2:
+            return ResourceIdentity(
+                "jobset.x-k8s.io/v1alpha2",
+                "JobSet",
+                "team-a",
+                "training",
+                "jobset-uid-1",
+            )
+        raise ResolutionPending("owner disappeared")
+
+
+class _ReassignedOwnerResolver(_OwnerResolver):
+    def resolve(self, pod):
+        self.calls += 1
+        if self.calls == 1:
+            return ResourceIdentity("batch/v1", "Job", "team-a", "trainer", "job-uid-1")
+        return ResourceIdentity(
+            "jobset.x-k8s.io/v1alpha2",
+            "JobSet",
+            "team-a",
+            "training",
+            "jobset-uid-1",
+        )
 
 
 class _PendingResourceResolver:
     def resolve(self, pod, owner):
         raise ResolutionPending("Workload has not appeared")
+
+
+class _ReassignedResourceResolver:
+    def __init__(self):
+        self.calls = 0
+
+    def resolve(self, pod, owner):
+        self.calls += 1
+        if self.calls == 2:
+            raise ResolutionPending("resource has not appeared")
+        suffix = "a" if self.calls == 1 else "b"
+        return (
+            ResourceIdentity(
+                "scheduling.example.io/v1",
+                "Admission",
+                "team-a",
+                f"admission-{suffix}",
+                f"admission-uid-{suffix}",
+            ),
+        )
 
 
 class _FailOnEnrichmentStore:
@@ -102,6 +156,57 @@ def test_retains_owner_when_optional_scheduler_resolution_exhausts(tmp_path):
     assert record is not None
     assert record.owner == ResourceIdentity("batch/v1", "Job", "team-a", "trainer", "job-uid-1")
     assert record.associated_resources == ()
+
+
+def test_reassigned_owner_refreshes_controller_reference_for_later_fallback(tmp_path, mocker):
+    store = SQLitePlacementStore(str(tmp_path / "placements.db"))
+    resolver = _ReassignedThenPendingResolver()
+    daemon = KubernetesDaemon(
+        core_api=None,
+        store=store,
+        namespace="team-a",
+        owner_resolver=resolver,
+    )
+    wait = mocker.patch.object(daemon.stop_event, "wait")
+    daemon._record(_pod())
+    reassigned = _pod()
+    reassigned["metadata"]["ownerReferences"][0]["uid"] = "job-uid-2"
+
+    daemon._record(reassigned)
+    daemon._record(reassigned)
+
+    stored = store.get_by_pod_uid("pod-uid-1")
+    assert resolver.calls == 3
+    wait.assert_not_called()
+    assert stored.owner.uid == "jobset-uid-1"
+    assert stored.owner_references[0].uid == "job-uid-2"
+
+
+def test_owner_change_clears_old_association_until_new_resource_resolves(tmp_path):
+    store = SQLitePlacementStore(str(tmp_path / "placements.db"))
+    daemon = KubernetesDaemon(
+        core_api=None,
+        store=store,
+        namespace="team-a",
+        owner_resolver=_ReassignedOwnerResolver(),
+        resource_resolvers=(_ReassignedResourceResolver(),),
+        max_resolution_attempts=1,
+    )
+    daemon._record(_pod())
+    reassigned = _pod()
+    reassigned["metadata"]["ownerReferences"][0]["uid"] = "job-uid-2"
+
+    daemon._record(reassigned)
+
+    stored = store.get_by_pod_uid("pod-uid-1")
+    assert stored is not None
+    assert stored.owner.uid == "jobset-uid-1"
+    assert stored.associated_resources == ()
+    assert store.list_for_resource("team-a", "admission-uid-a") == []
+
+    daemon._record(reassigned)
+
+    assert store.list_for_resource("team-a", "admission-uid-b")
 
 
 def test_deleted_event_starts_placement_retention(tmp_path):
