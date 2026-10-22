@@ -327,7 +327,7 @@ class TestJobLevelSymptoms:
 
         assert "NVRx detected failure" in symptoms
         assert not any(group.has_bad() for group in bad_nodes.attributions.values())
-        assert outcome.value().outcome == "Fail Undetermined"
+        assert outcome.value().outcome == "Fail MultiCategory"
 
 
 class TestMissingSrunCommand:
