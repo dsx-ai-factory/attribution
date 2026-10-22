@@ -3,9 +3,9 @@
 
 """Kueue (Kubernetes batch admission queue) ExecutionContextAdapter.
 
-Mirrors the Slurm adapter's shape: shell out to `kubectl` for the raw API
-payloads, normalize them into the wire-format `ExecutionContext` TypedDict,
-and never let any Kubernetes/Kueue-shaped data structure escape this file.
+Mirrors the Slurm adapter's shape: read the raw Kubernetes API payloads,
+normalize them into the wire-format `ExecutionContext` TypedDict, and never
+let any Kubernetes/Kueue-shaped data structure escape this file.
 
 Wire-format mapping vs. the Slurm adapter:
 
@@ -65,13 +65,15 @@ real owner.
 
 from __future__ import annotations
 
-import json
-import subprocess
 from datetime import datetime, timezone
 from typing import NamedTuple, NotRequired, TypedDict
 
 from loguru import logger
 
+from attribution_blueprint.connectors.execution_contexts.kubernetes_client import (
+    KubernetesClient,
+    KubernetesClientError,
+)
 from attribution_blueprint.connectors.execution_contexts.kueue.helpers import (
     NODE_LOSS_DISRUPTION_REASONS as _NODE_LOSS_DISRUPTION_REASONS,
     POD_JOBSET_LABEL as _POD_JOBSET_LABEL,
@@ -91,6 +93,11 @@ from attribution_blueprint.connectors.execution_contexts.kueue.pod_placement.sto
     PlacementResolver,
 )
 from attribution_blueprint.types import assert_aware
+
+_KUEUE_GROUP = "kueue.x-k8s.io"
+# Kueue versions its Workload CRD; this is a config default, not a
+# runtime-discovered "preferred version" — see `KueueExecutionContextAdapter`.
+_DEFAULT_WORKLOAD_API_VERSION = f"{_KUEUE_GROUP}/v1beta1"
 
 
 class KueueExecutionContext(TypedDict):
@@ -303,7 +310,7 @@ def _collect_pod_evidence(
                 break
     # `failed_node` is the lexicographically smallest node within the
     # strongest evidence tier available, so the result is stable across
-    # kubectl response orderings. Node-loss evidence outranks a generic
+    # API response orderings. Node-loss evidence outranks a generic
     # non-zero exit code.
     if node_loss_nodes:
         failed_node = min(node_loss_nodes)
@@ -627,8 +634,8 @@ def _workload_window(workload: dict, now: datetime) -> tuple[datetime, datetime]
     on the Workload object itself — no pod or owner-Job fetches.
 
     Used by `discover_by_time_range` to filter the cluster-wide listing by
-    time window BEFORE issuing per-workload `kubectl get pods` /
-    `kubectl get job` round-trips. The full `_parse_workload` computes the
+    time window BEFORE issuing per-workload Pod/owner-Job API round-trips.
+    The full `_parse_workload` computes the
     same window plus pod/node/time-limit evidence; this helper short-circuits
     when the caller only needs to know "does this workload overlap [start,
     end]?". Returns `None` if no start time can be derived (the workload
@@ -773,18 +780,23 @@ def _split_csv(value: str) -> list[str]:
 
 
 class KueueExecutionContextAdapter:
-    """ExecutionContextAdapter that talks to a Kubernetes cluster via kubectl.
+    """ExecutionContextAdapter that talks to a Kubernetes cluster over the
+    Kubernetes API.
 
-    `kubectl_path` is the binary to invoke (default "kubectl"). `kubeconfig`
-    and `context` map to `--kubeconfig`/`--context`; both are optional and
-    when unset kubectl falls back to its default discovery (KUBECONFIG env
-    var, ~/.kube/config, in-cluster service account). `namespace` selects a
-    single namespace; the empty string queries every namespace via `-A`.
+    `kubeconfig` and `context` select a kubeconfig file and context; both are
+    optional and when unset this falls back to the default kubeconfig
+    (KUBECONFIG env var, ~/.kube/config) or, if neither resolves, in-cluster
+    service-account credentials. `namespace` selects a single namespace; the
+    empty string queries every namespace. `workload_api_version` pins the
+    Kueue Workload CRD's `<group>/<version>` the adapter reads; Kueue versions
+    this API, so there is no runtime "ask the cluster for its preferred
+    version" step — the default tracks the Workload API version Kueue has
+    shipped as `v1beta1` since 0.6, and callers running a cluster that serves
+    a different version configure this directly.
     """
 
     def __init__(
         self,
-        kubectl_path: str = "kubectl",
         kubeconfig: str | None = None,
         context: str | None = None,
         namespace: str | None = None,
@@ -793,12 +805,18 @@ class KueueExecutionContextAdapter:
         placement_reader: PlacementReader | None = None,
         event_max_age_seconds: int = 3600,
         prometheus_placement_resolver: PlacementResolver | None = None,
+        workload_api_version: str = _DEFAULT_WORKLOAD_API_VERSION,
     ):
-        self.kubectl_path = kubectl_path
         self.kubeconfig = kubeconfig
         self.context = context
         self.namespace = namespace or ""
         self.timeout_seconds = timeout_seconds
+        self.workload_api_version = workload_api_version
+        self._kubernetes = KubernetesClient(
+            kubeconfig=kubeconfig,
+            context=context,
+            timeout_seconds=timeout_seconds,
+        )
         if not isinstance(placement_records_enabled, bool):
             raise ValueError("placement_records_enabled must be a bool")
         self.placement_records_enabled = placement_records_enabled
@@ -823,8 +841,8 @@ class KueueExecutionContextAdapter:
         adapter is namespace-scoped).
 
         Returns the same list shape `discover_by_time_range` does. Missing
-        workloads are silently skipped — `kubectl get workload <name>` exits
-        non-zero for unknown names.
+        workloads are silently skipped — the Kubernetes API returns 404 for
+        unknown names.
         """
         workloads: list[dict] = []
         for ref in ids:
@@ -837,9 +855,15 @@ class KueueExecutionContextAdapter:
                         f"use `<namespace>/<name>` or configure eca.kueue.namespace"
                     )
                 ns, name = self.namespace, ref
-            obj = self._kubectl_get_one("workload", name, namespace=ns)
-            if obj is not None:
-                workloads.append(obj)
+            try:
+                workloads.append(
+                    self._kubernetes.get_one(
+                        "Workload", name, namespace=ns, api_version=self.workload_api_version
+                    )
+                )
+            except KubernetesClientError as error:
+                if error.status != 404:
+                    raise
         return self._finalize(workloads)
 
     def discover_by_time_range(
@@ -863,7 +887,11 @@ class KueueExecutionContextAdapter:
         """
         assert_aware(start, "discover_by_time_range.start")
         assert_aware(end, "discover_by_time_range.end")
-        listing = self._kubectl_list("workloads", namespace=self.namespace or None)
+        listing = self._kubernetes.list(
+            "Workload",
+            namespace=self.namespace or None,
+            api_version=self.workload_api_version,
+        )
         # parse only the timestamps each workload object
         # already carries (conditions + creationTimestamp).
         from datetime import timezone
@@ -888,66 +916,6 @@ class KueueExecutionContextAdapter:
             return filtered
         return [c for c in filtered if wanted.intersection(c["nodes"])]
 
-    def _kubectl_base(self) -> list[str]:
-        cmd = [self.kubectl_path]
-        if self.kubeconfig:
-            cmd += ["--kubeconfig", self.kubeconfig]
-        if self.context:
-            cmd += ["--context", self.context]
-        return cmd
-
-    def _run_json(self, args: list[str], *, required: bool = False) -> dict | None:
-        cmd = self._kubectl_base() + args + ["-o", "json"]
-        try:
-            result = subprocess.run(
-                cmd,
-                check=True,
-                text=True,
-                timeout=self.timeout_seconds,
-                capture_output=True,
-            )
-        except subprocess.CalledProcessError as e:
-            if required:
-                raise RuntimeError(
-                    f"required kubectl query failed with exit {e.returncode}: {(e.stderr or '').strip()}"
-                ) from e
-            logger.warning(f"kubectl exited {e.returncode}: {(e.stderr or '').strip() or '<no stderr>'}")
-            return None
-        except subprocess.TimeoutExpired:
-            if required:
-                raise RuntimeError(f"required kubectl query timed out after {self.timeout_seconds}s")
-            logger.warning(f"kubectl timed out after {self.timeout_seconds}s: {cmd!r}")
-            return None
-        try:
-            return json.loads(result.stdout)
-        except json.JSONDecodeError as e:
-            if required:
-                raise RuntimeError(f"required kubectl query returned invalid JSON: {e}") from e
-            logger.warning(f"kubectl returned invalid JSON: {e}")
-            return None
-
-    def _kubectl_get_one(self, kind: str, name: str, *, namespace: str) -> dict | None:
-        args = ["get", kind, name]
-        if namespace:
-            args += ["-n", namespace]
-        return self._run_json(args)
-
-    def _kubectl_list(self, kind: str, *, namespace: str | None, field_selector: str | None = None) -> list[dict]:
-        args = ["get", kind]
-        if field_selector:
-            args += ["--field-selector", field_selector]
-        if namespace:
-            args += ["-n", namespace]
-        else:
-            args += ["-A"]
-        payload = self._run_json(args)
-        if not payload:
-            return []
-        items = payload.get("items")
-        if not isinstance(items, list):
-            return []
-        return items
-
     def _fetch_pods_for(self, workloads: list[dict]) -> list[dict]:
         """Fetch all pods that might belong to any workload in `workloads`.
 
@@ -966,17 +934,14 @@ class KueueExecutionContextAdapter:
             if selector is None:
                 continue
             namespace, label_key, label_value = selector
-            args = ["get", "pods", "-l", f"{label_key}={label_value}"]
-            if namespace:
-                args += ["-n", namespace]
-            else:
-                args += ["-A"]
-            payload = self._run_json(args)
-            if not payload:
-                continue
-            items = payload.get("items")
-            if isinstance(items, list):
-                pods.extend(items)
+            pods.extend(
+                self._kubernetes.list(
+                    "Pod",
+                    namespace=namespace or None,
+                    label_selector=f"{label_key}={label_value}",
+                    api_version="v1",
+                )
+            )
         return pods
 
     def _fetch_owner_jobs(self, workloads: list[dict]) -> dict[str, dict]:
@@ -1001,18 +966,25 @@ class KueueExecutionContextAdapter:
                     continue
                 seen.add(key)
                 if kind == "Job":
-                    job = self._kubectl_get_one("job", name, namespace=ns)
-                    if job is not None:
-                        out[f"{ns}/{name}"] = job
+                    try:
+                        out[f"{ns}/{name}"] = self._kubernetes.get_one(
+                            "Job",
+                            name,
+                            namespace=ns,
+                            api_version="batch/v1",
+                        )
+                    except KubernetesClientError as error:
+                        if error.status != 404:
+                            raise
                     continue
 
-                args = ["get", "jobs", "-l", f"{_POD_JOBSET_LABEL}={name}"]
-                if ns:
-                    args += ["-n", ns]
-                else:
-                    args += ["-A"]
-                payload = self._run_json(args)
-                for job in (payload or {}).get("items") or []:
+                child_jobs = self._kubernetes.list(
+                    "Job",
+                    namespace=ns or None,
+                    label_selector=f"{_POD_JOBSET_LABEL}={name}",
+                    api_version="batch/v1",
+                )
+                for job in child_jobs:
                     job_meta = job.get("metadata") or {}
                     job_name = job_meta.get("name")
                     job_namespace = job_meta.get("namespace") or ns
@@ -1032,7 +1004,7 @@ class KueueExecutionContextAdapter:
         then only the resulting pod names' `Scheduled` Events, via
         `--field-selector` — never a namespace-wide Event list. This keeps
         the RBAC/scale/retention footprint bounded to this one workload
-        one `kubectl get events` call per owner Job UID and per pod name.
+        one Events query per owner Job UID and per pod name.
         Skips entirely (no calls) once `context["end_time"]` is older than
         `event_max_age_seconds`.
         """
@@ -1046,21 +1018,38 @@ class KueueExecutionContextAdapter:
             return [], []
 
         pod_names: set[str] = set()
+        # Events are optional evidence, so a failed query is skipped. Every other
+        # read decides whether a workload exists and raises on failure.
         for job_uid in job_uids:
-            creation_events = self._kubectl_list(
-                "events",
-                namespace=namespace,
-                field_selector=f"involvedObject.uid={job_uid},involvedObject.kind=Job,reason=SuccessfulCreate",
-            )
+            try:
+                creation_events = self._kubernetes.list(
+                    "Event",
+                    namespace=namespace,
+                    field_selector=f"involvedObject.uid={job_uid},involvedObject.kind=Job,reason=SuccessfulCreate",
+                    api_version="v1",
+                    # Pin to the core API (not events.k8s.io/v1, also kind=Event):
+                    # both are marked preferred on clusters that serve both, so
+                    # omitting this makes discovery ambiguous.
+                    prefix="api",
+                )
+            except KubernetesClientError as error:
+                logger.warning(f"event lookup for Job {job_uid} failed; skipping: {error}")
+                continue
             pod_names |= _pod_names_from_creation_events(creation_events, context, job_uids)
 
         nodes: set[str] = set()
         for pod_name in pod_names:
-            scheduled_events = self._kubectl_list(
-                "events",
-                namespace=namespace,
-                field_selector=f"involvedObject.name={pod_name},involvedObject.kind=Pod,reason=Scheduled",
-            )
+            try:
+                scheduled_events = self._kubernetes.list(
+                    "Event",
+                    namespace=namespace,
+                    field_selector=f"involvedObject.name={pod_name},involvedObject.kind=Pod,reason=Scheduled",
+                    api_version="v1",
+                    prefix="api",
+                )
+            except KubernetesClientError as error:
+                logger.warning(f"event lookup for Pod {pod_name} failed; skipping: {error}")
+                continue
             node = _node_from_scheduled_events(scheduled_events, context, namespace, pod_name)
             if node:
                 nodes.add(node)
