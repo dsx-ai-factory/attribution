@@ -142,7 +142,7 @@ def test_run_to_react_falls_back_when_catalog_is_empty(tmp_path, monkeypatch):
 
 
 def test_generic_nvrx_failure_reports_unavailable_reason(tmp_path):
-    """Keep the unavailable-reason detail visible in the report and Diagnose cards."""
+    """Keep the unavailable reason in the report and tenant diagnosis without operator guidance."""
     detail = "Underlying failure reason unavailable from the collected evidence."
     run = _seed_one(
         tmp_path,
@@ -160,7 +160,7 @@ def test_generic_nvrx_failure_reports_unavailable_reason(tmp_path):
     assert result["detail"] == detail
     assert result["rootSymptom"]["symptom"] == "NVRx detected failure"
     assert result["diagnose"]["summary"] == detail
-    assert result["operatorDiagnose"]["summary"] == detail
+    assert "operatorDiagnose" not in result
 
 
 def test_symptom_text_without_catalog_id_yields_no_persona_card(tmp_path):
