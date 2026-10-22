@@ -428,6 +428,7 @@ _IB_CLEANUP_SKIP_SYMPTOMS = frozenset({_XID145_RXPIPE_SYMPTOM, "XID-137-NVLINK_P
 _KERNEL_CRASH_SYMPTOMS = frozenset(
     {
         "kernel panic",
+        "kernel soft lockup",
         "kernel oops",
         "kernel invalid memory access",
     }
