@@ -15,6 +15,7 @@ dependencies = [
     "nvidia-attribution-client",
     "requests>=2.31",
     "loguru>=0.7",
+    "kubernetes>=34.1,!=36.0.0",  # 36.0.0 omits the Authorization header under in-cluster auth
 ]
 
 [project.optional-dependencies]
@@ -30,9 +31,7 @@ web = [
     "uvicorn>=0.27",
     "pyyaml>=6.0",
 ]
-pod-placement-recorder = [
-    "kubernetes>=34.1",
-]
+pod-placement-recorder = []
 
 [project.scripts]
 nvidia-attribution-blueprint = "attribution_blueprint.cli:main"
