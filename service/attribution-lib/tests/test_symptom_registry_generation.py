@@ -1058,16 +1058,17 @@ def test_symptoms_package_exports_declaration_types():
         ("ibv_open_device failed", "Fail InfraHW"),
     ],
 )
-def test_bad_nic_state_supersedes_only_secondary_outcomes(secondary, baseline_outcome):
+@pytest.mark.parametrize("diagnosis", ["detected bad NIC state", "irisc not responding"])
+def test_bad_nic_state_supersedes_only_secondary_outcomes(secondary, baseline_outcome, diagnosis):
     registry = _load_committed_registry()
     baseline = registry.outcome_for([secondary])
     assert baseline is not None
     assert baseline.outcome == baseline_outcome
-    for symptoms in ([secondary, "detected bad NIC state"], ["detected bad NIC state", secondary]):
+    for symptoms in ([secondary, diagnosis], [diagnosis, secondary]):
         match = registry.outcome_for(symptoms)
         assert match is not None
         assert match.outcome == "Fail InfraSW"
-        assert match.symptom == "detected bad NIC state"
+        assert match.symptom == diagnosis
 
 
 @pytest.mark.parametrize(
@@ -1080,8 +1081,9 @@ def test_bad_nic_state_supersedes_only_secondary_outcomes(secondary, baseline_ou
     ],
 )
 @pytest.mark.parametrize("secondary", [None, "Call to ibv_modify_qp failed", "ibv_open_device failed"])
-def test_bad_nic_state_preserves_independent_outcomes(independent, expected_outcome, secondary):
-    symptoms = ["detected bad NIC state", independent]
+@pytest.mark.parametrize("diagnosis", ["detected bad NIC state", "irisc not responding"])
+def test_bad_nic_state_preserves_independent_outcomes(independent, expected_outcome, secondary, diagnosis):
+    symptoms = [diagnosis, independent]
     if secondary is not None:
         symptoms.append(secondary)
     match = _load_committed_registry().outcome_for(symptoms)

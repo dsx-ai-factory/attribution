@@ -2837,3 +2837,14 @@ outcome_symptom(
     doc="detected-bad-nic-state",
     hw_cause="NIC firmware initialization failure",
 )
+
+
+outcome_symptom(
+    "irisc not responding",
+    outcome="Fail InfraSW",
+    # Independent MEDIUM_SW faults retain precedence; outcome selection
+    # supersedes only the QP and device-open mappings for this diagnosis.
+    priority=OutcomePriority.LOW,
+    doc="irisc-not-responding",
+    hw_cause="irisc not responding",
+)
