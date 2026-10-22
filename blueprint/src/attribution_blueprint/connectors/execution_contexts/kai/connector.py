@@ -40,7 +40,10 @@ from typing import NotRequired, TypedDict
 import yaml
 from loguru import logger
 
-from attribution_blueprint.connectors.execution_contexts.kubernetes_client import KubernetesClient
+from attribution_blueprint.connectors.execution_contexts.kubernetes_client import (
+    KubernetesClient,
+    KubernetesClientError,
+)
 from attribution_blueprint.types import assert_aware
 
 _PODGROUP_RESOURCE = "PodGroup"
@@ -400,14 +403,18 @@ class KaiExecutionContextAdapter:
                         f"use `<namespace>/<name>` or configure eca.kai.namespace"
                     )
                 ns, name = self.namespace, ref
-            obj = self._kubernetes.get_one(
-                _PODGROUP_RESOURCE,
-                name,
-                namespace=ns,
-                group=_PODGROUP_GROUP,
-            )
-            if obj is not None:
-                podgroups.append(obj)
+            try:
+                podgroups.append(
+                    self._kubernetes.get_one(
+                        _PODGROUP_RESOURCE,
+                        name,
+                        namespace=ns,
+                        group=_PODGROUP_GROUP,
+                    )
+                )
+            except KubernetesClientError as error:
+                if error.status != 404:
+                    raise
         return self._finalize(podgroups)
 
     def discover_by_time_range(
@@ -473,16 +480,18 @@ class KaiExecutionContextAdapter:
                 if owner_resource == _JOB_RESOURCE
                 else {"group": _JOBSET_GROUP}
             )
-            owner_object = (
-                self._kubernetes.get_one(
-                    owner_resource,
-                    owner["name"],
-                    namespace=namespace,
-                    **owner_options,
-                )
-                if namespace
-                else None
-            )
+            owner_object = None
+            if namespace:
+                try:
+                    owner_object = self._kubernetes.get_one(
+                        owner_resource,
+                        owner["name"],
+                        namespace=namespace,
+                        **owner_options,
+                    )
+                except KubernetesClientError as error:
+                    if error.status != 404:
+                        raise
             owner_job_uids = {owner["uid"]}
             if owner["kind"] == "JobSet" and _skip_reason(owner, owner_object) is None:
                 child_jobs = self._kubernetes.list(

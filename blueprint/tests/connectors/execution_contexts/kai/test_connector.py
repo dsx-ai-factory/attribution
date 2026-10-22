@@ -179,7 +179,7 @@ class _FakeKubernetesClient:
         )
         if kind in self.failures:
             raise self.failures[kind]
-        return next(
+        obj = next(
             (
                 item
                 for item in self._selected(kind, namespace)
@@ -187,6 +187,9 @@ class _FakeKubernetesClient:
             ),
             None,
         )
+        if obj is None:
+            raise KubernetesClientError(f"{kind} {name!r} not found in {namespace!r}", status=404)
+        return obj
 
     def list(
         self,
