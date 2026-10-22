@@ -102,7 +102,7 @@ line   = "3: global_batch_size (12) must be divisible by micro_batch_size (4)"
 # A bare CalledProcessError may come from an unrelated subprocess.
 [[extractor]]
 name     = "TritonInductorCCompilationFailure"
-match_re = '''^\s*(?:\d+:\s*)?(?:\[default\d+\]:\s*)?(?:\[rank\s*:?\s*\d+\]:\s*)?(?:(?:torch\._inductor\.exc\.)?InductorError:\s+(?:subprocess\.)?CalledProcessError:|subprocess\.CalledProcessError:(?=[^\r\n]*/(?:site|dist)-packages/triton/))\s+Command '\['(?:[^'\r\n]*/)?(?:gcc|g\+\+|cc|c\+\+|clang(?:\+\+)?)(?:-\d+(?:\.\d+)*)?', [^\r\n]*\]' returned non-zero exit status [1-9]\d*\.\s*$'''
+match_re = '''^\s*(?:\d+:\s*)?(?:\[default\d+\]:\s*)?(?:\[rank\s*:?\s*\d+\]:\s*)?(?:(?:torch\._inductor\.exc\.)?InductorError:\s+(?:subprocess\.)?CalledProcessError:|subprocess\.CalledProcessError:(?=[^\r\n]*/(?:site|dist)-packages/triton/))\s+Command '\['(?:[^'\r\n]*/)?(?:[A-Za-z0-9_]+(?:-[A-Za-z0-9_]+)+-)?(?:gcc|g\+\+|cc|c\+\+|clang(?:\+\+)?)(?:-\d+(?:\.\d+)*)?', [^\r\n]*\]' returned non-zero exit status [1-9]\d*\.\s*$'''
 emit     = { type = "bad_node", symptom = "Triton/Inductor JIT C-compilation failure" }
 [[extractor.cases]]
 expect  = "bad"
@@ -124,6 +124,20 @@ symptom = "Triton/Inductor JIT C-compilation failure"
 expect  = "bad"
 line    = " 1: [default1]:[rank1]: subprocess.CalledProcessError: Command '['gcc', '/tmp/jit/kernel.c', '-I/dist-packages/triton/backends/nvidia/include']' returned non-zero exit status 1."
 symptom = "Triton/Inductor JIT C-compilation failure"
+[[extractor.cases]]
+expect  = "bad"
+line    = "[default1]: InductorError: subprocess.CalledProcessError: Command '['/usr/bin/aarch64-linux-gnu-gcc', '/tmp/jit/kernel.c', '-shared']' returned non-zero exit status 1."
+symptom = "Triton/Inductor JIT C-compilation failure"
+[[extractor.cases]]
+expect  = "bad"
+line    = "subprocess.CalledProcessError: Command '['x86_64-linux-gnu-g++-13', '/tmp/jit/kernel.cpp', '-I/site-packages/triton/backends/nvidia/include']' returned non-zero exit status 1."
+symptom = "Triton/Inductor JIT C-compilation failure"
+[[extractor.cases]]
+expect = "none"
+line   = "InductorError: CalledProcessError: Command '['aarch64-linux-gnu-gcc-ar', '/tmp/jit/kernel.o']' returned non-zero exit status 1."
+[[extractor.cases]]
+expect = "none"
+line   = "subprocess.CalledProcessError: Command '['aarch64-linux-gnu-gcc', '/tmp/extension.c']' returned non-zero exit status 1."
 [[extractor.cases]]
 expect = "none"
 line   = "[default1]: subprocess.CalledProcessError: Command '['gcc', '/home/user/triton/kernel.c']' returned non-zero exit status 1."

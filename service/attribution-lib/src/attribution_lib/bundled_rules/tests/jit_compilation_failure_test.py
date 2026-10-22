@@ -139,6 +139,46 @@ def test_compiler_failure_does_not_require_nvrx(attribute_logs, prefix):
     assert result.outcome_attr.value().root_cause_symptom == _SYMPTOM
 
 
+@pytest.mark.parametrize(
+    "compiler",
+    [
+        "aarch64-linux-gnu-gcc",
+        "/usr/bin/aarch64-linux-gnu-gcc",
+        "/usr/bin/aarch64-linux-gnu-gcc-13",
+        "x86_64-linux-gnu-g++-13",
+        "arm-none-eabi-gcc",
+        "x86_64-unknown-linux-gnu-clang++-18",
+    ],
+)
+@pytest.mark.parametrize("context", ["inductor", "triton", "unrelated"])
+def test_target_prefixed_compiler_requires_framework_context(attribute_logs, compiler, context):
+    error = _ERROR.replace("/usr/bin/gcc", compiler)
+    if context != "inductor":
+        error = error.replace(
+            "torch._inductor.exc.InductorError: CalledProcessError:", "subprocess.CalledProcessError:"
+        )
+    if context != "triton":
+        error = error.replace("/dist-packages/triton/", "/dist-packages/other_package/")
+    line = "[default1]: " + error
+    result, graph = attribute_logs(line_entries([line, _NVRX]))
+
+    expected_match = context != "unrelated"
+    assert (_SYMPTOM in result.symptoms) == expected_match
+    assert any(node.rule_name == _RULE for node in graph.nodes) == expected_match
+    assert result.outcome_attr.value().root_cause_symptom == (_SYMPTOM if expected_match else "NVRx detected failure")
+    if expected_match:
+        assert result.symptoms[_SYMPTOM].one_source().datum == line
+
+
+@pytest.mark.parametrize("command", ["aarch64-linux-gnu-gcc-ar", "aarch64-linux-gnu-python", "wrapper-gcc", "notgcc"])
+def test_similar_command_names_do_not_establish_compiler_failure(attribute_logs, command):
+    result, graph = attribute_logs(line_entries([_ERROR.replace("/usr/bin/gcc", command), _NVRX]))
+
+    assert _SYMPTOM not in result.symptoms
+    assert result.outcome_attr.value().root_cause_symptom == "NVRx detected failure"
+    assert not any(node.rule_name == _RULE for node in graph.nodes)
+
+
 @pytest.mark.parametrize("prefix", ["[rank1]: ", "[default1]: "])
 @pytest.mark.parametrize(
     "package_path, expected_match",
