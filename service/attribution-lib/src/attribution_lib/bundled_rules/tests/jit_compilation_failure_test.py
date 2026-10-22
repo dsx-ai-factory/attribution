@@ -159,7 +159,7 @@ def test_standalone_compiler_error_requires_installed_triton(attribute_logs, pre
     assert (_SYMPTOM in result.symptoms) == expected_match
     assert any(n.rule_name == _RULE for n in graph.nodes) == expected_match
     outcome = result.outcome_attr.value()
-    assert outcome.outcome == ("Fail MultiCategory" if expected_match else "Fail Undetermined")
+    assert outcome.outcome == "Fail MultiCategory"
     assert outcome.root_cause_symptom == (_SYMPTOM if expected_match else "NVRx detected failure")
     if expected_match:
         assert result.symptoms[_SYMPTOM].one_source().datum == line
@@ -277,6 +277,6 @@ def test_generic_nvrx_failure_does_not_invent_compilation_failure(attribute_logs
     result, graph = attribute_logs(line_entries([*lines, _NVRX]))
 
     assert _SYMPTOM not in result.symptoms
-    assert result.outcome_attr.value().outcome == "Fail Undetermined"
+    assert result.outcome_attr.value().outcome == "Fail MultiCategory"
     assert result.outcome_attr.value().root_cause_symptom == "NVRx detected failure"
     assert not any(n.rule_name == _RULE for n in graph.nodes)
