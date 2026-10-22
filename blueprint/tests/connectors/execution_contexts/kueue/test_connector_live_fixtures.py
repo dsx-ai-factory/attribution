@@ -17,6 +17,9 @@ import json
 from datetime import datetime, timezone
 from pathlib import Path
 
+from attribution_blueprint.connectors.execution_contexts.kubernetes_client import (
+    KubernetesClientError,
+)
 from attribution_blueprint.connectors.execution_contexts.kueue import (
     KueueExecutionContextAdapter,
 )
@@ -68,14 +71,19 @@ class _FakeLiveKubernetesClient:
         namespace: str,
         group=None,
         api_version=None,
-    ) -> dict | None:
+    ) -> dict:
         kind = resource_kind.lower() + "s"
         self.calls.append({"op": "get_one", "kind": kind, "name": name, "namespace": namespace, "label_selector": None})
         if kind == "workloads":
-            return self._by_name(self.workloads, name, namespace)
-        if kind == "jobs":
-            return self._by_name(self.jobs, name, namespace)
-        raise AssertionError(f"_FakeLiveKubernetesClient.get_one: unexpected kind {kind!r}")
+            items = self.workloads
+        elif kind == "jobs":
+            items = self.jobs
+        else:
+            raise AssertionError(f"_FakeLiveKubernetesClient.get_one: unexpected kind {kind!r}")
+        obj = self._by_name(items, name, namespace)
+        if obj is None:
+            raise KubernetesClientError(f"{kind} {name!r} not found in {namespace!r}", status=404)
+        return obj
 
     def list(
         self,

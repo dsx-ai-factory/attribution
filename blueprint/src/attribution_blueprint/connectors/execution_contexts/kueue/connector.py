@@ -95,6 +95,9 @@ from attribution_blueprint.connectors.execution_contexts.kueue.pod_placement.sto
 from attribution_blueprint.types import assert_aware
 
 _KUEUE_GROUP = "kueue.x-k8s.io"
+# Kueue versions its Workload CRD; this is a config default, not a
+# runtime-discovered "preferred version" — see `KueueExecutionContextAdapter`.
+_DEFAULT_WORKLOAD_API_VERSION = f"{_KUEUE_GROUP}/v1beta1"
 
 
 class KueueExecutionContext(TypedDict):
@@ -782,10 +785,14 @@ class KueueExecutionContextAdapter:
 
     `kubeconfig` and `context` select a kubeconfig file and context; both are
     optional and when unset this falls back to the default kubeconfig
-    (KUBECONFIG env var, ~/.kube/config) or, if neither resolves, the
-    in-cluster service account. `namespace` selects a single namespace; the
-    empty string queries every namespace. The client discovers the preferred
-    served version of the Kueue Workload API.
+    (KUBECONFIG env var, ~/.kube/config) or, if neither resolves, in-cluster
+    service-account credentials. `namespace` selects a single namespace; the
+    empty string queries every namespace. `workload_api_version` pins the
+    Kueue Workload CRD's `<group>/<version>` the adapter reads; Kueue versions
+    this API, so there is no runtime "ask the cluster for its preferred
+    version" step — the default tracks the Workload API version Kueue has
+    shipped as `v1beta1` since 0.6, and callers running a cluster that serves
+    a different version configure this directly.
     """
 
     def __init__(
@@ -798,11 +805,13 @@ class KueueExecutionContextAdapter:
         placement_reader: PlacementReader | None = None,
         event_max_age_seconds: int = 3600,
         prometheus_placement_resolver: PlacementResolver | None = None,
+        workload_api_version: str = _DEFAULT_WORKLOAD_API_VERSION,
     ):
         self.kubeconfig = kubeconfig
         self.context = context
         self.namespace = namespace or ""
         self.timeout_seconds = timeout_seconds
+        self.workload_api_version = workload_api_version
         self._kubernetes = KubernetesClient(
             kubeconfig=kubeconfig,
             context=context,
@@ -846,9 +855,15 @@ class KueueExecutionContextAdapter:
                         f"use `<namespace>/<name>` or configure eca.kueue.namespace"
                     )
                 ns, name = self.namespace, ref
-            obj = self._kubernetes.get_one("Workload", name, namespace=ns, group=_KUEUE_GROUP)
-            if obj is not None:
-                workloads.append(obj)
+            try:
+                workloads.append(
+                    self._kubernetes.get_one(
+                        "Workload", name, namespace=ns, api_version=self.workload_api_version
+                    )
+                )
+            except KubernetesClientError as error:
+                if error.status != 404:
+                    raise
         return self._finalize(workloads)
 
     def discover_by_time_range(
@@ -875,7 +890,7 @@ class KueueExecutionContextAdapter:
         listing = self._kubernetes.list(
             "Workload",
             namespace=self.namespace or None,
-            group=_KUEUE_GROUP,
+            api_version=self.workload_api_version,
         )
         # parse only the timestamps each workload object
         # already carries (conditions + creationTimestamp).
@@ -951,14 +966,16 @@ class KueueExecutionContextAdapter:
                     continue
                 seen.add(key)
                 if kind == "Job":
-                    job = self._kubernetes.get_one(
-                        "Job",
-                        name,
-                        namespace=ns,
-                        api_version="batch/v1",
-                    )
-                    if job is not None:
-                        out[f"{ns}/{name}"] = job
+                    try:
+                        out[f"{ns}/{name}"] = self._kubernetes.get_one(
+                            "Job",
+                            name,
+                            namespace=ns,
+                            api_version="batch/v1",
+                        )
+                    except KubernetesClientError as error:
+                        if error.status != 404:
+                            raise
                     continue
 
                 child_jobs = self._kubernetes.list(

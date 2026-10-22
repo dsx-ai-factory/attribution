@@ -163,7 +163,7 @@ def _build(spec: dict, ctx: dict) -> KueueExecutionContextAdapter:
         event_max_age = _coerce_int(event_max_age, "eca.kueue.event_max_age_seconds")
         if event_max_age <= 0:
             raise MCAError(f"eca.kueue.event_max_age_seconds must be positive, got {event_max_age}")
-    return KueueExecutionContextAdapter(
+    kwargs = dict(
         kubeconfig=spec.get("kubeconfig"),
         context=spec.get("context"),
         namespace=spec.get("namespace"),
@@ -173,6 +173,14 @@ def _build(spec: dict, ctx: dict) -> KueueExecutionContextAdapter:
         event_max_age_seconds=event_max_age,
         prometheus_placement_resolver=prometheus_placement_resolver,
     )
+    workload_api_version = spec.get("workload_api_version")
+    if workload_api_version is not None:
+        if not isinstance(workload_api_version, str) or not workload_api_version:
+            raise MCAError(
+                f"eca.kueue.workload_api_version must be a non-empty string, got {workload_api_version!r}"
+            )
+        kwargs["workload_api_version"] = workload_api_version
+    return KueueExecutionContextAdapter(**kwargs)
 
 
 _registry.register_component(
@@ -195,6 +203,8 @@ _registry.register_component(
         # or to allow bare `<name>` --ids values.
         "namespace": _PARAM,
         "timeout_seconds": _PARAM,
+        # Kueue Workload CRD `<group>/<version>` to read.
+        "workload_api_version": _PARAM,
         "placement_records_enabled": _PARAM,
         "placement_recorder": {
             "endpoint": _PARAM,

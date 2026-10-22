@@ -5,32 +5,37 @@
 
 from __future__ import annotations
 
-import os
 import threading
 
 
 class KubernetesClientError(RuntimeError):
-    """A Kubernetes API read failed."""
+    """A Kubernetes API read failed.
 
+    `status` carries the HTTP status code when the failure was an API
+    response (e.g. 404, 403); it is `None` for connection-level failures
+    (timeout, DNS, malformed response, ...).=
+    """
 
-class KubernetesClientNotFoundError(KubernetesClientError):
-    """The API server reported that the requested object does not exist."""
+    def __init__(self, message: str, *, status: int | None = None):
+        super().__init__(message)
+        self.status = status
 
 
 class KubernetesClient:
     """Runs read-only Kubernetes API queries and returns the decoded JSON.
 
-    `kubeconfig` and `context` select a kubeconfig file and context;
-    both are optional, and when unset this falls back to the default
-    kubeconfig (`KUBECONFIG`, `~/.kube/config`) or, if neither resolves,
-    the in-cluster service account. Kubernetes discovery resolves resources
-    by kind and selects a group's preferred served version when the caller
-    does not require a specific version.
+    `kubeconfig` and `context` select a kubeconfig file and context; both
+    are optional. When set, they're used exactly as given (no silent
+    fallback). When neither is set, credential resolution is delegated
+    to `kubernetes.config.load_config()`.
 
-    `get_one` returns `None` only for HTTP 404, and every other failure
-    (Forbidden, connection error, timeout, malformed response) raises
-    `KubernetesClientError`, so a failed read is never mistaken for an empty
-    result.
+    Every read requires the caller to name the resource it wants: `kind`
+    plus either `group` and `api_version`, or a combined
+    `api_version="<group>/<version>"` (bare version for the core API).
+
+    `get_one` and `list` raise `KubernetesClientError` for every failure
+    (not-found, forbidden, connection error, timeout, malformed response),
+    with `error.status` carrying the HTTP status when there is one.
     """
 
     def __init__(
@@ -43,9 +48,7 @@ class KubernetesClient:
         self.context = context
         self.timeout_seconds = timeout_seconds
         self._client_lock = threading.Lock()
-        self._discovery_lock = threading.Lock()
         self._api = None
-        self._resources: dict[tuple[str, str | None, str | None], object] = {}
 
     def get_one(
         self,
@@ -56,7 +59,12 @@ class KubernetesClient:
         group: str | None = None,
         api_version: str | None = None,
         prefix: str | None = None,
-    ) -> dict | None:
+    ) -> dict:
+        """Read one object, raising `KubernetesClientError` (`.status == 404`
+        for not-found) on any failure. The caller already knows whether
+        "not found" means "skip this id" or "this object must exist" —
+        this never collapses that into a silent `None`.
+        """
         resource = self._resource(kind, group=group, api_version=api_version, prefix=prefix)
         try:
             payload = self._client().get(
@@ -66,10 +74,15 @@ class KubernetesClient:
                 _request_timeout=self.timeout_seconds,
             )
         except Exception as error:
-            wrapped = _wrap(error)
-            if isinstance(wrapped, KubernetesClientNotFoundError):
-                return None
-            raise wrapped from error
+            # bare exception keeps the raw API response body out of logs.
+            status = getattr(error, "status", None)
+            reason = getattr(error, "reason", None)
+            reason = reason if isinstance(reason, str) and reason else str(error)
+            if status is not None:
+                raise KubernetesClientError(
+                    f"Kubernetes API query failed with status {status}: {reason}", status=status
+                ) from error
+            raise KubernetesClientError(f"Kubernetes API query failed: {type(error).__name__}: {reason}") from error
         return self._as_dict(payload, kind)
 
     def list(
@@ -93,38 +106,33 @@ class KubernetesClient:
                 _request_timeout=self.timeout_seconds,
             )
         except Exception as error:
-            raise _wrap(error) from error
+            # bare exception keeps the raw API response body out of logs.
+            status = getattr(error, "status", None)
+            reason = getattr(error, "reason", None)
+            reason = reason if isinstance(reason, str) and reason else str(error)
+            if status is not None:
+                raise KubernetesClientError(
+                    f"Kubernetes API query failed with status {status}: {reason}", status=status
+                ) from error
+            raise KubernetesClientError(f"Kubernetes API query failed: {type(error).__name__}: {reason}") from error
         data = self._as_dict(payload, kind)
         items = data.get("items")
         if not isinstance(items, list) or not all(isinstance(item, dict) for item in items):
             raise KubernetesClientError(f"Kubernetes API query for {kind!r} returned an unexpected response shape")
         return items
 
-    def _resource(self, kind: str, *, group: str | None, api_version: str | None, prefix: str | None = None):
-        key = kind, group, api_version, prefix
-        with self._discovery_lock:
-            if key in self._resources:
-                return self._resources[key]
-            try:
-                matches = self._client().resources.search(
-                    kind=kind,
-                    group=group,
-                    api_version=api_version,
-                    prefix=prefix,
-                )
-                preferred = [resource for resource in matches if resource.preferred]
-                candidates = preferred or matches
-                if len(candidates) != 1:
-                    raise KubernetesClientError(
-                        f"Kubernetes discovery found {len(candidates)} matches for "
-                        f"kind={kind!r}, group={group!r}, api_version={api_version!r}, prefix={prefix!r}"
-                    )
-                self._resources[key] = candidates[0]
-                return candidates[0]
-            except KubernetesClientError:
-                raise
-            except Exception as error:
-                raise _wrap(error) from error
+    def _resource(self, kind: str, *, group: str | None, api_version: str | None, prefix: str | None):
+        """Resolve `kind` to a queryable resource; any failure here is a hard
+        error, never a skippable one.
+        """
+        try:
+            return self._client().resources.get(kind=kind, group=group, api_version=api_version, prefix=prefix)
+        except Exception as error:
+            reason = getattr(error, "reason", None)
+            reason = reason if isinstance(reason, str) and reason else str(error)
+            raise KubernetesClientError(
+                f"Kubernetes resource discovery failed for {kind!r}: {type(error).__name__}: {reason}"
+            ) from error
 
     @staticmethod
     def _as_dict(payload, kind: str) -> dict:
@@ -147,20 +155,14 @@ class KubernetesClient:
         from kubernetes.dynamic import DynamicClient
 
         configuration = client.Configuration()
-        if self.kubeconfig or self.context:
+        if self.kubeconfig is not None or self.context is not None:
             config.load_kube_config(
                 config_file=self.kubeconfig,
                 context=self.context,
                 client_configuration=configuration,
             )
         else:
-            try:
-                config.load_kube_config(client_configuration=configuration)
-            except config.ConfigException:
-                if os.environ.get("KUBECONFIG"):
-                    raise
-                configuration = client.Configuration()
-                config.load_incluster_config(client_configuration=configuration)
+            config.load_config(client_configuration=configuration)
         api_client = client.ApiClient(configuration)
         _set_default_request_timeout(api_client, self.timeout_seconds)
         return DynamicClient(api_client)
@@ -176,18 +178,3 @@ def _set_default_request_timeout(api_client, timeout_seconds: float) -> None:
         return call_api(*args, **kwargs)
 
     api_client.call_api = call_api_with_timeout
-
-
-def _wrap(error: Exception) -> KubernetesClientError:
-    """Classify a client-library exception without leaking its response body."""
-    status = getattr(error, "status", None)
-    if status == 404:
-        return KubernetesClientNotFoundError(f"Kubernetes API query failed with status 404: {_reason(error)}")
-    if status is not None:
-        return KubernetesClientError(f"Kubernetes API query failed with status {status}: {_reason(error)}")
-    return KubernetesClientError(f"Kubernetes API query failed: {type(error).__name__}: {_reason(error)}")
-
-
-def _reason(error: Exception) -> str:
-    reason = getattr(error, "reason", None)
-    return reason if isinstance(reason, str) and reason else str(error)

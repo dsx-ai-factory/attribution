@@ -117,7 +117,7 @@ class _FakeKubernetesClient:
         group=None,
         api_version=None,
         prefix=None,
-    ) -> dict | None:
+    ) -> dict:
         kind = resource_kind.lower() + "s"
         self.calls.append(
             {"op": "get_one", "kind": kind, "name": name, "namespace": namespace, "label_selector": None,
@@ -129,7 +129,10 @@ class _FakeKubernetesClient:
             items = self.jobs_payload["items"]
         else:
             raise AssertionError(f"_FakeKubernetesClient.get_one: unexpected kind {kind!r}")
-        return self._by_name(items, name, namespace)
+        obj = self._by_name(items, name, namespace)
+        if obj is None:
+            raise KubernetesClientError(f"{kind} {name!r} not found in {namespace!r}", status=404)
+        return obj
 
     def list(
         self,
@@ -1813,6 +1816,34 @@ def test_build_with_none_timeout_falls_back_to_default():
 
     adapter = _build({"timeout_seconds": None}, ctx={"framework": "eca"})
     assert adapter.timeout_seconds == 60
+
+
+def test_build_without_workload_api_version_uses_adapter_default():
+    from attribution_blueprint.connectors.execution_contexts.kueue import _build
+    from attribution_blueprint.connectors.execution_contexts.kueue.connector import (
+        _DEFAULT_WORKLOAD_API_VERSION,
+    )
+
+    adapter = _build({}, ctx={"framework": "eca"})
+    assert adapter.workload_api_version == _DEFAULT_WORKLOAD_API_VERSION
+
+
+def test_build_passes_configured_workload_api_version_to_adapter():
+    """`eca.kueue.workload_api_version` must reach the adapter unchanged —
+    it's documented as the override for clusters serving a Workload CRD
+    version other than the default."""
+    from attribution_blueprint.connectors.execution_contexts.kueue import _build
+
+    adapter = _build({"workload_api_version": "kueue.x-k8s.io/v1"}, ctx={"framework": "eca"})
+    assert adapter.workload_api_version == "kueue.x-k8s.io/v1"
+
+
+def test_build_rejects_empty_workload_api_version():
+    from attribution_blueprint.connectors.execution_contexts.kueue import _build
+    from attribution_blueprint.exceptions import MCAError
+
+    with pytest.raises(MCAError, match="workload_api_version"):
+        _build({"workload_api_version": ""}, ctx={"framework": "eca"})
 
 
 def test_build_rejects_placement_records_without_namespace():

@@ -15,7 +15,7 @@ dependencies = [
     "nvidia-attribution-client",
     "requests>=2.31",
     "loguru>=0.7",
-    "kubernetes>=34.1,!=36.0.0",  # 36.0.0 omits the Authorization header under in-cluster auth
+    "kubernetes>36.0.0",  # 36.0.0 drops the Authorization header for token-based auth
 ]
 
 [project.optional-dependencies]
