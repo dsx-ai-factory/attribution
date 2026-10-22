@@ -4467,6 +4467,14 @@ class TestOutcomeReclassification:
         )
         assert result.outcome_attr.value().outcome == "Fail InfraHW"
 
+    def test_nvrx_detected_failure_with_inherited_success_not_pass(self, stream, obs_ctx):
+        # A failed cycle inherits the recovered job's 0:0; NVRx detected failure must stay a failure.
+        ji = _job_info_with(state="FAILED", tags=frozenset({"nvrx"}), exit_code=0, exit_code_signal=0, time_limit=None)
+        symptoms = _make_symptoms(obs_ctx, "NVRx detected failure")
+        result = self._nvrx_result(stream, calculate_outcome(symptoms).value().outcome, symptoms)
+        _run_post_outcome(stream, ji, symptoms, outcome=result.outcome_attr, attribution_result=result)
+        assert result.outcome_attr.value().outcome == "Fail MultiCategory"
+
     def test_nvrx_recovered_cycle_still_passes(self, stream, obs_ctx):
         # Job-level 0:0 -> Pass even if an intermediate cycle failed (DerivedExitCode is not used).
         ji = _job_info_with(
