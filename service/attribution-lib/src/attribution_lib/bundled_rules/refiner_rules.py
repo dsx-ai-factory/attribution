@@ -76,6 +76,7 @@ _SCRUB_ORDER = [
     # Prefer explicit XID-140 before correlating GSP evidence per node.
     "Xid140Cascade",
     "PoisonedGspComposite",
+    "DetectBadNicState",
     # Combine only the scheduler failure and surviving independent epilog
     # non-response evidence after more specific per-node causes are scrubbed.
     "CorroboratedNodeFailure",
@@ -420,6 +421,9 @@ _XID145_RXPIPE_COMPANIONS = frozenset(
 # interleaving while restricting correlation to the immediate episode.
 _XID145_RXPIPE_COMPANION_WINDOW = timedelta(seconds=1)
 _XID_PCI_ID_RE = re.compile(r"NVRM:\s+Xid \(PCI:(?P<pci_id>[0-9a-fA-F.:]+)\):")
+_BAD_NIC_COMPONENTS = ("mlx5 firmware in initialization state", "mlx5 device initialization failed")
+_BAD_NIC_WINDOW = timedelta(minutes=2)
+_MLX5_PCI_RE = re.compile(r"\bmlx5_core\s+([0-9a-fA-F]{4}:[0-9a-fA-F]{2}:[0-9a-fA-F]{2}\.[0-7]):")
 _IB_CLEANUP_SKIP_SYMPTOMS = frozenset({_XID145_RXPIPE_SYMPTOM, "XID-137-NVLINK_PRIV_ERR"})
 _KERNEL_CRASH_SYMPTOMS = frozenset(
     {
@@ -807,6 +811,51 @@ def poisoned_gsp_composite(context: RefinerContext):
         # hide unrelated codes such as NV_ERR_RESET_REQUIRED_OTHER.
         for symptom in components:
             node_group.discard(symptom)
+
+
+@refiner_def(
+    name="DetectBadNicState",
+    author="NVIDIA Attribution team",
+    priority=_priority("DetectBadNicState"),
+)
+def detect_bad_nic_state(context: RefinerContext):
+    """Combine mlx5 initialization signals on one node and PCI device near job end.
+
+    Both sources must be at job end or within the following two minutes. Preserve
+    their provenance and demote only the sources used in the compound symptom.
+    """
+    job_info = context.job_info
+    if context.my_bad_nodes is None or job_info is None or job_info.job_end_time is None:
+        return
+
+    for _node, node_group in context.my_bad_nodes.items():
+        symptoms = node_group.attributions
+        if not all(component in symptoms for component in _BAD_NIC_COMPONENTS):
+            continue
+        by_device: dict[str, dict[str, list[Source]]] = {}
+        for component in _BAD_NIC_COMPONENTS:
+            for source in symptoms[component]:
+                if source.time is None:
+                    continue
+                if not job_info.job_end_time <= source.time <= job_info.job_end_time + _BAD_NIC_WINDOW:
+                    continue
+                match = _MLX5_PCI_RE.search(source.datum)
+                if match is not None:
+                    device = match.group(1).lower()
+                    by_device.setdefault(device, {}).setdefault(component, []).append(source)
+
+        combined = SourceSet("detected bad NIC state")
+        for components in by_device.values():
+            if not all(component in components for component in _BAD_NIC_COMPONENTS):
+                continue
+            for sources in components.values():
+                for source in sources:
+                    combined.add(source)
+        if not combined.has_bad():
+            continue
+        node_group.add(combined)
+        for component in _BAD_NIC_COMPONENTS:
+            symptoms[component].discard_selected(combined)
 
 
 # Raw-keyword promotion rules

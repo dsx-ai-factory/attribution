@@ -46,7 +46,7 @@ _T = datetime(2026, 3, 22, 14, 3, 12, tzinfo=_UTC)
 
 def _lib_source(rule: str, obs_id: int = 1, line_num: int = 0, datum: str = "raw") -> LibSource:
     ti = TimeInterval(_T, _T + timedelta(minutes=5))
-    inbound = InboundContext(ti, AllJobResources, ObservationSource.APPLOG, Format.ENTRY_TIMESERIES, _UTC)
+    inbound = InboundContext(ti, ObservationSource.APPLOG, Format.ENTRY_TIMESERIES, _UTC)
     ctx = FullObservationContext(**vars(inbound), id=Id(obs_id))
     return LibSource(
         source_context=ctx,

@@ -714,6 +714,21 @@ def test_csp_category_is_generated_from_committed_declarations():
     assert "running without error" not in csp_symptoms
 
 
+def test_batch_size_assertion_is_registered_above_generic_nvrx_failure():
+    registry = _load_committed_registry()
+    symptom = "Python Exception: AssertionError: batch size not divisible"
+
+    assert registry.resolve_symptom(symptom) == symptom
+    match = registry.outcome_for(["NVRx detected failure", "Python Exception", symptom])
+
+    assert match is not None
+    assert match.symptom == symptom
+    assert match.matched_prefix == symptom
+    assert match.outcome == "Fail User"
+    assert match.tier_index == OUTCOME_PRIORITIES.index(OutcomePriority.LOW)
+    assert match.doc == "python-exception"
+
+
 def test_category_membership_deduplicates_scoped_declarations():
     registry = registry_from_declarations(
         [
@@ -1031,6 +1046,57 @@ def test_symptoms_package_exports_declaration_types():
     assert ExportedSymptomDeclaration is SymptomDeclaration
 
 
+@pytest.mark.parametrize(
+    ("secondary", "baseline_outcome"),
+    [
+        ("Call to ibv_modify_qp failed", "Fail InfraHW"),
+        ("Call to ibv_modify_qp failed: eno 110 timeout", "Fail InfraHW"),
+        ("Call to ibv_modify_qp failed: eno 22 invalid argument(Mismatched GID)", "Fail InfraHW"),
+        ("Call to ibv_modify_qp failed: eno 22 invalid argument", "Fail InfraSW"),
+        ("Call to ibv_modify_qp failed: eno 11 resource unavailable", "Fail InfraSW"),
+        ("Call to ibv_modify_qp failed: eno 5 input/output error", "Fail InfraHW"),
+        ("ibv_open_device failed", "Fail InfraHW"),
+    ],
+)
+@pytest.mark.parametrize("diagnosis", ["detected bad NIC state", "irisc not responding"])
+def test_bad_nic_state_supersedes_only_secondary_outcomes(secondary, baseline_outcome, diagnosis):
+    registry = _load_committed_registry()
+    baseline = registry.outcome_for([secondary])
+    assert baseline is not None
+    assert baseline.outcome == baseline_outcome
+    for symptoms in ([secondary, diagnosis], [diagnosis, secondary]):
+        match = registry.outcome_for(symptoms)
+        assert match is not None
+        assert match.outcome == "Fail InfraSW"
+        assert match.symptom == diagnosis
+
+
+@pytest.mark.parametrize(
+    ("independent", "expected_outcome"),
+    [
+        ("Node unexpectedly rebooted", "Fail InfraHW"),
+        ("Page Retirement", "Fail InfraHW"),
+        ("RDMA fabric flap", "Fail InfraHW"),
+        ("Call to ibv_modify_qp failed: eno 110 timeout(Overwrite NCCL parameters)", "Fail User"),
+    ],
+)
+@pytest.mark.parametrize("secondary", [None, "Call to ibv_modify_qp failed", "ibv_open_device failed"])
+@pytest.mark.parametrize("diagnosis", ["detected bad NIC state", "irisc not responding"])
+def test_bad_nic_state_preserves_independent_outcomes(independent, expected_outcome, secondary, diagnosis):
+    symptoms = [diagnosis, independent]
+    if secondary is not None:
+        symptoms.append(secondary)
+    match = _load_committed_registry().outcome_for(symptoms)
+    assert match is not None
+    assert match.outcome == expected_outcome
+    assert match.symptom == independent
+
+
+def test_bad_nic_state_outcome_metadata():
+    match = _load_committed_registry().outcome_for(["detected bad NIC state"])
+    assert match is not None
+    assert match.doc == "detected-bad-nic-state"
+    assert match.hw_cause == "NIC firmware initialization failure"
 @pytest.mark.parametrize("symptom", ["NV_ERR_RESET_REQUIRED", "NV_ERR_RESET_REQUIRED kernel_channel.c"])
 def test_gpu_reset_outcome_retains_documentation(symptom: str) -> None:
     """Check that GPU-reset variants retain their declared documentation.

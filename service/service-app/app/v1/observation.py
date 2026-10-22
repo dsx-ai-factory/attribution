@@ -13,7 +13,6 @@ from attribution_lib.observation.inbound import (
     Source as ObservationSource,
     TimeInterval as LibTimeInterval,
 )
-from attribution_lib.resources import AllJobResources
 from pydantic import model_validator
 
 from app.entry_timeseries import decode_timeseries_entries
@@ -30,7 +29,7 @@ class ObservationContextV1(HashableModel):
     """Describes the scope of an observation."""
 
     time_interval: TimeInterval
-    resources: str = "AllJobResources"
+    resources: str = "AllJobResources"  # Accepted for wire compatibility; the lib context has no resources.
     source: ObservationSource
     format: ObservationFormat
     is_prefiltered: bool = False
@@ -68,7 +67,6 @@ class ObservationContextV1(HashableModel):
     def _lib_context(self, time_interval: LibTimeInterval, format: LibFormat, timezone: ZoneInfo) -> InboundContext:
         return InboundContext(
             time_interval,
-            AllJobResources,
             self.source,
             format,
             timezone,

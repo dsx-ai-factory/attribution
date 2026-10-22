@@ -102,8 +102,8 @@ those is a per-source contract of the service: for `applog` it falls back to
 parsing timestamp and node out of the body, so bare `{"body": ...}` entries are
 enough. For `syslog` every entry needs a `ts`; build them with
 `syslog_entries_from_text`, which dates each line from its own timestamp and
-drops lines it cannot date. The shape is in the
-[observation API reference](./rest-api.md#2-submit-an-observation).
+drops lines it cannot date. The entry shape and the full per-source rules are in
+[Observation entry format](../../service/service-app/docs/api/observation-format.md).
 
 `time_interval` defaults per source through `log_observation`
 (`DEFAULT_TIME_INTERVAL` in

@@ -47,7 +47,6 @@ def obs_ctx():
             datetime(2024, 1, 1, 9, 0, 0, tzinfo=ZoneInfo("UTC")),
             datetime(2024, 1, 1, 12, 0, 0, tzinfo=ZoneInfo("UTC")),
         ),
-        resources=ResourceSet([Node(hostname="node01")]),
         source=ObsSource.SYSLOG,
         format=ObsFormat.ENTRY_TIMESERIES,
         timezone=ZoneInfo("UTC"),
