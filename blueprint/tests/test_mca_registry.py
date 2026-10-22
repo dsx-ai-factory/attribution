@@ -137,7 +137,17 @@ def test_built_schema_has_expected_shape():
     schema = mca.SCHEMA
     assert "eca" in schema
     assert schema["eca"]["_aliases"] == ("execution_context",)
-    assert set(schema["eca"]["_selector"]) == {"slurm", "static", "kueue"}
+    assert set(schema["eca"]["_selector"]) == {"slurm", "static", "kueue", "kai"}
+    assert set(schema["eca"]["_selector"]["kai"]) == {
+        "ids",
+        "start_time",
+        "end_time",
+        "nodelist",
+        "kubeconfig",
+        "context",
+        "namespace",
+        "timeout_seconds",
+    }
     assert set(schema["eca"]["_selector"]["slurm"]) == {
         "ids",
         "start_time",
