@@ -44,25 +44,10 @@ class KubernetesDaemonClient:
             if "verify" in kwargs:
                 self.session.verify = kwargs["verify"]
 
-    def list_placements(
-        self,
-        namespace: str,
-        *,
-        pod_uid: str | None = None,
-        owner_uid: str | None = None,
-        resource_uid: str | None = None,
-    ) -> list[PlacementRecord]:
-        if sum(bool(value) for value in (pod_uid, owner_uid, resource_uid)) != 1:
-            raise ValueError("exactly one of pod_uid, owner_uid, or resource_uid is required")
-        params = {
-            "namespace": namespace,
-            **({"pod_uid": pod_uid} if pod_uid else {}),
-            **({"owner_uid": owner_uid} if owner_uid else {}),
-            **({"resource_uid": resource_uid} if resource_uid else {}),
-        }
+    def list_for_resource(self, namespace: str, resource_uid: str) -> list[PlacementRecord]:
         response = self.session.get(
             f"{self.endpoint}/v1/placements",
-            params=params,
+            params={"namespace": namespace, "resource_uid": resource_uid},
             timeout=self.timeout_seconds,
         )
         response.raise_for_status()
@@ -73,22 +58,9 @@ class KubernetesDaemonClient:
         records = [PlacementRecord.from_resource(item) for item in payload["items"]]
         if any(record.namespace != namespace for record in records):
             raise ValueError("daemon returned a placement outside the requested namespace")
-        if pod_uid and any(record.pod_uid != pod_uid for record in records):
-            raise ValueError("daemon returned a placement outside the requested Pod")
-        if owner_uid and any(record.owner is None or record.owner.uid != owner_uid for record in records):
-            raise ValueError("daemon returned a placement outside the requested owner")
-        if resource_uid and any(
+        if any(
             not any(resource.uid == resource_uid for resource in record.associated_resources)
             for record in records
         ):
             raise ValueError("daemon returned a placement outside the requested resource")
         return records
-
-    def list_for_pod(self, namespace: str, pod_uid: str) -> list[PlacementRecord]:
-        return self.list_placements(namespace, pod_uid=pod_uid)
-
-    def list_for_owner(self, namespace: str, owner_uid: str) -> list[PlacementRecord]:
-        return self.list_placements(namespace, owner_uid=owner_uid)
-
-    def list_for_resource(self, namespace: str, resource_uid: str) -> list[PlacementRecord]:
-        return self.list_placements(namespace, resource_uid=resource_uid)

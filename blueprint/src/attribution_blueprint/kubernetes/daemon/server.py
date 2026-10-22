@@ -6,7 +6,6 @@ from __future__ import annotations
 import json
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from typing import Collection
 from urllib.parse import parse_qs, urlparse
 
 from loguru import logger
@@ -20,8 +19,6 @@ def serve_api(
     placement_reader: PlacementReader,
     port: int,
     namespace: str,
-    *,
-    resource_uid_aliases: Collection[str] = (),
 ) -> ThreadingHTTPServer:
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self):
@@ -34,30 +31,16 @@ def serve_api(
             elif parsed.path == "/v1/placements":
                 query = parse_qs(parsed.query)
                 requested_namespace = (query.get("namespace") or [""])[0]
-                pod_uid = (query.get("pod_uid") or [""])[0]
-                owner_uid = (query.get("owner_uid") or [""])[0]
                 resource_uid = (query.get("resource_uid") or [""])[0]
-                if not resource_uid:
-                    for alias in resource_uid_aliases:
-                        if resource_uid := (query.get(alias) or [""])[0]:
-                            break
-                selectors = tuple(value for value in (pod_uid, owner_uid, resource_uid) if value)
-                if not requested_namespace or len(selectors) != 1:
-                    status, body = 400, {
-                        "error": "namespace and exactly one of pod_uid, owner_uid, or resource_uid are required"
-                    }
+                if not requested_namespace or not resource_uid:
+                    status, body = 400, {"error": "namespace and resource_uid are required"}
                 elif requested_namespace != namespace:
                     status, body = 403, {
                         "error": f"this daemon only serves namespace {namespace!r}, got {requested_namespace!r}"
                     }
                 else:
                     try:
-                        if pod_uid:
-                            records = placement_reader.list_for_pod(requested_namespace, pod_uid)
-                        elif owner_uid:
-                            records = placement_reader.list_for_owner(requested_namespace, owner_uid)
-                        else:
-                            records = placement_reader.list_for_resource(requested_namespace, resource_uid)
+                        records = placement_reader.list_for_resource(requested_namespace, resource_uid)
                         status, body = 200, {"items": [record.to_resource() for record in records]}
                     except Exception:
                         logger.exception("placement lookup failed")

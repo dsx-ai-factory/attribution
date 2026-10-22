@@ -21,7 +21,7 @@ from attribution_blueprint.kubernetes.daemon.resolvers import (
     normalize_resource,
 )
 from attribution_blueprint.kubernetes.daemon.store import CreateResult, PlacementStore
-from attribution_blueprint.kubernetes.helpers import pod_node_failure_reason
+from attribution_blueprint.kubernetes.helpers import pod_container_exit_reason, pod_node_failure_reason
 
 _WORK_GENERATIONS = count()
 
@@ -58,6 +58,7 @@ class KubernetesDaemon:
         self.worker_count = workers
         self.stop_event = threading.Event()
         self._latest_generation: dict[str, int] = {}
+        self._latest_controller: dict[str, tuple[str, str] | None] = {}
         self._generation_lock = threading.Lock()
 
     def run(self) -> None:
@@ -136,25 +137,41 @@ class KubernetesDaemon:
         if not captured:
             return
         generation = next(_WORK_GENERATIONS)
-        if pod_uid:
-            with self._generation_lock:
-                self._latest_generation[pod_uid] = generation
-        while not self.stop_event.is_set():
+        controller = _pod_controller(pod)
+        queue_full = False
+        with self._generation_lock:
             try:
-                self.items.put((pod, generation), timeout=0.5)
-                self.health.update(queue_saturated=False)
-                return
+                self.items.put_nowait((pod, generation))
             except queue.Full:
-                self.health.update(queue_saturated=True)
-                logger.error("KubernetesDaemon work queue is saturated; readiness is failing")
-        self._complete_generation(pod_uid, generation)
+                queue_full = True
+                if pod_uid:
+                    if (
+                        pod_uid in self._latest_controller
+                        and self._latest_controller[pod_uid] != controller
+                    ):
+                        self._latest_generation.pop(pod_uid, None)
+                        self._latest_controller.pop(pod_uid, None)
+            else:
+                if pod_uid:
+                    self._latest_generation[pod_uid] = generation
+                    self._latest_controller[pod_uid] = controller
+        if queue_full:
+            self.health.update(queue_saturated=self.items.full())
+            logger.error(
+                "KubernetesDaemon enrichment queue is saturated; "
+                "placement was persisted but owner/scheduler enrichment was not queued"
+            )
+            return
+        self.health.update(queue_saturated=False)
 
     def _worker(self) -> None:
         while not self.stop_event.is_set() or not self.items.empty():
             try:
                 pod, generation = self.items.get(timeout=0.5)
             except queue.Empty:
+                self.health.update(queue_saturated=False)
                 continue
+            self.health.update(queue_saturated=False)
             try:
                 self._record(pod, generation=generation)
             except Exception:
@@ -174,6 +191,7 @@ class KubernetesDaemon:
             with self._generation_lock:
                 if self._latest_generation.get(pod_uid) == generation:
                     del self._latest_generation[pod_uid]
+                    self._latest_controller.pop(pod_uid, None)
 
     def _record(
         self,
@@ -186,7 +204,7 @@ class KubernetesDaemon:
             base = self.store.get_by_pod_uid(metadata.get("uid"))
         except Exception:
             logger.exception("failed to read stored placement before enrichment")
-            failure_reason = pod_node_failure_reason(pod) or _pod_container_exit_reason(pod)
+            failure_reason = pod_node_failure_reason(pod) or pod_container_exit_reason(pod)
             base = PlacementRecord.for_pod(pod, node_failure_reason=failure_reason)
         if base is None:
             logger.error(
@@ -197,7 +215,7 @@ class KubernetesDaemon:
         self._enrich_placement(pod, base, generation)
 
     def _capture_placement(self, pod: dict) -> bool:
-        failure_reason = pod_node_failure_reason(pod) or _pod_container_exit_reason(pod)
+        failure_reason = pod_node_failure_reason(pod) or pod_container_exit_reason(pod)
         base = PlacementRecord.for_pod(pod, node_failure_reason=failure_reason)
         result = self._persist(base, "scheduler-neutral Pod placement")
         if result is None:
@@ -262,37 +280,30 @@ class KubernetesDaemon:
         enriched = owned
         for resolver in self.resource_resolvers:
             resolver_name = type(resolver).__name__
-            for attempt in range(self.max_resolution_attempts):
-                try:
-                    resources = resolver.resolve(pod, owner)
-                    enriched = enriched.enriched(associated_resources=resources)
-                    resource_result = self._persist_enrichment(
-                        enriched,
-                        f"resources from {resolver_name}",
-                        generation,
+            try:
+                resources = resolver.resolve(pod, owner)
+                enriched = enriched.enriched(associated_resources=resources)
+                resource_result = self._persist_enrichment(
+                    enriched,
+                    f"resources from {resolver_name}",
+                    generation,
+                )
+                if resource_result is not None and resource_result != CreateResult.DUPLICATE:
+                    logger.info(
+                        f"{resource_result.value} resources from {resolver_name} for "
+                        f"Pod {self.namespace}/{metadata.get('name')}"
                     )
-                    if resource_result is None:
-                        break
-                    if resource_result != CreateResult.DUPLICATE:
-                        logger.info(
-                            f"{resource_result.value} resources from {resolver_name} for "
-                            f"Pod {self.namespace}/{metadata.get('name')}"
-                        )
-                    break
-                except ResolutionPending as error:
-                    if attempt + 1 == self.max_resolution_attempts or self.stop_event.is_set():
-                        logger.warning(f"retained Pod placement without resources from {resolver_name}: {error}")
-                        break
-                    self.stop_event.wait(min(2**attempt, 8))
-                except UnsupportedOwner as error:
-                    logger.info(f"retained Pod placement without resources from {resolver_name}: {error}")
-                    break
-                except Exception:
-                    logger.exception(
-                        f"failed to enrich resources from {resolver_name}; "
-                        "scheduler-neutral evidence was retained"
-                    )
-                    break
+            except ResolutionPending as error:
+                logger.info(
+                    f"retained Pod placement with pending resources from {resolver_name}: {error}"
+                )
+            except UnsupportedOwner as error:
+                logger.info(f"retained Pod placement without resources from {resolver_name}: {error}")
+            except Exception:
+                logger.exception(
+                    f"failed to enrich resources from {resolver_name}; "
+                    "scheduler-neutral evidence was retained"
+                )
 
     def _persist_enrichment(
         self,
@@ -347,16 +358,20 @@ def _stored_owner_matches_pod(record: PlacementRecord, pod: dict) -> bool:
     return False
 
 
+def _pod_controller(pod: dict) -> tuple[str, str] | None:
+    controllers = [
+        reference
+        for reference in (pod.get("metadata") or {}).get("ownerReferences") or []
+        if reference.get("controller") is True
+        and reference.get("kind")
+        and reference.get("uid")
+    ]
+    if len(controllers) != 1:
+        return None
+    return controllers[0]["kind"], controllers[0]["uid"]
+
+
 def _as_dict(resource) -> dict:
     if isinstance(resource, dict):
         return resource
     return normalize_resource(resource.to_dict())
-
-
-def _pod_container_exit_reason(pod: dict) -> str | None:
-    for container_status in (pod.get("status") or {}).get("containerStatuses") or []:
-        terminated = (container_status.get("state") or {}).get("terminated") or {}
-        exit_code = terminated.get("exitCode")
-        if isinstance(exit_code, int) and exit_code != 0:
-            return f"ExitCode:{exit_code}"
-    return None

@@ -1,6 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
+import queue
 import sqlite3
 import threading
 from types import SimpleNamespace
@@ -149,7 +150,11 @@ class _BlockingResourceResolver:
 
 
 class _PendingResourceResolver:
+    def __init__(self):
+        self.calls = 0
+
     def resolve(self, pod, owner):
+        self.calls += 1
         raise ResolutionPending("Workload has not appeared")
 
 
@@ -256,20 +261,133 @@ def test_relist_marks_queued_but_now_absent_pod_deleted(tmp_path):
     assert marker == ("pod-uid-1",)
 
 
-def test_retains_owner_when_optional_scheduler_resolution_exhausts(tmp_path):
+def test_saturated_enrichment_queue_does_not_lose_placement(tmp_path):
+    store = SQLitePlacementStore(str(tmp_path / "placements.db"))
+    daemon = KubernetesDaemon(
+        core_api=None,
+        store=store,
+        namespace="team-a",
+        queue_size=1,
+    )
+    daemon.items.put((_pod(), -1))
+    replacement = _pod()
+    replacement["metadata"]["uid"] = "pod-uid-2"
+    replacement["metadata"]["name"] = "trainer-1"
+
+    daemon._enqueue(replacement)
+
+    record = store.get_by_pod_uid("pod-uid-2")
+    assert record is not None
+    assert record.node_name == "node-a"
+    assert daemon.health.queue_saturated is True
+
+    daemon.stop_event.set()
+    daemon._worker()
+
+    assert daemon.health.queue_saturated is False
+
+
+def test_full_queue_keeps_queued_generation_valid(tmp_path):
     store = SQLitePlacementStore(str(tmp_path / "placements.db"))
     daemon = KubernetesDaemon(
         core_api=None,
         store=store,
         namespace="team-a",
         owner_resolver=_OwnerResolver(),
-        resource_resolvers=(_PendingResourceResolver(),),
-        max_resolution_attempts=1,
+        queue_size=1,
+    )
+    daemon._enqueue(_pod())
+
+    daemon._enqueue(_pod())
+
+    assert daemon.health.queue_saturated is True
+    daemon.stop_event.set()
+    daemon._worker()
+    assert store.get_by_pod_uid("pod-uid-1").owner.uid == "job-uid-1"
+
+
+def test_full_queue_invalidates_queued_generation_after_controller_change(tmp_path):
+    store = SQLitePlacementStore(str(tmp_path / "placements.db"))
+    daemon = KubernetesDaemon(
+        core_api=None,
+        store=store,
+        namespace="team-a",
+        owner_resolver=_OwnerResolver(),
+        queue_size=1,
+    )
+    daemon._enqueue(_pod())
+    reassigned = _pod()
+    reassigned["metadata"]["ownerReferences"][0]["uid"] = "job-uid-2"
+
+    daemon._enqueue(reassigned)
+
+    assert "pod-uid-1" not in daemon._latest_generation
+    daemon.stop_event.set()
+    daemon._worker()
+    assert store.get_by_pod_uid("pod-uid-1").owner is None
+
+
+def test_full_queue_invalidates_queued_generation_after_controller_removal(tmp_path):
+    store = SQLitePlacementStore(str(tmp_path / "placements.db"))
+    daemon = KubernetesDaemon(
+        core_api=None,
+        store=store,
+        namespace="team-a",
+        owner_resolver=_OwnerResolver(),
+        queue_size=1,
+    )
+    daemon._enqueue(_pod())
+    orphaned = _pod()
+    orphaned["metadata"]["ownerReferences"] = []
+
+    daemon._enqueue(orphaned)
+
+    assert "pod-uid-1" not in daemon._latest_generation
+    daemon.stop_event.set()
+    daemon._worker()
+    assert store.get_by_pod_uid("pod-uid-1").owner is None
+
+
+def test_concurrent_dequeue_prevents_stale_saturation(tmp_path, mocker):
+    store = SQLitePlacementStore(str(tmp_path / "placements.db"))
+    daemon = KubernetesDaemon(core_api=None, store=store, namespace="team-a")
+    mocker.patch.object(daemon.items, "put_nowait", side_effect=queue.Full)
+    mocker.patch.object(daemon.items, "full", return_value=False)
+
+    daemon._enqueue(_pod())
+
+    assert daemon.health.queue_saturated is False
+
+
+def test_empty_worker_clears_stale_saturation(tmp_path, mocker):
+    store = SQLitePlacementStore(str(tmp_path / "placements.db"))
+    daemon = KubernetesDaemon(core_api=None, store=store, namespace="team-a")
+    daemon.health.update(queue_saturated=True)
+    daemon.stop_event = mocker.Mock()
+    daemon.stop_event.is_set.side_effect = [False, True]
+    mocker.patch.object(daemon.items, "get", side_effect=queue.Empty)
+
+    daemon._worker()
+
+    assert daemon.health.queue_saturated is False
+
+
+def test_pending_scheduler_resolution_retries_only_on_later_pod_events(tmp_path):
+    store = SQLitePlacementStore(str(tmp_path / "placements.db"))
+    resolver = _PendingResourceResolver()
+    daemon = KubernetesDaemon(
+        core_api=None,
+        store=store,
+        namespace="team-a",
+        owner_resolver=_OwnerResolver(),
+        resource_resolvers=(resolver,),
+        max_resolution_attempts=5,
     )
 
     daemon._capture_placement(_pod())
     daemon._record(_pod())
 
+    assert resolver.calls == 1
     record = store.get_by_pod_uid("pod-uid-1")
     assert record is not None
     assert record.owner == ResourceIdentity("batch/v1", "Job", "team-a", "trainer", "job-uid-1")
@@ -486,6 +604,24 @@ def test_deleted_event_starts_placement_retention(tmp_path):
             "SELECT pod_uid FROM placement_deletion"
         ).fetchone()
     assert marker == ("pod-uid-1",)
+
+
+def test_failed_deleted_capture_still_starts_retention(tmp_path, mocker):
+    path = tmp_path / "placements.db"
+    store = SQLitePlacementStore(str(path))
+    daemon = KubernetesDaemon(core_api=None, store=store, namespace="team-a")
+    daemon._capture_placement(_pod())
+    mocker.patch.object(store, "create", side_effect=OSError("synthetic storage failure"))
+
+    daemon._enqueue(_pod(), deleted=True)
+
+    with sqlite3.connect(path) as connection:
+        marker = connection.execute(
+            "SELECT pod_uid FROM placement_deletion"
+        ).fetchone()
+    assert marker == ("pod-uid-1",)
+    assert daemon.health.persistence_failed is True
+    assert daemon.items.empty()
 
 
 def test_resource_version_expiry_resets_readiness_before_relisting(mocker):
