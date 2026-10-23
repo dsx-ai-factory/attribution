@@ -85,6 +85,7 @@ def test_xid145_alone_selects_multicategory():
 
     assert match is not None
     assert match.symptom == "XID-145-MultiCategory"
+    assert match.outcome == "Fail MultiCategory"
 
 
 def test_known_prefixes_from_committed_declarations():
