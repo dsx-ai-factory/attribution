@@ -32,7 +32,6 @@ function appendGuidance(
   lines: string[],
   heading: string,
   card: PersonaDiagnose | undefined,
-  includeSupport: boolean,
 ): void {
   if (card?.hasPersona !== true) return
 
@@ -44,10 +43,10 @@ function appendGuidance(
     lines.push(`**Impact:** ${card.impact}`)
   }
   if (card.action !== '') {
-    lines.push(`**Recommended action:** ${card.action}`)
+    lines.push(``, `**Recommended action:**`, ``, card.action)
   }
-  if (includeSupport && card.supportDetails.length > 0) {
-    lines.push(`**Include on escalation:** ${card.supportDetails.join(', ')}`)
+  if (card.supportDetails.length > 0) {
+    lines.push(``, `**Include on escalation:**`, ``, card.supportDetails.join('\n\n'))
   }
 }
 
@@ -59,10 +58,9 @@ export function buildVerdictMarkdown(run: RunSummary, base?: string): string {
     : 'None'
 
   const personaLines: string[] = []
-  appendGuidance(personaLines, 'Tenant SRE guidance', run.diagnose, false)
-  appendGuidance(personaLines, 'Cloud operator guidance', run.operatorDiagnose, true)
-  const operatorSummary = run.operatorDiagnose?.hasPersona === true ? run.operatorDiagnose.summary : ''
-  const verdictSummary = operatorSummary !== '' ? operatorSummary : run.detail
+  appendGuidance(personaLines, 'Tenant SRE guidance', run.diagnose)
+  const tenantSummary = run.diagnose?.hasPersona === true ? run.diagnose.summary : ''
+  const verdictSummary = tenantSummary !== '' ? tenantSummary : run.detail
 
   // The verdict by the name the page gives it (the verdict badge's), and every
   // time in the page's stamp. An empty value reads "Not recorded", as on the

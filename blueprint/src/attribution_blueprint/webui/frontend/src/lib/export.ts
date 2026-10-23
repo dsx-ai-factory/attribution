@@ -111,6 +111,14 @@ export function verdictExportData(run: RunSummary) {
     outcome: run.outcome,
     verdict_label: run.verdictLabel,
     detail: run.detail,
+    // Export only the tenant fields shown in the UI, never the full catalog card
+    // or legacy operator guidance. Null means no tenant guidance is available.
+    tenant_guidance: run.diagnose?.hasPersona === true ? {
+      summary: run.diagnose.summary,
+      impact: run.diagnose.impact,
+      action: run.diagnose.action,
+      support_details: [...run.diagnose.supportDetails],
+    } : null,
     window: {
       start_utc: run.startTime,
       end_utc: run.endTime,
