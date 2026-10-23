@@ -20,9 +20,12 @@ from attribution_lib.events import BAD_PAIR_EVENT_TYPES, EventStream, sql_placeh
 from attribution_lib.failed_node_provenance import FailedNodeResolution
 from common.megatron import get_pytorch_timeout_minutes
 from attribution_lib.hooks import multihooks, singlehooks
-from attribution_lib.job_info import NVRX_TAG, JobInfo, Scheduler
+from attribution_lib.job_info import NVRX_TAG, JobInfo
 from attribution_lib.node_not_responding_provenance import NodeNotRespondingProvenance
-from attribution_lib.bundled_rules.common.outcome_helpers import apply_user_cancellation_reclassification
+from attribution_lib.bundled_rules.common.outcome_helpers import (
+    KUBERNETES_SCHEDULER_TYPES,
+    apply_user_cancellation_reclassification,
+)
 from attribution_lib.outcome import OutcomeAttribution
 from attribution_lib.rules import (
     FilterPriority,
@@ -861,10 +864,9 @@ def detect_bad_nic_state(context: RefinerContext):
 
 # Raw-keyword promotion rules
 
-# Kueue terminal results remain authoritative when pod/node evidence has
-# already expired. Other scheduler types retain the historical zero-node
-# behavior until that contract is changed separately.
-_KUEUE_ALLOWED_ZERO_NODE_STATES = frozenset(
+# Kubernetes scheduler terminal results remain authoritative when
+# pod/node evidence has expired.
+_KUBERNETES_ALLOWED_ZERO_NODE_STATES = frozenset(
     {"EVICTED", "COMPLETED", "FAILED", "TIMEOUT", "NODE_FAIL", "PREEMPTED", "REQUEUED"}
 )
 
@@ -882,12 +884,15 @@ def job_state_fallback(context: RefinerContext):
     if symptoms is None or job_info is None:
         return
     if len(job_info.nodes) == 0 and job_info.attributed_cancellation is None:
-        if job_info.scheduler is not Scheduler.KUEUE or job_info.state not in _KUEUE_ALLOWED_ZERO_NODE_STATES:
+        if (
+            job_info.scheduler not in KUBERNETES_SCHEDULER_TYPES
+            or job_info.state not in _KUBERNETES_ALLOWED_ZERO_NODE_STATES
+        ):
             symptoms.discard_all()
             symptoms.add(job_info.source_value("Job didn't start", None, "none assigned"))
             return
     if job_info.state == "RUNNING" and job_info.attributed_cancellation is None:
-        if job_info.scheduler is not Scheduler.KUEUE:
+        if job_info.scheduler not in KUBERNETES_SCHEDULER_TYPES:
             symptoms.discard_all()
         if not symptoms:
             symptoms.add(job_info.source_value("running without error", None, "no symptoms; status says running"))
@@ -1104,7 +1109,7 @@ def _add_kueue_scheduler_node_failure(job_info: JobInfo, symptoms: SymptomSet) -
     """
     if (
         job_info.state == "NODE_FAIL"
-        and job_info.scheduler is Scheduler.KUEUE
+        and job_info.scheduler in KUBERNETES_SCHEDULER_TYPES
         and not job_info.failed_node
         and len(job_info.nodes) != 1
     ):
@@ -1334,7 +1339,7 @@ def slurm_timeout_xid145_cascade(context: RefinerContext):
         symptoms is None
         or my_bad_nodes is None
         or job_info is None
-        or job_info.scheduler is Scheduler.KUEUE
+        or job_info.scheduler in KUBERNETES_SCHEDULER_TYPES
         or job_info.job_end_time is None
         or "Cancelled by Timeout" not in symptoms
         or _XID145_RXPIPE_SYMPTOM not in symptoms
@@ -1988,7 +1993,8 @@ def last_resort_symptoms(context: RefinerContext):
         elif job_info.state == "REQUEUED":
             symptoms.add(job_info.source_value("Job requeued", job_info.state, "last resort; slurm status"))
         elif job_info.state == "EVICTED":
-            # eviction reason preserved in `kueue_state`; empty symptom set resolves to Incomplete Info
+            # Native eviction reason is preserved in raw scheduler context;
+            # an empty symptom set resolves to Incomplete Info.
             pass
         elif job_info.state != "RUNNING":
             symptoms.add(job_info.source_value("job failed", job_info.state, "last resort; slurm status"))
@@ -2480,16 +2486,16 @@ def outcome_reclassification_refiner(context: RefinerContext):
     nvrx_exit_fields = (job_info.exit_code, job_info.exit_code_signal)
     is_nvrx = NVRX_TAG in job_info.tags
     nvrx_failed = is_nvrx and any(v is not None and v != 0 for v in nvrx_exit_fields)
-    kueue_has_only_preemption_fallback = all(
+    has_only_preemption_fallback = all(
         symptom == "job failed" for symptom in attribution_result.symptoms.symptoms()
     )
 
-    # Kueue preemption must not mask evidence-backed failures. Other scheduler
-    # types retain their historical PREEMPTED reclassification behavior.
+    # Kubernetes scheduler preemption must not mask evidence-backed
+    # failures. Other scheduler types retain their original behavior.
     if (
         job_info.attributed_cancellation is None
         and not nvrx_failed
-        and (job_info.scheduler is not Scheduler.KUEUE or kueue_has_only_preemption_fallback)
+        and (job_info.scheduler not in KUBERNETES_SCHEDULER_TYPES or has_only_preemption_fallback)
         and job_info.state is not None
         and job_info.state.upper() == "PREEMPTED"
     ):

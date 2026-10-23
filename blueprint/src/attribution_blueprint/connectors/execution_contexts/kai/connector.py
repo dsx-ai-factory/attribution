@@ -15,6 +15,13 @@ Emits one workload-level context per PodGroup, with these KAI specifics:
     end_time           Terminal time of the owning Job or JobSet; now()
                        while the owner is active. Pods never determine it.
     nodes              Union of .spec.nodeName across the member Pods
+    state              From the owning Job or JobSet: COMPLETED, FAILED,
+                       TIMEOUT (a Job failed with DeadlineExceeded), or
+                       RUNNING while the owner has no terminal signal,
+                       including while suspended. `owner_state` keeps the
+                       owner's own wording. A member Pod that reports node
+                       loss sets state to NODE_FAIL and sets `failed_node`;
+                       a completed one stays COMPLETED without one.
 
 Member Pods are joined on the `pod-group-name` annotation plus namespace,
 then validated against the exact owning Job UID; JobSet members must belong
@@ -43,6 +50,11 @@ from loguru import logger
 from attribution_blueprint.connectors.execution_contexts.kubernetes_client import (
     KubernetesClient,
     KubernetesClientError,
+)
+from attribution_blueprint.connectors.execution_contexts.kubernetes_helpers import (
+    earliest_job_failure_reason,
+    job_time_limit_minutes,
+    pod_node_failure_reason,
 )
 from attribution_blueprint.types import assert_aware
 
@@ -74,6 +86,8 @@ class KaiExecutionContext(TypedDict):
     nodes: list[str]
     start_time: datetime
     end_time: datetime
+    # Service-facing state: COMPLETED, FAILED, TIMEOUT or RUNNING.
+    state: str
 
     job_id: str
     pod_group_uid: str
@@ -84,6 +98,11 @@ class KaiExecutionContext(TypedDict):
     owner_kind: str
     owner_name: str
     owner_uid: str
+    # The owner's own state, e.g. "Complete", "Failed:BackoffLimitExceeded",
+    # "Suspended" or "Active".
+    owner_state: str
+    failed_node: NotRequired[str]
+    time_limit: NotRequired[int]
 
     queue_name: NotRequired[str]
     min_member: NotRequired[int]
@@ -146,15 +165,16 @@ def _member_pods(owner_job_uids: set[str], pods: list[dict]) -> list[dict]:
     ]
 
 
-def _jobset_child_job_uids(owner: dict, jobs: list[dict]) -> set[str]:
-    """Return UIDs of Jobs controlled by this exact JobSet incarnation."""
-    child_uids: set[str] = set()
-    for job in jobs:
-        controller = _controller_owner(job.get("metadata") or {})
-        uid = (job.get("metadata") or {}).get("uid")
-        if controller and controller["kind"] == "JobSet" and controller["uid"] == owner["uid"] and uid:
-            child_uids.add(uid)
-    return child_uids
+def _jobset_child_jobs(owner: dict, jobs: list[dict]) -> list[dict]:
+    """Return Jobs controlled by this exact JobSet incarnation."""
+    return [
+        job
+        for job in jobs
+        if (controller := _controller_owner(job.get("metadata") or {})) is not None
+        and controller["kind"] == "JobSet"
+        and controller["uid"] == owner["uid"]
+        and (job.get("metadata") or {}).get("uid")
+    ]
 
 
 def _top_owner(meta: dict) -> dict | None:
@@ -223,25 +243,65 @@ def _owner_resource(owner: dict) -> str | None:
     return None
 
 
-def _jobset_end_time(jobset: dict) -> datetime | None:
-    """Terminal condition time of a finished JobSet, or None while active."""
+def _jobset_terminal(jobset: dict) -> tuple[datetime, str] | None:
+    """Terminal transition time and condition type of a JobSet, or None while active."""
     status = jobset.get("status") or {}
     terminal_state = status.get("terminalState")
     condition_types = {terminal_state} if terminal_state in {"Completed", "Failed"} else {"Completed", "Failed"}
-    times = [
-        transition
+    terminals = [
+        (transition, condition["type"])
         for condition in status.get("conditions") or []
         if (condition or {}).get("type") in condition_types
-        and (condition or {}).get("status") == "True"
+        and condition.get("status") == "True"
         and (transition := _parse_dt(condition.get("lastTransitionTime"))) is not None
     ]
-    return max(times) if times else None
+    return max(terminals) if terminals else None
+
+
+def _jobset_end_time(jobset: dict) -> datetime | None:
+    """Terminal condition time of a finished JobSet, or None while active."""
+    terminal = _jobset_terminal(jobset)
+    return terminal[0] if terminal else None
 
 
 def _owner_end_time(owner: dict, owner_object: dict) -> datetime | None:
     if owner["kind"] == "Job":
         return _job_end_time(owner_object)
     return _jobset_end_time(owner_object)
+
+
+def _condition(owner_object: dict, condition_type: str) -> dict | None:
+    for condition in (owner_object.get("status") or {}).get("conditions") or []:
+        if (condition or {}).get("type") == condition_type and condition.get("status") == "True":
+            return condition
+    return None
+
+
+def _owner_state(owner: dict, owner_object: dict, owner_jobs: list[dict]) -> tuple[str, str]:
+    """Return the service-facing state and the native owner state.
+
+    The service state is COMPLETED, FAILED, TIMEOUT or RUNNING. It is derived
+    from the same terminal signal as the end time, so an owner without one is
+    RUNNING, including while suspended. A Job whose Failed condition reports
+    DeadlineExceeded is TIMEOUT. The native state keeps the owner's own
+    wording, including the failure reason.
+    """
+    if _owner_end_time(owner, owner_object) is None:
+        return "RUNNING", "Suspended" if _condition(owner_object, "Suspended") else "Active"
+
+    if owner["kind"] == "Job":
+        completed = _parse_dt((owner_object.get("status") or {}).get("completionTime")) is not None
+        failed = None if completed else _condition(owner_object, "Failed")
+    else:
+        terminal = _jobset_terminal(owner_object)
+        failed = _condition(owner_object, "Failed") if terminal and terminal[1] == "Failed" else None
+    if failed is None:
+        return "COMPLETED", "Complete" if owner["kind"] == "Job" else "Completed"
+
+    owner_reason = (failed.get("reason") or "").strip()
+    native = f"Failed:{owner_reason}" if owner_reason else "Failed"
+    failure_reason = earliest_job_failure_reason(owner_jobs) or owner_reason
+    return ("TIMEOUT" if failure_reason == "DeadlineExceeded" else "FAILED"), native
 
 
 def _skip_reason(owner: dict, owner_object: dict | None) -> str | None:
@@ -256,7 +316,7 @@ def _skip_reason(owner: dict, owner_object: dict | None) -> str | None:
 def _parse_pod_group(
     podgroup: dict,
     owner: dict,
-    owner_job_uids: set[str],
+    owner_jobs: list[dict],
     pods: list[dict],
     owner_object: dict | None,
     now: datetime,
@@ -283,6 +343,7 @@ def _parse_pod_group(
         logger.warning(f"podgroup {namespace}/{name} has no creationTimestamp; skipping")
         return None
 
+    owner_job_uids = {job_uid for job in owner_jobs if (job_uid := (job.get("metadata") or {}).get("uid")) is not None}
     members = _member_pods(owner_job_uids, pods)
     member_starts = [
         created
@@ -311,6 +372,12 @@ def _parse_pod_group(
     if owner_end is None:
         logger.debug(f"podgroup {namespace}/{name}: owner {owner['kind']} still active; using now() for end_time")
     end_time = max(owner_end if owner_end is not None else now, start_time)
+    state, owner_state = _owner_state(owner, owner_object, owner_jobs)
+    node_loss_nodes = sorted(
+        {node for pod in members if pod_node_failure_reason(pod) and (node := (pod.get("spec") or {}).get("nodeName"))}
+    )
+    if state != "COMPLETED" and any(pod_node_failure_reason(pod) for pod in members):
+        state = "NODE_FAIL"
     if not pod_nodes:
         logger.warning(f"podgroup {namespace}/{name}: node list unavailable from member Pods")
 
@@ -321,6 +388,7 @@ def _parse_pod_group(
         "nodes": sorted(set(pod_nodes.values())),
         "start_time": start_time,
         "end_time": end_time,
+        "state": state,
         "job_id": f"{namespace}/{name}",
         "pod_group_uid": uid,
         # PodGroup incarnation identity, not a scheduling attempt.
@@ -340,6 +408,11 @@ def _parse_pod_group(
     ctx["owner_kind"] = owner["kind"]
     ctx["owner_name"] = owner["name"]
     ctx["owner_uid"] = owner["uid"]
+    ctx["owner_state"] = owner_state
+    if (time_limit := job_time_limit_minutes(owner_jobs)) is not None:
+        ctx["time_limit"] = time_limit
+    if state == "NODE_FAIL" and node_loss_nodes:
+        ctx["failed_node"] = node_loss_nodes[0]
 
     status = podgroup.get("status") or {}
     conditions = status.get("schedulingConditions")
@@ -492,19 +565,21 @@ class KaiExecutionContextAdapter:
                 except KubernetesClientError as error:
                     if error.status != 404:
                         raise
-            owner_job_uids = {owner["uid"]}
+            owner_jobs = [owner_object] if owner["kind"] == "Job" and owner_object is not None else []
             if owner["kind"] == "JobSet" and _skip_reason(owner, owner_object) is None:
-                child_jobs = self._kubernetes.list(
-                    _JOB_RESOURCE,
-                    namespace=namespace,
-                    label_selector=f"{_JOBSET_NAME_LABEL}={owner['name']}",
-                    api_version=_JOB_API_VERSION,
+                owner_jobs = _jobset_child_jobs(
+                    owner,
+                    self._kubernetes.list(
+                        _JOB_RESOURCE,
+                        namespace=namespace,
+                        label_selector=f"{_JOBSET_NAME_LABEL}={owner['name']}",
+                        api_version=_JOB_API_VERSION,
+                    ),
                 )
-                owner_job_uids = _jobset_child_job_uids(owner, child_jobs)
             ctx = _parse_pod_group(
                 podgroup,
                 owner,
-                owner_job_uids,
+                owner_jobs,
                 pods_by_key.get((namespace, meta.get("name") or ""), []),
                 owner_object,
                 now,
