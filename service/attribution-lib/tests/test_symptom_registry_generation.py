@@ -47,6 +47,9 @@ def _load_committed_registry():
 
 
 @pytest.mark.parametrize(
+    "crash_symptom", ["kernel panic", "kernel oops", "kernel invalid memory access", "kernel soft lockup"]
+)
+@pytest.mark.parametrize(
     ("symptoms", "expected"),
     [
         (["kernel panic", "ECC Error"], "ECC Error"),
@@ -63,13 +66,17 @@ def _load_committed_registry():
         ),
     ],
 )
-def test_kernel_panic_priority_preserves_hardware_precedence(symptoms, expected):
+def test_kernel_panic_priority_preserves_hardware_precedence(symptoms, expected, crash_symptom):
     """Preserve hardware precedence and select panic over XID-145 and error 22.
 
     Args:
         symptoms: Synthetic symptoms to classify.
         expected: Root cause that should retain precedence.
+        crash_symptom: Kernel crash variant to check against competing causes.
     """
+    symptoms = [crash_symptom if symptom == "kernel panic" else symptom for symptom in symptoms]
+    if expected == "kernel panic":
+        expected = crash_symptom
     match = _load_committed_registry().outcome_for(symptoms)
 
     assert match is not None
