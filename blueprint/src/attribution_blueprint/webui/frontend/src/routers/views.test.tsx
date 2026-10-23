@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 // SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-// SPDX-License-Identifier: LicenseRef-NvidiaProprietary
+// SPDX-License-Identifier: Apache-2.0
 
 import type { ReactNode } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -408,6 +408,15 @@ describe('VerdictView', () => {
     expect(within(empty).getByText('No nodes recorded for this attempt.').getAttribute('data-slot')).toBe('empty-description')
   })
 
+  it('shows the evidence status row when recorded', () => {
+    mocks.useSWR.mockReturnValue({ data: run({ evidenceStatus: 'partial' }), isLoading: false, error: undefined })
+    render(<MemoryRouter><VerdictView /></MemoryRouter>)
+
+    const verdict = within(screen.getByRole('region', { name: 'Verdict' }))
+    expect(verdict.getByText('Evidence').closest('dt')?.nextElementSibling?.textContent)
+      .toBe('Partial')
+  })
+
   it('renders loading, missing and failed states', () => {
     // Every state keeps the way back to Fleet where the loaded page has it.
     const expectWayBack = () => {
@@ -602,6 +611,8 @@ describe('VerdictView', () => {
     const payloads = within(screen.getByRole('region', { name: 'Payloads' }))
     const copy = payloads.getByRole('button', { name: 'Copy Result summary as JSON' })
     expect(payloads.getByRole('button', { name: 'Copy Scheduler summary as JSON' })).toBeTruthy()
+    // Runs recorded before ingestion reports were saved get no third card.
+    expect(payloads.queryByRole('button', { name: 'Copy Ingestion reports as JSON' })).toBeNull()
     expect(payloads.queryByRole('region', { name: 'Result summary' })).toBeNull()
     // Folded, a block is its header alone inside one border: the header draws no divider above the bottom edge.
     const header = copy.closest<HTMLElement>('[data-slot="code-block-header"]')!
@@ -626,6 +637,12 @@ describe('VerdictView', () => {
     await act(async () => { fireEvent.click(payloads.getByRole('button', { name: 'Copy Scheduler summary as JSON' })) })
     const scheduler = JSON.parse(mocks.clipboardWrite.mock.calls[1][0] as string)
     expect(Object.keys(scheduler)).toEqual(['execution_context', 'user', 'status', 'nodes', 'start_time', 'end_time'])
+  })
+
+  it('shows the ingestion reports when the run recorded them', () => {
+    mocks.useSWR.mockReturnValue({ data: run({ ingestionReports: { connector_reports: [], ingestion_reports: [{ source: 'syslog', status: 'error' }] } }), isLoading: false, error: undefined })
+    render(<MemoryRouter><VerdictView /></MemoryRouter>)
+    expect(within(screen.getByRole('region', { name: 'Payloads' })).getByRole('button', { name: 'Copy Ingestion reports as JSON' })).toBeTruthy()
   })
 
   it.each(['hardware', 'software', 'multi', 'user', 'undetermined', 'pass'] as const)('always marks the root line of a %s verdict, the same way', (outcome) => {

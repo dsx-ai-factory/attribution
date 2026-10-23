@@ -1,12 +1,5 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-# SPDX-License-Identifier: LicenseRef-NvidiaProprietary
-#
-# NVIDIA CORPORATION, its affiliates and licensors retain all intellectual
-# property and proprietary rights in and to this material, related
-# documentation and any modifications thereto. Any use, reproduction,
-# disclosure or distribution of this material and related documentation
-# without an express license agreement from NVIDIA CORPORATION or
-# its affiliates is strictly prohibited.
+# SPDX-License-Identifier: Apache-2.0
 
 from typing import cast
 
@@ -91,6 +84,33 @@ def test_known_prefixes_from_committed_declarations():
     assert "bus error" in prefixes
     assert "Python bug" in prefixes
     assert "XID-" in prefixes
+
+
+def test_xid94_poison_victim_members_preserve_multicategory_outcome():
+    """Declare poison-victim identity without assigning outcome policy."""
+
+    registry = _load_committed_registry()
+    expected_members = {
+        "XID-94-CONTAINED_ERROR-CE": "CE",
+        "XID-94-CONTAINED_ERROR-SM": "SM",
+        "XID-94-CONTAINED_ERROR-GSP": "GSP",
+    }
+
+    for symptom_id, poison_victim in expected_members.items():
+        properties = {
+            "number": 94,
+            "mnemonic": "CONTAINED_ERROR",
+            "poison_victim": poison_victim,
+        }
+        assert registry.family_for(symptom_id) == SymptomFamily(name="xid", properties=properties)
+        assert registry.selector_for(symptom_id) == SymptomSelector(
+            family_name="xid",
+            family_properties=properties,
+        )
+
+        outcome = registry.outcome_for([symptom_id])
+        assert outcome is not None
+        assert outcome.outcome == "Fail MultiCategory"
 
 
 def test_cuda_not_ready_and_not_supported_classify_as_multicategory():
@@ -258,7 +278,6 @@ def test_wandb_error_yields_to_stronger_infrastructure_symptom_in_any_order():
     ("code", "symptom"),
     [
         ("NV_ERR_FABRIC_STATE_OUT_OF_SYNC", "NV_ERR_FABRIC_STATE_OUT_OF_SYNC mem_multicast_fabric.c"),
-        ("NV_ERR_RESET_REQUIRED", "NV_ERR_RESET_REQUIRED gpu_fabric_probe.c"),
         ("NV_ERR_BUFFER_TOO_SMALL", "NV_ERR_BUFFER_TOO_SMALL journal.c"),
         ("NV_ERR_INVALID_OBJECT", "NV_ERR_INVALID_OBJECT mem_multicast_fabric.c"),
         ("NV_ERR_TIMEOUT", "NV_ERR_TIMEOUT nv_gpu_ops.c"),
@@ -387,13 +406,13 @@ def test_bare_nv_err_no_memory_maps_to_multicategory():
     assert match.hw_cause == "Not Applicable"
 
 
-def test_nvrx_detected_failure_maps_to_fail_undetermined():
+def test_nvrx_detected_failure_maps_to_fail_multicategory():
     registry = _load_committed_registry()
 
     match = registry.outcome_for(["NVRx detected failure"])
 
     assert match is not None
-    assert match.outcome == "Fail Undetermined"
+    assert match.outcome == "Fail MultiCategory"
     assert match.tier_index == OUTCOME_PRIORITIES.index(OutcomePriority.LOW_GENERIC)
 
 
@@ -404,6 +423,27 @@ def test_nvrx_unhealthy_node_maps_to_fail_multicategory():
     match = registry.outcome_for(["NVRx unhealthy node"])
 
     assert match is not None
+    assert match.outcome == "Fail MultiCategory"
+    assert match.tier_index == OUTCOME_PRIORITIES.index(OutcomePriority.LOW_GENERIC)
+
+
+@pytest.mark.parametrize(
+    ("symptom", "declared"),
+    [
+        ("NVRx node health check failed: example_check", "NVRx node health check failed"),
+        ("NVRx GPU recovery action: Operating at reduced capacity", "NVRx GPU recovery action"),
+        ("NVRx step section timeout", "NVRx step section timeout"),
+        ("NVRx no progress across restarts", "NVRx no progress across restarts"),
+    ],
+)
+def test_nvrx_launcher_symptoms_map_to_fail_multicategory(symptom, declared):
+    """Classify NVRx launcher symptoms like an unhealthy NVRx node, without asserting a root cause."""
+    registry = _load_committed_registry()
+
+    assert registry.resolve_symptom(symptom) == declared
+    match = registry.outcome_for([symptom])
+    assert match is not None
+    assert match.matched_prefix == declared
     assert match.outcome == "Fail MultiCategory"
     assert match.tier_index == OUTCOME_PRIORITIES.index(OutcomePriority.LOW_GENERIC)
 
@@ -597,12 +637,15 @@ def test_generated_registry_resolves_all_declared_fallback_families():
     dynamic_to_prefix = {
         "XID-149.21-NETIR_LINK_DOWN-RECEIEVED_TS1-0": "XID-",
         "NV_ERR_INSUFFICIENT_RESOURCES mem_multicast_fabric.c": "NV_ERR_",
+        "NV_ERR_RESET_REQUIRED p2p_api.c": "NV_ERR_RESET_REQUIRED",
         "cudaErrorSomethingDynamic": "cudaError",
         "RuntimeError: dynamic message": "RuntimeError",
         "IB Error-99 something": "IB Error-",
         "EFA Error-7 something": "EFA Error-",
         "bad kernel stack frame pointer in some_dynamic_tool": "bad kernel stack frame pointer",
         "Call to ibv_modify_qp failed: eno 9999": "Call to ibv_modify_qp failed",
+        "NVRx node health check failed: example_gpu_check": "NVRx node health check failed",
+        "NVRx GPU recovery action: Requires a node reboot to recover": "NVRx GPU recovery action",
     }
     # Guard against drift: the cases above must exercise every declared fallback
     # family, so a newly declared fallback_prefix forces a new case here.
@@ -669,6 +712,21 @@ def test_csp_category_is_generated_from_committed_declarations():
     assert "CSP Event GPU Fault" in csp_symptoms
     assert "CSP Event Classification Pending" in csp_symptoms
     assert "running without error" not in csp_symptoms
+
+
+def test_batch_size_assertion_is_registered_above_generic_nvrx_failure():
+    registry = _load_committed_registry()
+    symptom = "Python Exception: AssertionError: batch size not divisible"
+
+    assert registry.resolve_symptom(symptom) == symptom
+    match = registry.outcome_for(["NVRx detected failure", "Python Exception", symptom])
+
+    assert match is not None
+    assert match.symptom == symptom
+    assert match.matched_prefix == symptom
+    assert match.outcome == "Fail User"
+    assert match.tier_index == OUTCOME_PRIORITIES.index(OutcomePriority.LOW)
+    assert match.doc == "python-exception"
 
 
 def test_category_membership_deduplicates_scoped_declarations():
@@ -837,7 +895,7 @@ def test_symptom_docs_from_declarations_includes_only_doc_bearing_outcomes():
         ),
         # Cascade-only pruning edge: not a symptom, excluded even with a doc.
         SymptomDeclaration(prefix="noop-only", cascade_noop=True, doc="noop-doc"),
-        # Generic fallback prefix: resolves dynamically, excluded even with a doc.
+        # Fallback prefixes retain an explicitly declared doc.
         SymptomDeclaration(
             prefix="XID-",
             outcome="Fail InfraHW",
@@ -854,6 +912,13 @@ def test_symptom_docs_from_declarations_includes_only_doc_bearing_outcomes():
             priority=OutcomePriority.LOW_GENERIC,
             doc="",
         ),
+        # Whitespace-only doc slug: excluded.
+        SymptomDeclaration(
+            prefix="blank-doc",
+            outcome="Fail InfraSW",
+            priority=OutcomePriority.LOW,
+            doc=" \t\n",
+        ),
         # Missing doc slug: excluded.
         SymptomDeclaration(
             prefix="RuntimeError",
@@ -864,10 +929,10 @@ def test_symptom_docs_from_declarations_includes_only_doc_bearing_outcomes():
 
     docs = symptom_docs_from_declarations(declarations)
 
-    assert docs == {"XID-149": "xid-149"}
+    assert docs == {"XID-149": "xid-149", "XID-": "xid"}
 
 
-def test_outcome_for_carries_doc_for_matched_prefix_and_none_for_fallback():
+def test_outcome_for_carries_doc_for_exact_and_fallback_prefixes():
     declarations = [
         SymptomDeclaration(
             prefix="XID-149",
@@ -892,12 +957,11 @@ def test_outcome_for_carries_doc_for_matched_prefix_and_none_for_fallback():
     assert doc_bearing.matched_prefix == "XID-149"
     assert doc_bearing.doc == "xid-149"
 
-    # The fallback prefix declares a doc slug, but fallback prefixes are excluded
-    # from symptom_docs, so a dynamic id that only matches it resolves with no doc.
+    # A dynamic id inherits the documentation declared by its fallback prefix.
     fallback_match = registry.outcome_for(["XID-777-unmapped-variant"])
     assert isinstance(fallback_match, GeneratedOutcomeMatch)
     assert fallback_match.matched_prefix == "XID-"
-    assert fallback_match.doc is None
+    assert fallback_match.doc == "xid"
 
 
 def test_generated_registry_uses_immutable_containers():
@@ -980,3 +1044,69 @@ def test_symptoms_package_exports_declaration_types():
     assert ExportedOutcomePriority is OutcomePriority
     assert ExportedSymptomCategory is SymptomCategory
     assert ExportedSymptomDeclaration is SymptomDeclaration
+
+
+@pytest.mark.parametrize(
+    ("secondary", "baseline_outcome"),
+    [
+        ("Call to ibv_modify_qp failed", "Fail InfraHW"),
+        ("Call to ibv_modify_qp failed: eno 110 timeout", "Fail InfraHW"),
+        ("Call to ibv_modify_qp failed: eno 22 invalid argument(Mismatched GID)", "Fail InfraHW"),
+        ("Call to ibv_modify_qp failed: eno 22 invalid argument", "Fail InfraSW"),
+        ("Call to ibv_modify_qp failed: eno 11 resource unavailable", "Fail InfraSW"),
+        ("Call to ibv_modify_qp failed: eno 5 input/output error", "Fail InfraHW"),
+        ("ibv_open_device failed", "Fail InfraHW"),
+    ],
+)
+@pytest.mark.parametrize("diagnosis", ["detected bad NIC state", "irisc not responding"])
+def test_bad_nic_state_supersedes_only_secondary_outcomes(secondary, baseline_outcome, diagnosis):
+    registry = _load_committed_registry()
+    baseline = registry.outcome_for([secondary])
+    assert baseline is not None
+    assert baseline.outcome == baseline_outcome
+    for symptoms in ([secondary, diagnosis], [diagnosis, secondary]):
+        match = registry.outcome_for(symptoms)
+        assert match is not None
+        assert match.outcome == "Fail InfraSW"
+        assert match.symptom == diagnosis
+
+
+@pytest.mark.parametrize(
+    ("independent", "expected_outcome"),
+    [
+        ("Node unexpectedly rebooted", "Fail InfraHW"),
+        ("Page Retirement", "Fail InfraHW"),
+        ("RDMA fabric flap", "Fail InfraHW"),
+        ("Call to ibv_modify_qp failed: eno 110 timeout(Overwrite NCCL parameters)", "Fail User"),
+    ],
+)
+@pytest.mark.parametrize("secondary", [None, "Call to ibv_modify_qp failed", "ibv_open_device failed"])
+@pytest.mark.parametrize("diagnosis", ["detected bad NIC state", "irisc not responding"])
+def test_bad_nic_state_preserves_independent_outcomes(independent, expected_outcome, secondary, diagnosis):
+    symptoms = [diagnosis, independent]
+    if secondary is not None:
+        symptoms.append(secondary)
+    match = _load_committed_registry().outcome_for(symptoms)
+    assert match is not None
+    assert match.outcome == expected_outcome
+    assert match.symptom == independent
+
+
+def test_bad_nic_state_outcome_metadata():
+    match = _load_committed_registry().outcome_for(["detected bad NIC state"])
+    assert match is not None
+    assert match.doc == "detected-bad-nic-state"
+    assert match.hw_cause == "NIC firmware initialization failure"
+@pytest.mark.parametrize("symptom", ["NV_ERR_RESET_REQUIRED", "NV_ERR_RESET_REQUIRED kernel_channel.c"])
+def test_gpu_reset_outcome_retains_documentation(symptom: str) -> None:
+    """Check that GPU-reset variants retain their declared documentation.
+
+    Args:
+        symptom: Exact or file-suffixed GPU-reset symptom.
+    """
+    registry = _load_committed_registry()
+    match = registry.outcome_for([symptom])
+
+    assert isinstance(match, GeneratedOutcomeMatch)
+    assert match.matched_prefix == "NV_ERR_RESET_REQUIRED"
+    assert match.doc == "gpu-reset-required"

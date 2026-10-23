@@ -5,7 +5,7 @@ There are many parts involved in a system that does automated job attribution: s
 
 This repository-level document describes the rule-processing model at the center of NVIDIA Attribution. The Blueprint supplies normalized observations to the Service, the Service manages the attribution lifecycle, and the attribution library analyzes that evidence and produces a result.
 
-For a concrete end-to-end example, see the [interactive attribution process walkthrough](attribution-tour/README.md).
+For a concrete end-to-end example, see the [interactive attribution process walkthrough](https://dsx-ai-factory.github.io/attribution/walkthroughs/attribution-process/).
 
 - [Elements of Attribution](#elements-of-attribution): symptoms, outcomes, sources
 - [Attribution Process Overview](#attribution-process-overview): state, events, rules, rule engine/loader
@@ -32,11 +32,20 @@ N.B. Outcomes will become compound in the future, allowing a set of semantically
 
 Primary data for attribution comes from logs, metrics, and telemetry. It is important to track this information throughout the attribution process, so information about the provenance of a given internal representation (symptom, outcome, event, etc) is carried with it. A source will often say from which rule the item originated, as well as the line number, time, and type of data that produced it. See [Events](#events) for how source information is represented on an event record.
 
+`JobInfoBuilder` accepts two optional inputs for a record that represents part of an allocation, such as an array task's participation in an NVRx cycle. `allocation_failure` is a `SchedulerFailure`: the allocation's ID, state, failed node and source. Its time is when the scheduler reported the failure, not when the failure began. `execution_cancellation` is an `ExecutionCancellation` that the caller has established for this record: the record ID, who cancelled it, and a timezone-aware source time. A mismatched record ID or a missing identity or timestamp is rejected.
+
+A supplied cancellation provides the record's cancellation symptom, regardless of the record's raw scheduler state. Independent faults still take precedence. `allocation_failure` changes attribution only together with a cancellation. When the record's state is `NODE_FAIL` and the allocation's failed node is not among the record's nodes, the inherited node failure is not attributed to the record, unless the record's own `failed_node` names a different node that is among its nodes. Omitting both inputs keeps existing behavior.
+
 ## Attribution Process Overview
 
 ### State management
 
 Attribution stores the bulk of its state in a relational database. The current implementation uses an in-memory database with lookup tables and a shared `events` table. Code accesses the rows for one job through an `EventStream`; throughout this document, **event stream** refers to that per-job interface and **`events` table** refers specifically to its database storage.
+
+`EventManager.close()` flushes buffered events before releasing its connection
+and private spill files. Use `close(flush=False)` when discarding the data, as
+the service does on retirement. Destructor cleanup also discards buffers;
+call `close()` explicitly when flushing is required.
 
 The `events` table is the only table that grows with job data:
 
@@ -278,6 +287,24 @@ There is a further sub-phase of `POST_OUTCOME` rules that take the computed outc
 ### Phase 4: Collections
 
 Collector rules do not strictly affect the attribution result; instead, they exist to help surface useful information that may have been collected into the event stream during the attribution process. This may be relevant job parameters or component versions found during the attribution process. See [Collector](#collector) under Rule Types for more detail.
+
+For NCCL `Got completion from peer` errors, the `bad_pairs` collector preserves
+the explicit source hostname even when it is outside the workload's node list.
+When no hostname is printed, a mapped local GID can supply it. If neither
+provides a hostname, a verified producer-declared node or an explicit leading
+rank resolved within the supplied workload can supply the source, even when a
+local GID is present but unmapped. The internal source retains `declared_node`
+to distinguish producer metadata from parser fallbacks. An implicit rank-zero
+default is not source evidence. When no hostname is known, `src_node` stays
+null and an available IP remains in `src_ip`.
+
+If the logged hostname and the hostname mapped from its local GID disagree,
+`src_node` keeps the logged hostname and `src_gid_node` exposes the mapped name.
+When reverse-direction reports are combined, the corresponding information
+can appear as `dst_gid_node`. These extra fields are omitted when the names
+agree or no GID hostname is known. Conflicting IPs, interfaces, or GID hostnames
+remain separate pairs. These fields describe network evidence; they do not
+change workload membership or establish that either node is faulty.
 
 ### Phase 5: Reporting
 

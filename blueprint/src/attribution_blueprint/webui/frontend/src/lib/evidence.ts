@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// SPDX-License-Identifier: Apache-2.0
+
 import type { PersonaDiagnose, RunSummary } from '@/interfaces/attribution'
 import { OUTCOMES } from '@/lib/attribution-data'
 import { counted } from '@/lib/format'

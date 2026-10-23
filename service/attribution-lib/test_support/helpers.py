@@ -1,12 +1,5 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-# SPDX-License-Identifier: LicenseRef-NvidiaProprietary
-#
-# NVIDIA CORPORATION, its affiliates and licensors retain all intellectual
-# property and proprietary rights in and to this material, related
-# documentation and any modifications thereto. Any use, reproduction,
-# disclosure or distribution of this material and related documentation
-# without an express license agreement from NVIDIA CORPORATION or
-# its affiliates is strictly prohibited.
+# SPDX-License-Identifier: Apache-2.0
 
 """Minimal helper utilities for attribution tests."""
 
@@ -31,7 +24,7 @@ from attribution_lib.observation.inbound import (
     TimeInterval,
 )
 from attribution_lib.observation.processing import EntrySourceBase
-from attribution_lib.resources.resource_set import AllJobResources, ResourceSet
+from attribution_lib.resources.resource_set import ResourceSet
 from attribution_lib.rules_engine import body_fallbacks_for
 from attribution_lib.sources import Source, SourceSet
 
@@ -112,7 +105,6 @@ def observation_base(jobinfo, timezone, source, data, *, format=ObservationForma
         time_interval = TimeInterval(jobinfo.job_start_time, jobinfo.job_end_time)
     context = InboundContext(
         time_interval=time_interval,
-        resources=AllJobResources,
         source=source,
         format=format,
         timezone=timezone,

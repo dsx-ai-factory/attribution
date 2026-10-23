@@ -3,17 +3,10 @@
 # flake8: noqa
 
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-# SPDX-License-Identifier: LicenseRef-NvidiaProprietary
-
-# NVIDIA CORPORATION, its affiliates and licensors retain all intellectual
-# property and proprietary rights in and to this material, related
-# documentation and any modifications thereto. Any use, reproduction,
-# disclosure or distribution of this material and related documentation
-# without an express license agreement from NVIDIA CORPORATION or
-# its affiliates is strictly prohibited.
+# SPDX-License-Identifier: Apache-2.0
 
 
-__version__ = "2.0.0.dev0"
+__version__ = "2.0.0"
 
 # Define package exports
 __all__ = [
@@ -45,6 +38,7 @@ __all__ = [
     "DecisionGraph",
     "DecisionNode",
     "DecisionNodeType",
+    "DropReason",
     "DuplicateAttributorError",
     "DuplicateObservationError",
     "Errors",
@@ -54,6 +48,7 @@ __all__ = [
     "GlobalAttribution",
     "HTTPValidationError",
     "IncompatibleObservationSourceFormatError",
+    "IngestSummaryV2",
     "InvalidObservationBodyError",
     "LocationInner",
     "NewResponseV1",
@@ -125,6 +120,7 @@ from nvidia_attribution_client.models.decision_edge import DecisionEdge as Decis
 from nvidia_attribution_client.models.decision_graph import DecisionGraph as DecisionGraph
 from nvidia_attribution_client.models.decision_node import DecisionNode as DecisionNode
 from nvidia_attribution_client.models.decision_node_type import DecisionNodeType as DecisionNodeType
+from nvidia_attribution_client.models.drop_reason import DropReason as DropReason
 from nvidia_attribution_client.models.duplicate_attributor_error import DuplicateAttributorError as DuplicateAttributorError
 from nvidia_attribution_client.models.duplicate_observation_error import DuplicateObservationError as DuplicateObservationError
 from nvidia_attribution_client.models.errors import Errors as Errors
@@ -134,6 +130,7 @@ from nvidia_attribution_client.models.format import Format as Format
 from nvidia_attribution_client.models.global_attribution import GlobalAttribution as GlobalAttribution
 from nvidia_attribution_client.models.http_validation_error import HTTPValidationError as HTTPValidationError
 from nvidia_attribution_client.models.incompatible_observation_source_format_error import IncompatibleObservationSourceFormatError as IncompatibleObservationSourceFormatError
+from nvidia_attribution_client.models.ingest_summary_v2 import IngestSummaryV2 as IngestSummaryV2
 from nvidia_attribution_client.models.invalid_observation_body_error import InvalidObservationBodyError as InvalidObservationBodyError
 from nvidia_attribution_client.models.location_inner import LocationInner as LocationInner
 from nvidia_attribution_client.models.new_response_v1 import NewResponseV1 as NewResponseV1

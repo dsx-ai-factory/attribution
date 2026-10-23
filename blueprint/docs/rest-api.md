@@ -74,19 +74,35 @@ to the rules engine as a string. When no stronger evidence exists,
 states produce the failed fallback symptom.
 
 Creating an identical attributor while the first one still exists returns
-HTTP 409. Delete the old attributor, or change the workload context, before
-retrying.
+HTTP 409 (`DuplicateAttributorError`). The response's `att_id` identifies the
+existing session; it does not establish that the session is stale or safe to
+delete. The Blueprint preserves that session and its accumulated evidence and
+rejects the duplicate creation. See the
+[Blueprint session flow](../../docs/ARCHITECTURE.md#end-to-end-flow-for-one-workload)
+for conflict reporting.
+
+Serialize runs with identical workload information against the same Service.
+Retry after the existing session's owner finishes and deletes it. If a caller
+crashed, delete its session only after confirming that no caller still uses it,
+or wait for the Service to expire it after 24 hours of inactivity (checked
+hourly, normally about 24–25 hours after the last activity). Normal sequential
+Blueprint runs clean up their own sessions and can be repeated. Recovery before
+expiry requires an operator to explicitly delete the session; ownership-aware
+recovery would require a separate Service lifecycle change.
 
 ## 2. Submit an observation
 
 The outer observation is JSON, but `body` is always a string. For
 `entry_timeseries`, that string is a JSON array with one object per log line:
 * `body` (required)
-* `ts` (unix nanoseconds, or omitted when the producer has no timestamp)
-* `resources` (omitted unless the producer knows the node; `[{"kind": "node", "hostname": ...}]`, optionally with `{"kind": "replica", "name": ...}` objects)
+* `ts` (unix nanoseconds; optional in the schema, but `syslog`, `health_check` and `csp_event` drop an entry without it)
+* `resources` (`[{"kind": "node", "hostname": ...}]`, optionally with `{"kind": "replica", "name": ...}` objects)
 
-If no `resources` are declared, application log lines can include a rank or node prefix so the service can associate evidence more specifically. A `null` bound in 
-`time_interval` is unbounded on that side; **entries outside the declared interval are dropped.**
+[Observation entry format](../../service/service-app/docs/api/observation-format.md) is the authority
+on these fields: what each source does when `ts` or the node is missing, what
+it parses out of the body instead, and why a 201 does not mean the entries were
+used. A `null` bound in `time_interval` is unbounded on that side; **entries
+outside the declared interval are dropped.**
 
 ```bash
 curl --fail-with-body --silent --show-error \
@@ -145,7 +161,8 @@ curl --fail-with-body --silent --show-error \
 
 A successful delete returns HTTP 204 with no response body. Attributors are
 temporary service state, not a result database. Always delete them after
-retrieving the result. The Blueprint does this in a `finally` block and writes
+retrieving the result, and only delete sessions you own. The Blueprint cleans
+up successfully created sessions in a `finally` block and writes
 the enriched result through its configured output connectors.
 
 ## API discovery and errors

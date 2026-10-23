@@ -1,0 +1,11 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+blank_issues_enabled: false
+contact_links:
+  - name: Questions and feature requests
+    url: https://github.com/dsx-ai-factory/attribution/discussions
+    about: Ask for help or propose an improvement in GitHub Discussions.
+  - name: Report a security vulnerability
+    url: https://github.com/dsx-ai-factory/attribution/blob/main/SECURITY.md
+    about: Do not report security vulnerabilities in public issues. Follow the security policy.

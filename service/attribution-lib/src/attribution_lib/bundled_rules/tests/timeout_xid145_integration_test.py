@@ -1,5 +1,5 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-# SPDX-License-Identifier: LicenseRef-NvidiaProprietary
+# SPDX-License-Identifier: Apache-2.0
 
 """End-to-end coverage for Slurm timeout XID-145 cascade handling."""
 
@@ -46,7 +46,6 @@ def test_terminal_rxpipe_after_raw_slurm_timeout_finishes_as_pass(
     syslog = InboundObservation(
         context=InboundContext(
             time_interval=interval,
-            resources=AllJobResources,
             source=ObservationSource.SYSLOG,
             format=ObservationFormat.ENTRY_TIMESERIES,
             timezone=timezone,
@@ -64,7 +63,6 @@ def test_terminal_rxpipe_after_raw_slurm_timeout_finishes_as_pass(
     applog = InboundObservation(
         context=InboundContext(
             time_interval=interval,
-            resources=AllJobResources,
             source=ObservationSource.APPLOG,
             format=ObservationFormat.ENTRY_TIMESERIES,
             timezone=timezone,
@@ -119,7 +117,6 @@ def test_timeout_cascades_and_unused_xid_leave_only_timeout_failure(
     syslog = InboundObservation(
         context=InboundContext(
             time_interval=interval,
-            resources=AllJobResources,
             source=ObservationSource.SYSLOG,
             format=ObservationFormat.ENTRY_TIMESERIES,
             timezone=timezone,
@@ -160,7 +157,6 @@ def test_timeout_cascades_and_unused_xid_leave_only_timeout_failure(
     applog = InboundObservation(
         context=InboundContext(
             time_interval=interval,
-            resources=AllJobResources,
             source=ObservationSource.APPLOG,
             format=ObservationFormat.ENTRY_TIMESERIES,
             timezone=timezone,
@@ -194,7 +190,7 @@ def test_timeout_cascades_and_unused_xid_leave_only_timeout_failure(
         "XID-145-RLW_RXPIPE-8",
         "XID-145-MultiCategory",
         "XID-137-NVLINK_PRIV_ERR",
-        "XID-94-CONTAINED_ERROR",
+        "XID-94-CONTAINED_ERROR-SM",
     ):
         assert not result.symptoms._data[symptom].has_bad()
         assert result.symptoms._data[symptom].has_interesting()
@@ -207,7 +203,7 @@ def test_timeout_cascades_and_unused_xid_leave_only_timeout_failure(
         "XID-145-RLW_RXPIPE-8",
         "XID-145-MultiCategory",
         "XID-137-NVLINK_PRIV_ERR",
-        "XID-94-CONTAINED_ERROR",
+        "XID-94-CONTAINED_ERROR-SM",
     ):
         assert symptom not in cascade_node
         assert cascade_node._data[symptom].has_interesting()

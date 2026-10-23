@@ -1,5 +1,5 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-// SPDX-License-Identifier: LicenseRef-NvidiaProprietary
+// SPDX-License-Identifier: Apache-2.0
 
 import { BaseEdge, EdgeLabelRenderer, type Edge, type EdgeProps } from '@xyflow/react'
 import { EDGE_LABEL_HEIGHT, type TracePathData } from './layout'

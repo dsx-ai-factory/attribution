@@ -1,22 +1,14 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-# SPDX-License-Identifier: LicenseRef-NvidiaProprietary
-#
-# NVIDIA CORPORATION, its affiliates and licensors retain all intellectual
-# property and proprietary rights in and to this material, related
-# documentation and any modifications thereto. Any use, reproduction,
-# disclosure or distribution of this material and related documentation
-# without an express license agreement from NVIDIA CORPORATION or
-# its affiliates is strictly prohibited.
+# SPDX-License-Identifier: Apache-2.0
 
 [project]
 name = "nvidia-attribution-service"
 dynamic = ["version"]
 description = "NVIDIA Attribution Service"
 readme = "README.md"
-license = "LicenseRef-NvidiaProprietary"
+license = "Apache-2.0"
 license-files = ["LICENSE"]
 requires-python = ">=3.14.6,<3.15"
-classifiers = ["Private :: Do Not Upload"]
 dependencies = [
     "attribution-lib",
     "fastapi>=0.115.6",
@@ -55,7 +47,7 @@ members = ["nvidia_attribution_client"]
 attribution-lib = { path = "../attribution-lib", editable = true }
 
 [build-system]
-requires = ["hatchling"]
+requires = ["hatchling>=1.27"]
 build-backend = "hatchling.build"
 
 [tool.hatch.version]

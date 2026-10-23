@@ -1,12 +1,5 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-# SPDX-License-Identifier: LicenseRef-NvidiaProprietary
-#
-# NVIDIA CORPORATION, its affiliates and licensors retain all intellectual
-# property and proprietary rights in and to this material, related
-# documentation and any modifications thereto. Any use, reproduction,
-# disclosure or distribution of this material and related documentation
-# without an express license agreement from NVIDIA CORPORATION or
-# its affiliates is strictly prohibited.
+# SPDX-License-Identifier: Apache-2.0
 import re
 from abc import ABC, abstractmethod
 from collections.abc import Iterator
@@ -339,6 +332,18 @@ class TimeseriesEntryObj(EntryBase):
         declared = entry.get("resources")
         self._resources = validate_resource_set(declared) if declared is not None else None
         self._body_fallbacks = body_fallbacks
+
+    def attribution_source_base(self, job_info: Optional[JobInfo]) -> Source:
+        """Retain a verified producer-declared node separately from body fallbacks."""
+        source = super().attribution_source_base(job_info)
+        if (
+            job_info is not None
+            and self._resources is not None
+            and self._resources != ResourceSetClass.ANY
+            and any(isinstance(resource, NodeResource) for resource in self._resources)
+        ):
+            return source._replace(declared_node=get_single_node(source.resources).hostname)
+        return source
 
     @method_cache
     def time(self) -> Optional[datetime]:

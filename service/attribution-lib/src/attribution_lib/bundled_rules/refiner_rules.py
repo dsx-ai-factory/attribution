@@ -1,12 +1,5 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-# SPDX-License-Identifier: LicenseRef-NvidiaProprietary
-#
-# NVIDIA CORPORATION, its affiliates and licensors retain all intellectual
-# property and proprietary rights in and to this material, related
-# documentation and any modifications thereto. Any use, reproduction,
-# disclosure or distribution of this material and related documentation
-# without an express license agreement from NVIDIA CORPORATION or
-# its affiliates is strictly prohibited.
+# SPDX-License-Identifier: Apache-2.0
 
 
 # Refiner rules run on materialized symptoms and my_bad_nodes (post–event-stream).
@@ -83,6 +76,7 @@ _SCRUB_ORDER = [
     # Prefer explicit XID-140 before correlating GSP evidence per node.
     "Xid140Cascade",
     "PoisonedGspComposite",
+    "DetectBadNicState",
     # Combine only the scheduler failure and surviving independent epilog
     # non-response evidence after more specific per-node causes are scrubbed.
     "CorroboratedNodeFailure",
@@ -395,6 +389,7 @@ _CONNECTION_CLOSED_TRIGGERS = [
     "XID-145-RLW_SRC_TRACK-4",
     "Node failure reported by slurm",
     "NaN reported by Megatron",
+    "cudaError out of memory",
 ]
 
 _XID145_RXPIPE_SYMPTOM = "XID-145-RLW_RXPIPE-8"
@@ -407,10 +402,18 @@ _SLURM_TIMEOUT_XID145_WINDOW = timedelta(seconds=90)
 # timestamp precision and clock skew, rather than making the full 90 s window
 # symmetric and potentially suppressing a genuine pre-timeout XID.
 _SLURM_TIMEOUT_XID145_CLOCK_SKEW = timedelta(seconds=1)
+_XID94_CONTAINED_ERROR_SYMPTOMS = frozenset(
+    {
+        "XID-94-CONTAINED_ERROR",
+        "XID-94-CONTAINED_ERROR-CE",
+        "XID-94-CONTAINED_ERROR-GSP",
+        "XID-94-CONTAINED_ERROR-SM",
+    }
+)
 _XID145_RXPIPE_COMPANIONS = frozenset(
     {
         "XID-137-NVLINK_PRIV_ERR",
-        "XID-94-CONTAINED_ERROR",
+        *_XID94_CONTAINED_ERROR_SYMPTOMS,
     }
 )
 # In the regression fixture, XID-94 preceded RXPIPE by 70 ms, and XID-137
@@ -418,6 +421,9 @@ _XID145_RXPIPE_COMPANIONS = frozenset(
 # interleaving while restricting correlation to the immediate episode.
 _XID145_RXPIPE_COMPANION_WINDOW = timedelta(seconds=1)
 _XID_PCI_ID_RE = re.compile(r"NVRM:\s+Xid \(PCI:(?P<pci_id>[0-9a-fA-F.:]+)\):")
+_BAD_NIC_COMPONENTS = ("mlx5 firmware in initialization state", "mlx5 device initialization failed")
+_BAD_NIC_WINDOW = timedelta(minutes=2)
+_MLX5_PCI_RE = re.compile(r"\bmlx5_core\s+([0-9a-fA-F]{4}:[0-9a-fA-F]{2}:[0-9a-fA-F]{2}\.[0-7]):")
 _IB_CLEANUP_SKIP_SYMPTOMS = frozenset({_XID145_RXPIPE_SYMPTOM, "XID-137-NVLINK_PRIV_ERR"})
 _KERNEL_CRASH_SYMPTOMS = frozenset(
     {
@@ -469,7 +475,7 @@ def _remove_network_cascade(symptoms, my_bad_nodes) -> None:
     """Discard cascaded network symptoms from both symptoms and per-node attributions."""
     for symptom in _NETWORK_CASCADE_SYMPTOMS:
         symptoms.discard(symptom)
-    for _node, errors in my_bad_nodes.items():
+    for _node, errors in my_bad_nodes.symptom_groups():
         for symptom in _NETWORK_CASCADE_SYMPTOMS:
             errors.discard(symptom)
 
@@ -479,7 +485,7 @@ def _remove_connection_closed_cascade(symptoms, my_bad_nodes) -> None:
     symptoms.discard("Connection closed")
     if my_bad_nodes is None:
         return
-    for _node, errors in my_bad_nodes.items():
+    for _node, errors in my_bad_nodes.symptom_groups():
         errors.discard("Connection closed")
 
 
@@ -546,6 +552,10 @@ def scheduler_node_failure_refiner(context: RefinerContext):
     job_info = context.job_info
     my_bad_nodes = context.my_bad_nodes
     if job_info is None or my_bad_nodes is None:
+        return
+    if job_info.suppress_inherited_node_failure:
+        # Associated cancellation supplies execution termination; the node
+        # failure remains allocation evidence. Independent faults still apply.
         return
     if job_info.state != "NODE_FAIL":
         return
@@ -619,68 +629,74 @@ def scrub_bad_nodes_refiner(context: RefinerContext):
     # job carries a node-failure symptom.
     node_failure_present = any(s in my_bad_nodes[n] for n in my_bad_nodes for s in _NODE_FAILURE_SYMPTOMS)
 
-    for k in list(my_bad_nodes):
-        if "Node not responding" in my_bad_nodes[k]:
-            my_bad_nodes[k].discard("Node unexpectedly rebooted")
+    # Job-level symptoms come from output that names no node (unlabelled APPLOG
+    # lines of a multi-node job). Scrub them with the same rules so a cascade the
+    # rules discard on a node is not kept just because its line had no prefix.
+    for k, group in my_bad_nodes.symptom_groups():
+        if "Node not responding" in group:
+            group.discard("Node unexpectedly rebooted")
 
-        if "System is powering down" in my_bad_nodes[k]:
-            my_bad_nodes[k].discard("Node not responding")
-            my_bad_nodes[k].discard("Node unexpectedly rebooted")
-            my_bad_nodes[k].discard("Stopping nvidia-imex.service")
+        if "System is powering down" in group:
+            group.discard("Node not responding")
+            group.discard("Node unexpectedly rebooted")
+            group.discard("Stopping nvidia-imex.service")
 
         if (
-            any("XID-" in error for error in my_bad_nodes[k].symptoms())
-            or "NMI watchdog hard LOCKUP" in my_bad_nodes[k]
-            or "general protection fault" in my_bad_nodes[k]
-            or "kernel invalid memory access" in my_bad_nodes[k]
-            or "Failed to collect nvlink status info" in my_bad_nodes[k]
+            any("XID-" in error for error in group.symptoms())
+            or "NMI watchdog hard LOCKUP" in group
+            or "general protection fault" in group
+            or "kernel invalid memory access" in group
+            or "Failed to collect nvlink status info" in group
         ):
-            my_bad_nodes[k].discard("Node not responding")
-            my_bad_nodes[k].discard("Node unexpectedly rebooted")
+            group.discard("Node not responding")
+            group.discard("Node unexpectedly rebooted")
 
-        if any("bad kernel stack frame pointer" in error for error in my_bad_nodes[k].symptoms()):
-            my_bad_nodes[k].discard("NMI watchdog hard LOCKUP")
-            my_bad_nodes[k].discard("general protection fault")
-            my_bad_nodes[k].discard("Node not responding")
-            my_bad_nodes[k].discard("Node unexpectedly rebooted")
+        if any("bad kernel stack frame pointer" in error for error in group.symptoms()):
+            group.discard("NMI watchdog hard LOCKUP")
+            group.discard("general protection fault")
+            group.discard("Node not responding")
+            group.discard("Node unexpectedly rebooted")
 
         # An OOM kill of a system service (slurmd, slurmstepd, munged, etc.) is
         # the root cause; the node going silent or SLURM declaring NODE_FAIL
         # are downstream consequences.
-        if "OOM kill of system service" in my_bad_nodes[k]:
-            my_bad_nodes[k].discard("Node not responding")
-            my_bad_nodes[k].discard("Node failure reported by slurm")
+        if "OOM kill of system service" in group:
+            group.discard("Node not responding")
+            group.discard("Node failure reported by slurm")
 
         # See cross-node precompute above — discard from every node, not just
         # the one where dataloader crashed.
         if node_failure_present:
-            my_bad_nodes[k].discard("DataLoader Exception")
+            group.discard("DataLoader Exception")
 
-        if "FalsePositive-XID-64" in my_bad_nodes[k] or "DriverBug-XID-64" in my_bad_nodes[k]:
-            my_bad_nodes[k].discard("XID-64-INFOROM_DRAM_RETIREMENT_FAILURE")
-            my_bad_nodes[k].discard("XID-92-EXCESSIVE_SBE_INTERRUPTS")
-            my_bad_nodes[k].discard("PyTorch NCCL watchdog")
+        if "FalsePositive-XID-64" in group or "DriverBug-XID-64" in group:
+            group.discard("XID-64-INFOROM_DRAM_RETIREMENT_FAILURE")
+            group.discard("XID-92-EXCESSIVE_SBE_INTERRUPTS")
+            group.discard("PyTorch NCCL watchdog")
 
-        if "DriverBug-XID-64" in my_bad_nodes[k]:
-            my_bad_nodes[k].discard("FalsePositive-XID-64")
+        if "DriverBug-XID-64" in group:
+            group.discard("FalsePositive-XID-64")
 
-        if "FalsePositive-XID-63" in my_bad_nodes[k]:
-            my_bad_nodes[k].discard("XID-63-INFOROM_DRAM_RETIREMENT_EVENT")
+        if "FalsePositive-XID-63" in group:
+            group.discard("XID-63-INFOROM_DRAM_RETIREMENT_EVENT")
 
         # Both an authentication failure and a subsequent success means
         # normal behavior — not a job interruption event.
-        if "EAP authentication recovery" in my_bad_nodes[k]:
-            my_bad_nodes[k].discard("EAP authentication failed")
-            my_bad_nodes.purge_from_node(k, "EAP authentication recovery")
-            if k not in my_bad_nodes:
-                continue
+        if "EAP authentication recovery" in group:
+            group.discard("EAP authentication failed")
+            if k is None:
+                group.discard("EAP authentication recovery", purge=True)
+            else:
+                my_bad_nodes.purge_from_node(k, "EAP authentication recovery")
+                if k not in my_bad_nodes:
+                    continue
 
-        if "Unexpected error from cudaGetDeviceCount()" in my_bad_nodes[k] and job_info.num_gpus == 0:
-            my_bad_nodes[k].discard("Unexpected error from cudaGetDeviceCount()")
+        if "Unexpected error from cudaGetDeviceCount()" in group and job_info.num_gpus == 0:
+            group.discard("Unexpected error from cudaGetDeviceCount()")
 
         # Error 803 is the specific cause behind the generic device-count failure.
-        if "cudaErrorSystemDriverMismatch" in my_bad_nodes[k]:
-            my_bad_nodes[k].discard("Unexpected error from cudaGetDeviceCount()")
+        if "cudaErrorSystemDriverMismatch" in group:
+            group.discard("Unexpected error from cudaGetDeviceCount()")
 
 
 @refiner_def(
@@ -797,6 +813,51 @@ def poisoned_gsp_composite(context: RefinerContext):
             node_group.discard(symptom)
 
 
+@refiner_def(
+    name="DetectBadNicState",
+    author="NVIDIA Attribution team",
+    priority=_priority("DetectBadNicState"),
+)
+def detect_bad_nic_state(context: RefinerContext):
+    """Combine mlx5 initialization signals on one node and PCI device near job end.
+
+    Both sources must be at job end or within the following two minutes. Preserve
+    their provenance and demote only the sources used in the compound symptom.
+    """
+    job_info = context.job_info
+    if context.my_bad_nodes is None or job_info is None or job_info.job_end_time is None:
+        return
+
+    for _node, node_group in context.my_bad_nodes.items():
+        symptoms = node_group.attributions
+        if not all(component in symptoms for component in _BAD_NIC_COMPONENTS):
+            continue
+        by_device: dict[str, dict[str, list[Source]]] = {}
+        for component in _BAD_NIC_COMPONENTS:
+            for source in symptoms[component]:
+                if source.time is None:
+                    continue
+                if not job_info.job_end_time <= source.time <= job_info.job_end_time + _BAD_NIC_WINDOW:
+                    continue
+                match = _MLX5_PCI_RE.search(source.datum)
+                if match is not None:
+                    device = match.group(1).lower()
+                    by_device.setdefault(device, {}).setdefault(component, []).append(source)
+
+        combined = SourceSet("detected bad NIC state")
+        for components in by_device.values():
+            if not all(component in components for component in _BAD_NIC_COMPONENTS):
+                continue
+            for sources in components.values():
+                for source in sources:
+                    combined.add(source)
+        if not combined.has_bad():
+            continue
+        node_group.add(combined)
+        for component in _BAD_NIC_COMPONENTS:
+            symptoms[component].discard_selected(combined)
+
+
 # Raw-keyword promotion rules
 
 # Kueue terminal results remain authoritative when pod/node evidence has
@@ -805,6 +866,7 @@ def poisoned_gsp_composite(context: RefinerContext):
 _KUEUE_ALLOWED_ZERO_NODE_STATES = frozenset(
     {"EVICTED", "COMPLETED", "FAILED", "TIMEOUT", "NODE_FAIL", "PREEMPTED", "REQUEUED"}
 )
+
 
 @refiner_def(name="JobStateFallback", author="NVIDIA Attribution team", priority=_priority("JobStateFallback"))
 def job_state_fallback(context: RefinerContext):
@@ -818,12 +880,12 @@ def job_state_fallback(context: RefinerContext):
     job_info = context.job_info
     if symptoms is None or job_info is None:
         return
-    if len(job_info.nodes) == 0:
+    if len(job_info.nodes) == 0 and job_info.attributed_cancellation is None:
         if job_info.scheduler is not Scheduler.KUEUE or job_info.state not in _KUEUE_ALLOWED_ZERO_NODE_STATES:
             symptoms.discard_all()
             symptoms.add(job_info.source_value("Job didn't start", None, "none assigned"))
             return
-    if job_info.state == "RUNNING":
+    if job_info.state == "RUNNING" and job_info.attributed_cancellation is None:
         if job_info.scheduler is not Scheduler.KUEUE:
             symptoms.discard_all()
         if not symptoms:
@@ -943,6 +1005,11 @@ def empty_symptoms_fallback(context: RefinerContext):
     job_info = context.job_info
     if raw_keywords is None or symptoms is None or job_info is None:
         return
+    if job_info.attributed_cancellation is not None:
+        # Explicit execution termination is already known. Collection metadata
+        # must not replace it with a missing-log outcome; raw keywords remain
+        # available and independently extracted faults retain their precedence.
+        return
     if not symptoms or (len(symptoms) == 1 and "Cancelled by user" in symptoms):
         if "log file is not recognized from slurm cmdline" in raw_keywords:
             sources = raw_keywords["log file is not recognized from slurm cmdline"]
@@ -1000,7 +1067,19 @@ def slurm_state_symptoms(context: RefinerContext):
     if symptoms is None or job_info is None:
         return
 
-    if _is_root_cancellation(job_info):
+    if (cancellation := job_info.attributed_cancellation) is not None:
+        actor = cancellation.cancelled_by
+        if actor == "root":
+            symptom = "Cancelled by root"
+        elif actor == "site-automation-account":
+            symptom = "Cancelled by cluster operators"
+        elif actor == "Timeout":
+            symptom = "Cancelled by Timeout"
+        else:
+            symptom = "Cancelled by user"
+        symptoms.add(SourceSet(symptom).add(cancellation.source))
+        _add_kueue_scheduler_node_failure(job_info, symptoms)
+    elif _is_root_cancellation(job_info):
         symptoms.add(job_info.source_value("Cancelled by root", job_info.state, "state cancelled by root"))
     elif job_info.state.startswith("CANCELLED"):
         if job_info.cancelled_by == "site-automation-account":
@@ -1011,14 +1090,23 @@ def slurm_state_symptoms(context: RefinerContext):
             symptoms.add(job_info.source_value("Cancelled by user", job_info.state, "state cancelled"))
     elif job_info.state == "REQUEUED":
         symptoms.add(job_info.source_value("Job requeued", job_info.state, "state requeued"))
-    elif (
+    else:
+        _add_kueue_scheduler_node_failure(job_info, symptoms)
+
+
+def _add_kueue_scheduler_node_failure(job_info: JobInfo, symptoms: SymptomSet) -> None:
+    """Add Kueue scheduler-level node loss when the exact failed node is unknown.
+
+    Args:
+        job_info: The record being attributed.
+        symptoms: The symptom set to add to.
+    """
+    if (
         job_info.state == "NODE_FAIL"
         and job_info.scheduler is Scheduler.KUEUE
         and not job_info.failed_node
         and len(job_info.nodes) != 1
     ):
-        # Scheduler-level node-loss evidence is still actionable when the
-        # exact failed node cannot be identified.
         symptoms.add(
             job_info.source_value(
                 "Node failure reported by slurm",
@@ -1053,8 +1141,8 @@ def process_completes_cleanup(context: RefinerContext):
         # attributions, so same-node DAG cascade pruning cannot demote this CSP
         # symptom there.
         if my_bad_nodes is not None:
-            for _node, node_group in my_bad_nodes.items():
-                node_group.discard(_CSP_TENANT_REPORTED)
+            for _node, group in my_bad_nodes.symptom_groups():
+                group.discard(_CSP_TENANT_REPORTED)
 
 
 @refiner_def(
@@ -1088,9 +1176,9 @@ def csp_event_precedence_and_cascades(context: RefinerContext):
     if _CSP_TENANT_REPORTED in symptoms and _CSP_TERMINATED in symptoms:
         symptoms.discard(_CSP_TERMINATED)
         if my_bad_nodes is not None:
-            for _node, node_group in my_bad_nodes.items():
-                if _CSP_TENANT_REPORTED in node_group and _CSP_TERMINATED in node_group:
-                    node_group.discard(_CSP_TERMINATED)
+            for _node, group in my_bad_nodes.symptom_groups():
+                if _CSP_TENANT_REPORTED in group and _CSP_TERMINATED in group:
+                    group.discard(_CSP_TERMINATED)
 
     if not any(symptom.startswith(_CSP_EVENT_PREFIX) for symptom in symptoms.symptoms()):
         return
@@ -1101,13 +1189,13 @@ def csp_event_precedence_and_cascades(context: RefinerContext):
     symptoms.discard_seq(cascade_targets)
 
     if my_bad_nodes is not None:
-        for _node, node_group in my_bad_nodes.items():
+        for _node, group in my_bad_nodes.symptom_groups():
             node_cascade_targets = [
                 symptom
-                for symptom in node_group.symptoms()
+                for symptom in group.symptoms()
                 if symptom == _SYSTEM_POWERING_DOWN or "pyxis" in symptom.casefold()
             ]
-            node_group.attributions.discard_seq(node_cascade_targets)
+            group.discard_seq(node_cascade_targets)
 
 
 @singlehooks.CancelledByCleanup.set_default
@@ -1134,7 +1222,7 @@ def cancellation_resolution(context: RefinerContext):
         symptoms.discard("Cancelled by user")
     elif singlehooks.CancelledByCleanup(job_info, symptoms):
         symptoms.discard("Cancelled by user")
-    elif job_info.state == "TIMEOUT":
+    elif job_info.state == "TIMEOUT" and job_info.attributed_cancellation is None:
         symptoms.add(job_info.source_value("Cancelled by Timeout", job_info.state, "Timeout"))
 
     if "Cancelled by Timeout" in symptoms:
@@ -1418,8 +1506,8 @@ def multicast_nv_err_suppression(context: RefinerContext):
     logger.info(f"Discarding syslog symptom due to applog multicast skip marker: {MULTICAST_RESOURCE_SYMPTOM}")
     symptoms.discard(MULTICAST_RESOURCE_SYMPTOM)
     if my_bad_nodes is not None:
-        for _node, node_group in my_bad_nodes.items():
-            node_group.attributions.discard(MULTICAST_RESOURCE_SYMPTOM)
+        for _node, group in my_bad_nodes.symptom_groups():
+            group.discard(MULTICAST_RESOURCE_SYMPTOM)
 
 
 @singlehooks.WatchdogCancellationOverride.set_default
@@ -1573,10 +1661,11 @@ def ib_symptom_cleanup(context: RefinerContext):
     elif "link down(east-west)" in symptoms:
         _handle_link_down_time_proximity(symptoms, my_bad_nodes, es)
 
-    # Per-node: non-IB root cause → discard cascaded IB/EFA on that node
+    # Per-node: non-IB root cause → discard cascaded IB/EFA on that node. The
+    # job-level set counts as a group: an unlabelled applog line that names the
+    # root cause is still the root cause.
     substrings = [p.strip("%") for p in _NON_IB_ROOT_CAUSE_PATTERNS]
-    for _node, node_group in my_bad_nodes.items():
-        errors = node_group.attributions
+    for _node, errors in my_bad_nodes.symptom_groups():
         found_root_cause = False
         for err in list(errors.symptoms()):
             for substr in substrings:
@@ -1638,11 +1727,13 @@ def kernel_crash_ib_cascade_cleanup(context: RefinerContext):
     if len(crashed_nodes) == 0:
         return
 
+    # Only a group with a known node can be classed as a peer. Job-level IB
+    # evidence (unlabelled applog) has no known origin, so it is preserved like
+    # the crashed node's own evidence rather than discarded as a peer report.
     discarded: set[str] = set()
-    for node, node_group in my_bad_nodes.items():
-        if node in crashed_nodes:
+    for node, errors in my_bad_nodes.symptom_groups():
+        if node is None or node in crashed_nodes:
             continue
-        errors = node_group.attributions
         if not any(_is_ib_error_12(symptom) for symptom in errors.symptoms()):
             continue
         before = set(errors.symptoms())
@@ -1652,9 +1743,7 @@ def kernel_crash_ib_cascade_cleanup(context: RefinerContext):
     if len(discarded) == 0:
         return
 
-    surviving = {
-        symptom for _node, node_group in my_bad_nodes.items() for symptom in node_group.attributions.symptoms()
-    }
+    surviving = {symptom for _node, errors in my_bad_nodes.symptom_groups() for symptom in errors.symptoms()}
     for symptom in discarded - surviving:
         symptoms.discard(symptom)
 
@@ -1679,9 +1768,9 @@ def watchdog_gpu_cascade_cleanup(context: RefinerContext):
     for symptom in watchdog_cascade_symptoms:
         symptoms.discard(symptom)
     if my_bad_nodes is not None:
-        for _node, node_group in my_bad_nodes.items():
+        for _node, group in my_bad_nodes.symptom_groups():
             for symptom in watchdog_cascade_symptoms:
-                node_group.attributions.discard(symptom)
+                group.discard(symptom)
 
 
 # Post-IB cascading rules
@@ -1828,8 +1917,8 @@ def python_bug_xid_cleanup(context: RefinerContext):
         symptoms.discard("Python bug")
         # Also clean up "Python bug" from bad_nodes
         if my_bad_nodes is not None:
-            for node in my_bad_nodes.attributions:
-                my_bad_nodes.attributions[node].attributions.discard("Python bug")
+            for _node, group in my_bad_nodes.symptom_groups():
+                group.discard("Python bug")
 
 
 # Node failure / NFS cleanup
@@ -1860,9 +1949,9 @@ def node_failure_nfs_cleanup(context: RefinerContext):
     # An NFS not responding failure is recoverable, but if we also see a SLURM node failure it's
     # likely the NFS server was the root cause of the node failure.
     if "Node failure reported by slurm" in symptoms and my_bad_nodes is not None:
-        for node, node_attrs in my_bad_nodes.attributions.items():
-            if "nfs not responding" in node_attrs.attributions:
-                nfs_source = node_attrs.attributions["nfs not responding"].one_source()
+        for _node, group in my_bad_nodes.symptom_groups():
+            if "nfs not responding" in group:
+                nfs_source = group["nfs not responding"].one_source()
                 symptoms.add(SourceSet.new_one("nfs server failure", nfs_source))
                 symptoms.discard("nfs not responding")
                 symptoms.discard("Node failure reported by slurm")
@@ -1881,6 +1970,8 @@ def last_resort_symptoms(context: RefinerContext):
     symptoms = context.symptoms
     job_info = context.job_info
     if symptoms is None or job_info is None:
+        return
+    if job_info.attributed_cancellation is not None:
         return
 
     # LAST RESORTS
@@ -2203,7 +2294,11 @@ def post_process_symptoms_refiner(context: RefinerContext):
     symptoms = context.symptoms
     job_info = context.job_info
     outcome = context.outcome
-    cancelled_by = context.cancelled_by
+    cancelled_by = (
+        job_info.attributed_cancelled_by
+        if job_info is not None and job_info.attributed_cancellation is not None
+        else context.cancelled_by
+    )
     if symptoms is None or job_info is None:
         return
 
@@ -2391,7 +2486,8 @@ def outcome_reclassification_refiner(context: RefinerContext):
     # Kueue preemption must not mask evidence-backed failures. Other scheduler
     # types retain their historical PREEMPTED reclassification behavior.
     if (
-        not nvrx_failed
+        job_info.attributed_cancellation is None
+        and not nvrx_failed
         and (job_info.scheduler is not Scheduler.KUEUE or kueue_has_only_preemption_fallback)
         and job_info.state is not None
         and job_info.state.upper() == "PREEMPTED"
@@ -2456,7 +2552,12 @@ def outcome_reclassification_refiner(context: RefinerContext):
     # allowlist (not a denylist) so it only touches outcomes with no specific category to
     # mask: any categorized failure (InfraHW/InfraSW/User/MultiCategory), a cancellation,
     # or an already-decided Pass is left alone, and new outcomes are safe by default.
-    if is_nvrx and job_info.exit_code == 0 and job_info.exit_code_signal == 0:
+    if (
+        is_nvrx
+        and job_info.exit_code == 0
+        and job_info.exit_code_signal == 0
+        and not job_info.suppress_inherited_node_failure
+    ):
         current_outcome = (
             attribution_result.outcome_attr.value().outcome if attribution_result.outcome_attr is not None else None
         )

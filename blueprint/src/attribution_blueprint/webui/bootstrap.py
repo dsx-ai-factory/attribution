@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
 """Map read-only SQLite rows to the React summary and detail contracts."""
 
 from __future__ import annotations
@@ -313,6 +316,12 @@ def _text(value: Any) -> str:
     return value if isinstance(value, str) else ""
 
 
+def _list_of_str(value: Any) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    return [item for item in value if isinstance(item, str)]
+
+
 def _display_run(run):
     """Keep malformed evidence out of display fields without changing storage."""
     raw = _object(run.raw_result)
@@ -337,11 +346,23 @@ def _display_run(run):
     )
 
 
+def _ingestion_reports(raw: dict[str, Any]) -> dict[str, Any] | None:
+    """Return both report lists for display, or None for rows saved before ingestion reports were recorded."""
+    if "ingestion_reports" not in raw:
+        return None
+    return {
+        "connector_reports": raw.get("connector_reports") or [],
+        "ingestion_reports": raw.get("ingestion_reports") or [],
+    }
+
+
 def _run_summary_fields(run) -> dict[str, Any]:
     """Map shared display fields without loading logs or validating evidence."""
     run = _display_run(run)
     verdict = (run.raw_result or {}).get("verdict") or {}
     collectors = (run.raw_result or {}).get("collectors")
+    evidence_status = (run.raw_result or {}).get("evidence_status")
+    ingestion_reports = _ingestion_reports(run.raw_result or {})
     bad_pairs = collectors.get("bad_pairs") if isinstance(collectors, dict) else None
     root = verdict.get("root_symptom") or {}
     root_src = root.get("source") or {}
@@ -381,6 +402,12 @@ def _run_summary_fields(run) -> dict[str, Any]:
         "responsibleNodes": list(run.responsible_nodes or []),
         "pipeline": run.pipeline_version or "",
         "service": run.service_api_version or "",
+        "terminalStates": _list_of_str(verdict.get("terminal_states")),
+        "failureDomains": _list_of_str(verdict.get("failure_domains")),
+        "cancellationActors": _list_of_str(verdict.get("cancellation_actors")),
+        "uncertaintyType": verdict.get("uncertainty_type") if isinstance(verdict.get("uncertainty_type"), str) else None,
+        "evidenceStatus": evidence_status if isinstance(evidence_status, str) else None,
+        "ingestionReports": ingestion_reports,
         "diagnose": _diagnose_camel(diagnose),
         "operatorDiagnose": _diagnose_camel(operator_diagnose),
     }

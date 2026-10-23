@@ -1,12 +1,5 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-# SPDX-License-Identifier: LicenseRef-NvidiaProprietary
-#
-# NVIDIA CORPORATION, its affiliates and licensors retain all intellectual
-# property and proprietary rights in and to this material, related
-# documentation and any modifications thereto. Any use, reproduction,
-# disclosure or distribution of this material and related documentation
-# without an express license agreement from NVIDIA CORPORATION or
-# its affiliates is strictly prohibited.
+# SPDX-License-Identifier: Apache-2.0
 from collections import defaultdict
 from datetime import datetime
 from zoneinfo import ZoneInfo
@@ -40,6 +33,17 @@ from attribution_lib.symptoms import (
 from attribution_lib.symptoms.registry_generation import GeneratedSymptomRegistry
 from attribution_lib.utils import get_hostname
 from test_support.helpers import create_source_set, make_node_to_ranks
+
+
+def test_attribute_rejects_kai_until_supported(simple_job_factory):
+    """KAI is a recognized identity, but attribution has no KAI rules yet."""
+    with pytest.raises(NotImplementedError, match="kai"):
+        core.attribute(
+            event_stream=None,  # type: ignore[arg-type]
+            job_info=simple_job_factory(scheduler=Scheduler.KAI),
+            bad_node_result=None,  # type: ignore[arg-type]
+            extract_job_metadata_from_logfile=False,
+        )
 
 
 def test_setup_rules_without_mapping_clears_previous_mapping(monkeypatch):
@@ -105,7 +109,6 @@ def configured_node_domain_resolver(monkeypatch):
 class DummyInbound:
     def __init__(self):
         self.time_interval = 0
-        self.resources = None
         self.source = None
         self.format = None
         self.timezone = ZoneInfo("UTC")
@@ -324,7 +327,7 @@ class TestJobLevelSymptoms:
 
         assert "NVRx detected failure" in symptoms
         assert not any(group.has_bad() for group in bad_nodes.attributions.values())
-        assert outcome.value().outcome == "Fail Undetermined"
+        assert outcome.value().outcome == "Fail MultiCategory"
 
 
 class TestMissingSrunCommand:
@@ -759,6 +762,71 @@ class TestNodeFailureReportedBySlurmDiscard:
             f"'{cascade_symptom}' should be preserved without "
             f"'Node failure reported by slurm': {list(bad_nodes['test-node-001'].symptoms())}"
         )
+
+
+class TestNvErrResetRequired:
+    """NV_ERR_RESET_REQUIRED means a prior GPU fault left the GPU awaiting reset."""
+
+    def test_maps_to_fail_infrahw(self, source_set_factory):
+        """A GPU awaiting reset is a node hardware fault, not a driver bug."""
+        symptoms = SymptomSet()
+        symptoms.add(source_set_factory("NV_ERR_RESET_REQUIRED kern_bus_gp100.c"))
+
+        outcome = calculate_outcome(symptoms).value()
+
+        assert outcome.outcome == "Fail InfraHW"
+        assert outcome.hw_cause == "Known HW Cause - Node"
+
+    @pytest.mark.parametrize(
+        "other_symptom",
+        ["NV_ERR_GENERIC rs_server.c", "NV_ERR_INVALID_STATE nv_gpu_ops.c", "NV_ERR_TIMEOUT nv_gpu_ops.c"],
+    )
+    def test_outranks_other_nv_err_codes(self, source_set_factory, other_symptom):
+        """Other driver calls against a GPU awaiting reset fail too, so their codes must not win."""
+        reset = "NV_ERR_RESET_REQUIRED gpu_fabric_probe.c"
+        symptoms = SymptomSet()
+        symptoms.add(source_set_factory(reset))
+        symptoms.add(source_set_factory(other_symptom))
+
+        outcome = calculate_outcome(symptoms).value()
+
+        assert outcome.root_cause_symptom == reset
+        assert outcome.outcome == "Fail InfraHW"
+
+    def test_generic_xid_still_wins(self, source_set_factory):
+        """The XID that caused the reset state stays the root cause."""
+        xid = "XID-999-UNKNOWN"
+        symptoms = SymptomSet()
+        symptoms.add(source_set_factory("NV_ERR_RESET_REQUIRED gpu_fabric_probe.c"))
+        symptoms.add(source_set_factory(xid))
+
+        assert calculate_outcome(symptoms).value().root_cause_symptom == xid
+
+    @pytest.mark.parametrize(
+        "cascade_symptom",
+        [
+            "Failed to collect nvlink status info",
+            "knvlinkUpdatePostRxDetectLinkMask_IMPL: Failed to update Rx Detect Link mask!",
+        ],
+    )
+    def test_discards_nvlink_cascade_symptom(self, core_test_job_info, source_set_factory, cascade_symptom):
+        """NVLink queries against a GPU awaiting reset fail as a consequence of the reset state.
+
+        Args:
+            core_test_job_info: Standard job info fixture.
+            source_set_factory: Factory fixture for SourceSet instances.
+            cascade_symptom: Symptom expected to be pruned.
+        """
+        reset = "NV_ERR_RESET_REQUIRED gpu_fabric_probe.c"
+        bad_nodes = JobNodeAttributions()
+        bad_nodes.add(["test-node-001"], source_set_factory(reset))
+        bad_nodes.add(["test-node-001"], source_set_factory(cascade_symptom))
+
+        node_symptoms_base, _ = translate_and_prune_node_attributions(bad_nodes, core_test_job_info)
+        project_node_symptoms_to_bad_nodes(bad_nodes, node_symptoms_base)
+
+        assert reset in bad_nodes["test-node-001"].symptoms()
+        assert cascade_symptom not in bad_nodes["test-node-001"].symptoms()
 
 
 class TestFabricManagerLostConnectionToAllGpusDiscard:

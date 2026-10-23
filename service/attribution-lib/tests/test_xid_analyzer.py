@@ -1,18 +1,13 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-# SPDX-License-Identifier: LicenseRef-NvidiaProprietary
-#
-# NVIDIA CORPORATION, its affiliates and licensors retain all intellectual
-# property and proprietary rights in and to this material, related
-# documentation and any modifications thereto. Any use, reproduction,
-# disclosure or distribution of this material and related documentation
-# without an express license agreement from NVIDIA CORPORATION or
-# its affiliates is strictly prohibited.
+# SPDX-License-Identifier: Apache-2.0
 
 """Unit coverage for XID parsing, burst grouping, and resolution lookup."""
 
 import subprocess
 import sys
 from datetime import datetime
+
+import pytest
 
 from attribution_lib.xid_analyzer import nvidia_xid_analyzer as xid_analyzer
 
@@ -125,6 +120,67 @@ def test_from_message_parses_public_xid_line():
     assert entry.pcie_bdf == "0000:ae:00"
     assert entry.context == message
     assert entry.timestamp is not None
+
+
+@pytest.mark.parametrize(
+    ("contained_detail", "expected"),
+    [
+        ("CE User Channel (0x36)", "CE"),
+        ("SM (0x1)", "SM"),
+        ("GSP", "GSP"),
+    ],
+)
+def test_from_message_extracts_xid94_poison_victim(contained_detail: str, expected: str) -> None:
+    """Verify XID 94 containment details produce a normalized poison victim."""
+
+    entry = xid_analyzer.XIDEntry.from_message(
+        message=f"NVRM: Xid (PCI:0000:ae:00): 94, Contained: {contained_detail}. RST: No, D-RST: No"
+    )
+
+    assert entry is not None
+    assert entry.number == 94
+    assert entry.poison_victim == expected
+
+
+def test_from_message_extracts_xid94_poison_victim_from_redfish() -> None:
+    """Verify accepted Redfish XID 94 messages retain poison-victim identity."""
+
+    entry = xid_analyzer.XIDEntry.from_message(
+        message=(
+            "Driver Event Message has detected errors of type "
+            "'[2024-01-01 10:00:00][GPU0] XID 94 "
+            "Contained: SM (0x1). RST: No, D-RST: No'"
+        ),
+        driver=_DRIVER,
+        machine=_MACHINE,
+    )
+
+    assert entry is not None
+    assert entry.number == 94
+    assert entry.poison_victim == "SM"
+
+
+def test_from_message_leaves_poison_victim_unset_without_supported_xid94_detail() -> None:
+    """Verify generic XID messages do not invent poison-victim identity."""
+
+    entry = xid_analyzer.XIDEntry.from_message(message=_xid_message(94, "Contained: unknown engine. RST: No"))
+
+    assert entry is not None
+    assert entry.poison_victim is None
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        "",
+        "GPU is healthy",
+        "NVRM: Xid (PCI:0000:ae:00): 94, Contained: SM",
+    ],
+)
+def test_extract_xid94_poison_victim_rejects_malformed_input(message: str) -> None:
+    """Return no identity for unrelated or incomplete input."""
+
+    assert xid_analyzer.extract_xid94_poison_victim(message) is None
 
 
 def test_from_message_parses_fractional_kernel_uptime():

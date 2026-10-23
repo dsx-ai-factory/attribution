@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
 # Attribution Blueprint configuration for Kueue Workloads.
 #
 # Replace every CHANGE_ME value. Paths are resolved from the directory where
@@ -16,7 +19,6 @@ gpus_per_node = 8
 component = "kueue"
 
 [eca.kueue]
-kubectl_path = "kubectl"
 kubeconfig = "/CHANGE_ME_PATH/kubeconfig"
 context = "CHANGE_ME_KUBECTL_CONTEXT"
 namespace = "CHANGE_ME_NAMESPACE"

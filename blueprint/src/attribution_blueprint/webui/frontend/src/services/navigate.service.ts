@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// SPDX-License-Identifier: Apache-2.0
+
 // src/services/navigate.service.ts
 // Single source of truth for route aliases. Navigate by name, never by a
 // hand-built path string.

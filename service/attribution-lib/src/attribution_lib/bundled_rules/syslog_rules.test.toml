@@ -1,12 +1,5 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-# SPDX-License-Identifier: LicenseRef-NvidiaProprietary
-#
-# NVIDIA CORPORATION, its affiliates and licensors retain all intellectual
-# property and proprietary rights in and to this material, related
-# documentation and any modifications thereto. Any use, reproduction,
-# disclosure or distribution of this material and related documentation
-# without an express license agreement from NVIDIA CORPORATION or
-# its affiliates is strictly prohibited.
+# SPDX-License-Identifier: Apache-2.0
 
 [meta]
 runner = "syslog_single_line_mfu"
@@ -782,6 +775,25 @@ expected_rule = "kernel-oops"
 [[cases]]
 description = "slurmd 'Internal error: Oops handler' debug string must not match"
 line = "[1234.567890] slurmd: Internal error: Oops handler invoked but no callback registered"
+expect = "no_match"
+
+[[cases]]
+description = "ext4 delayed allocation failure with EFSCORRUPTED is filesystem corruption"
+line = "<2>1 2026-10-15T21:53:07.933349-07:00 test-node-001 kernel - - -  EXT4-fs (md0): Delayed block allocation failed for inode 285219254 at logical offset 0 with max blocks 1 with error 117"
+expect = "bad"
+expected_symptom = "ext4 filesystem corruption"
+expected_rule = "ext4-filesystem-corruption"
+
+[[cases]]
+description = "ext4_error() report is filesystem corruption"
+line = "Oct 15 21:53:07 test-node-001 kernel: EXT4-fs error (device md0): ext4_mb_complex_scan_group:2312: group 4352, 32768 free clusters as per group info. But got 0 blocks"
+expect = "bad"
+expected_symptom = "ext4 filesystem corruption"
+expected_rule = "ext4-filesystem-corruption"
+
+[[cases]]
+description = "ext4 delayed allocation failure on a full disk (ENOSPC) is not corruption"
+line = "EXT4-fs (md0): Delayed block allocation failed for inode 285219254 at logical offset 0 with max blocks 1 with error 28"
 expect = "no_match"
 
 [[cases]]

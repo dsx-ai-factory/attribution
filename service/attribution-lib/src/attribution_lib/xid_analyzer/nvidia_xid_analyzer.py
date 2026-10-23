@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-# SPDX-FileCopyrightText: Copyright (c) 2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-# SPDX-License-Identifier: LicenseRef-NvidiaProprietary
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
 
 """XID parsing and resolution helpers."""
 
@@ -64,6 +64,37 @@ def get_resolution_for_xid154(input_string):
     if match is None:
         return None
     return match.group("action")
+
+
+def extract_xid94_poison_victim(message: str) -> str | None:
+    """Extract the normalized poison victim from an XID 94 message.
+
+    Args:
+        message: Driver message that may contain XID 94 containment details.
+
+    Returns:
+        ``CE``, ``SM``, or ``GSP`` when declared by the message; otherwise
+        ``None``.
+    """
+
+    is_nvrm_xid94 = re.search(r"NVRM: Xid \([^)]*\):\s*94,", message) is not None
+    is_redfish_xid94 = (
+        re.search(r"Driver Event Message has detected errors of type\s+'[^']*\bXID\s+94\b", message) is not None
+    )
+    if not is_nvrm_xid94 and not is_redfish_xid94:
+        return None
+
+    victim_match = re.search(r"\bContained:\s*(?P<victim>[^.(]+?)\s*(?:\([^)]*\))?\.\s*RST:", message)
+    if victim_match is None:
+        return None
+
+    normalized = " ".join(victim_match.group("victim").split()).casefold()
+    return {
+        "ce": "CE",
+        "ce user channel": "CE",
+        "sm": "SM",
+        "gsp": "GSP",
+    }.get(normalized)
 
 
 def ContentOfColumn(header, row, col_name):
@@ -189,6 +220,7 @@ class XIDEntry:
     nvl5_error_code: Optional[int] = None
     vbios_version: Optional[str] = None
     mnemonic: Optional[str] = None
+    poison_victim: Optional[str] = None
 
     resolution: Optional[str] = None
     investigatory_action: Optional[str] = None
@@ -272,6 +304,8 @@ class XIDEntry:
         if not message:
             return None
 
+        poison_victim = extract_xid94_poison_victim(message)
+
         if not timestamp and message:
             if "NVRM: Xid" in message:
                 full_ts_match = re.search(
@@ -317,6 +351,7 @@ class XIDEntry:
                 intrinfo=int(match.group("intrinfo"), 16) if match.group("intrinfo") else None,
                 errorstatus=int(match.group("errorstatus"), 16) if match.group("errorstatus") else None,
                 vbios_version=vbios_version,
+                poison_victim=poison_victim,
             )
             xid_entry.parse_timestamp()
             return xid_entry
@@ -344,6 +379,7 @@ class XIDEntry:
                 intrinfo=int(match.group("intrinfo"), 16) if match.group("intrinfo") else None,
                 errorstatus=int(match.group("errorstatus"), 16) if match.group("errorstatus") else None,
                 vbios_version=vbios_version,
+                poison_victim=poison_victim,
             )
             xid_entry.parse_timestamp()
             return xid_entry
@@ -362,6 +398,7 @@ class XIDEntry:
                 driver=driver,
                 timestamp=timestamp if timestamp else match.group("timestamp"),
                 machine=machine,
+                poison_victim=poison_victim,
             )
             xid_entry.parse_timestamp()
             return xid_entry
@@ -381,6 +418,7 @@ class XIDEntry:
                 timestamp=timestamp if timestamp else None,
                 machine=machine,
                 pcie_bdf=match.group("pcie_bdf"),
+                poison_victim=poison_victim,
             )
             xid_entry.parse_timestamp()
             return xid_entry
@@ -399,6 +437,7 @@ class XIDEntry:
                 machine=machine,
                 pcie_bdf=match.group("pcie_bdf"),
                 vbios_version=vbios_version,
+                poison_victim=poison_victim,
             )
             xid_entry.parse_timestamp()
             return xid_entry

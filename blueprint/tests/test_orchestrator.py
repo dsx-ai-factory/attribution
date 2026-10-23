@@ -1,21 +1,15 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-# SPDX-License-Identifier: LicenseRef-NvidiaProprietary
-#
-# NVIDIA CORPORATION, its affiliates and licensors retain all intellectual
-# property and proprietary rights in and to this material, related
-# documentation and any modifications thereto. Any use, reproduction,
-# disclosure or distribution of this material and related documentation
-# without an express license agreement from NVIDIA CORPORATION or
-# its affiliates is strictly prohibited.
+# SPDX-License-Identifier: Apache-2.0
 
 import json
 from datetime import datetime, timedelta, timezone
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, call
 from zoneinfo import ZoneInfo
 
 import pytest
-from nvidia_attribution_client import ApiException, AttributorInfoV2
+from nvidia_attribution_client import ApiException, AttributorInfoV2, IngestSummaryV2, ObservationResponseV2
 
+from attribution_blueprint.connectors.attribution import AttributorConflictError, ObservationConflictError
 from attribution_blueprint.orchestrator import AttributionOrchestrator
 from attribution_blueprint.types import Source
 
@@ -53,11 +47,15 @@ def _make_obs(source: Source = Source.SYSLOG) -> dict:
     }
 
 
+def _ingest_response(ingest: IngestSummaryV2 | None = None) -> ObservationResponseV2:
+    ingest = ingest or IngestSummaryV2(accepted=1, dropped={})
+    return ObservationResponseV2(observation_id=1, ingest=ingest, model_type="ObservationResponseV2")
+
+
 def _make_attribution_mock():
     attr = MagicMock()
     attr.create_attributor.side_effect = lambda info: f"attr-{info.workload.id}"
-    attr.create_or_replace_attributor.side_effect = lambda info: attr.create_attributor(info)
-    attr.ingest_observation.return_value = 1
+    attr.ingest_observation.return_value = _ingest_response()
     attr.get_attribution.return_value = {"verdict": {"attribution_outcome": "Fail User"}}
     attr.delete_attributor.return_value = None
     return attr
@@ -138,10 +136,12 @@ def test_analyze_records_run_summaries():
             "context_id": "1",
             "job_id": "1",
             "attempt_id": "0",
+            "status": "attributed",
             "terminal_state": "fail",
             "sub_domain": "hardware",
             "root_symptom": "XID-79",
             "symptoms": "XID-79",
+            "evidence_status": "none",
         }
     ]
 
@@ -597,7 +597,7 @@ def test_outputs_preserve_scheduler_gpu_count():
     assert output_ctx["gpu_count"] == 6
 
 
-def test_failing_ingest_does_not_block_other_observations():
+def test_failing_ingest_is_recorded_and_does_not_block_other_observations():
     contexts = [_make_ctx("1")]
     eca = MagicMock()
     eca.discover_by_ids.return_value = contexts
@@ -607,13 +607,90 @@ def test_failing_ingest_does_not_block_other_observations():
     coll.collect.return_value = [obs, obs, obs]
 
     attr = _make_attribution_mock()
-    attr.ingest_observation.side_effect = [1, Exception("boom"), 3]
+    attr.ingest_observation.side_effect = [_ingest_response(), Exception("boom"), _ingest_response()]
 
-    pipeline = _make_pipeline(eca, [coll], attribution=attr)
+    output = _ListOutput()
+    pipeline = _make_pipeline(eca, [coll], attribution=attr, output=output)
     pipeline.analyze(ids=["1"])
 
     assert attr.ingest_observation.call_count == 3
     assert attr.get_attribution.call_count == 1
+    [(_, result)] = output.entries
+    [report] = result["ingestion_reports"]
+    assert (report["status"], report["attempted"], report["failed"]) == ("partial", 3, 1)
+    assert result["evidence_status"] == "partial"
+
+
+_EMPTY_INGEST = _ingest_response(IngestSummaryV2(accepted=0, dropped={"unknown_node": 3}))
+
+
+@pytest.mark.parametrize(
+    ("ingest_outcomes", "expected_report", "expected_reason", "expected_evidence"),
+    [
+        # A 409 duplicate is delivered, not failed.
+        ([_ingest_response(), ObservationConflictError(1)], ("ok", 0, 0, {}), "", "complete"),
+        # A failed POST outranks an empty delivery, and its message is the reason.
+        ([Exception("boom"), _EMPTY_INGEST], ("error", 1, 1, {"unknown_node": 3}), "boom", "none"),
+        ([_EMPTY_INGEST, _EMPTY_INGEST], ("empty", 0, 2, {"unknown_node": 6}), "service accepted 0 entries", "none"),
+        # A duplicate's acceptance is unknown, so it cannot turn an empty delivery into evidence.
+        (
+            [_EMPTY_INGEST, ObservationConflictError(1)],
+            ("empty", 0, 1, {"unknown_node": 3}),
+            "service accepted 0 entries",
+            "none",
+        ),
+        ([_ingest_response(), _EMPTY_INGEST], ("partial", 0, 1, {"unknown_node": 3}), "", "partial"),
+        # Only duplicates means nothing confirmed as accepted, so there is no evidence.
+        (
+            [ObservationConflictError(1), ObservationConflictError(2)],
+            ("empty", 0, 0, {}),
+            "service accepted 0 entries",
+            "none",
+        ),
+    ],
+    ids=["duplicate", "failed-and-empty", "all-empty", "empty-and-duplicate", "accepted-and-empty", "all-duplicates"],
+)
+def test_ingestion_report_status_follows_delivery_outcomes(
+    ingest_outcomes, expected_report, expected_reason, expected_evidence
+):
+    eca = MagicMock()
+    eca.discover_by_ids.return_value = [_make_ctx("1")]
+    coll = MagicMock(source="APPLOG")
+    coll.collect.return_value = [_make_obs(), _make_obs()]
+    attr = _make_attribution_mock()
+    attr.ingest_observation.side_effect = ingest_outcomes
+
+    output = _ListOutput()
+    pipeline = _make_pipeline(eca, [coll], attribution=attr, output=output)
+    pipeline.analyze(ids=["1"])
+
+    [(_, result)] = output.entries
+    [report] = result["ingestion_reports"]
+    assert (report["status"], report["failed"], report["empty"], report["dropped"]) == expected_report
+    assert report["attempted"] == 2
+    assert report["reason"] == expected_reason
+    assert result["evidence_status"] == expected_evidence
+
+
+def test_every_ingest_failing_persists_verdict_flagged_no_evidence():
+    eca = MagicMock()
+    eca.discover_by_ids.return_value = [_make_ctx("1")]
+    coll = MagicMock(source="APPLOG")
+    # A malformed observation counts as a failed ingest instead of aborting the context.
+    coll.collect.return_value = [_make_obs(), {**_make_obs(), "context": None}]
+    attr = _make_attribution_mock()
+    attr.ingest_observation.side_effect = Exception("x" * 5000)
+
+    output = _ListOutput()
+    pipeline = _make_pipeline(eca, [coll], attribution=attr, output=output)
+    pipeline.analyze(ids=["1"])
+
+    [(_, result)] = output.entries
+    [report] = result["ingestion_reports"]
+    assert report["status"] == "error"
+    assert len(report["reason"]) <= 500
+    assert result["evidence_status"] == "none"
+    assert pipeline.last_run_stats == {"attempted": 1, "succeeded": 1, "conflicted": 0}
 
 
 @pytest.mark.parametrize("ids", [["1"], ["1", "2"]])
@@ -674,7 +751,7 @@ def test_output_write_failure_does_not_abort_batch():
     assert flaky_output.write.call_count == 3
     # All three verdicts still returned (output failure logged, not propagated).
     assert len(results) == 3
-    assert pipeline.last_run_stats == {"attempted": 3, "succeeded": 2}
+    assert pipeline.last_run_stats == {"attempted": 3, "succeeded": 2, "conflicted": 0}
 
 
 def test_all_output_write_failures_do_not_count_as_success():
@@ -692,7 +769,8 @@ def test_all_output_write_failures_do_not_count_as_success():
 
     assert len(results) == 2
     assert failing_output.write.call_count == 2
-    assert pipeline.last_run_stats == {"attempted": 2, "succeeded": 0}
+    assert pipeline.last_run_stats == {"attempted": 2, "succeeded": 0, "conflicted": 0}
+    assert [summary["status"] for summary in pipeline.last_run_summaries] == ["attributed", "attributed"]
 
 
 def test_one_failing_sink_does_not_skip_other_sinks_for_same_ctx():
@@ -715,12 +793,22 @@ def test_one_failing_sink_does_not_skip_other_sinks_for_same_ctx():
     assert raising.write.call_count == 1
     assert ok_c.write.call_count == 1
     assert len(results) == 1
-    assert pipeline.last_run_stats == {"attempted": 1, "succeeded": 1}
+    assert pipeline.last_run_stats == {"attempted": 1, "succeeded": 1, "conflicted": 0}
 
 
-def test_analyze_continues_when_create_attributor_raises_non_409():
+@pytest.mark.parametrize(
+    ("error", "conflicted", "summary_ids"),
+    [
+        (RuntimeError("boom"), 0, ["1", "3"]),
+        (ApiException(status=409, reason="Conflict"), 0, ["1", "3"]),
+        (AttributorConflictError("active-attr-2"), 1, ["1", "2", "3"]),
+    ],
+    ids=["unexpected-error", "unrecognized-conflict", "duplicate-session"],
+)
+def test_analyze_continues_when_create_attributor_raises(error, conflicted, summary_ids):
     """A create failure for one ctx must not abort the batch."""
     contexts = [_make_ctx("1"), _make_ctx("2"), _make_ctx("3")]
+    contexts[1].update(job_id="job-2", attempt_id=0)
     eca = MagicMock()
     eca.discover_by_ids.return_value = contexts
 
@@ -728,17 +816,70 @@ def test_analyze_continues_when_create_attributor_raises_non_409():
     # Second context's create fails hard; first and third must still process.
     attr.create_attributor.side_effect = [
         "attr-1",
-        RuntimeError("boom"),
+        error,
         "attr-3",
     ]
 
+    collector = MagicMock(source="syslog")
+    collector.collect.return_value = [_make_obs()]
     output = _ListOutput()
-    pipeline = _make_pipeline(eca, [], attribution=attr, output=output)
+    pipeline = _make_pipeline(eca, [collector], attribution=attr, output=output)
     results = pipeline.analyze(ids=["1", "2", "3"])
 
     # Two successful contexts; the failed one yields no result entry.
     assert len(results) == 2
-    assert len(output.entries) == 2
+    assert [ctx["id"] for ctx, _ in output.entries] == ["1", "3"]
+    assert pipeline.last_run_stats == {"attempted": 3, "succeeded": 2, "conflicted": conflicted}
+    assert [summary["context_id"] for summary in pipeline.last_run_summaries] == summary_ids
+    assert [summary["status"] for summary in pipeline.last_run_summaries] == (
+        ["attributed", "conflicted", "attributed"] if conflicted else ["attributed", "attributed"]
+    )
+    if conflicted:
+        assert pipeline.last_run_summaries[1] == {
+            "context_id": "2",
+            "job_id": "job-2",
+            "attempt_id": "0",
+            "status": "conflicted",
+            "attributor_id": "active-attr-2",
+        }
+    assert [args.args[0] for args in attr.ingest_observation.call_args_list] == ["attr-1", "attr-3"]
+    assert attr.get_attribution.call_args_list == [call("attr-1"), call("attr-3")]
+    assert attr.delete_attributor.call_args_list == [call("attr-1"), call("attr-3")]
+
+
+def test_conflict_stats_and_summaries_reset_between_runs():
+    eca = MagicMock()
+    eca.discover.return_value = [_make_ctx("1"), _make_ctx("2")]
+    attr = _make_attribution_mock()
+    attr.create_attributor.side_effect = [AttributorConflictError("active-1"), AttributorConflictError("active-2")]
+    output = MagicMock()
+    pipeline = _make_pipeline(eca, [], attribution=attr, output=output)
+    assert pipeline.last_run_stats == {"attempted": 0, "succeeded": 0, "conflicted": 0}
+
+    assert pipeline.analyze() == []
+
+    assert pipeline.last_run_stats == {"attempted": 2, "succeeded": 0, "conflicted": 2}
+    assert [summary["attributor_id"] for summary in pipeline.last_run_summaries] == ["active-1", "active-2"]
+    attr.ingest_observation.assert_not_called()
+    attr.get_attribution.assert_not_called()
+    attr.delete_attributor.assert_not_called()
+    output.write.assert_not_called()
+    output.close.assert_called_once_with()
+
+    # An explicit later retry must replace the previous run's conflict report.
+    eca.discover.return_value = [_make_ctx("1")]
+    attr.create_attributor.side_effect = None
+    attr.create_attributor.return_value = "owned-1"
+    assert len(pipeline.analyze()) == 1
+    assert pipeline.last_run_stats == {"attempted": 1, "succeeded": 1, "conflicted": 0}
+    assert len(pipeline.last_run_summaries) == 1
+    assert "attributor_id" not in pipeline.last_run_summaries[0]
+    attr.delete_attributor.assert_called_once_with("owned-1")
+
+    eca.discover.return_value = []
+    assert pipeline.analyze() == []
+    assert pipeline.last_run_stats == {"attempted": 0, "succeeded": 0, "conflicted": 0}
+    assert pipeline.last_run_summaries == []
 
 
 def test_dump_observations_tolerates_non_json_body(tmp_path):
@@ -775,3 +916,23 @@ def test_dump_observations_tolerates_non_json_body(tmp_path):
     payload = _json.loads(dump_path.read_text())
     assert payload["body_raw"] == "line1\nline2 not json\n"
     assert "body" not in payload  # the JSON-decode key is absent for raw bodies
+
+
+def test_dump_observations_tolerates_missing_context(tmp_path):
+    eca = MagicMock()
+    eca.discover_by_ids.return_value = [_make_ctx("dumpme")]
+    coll = MagicMock(source="APPLOG")
+    coll.collect.return_value = [{"body": "line"}]
+    output = _ListOutput()
+
+    pipeline = AttributionOrchestrator(
+        execution_context_adapters=[eca],
+        log_connectors=[coll],
+        metrics_connectors=[],
+        attribution=_make_attribution_mock(),
+        outputs=[output],
+        dump_observations_dir=tmp_path,
+    )
+    pipeline.analyze(ids=["dumpme"])
+
+    assert (tmp_path / "dumpme.unknown.json").exists()

@@ -1,13 +1,6 @@
 <!--
 SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-SPDX-License-Identifier: LicenseRef-NvidiaProprietary
-
-NVIDIA CORPORATION, its affiliates and licensors retain all intellectual
-property and proprietary rights in and to this material, related
-documentation and any modifications thereto. Any use, reproduction,
-disclosure or distribution of this material and related documentation
-without an express license agreement from NVIDIA CORPORATION or
-its affiliates is strictly prohibited.
+SPDX-License-Identifier: Apache-2.0
 -->
 
 # Add a New Extractor Rule
@@ -23,7 +16,10 @@ Later rule stages can correlate or suppress these events, turn them into symptom
 
 Adding a rule here means changing the checked-in bundled rule catalog and shipping that change with the Attribution Service.
 It is not a rule uploaded at runtime through an API or user interface.
-During private preview, the bundled rules are not a supported customer extension point.
+Propose changes through [CONTRIBUTING.md](../../../CONTRIBUTING.md).
+The Library does not offer a stable external interface. Upstream bug reports
+must reproduce on the unmodified main branch, as described in
+[SUPPORT.md](../../../SUPPORT.md).
 
 ## Why Add an Extractor Rule?
 
@@ -42,7 +38,7 @@ Extend an existing rule when the new input has the same meaning and output as ev
 
 ## Key Terms
 
-- **Observation:** One submission of related evidence plus context describing its source, format, time interval, timezone, and associated resources, such as nodes. An observation can contain application-log lines, syslog entries, Prometheus samples, or cloud-provider events.
+- **Observation:** One submission of related evidence plus context describing its source, format, time interval, and timezone. Each entry can name the resources it concerns, such as a node. An observation can contain application-log lines, syslog entries, Prometheus samples, or cloud-provider events.
 - **Observation source:** The kind of evidence in an observation, such as `APPLOG`, `SYSLOG`, `NODE_METRICS`, or `CSP_EVENT`. Extractor rules declare which sources they accept.
 - **Observation entry:** One item within an observation, such as one log line or metric sample. Most extractors evaluate entries individually.
 - **Extractor rule:** A rule that looks for a pattern in observation entries and emits a structured event when it matches. A simple extractor can be declarative TOML, where the pattern and output are configuration data. More complex processing can use Python referenced from TOML.

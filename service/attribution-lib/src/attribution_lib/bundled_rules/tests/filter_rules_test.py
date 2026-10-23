@@ -1,12 +1,5 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-# SPDX-License-Identifier: LicenseRef-NvidiaProprietary
-#
-# NVIDIA CORPORATION, its affiliates and licensors retain all intellectual
-# property and proprietary rights in and to this material, related
-# documentation and any modifications thereto. Any use, reproduction,
-# disclosure or distribution of this material and related documentation
-# without an express license agreement from NVIDIA CORPORATION or
-# its affiliates is strictly prohibited.
+# SPDX-License-Identifier: Apache-2.0
 
 from collections import defaultdict
 from datetime import datetime, timedelta
@@ -83,7 +76,6 @@ def obs_ctx():
             datetime(2024, 1, 1, 9, 0, 0, tzinfo=ZoneInfo("UTC")),
             datetime(2024, 1, 1, 12, 0, 0, tzinfo=ZoneInfo("UTC")),
         ),
-        resources=ResourceSet([Node(hostname="node01")]),
         source=ObsSource.APPLOG,
         format=ObsFormat.ENTRY_TIMESERIES,
         timezone=ZoneInfo("UTC"),
@@ -906,7 +898,6 @@ def test_fm_node_failure_retains_per_gpu_evidence(stream, obs_ctx):
             datetime(2024, 1, 1, 9, 0, 0, tzinfo=ZoneInfo("UTC")),
             datetime(2024, 1, 1, 12, 0, 0, tzinfo=ZoneInfo("UTC")),
         ),
-        resources=ResourceSet([Node(hostname="node01")]),
         source=ObsSource.SYSLOG,
         format=ObsFormat.ENTRY_TIMESERIES,
         timezone=ZoneInfo("UTC"),

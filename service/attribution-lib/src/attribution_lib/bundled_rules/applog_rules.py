@@ -1,12 +1,5 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-# SPDX-License-Identifier: LicenseRef-NvidiaProprietary
-#
-# NVIDIA CORPORATION, its affiliates and licensors retain all intellectual
-# property and proprietary rights in and to this material, related
-# documentation and any modifications thereto. Any use, reproduction,
-# disclosure or distribution of this material and related documentation
-# without an express license agreement from NVIDIA CORPORATION or
-# its affiliates is strictly prohibited.
+# SPDX-License-Identifier: Apache-2.0
 
 """
 Applog rules ported from attribution_lib/applog.py node_single function.
@@ -34,6 +27,7 @@ import attribution_lib
 from attribution_lib.attr_types import BadPairInfo
 from attribution_lib.event_helpers import query_events_with_source
 from attribution_lib.events import BAD_PAIR_EVENT_TYPES, DemotionTypes, sql_placeholders
+from attribution_lib.network_identity import NetworkSourceIdentity, network_source_identity, normalize_network_hostname
 from attribution_lib.observation.inbound import Source as ObsSource
 from attribution_lib.rule_helpers import _bad
 from attribution_lib.rules import (
@@ -49,7 +43,7 @@ from attribution_lib.rules import (
     rule_processor,
 )
 from attribution_lib.sources import Source, SourceSet
-from attribution_lib.utils import get_hostname, matches_ignored_hostname_prefix
+from attribution_lib.utils import _leading_explicit_applog_rank, get_hostname, matches_ignored_hostname_prefix
 
 # User should not overwrite these NCCL parameters
 NCCL_PARAMS_OVERWRITE_FORBIDDEN = [
@@ -276,6 +270,25 @@ def client_socket_timeout_event(
 # bundled_rules/applog_leaf_rules.toml.
 
 
+def _completion_pair_node(identity: NetworkSourceIdentity, node: str | None, source: Source) -> str | None:
+    """Preserve known source names without promoting IPs or implicit rank zero.
+
+    Args:
+        identity: Explicit log hostname and scoped GID mapping.
+        node: Allocation-verified node, possibly inferred by the generic parser.
+        source: Original line and verified producer-declared node, when present.
+    Returns:
+        An evidenced source hostname, or None when no hostname is known.
+    """
+    if identity.hostname is not None:
+        return identity.hostname
+    if source.declared_node is not None:
+        return normalize_network_hostname(source.declared_node)
+    if _leading_explicit_applog_rank(source.datum) is not None:
+        return normalize_network_hostname(node) if node is not None else None
+    return None
+
+
 @rule_processor("applog:Got completion from peer (new)")
 def got_completion_from_peer_new_event(
     groups: Dict[str, str], node: str, source: Source, ctx: RuleContext
@@ -294,10 +307,15 @@ def got_completion_from_peer_new_event(
     local_dev_ip = groups["local_gid"][7:] if groups["local_gid"].startswith("::ffff:") else None
     remote_dev_ip = groups["remote_gid"][7:] if groups["remote_gid"].startswith("::ffff:") else None
 
+    # Pair hostnames describe the log and GID mapping independently of the
+    # allocation-filtered node used for fault attribution above.
+    identity = network_source_identity(source.datum, prefix_hostname=node)
+    pair_node = _completion_pair_node(identity, node, source)
     if local_dev_ip and remote_dev_ip:
         bad_pair_payload = {
-            "local_node": node,
-            "remote_node": peer_node,
+            "local_node": pair_node,
+            "local_gid_node": identity.mapped_hostname,
+            "remote_node": normalize_network_hostname(peer_node) or peer_node,
             "local_dev_ip": local_dev_ip,
             "local_device": groups["hca"],
             "remote_dev_ip": remote_dev_ip,
@@ -311,8 +329,9 @@ def got_completion_from_peer_new_event(
         )
     else:
         bad_pair_payload = {
-            "local_node": node,
-            "remote_node": peer_node,
+            "local_node": pair_node,
+            "local_gid_node": identity.mapped_hostname,
+            "remote_node": normalize_network_hostname(peer_node) or peer_node,
         }
         events.append(
             EventTriple(
@@ -338,10 +357,18 @@ def got_completion_from_peer_old_event(
         )
     ]
 
+    # This matcher also handles GID-bearing lines. Both matchers must preserve
+    # the same source names so their complete/partial events can be combined.
+    # Without GIDs, an explicit hostname still outranks the filtered node.
+    identity = network_source_identity(source.datum, prefix_hostname=node)
+    pair_node = _completion_pair_node(identity, node, source)
+    pair_peer = normalize_network_hostname(peer_node) or peer_node
+
     # Old format doesn't have GID fields, create partial bad_pair
     bad_pair_payload = {
-        "local_node": node,
-        "remote_node": peer_node,
+        "local_node": pair_node,
+        "local_gid_node": identity.mapped_hostname,
+        "remote_node": pair_peer,
     }
     events.append(
         EventTriple(
@@ -946,12 +973,56 @@ def _format_bad_pair(pair):
         result["dst_ip"] = pair.remote_dev_ip
     if pair.remote_device is not None:
         result["dst_device"] = pair.remote_device
+    if pair.local_gid_node is not None and pair.local_gid_node != pair.local_node:
+        result["src_gid_node"] = pair.local_gid_node
+    if pair.remote_gid_node is not None and pair.remote_gid_node != pair.remote_node:
+        result["dst_gid_node"] = pair.remote_gid_node
     return str(result)
 
 
 def _fmt_bad_pairs(raw):
     formatted = sorted([_format_bad_pair(pair) for pair in raw])
     return {"bad_pairs": "; ".join(str(x) for x in formatted)}
+
+
+def _bad_pair_endpoints_agree(existing: BadPairInfo, incoming: BadPairInfo) -> bool:
+    """Allow node-pair merging only when known IP/device/GID names agree.
+
+    Args:
+        existing: A previously collected pair.
+        incoming: A pair whose direction may be reversed.
+    Returns:
+        Whether merging can fill missing fields without mixing interfaces.
+    """
+    if existing != incoming:
+        return False
+    current = (
+        existing.local_dev_ip,
+        existing.local_device,
+        existing.local_gid_node,
+        existing.remote_dev_ip,
+        existing.remote_device,
+        existing.remote_gid_node,
+    )
+    if existing.local_node == incoming.local_node:
+        other = (
+            incoming.local_dev_ip,
+            incoming.local_device,
+            incoming.local_gid_node,
+            incoming.remote_dev_ip,
+            incoming.remote_device,
+            incoming.remote_gid_node,
+        )
+    else:
+        other = (
+            incoming.remote_dev_ip,
+            incoming.remote_device,
+            incoming.remote_gid_node,
+            incoming.local_dev_ip,
+            incoming.local_device,
+            incoming.local_gid_node,
+        )
+    return all(left is None or right is None or left == right for left, right in zip(current, other))
 
 
 @collector_def(name="Collect.BadPairs", formatter=_fmt_bad_pairs)
@@ -972,7 +1043,7 @@ def _collect_bad_pairs(event_stream, _job_info, _params):
         bad_pair = BadPairInfo(**payload)
         found = False
         for pair in bad_pairs:  # this is inefficient, but it's the original logic and we'll keep it for now
-            if pair == bad_pair:
+            if _bad_pair_endpoints_agree(pair, bad_pair):
                 pair.update(bad_pair)
                 found = True
                 break

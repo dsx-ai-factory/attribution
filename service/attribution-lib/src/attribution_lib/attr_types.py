@@ -1,12 +1,5 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-# SPDX-License-Identifier: LicenseRef-NvidiaProprietary
-#
-# NVIDIA CORPORATION, its affiliates and licensors retain all intellectual
-# property and proprietary rights in and to this material, related
-# documentation and any modifications thereto. Any use, reproduction,
-# disclosure or distribution of this material and related documentation
-# without an express license agreement from NVIDIA CORPORATION or
-# its affiliates is strictly prohibited.
+# SPDX-License-Identifier: Apache-2.0
 
 import re
 from collections import defaultdict
@@ -60,12 +53,16 @@ def _normalize_node(name: str) -> str:
 
 @dataclass(eq=True, frozen=True)
 class BadPairInfo:
-    local_node: str
-    remote_node: str
+    local_node: str | None
+    remote_node: str | None
     local_dev_ip: Optional[str] = None
     local_device: Optional[str] = None
     remote_dev_ip: Optional[str] = None
     remote_device: Optional[str] = None
+    # Hostnames resolved from GIDs can disagree with the logged hostnames.
+    # Keep them independently so pair merging never erases that evidence.
+    local_gid_node: Optional[str] = None
+    remote_gid_node: Optional[str] = None
 
     def __eq__(self, other: object) -> bool:
         if not isinstance(other, BadPairInfo):
@@ -87,6 +84,10 @@ class BadPairInfo:
                 object.__setattr__(self, "remote_device", other.remote_device)
             if other.remote_dev_ip and not self.remote_dev_ip:
                 object.__setattr__(self, "remote_dev_ip", other.remote_dev_ip)
+            if other.local_gid_node is not None and self.local_gid_node is None:
+                object.__setattr__(self, "local_gid_node", other.local_gid_node)
+            if other.remote_gid_node is not None and self.remote_gid_node is None:
+                object.__setattr__(self, "remote_gid_node", other.remote_gid_node)
         elif other.remote_node == self.local_node:
             if other.remote_device and not self.local_device:
                 object.__setattr__(self, "local_device", other.remote_device)
@@ -96,6 +97,10 @@ class BadPairInfo:
                 object.__setattr__(self, "remote_device", other.local_device)
             if other.local_dev_ip and not self.remote_dev_ip:
                 object.__setattr__(self, "remote_dev_ip", other.local_dev_ip)
+            if other.remote_gid_node is not None and self.local_gid_node is None:
+                object.__setattr__(self, "local_gid_node", other.remote_gid_node)
+            if other.local_gid_node is not None and self.remote_gid_node is None:
+                object.__setattr__(self, "remote_gid_node", other.local_gid_node)
         return self
 
 
@@ -168,6 +173,9 @@ class JobNodeAttributions:
     """
 
     attributions: dict[str, NodeAttributionGroup] = field(default_factory=dict)
+    # Symptoms whose evidence names no node (e.g. unlabelled application output of a
+    # multi-node job). They inform job-level symptoms without blaming any node.
+    job_level: SymptomSet[str] = field(default_factory=SymptomSet)
 
     @classmethod
     def from_event_stream(cls, event_stream: EventStream, job_info: JobInfo) -> "JobNodeAttributions":
@@ -221,6 +229,8 @@ class JobNodeAttributions:
 
             if nodes:
                 res.add(nodes, source_set)
+            elif not peers:
+                res.job_level.add(source_set)
 
             event_ids.append(eid)
 
@@ -245,6 +255,7 @@ class JobNodeAttributions:
     def clear(self) -> None:
         for group in self.attributions.values():
             group.discard_all()
+        self.job_level.discard_all()
 
     def discard(self, nodes: Iterable[str], symptoms: list[str], purge: bool = False) -> None:
         for node in nodes:
@@ -270,17 +281,28 @@ class JobNodeAttributions:
     def items(self) -> Iterator[tuple[str, NodeAttributionGroup]]:
         return iter(self.attributions.items())
 
+    def symptom_groups(self) -> Iterator[tuple[Optional[str], SymptomSet[str]]]:
+        """Every symptom group: one per node, then the job-level set keyed ``None``.
+
+        Refiners that look for a root cause, or discard a cascade, across the
+        per-node attributions should iterate this so evidence that named no node
+        is treated the same way as evidence that did.
+        """
+        for node, group in list(self.attributions.items()):
+            yield node, group.attributions
+        yield None, self.job_level
+
     def discard_node(self, node: str, purge: bool = False) -> None:
         self.attributions[node].discard_all(purge)
         if self.attributions[node].is_void():
             del self.attributions[node]
 
     def discard_matching_from_all_nodes(self, substrings: list[str], purge: bool = False) -> None:
-        """Discard symptoms containing any of the given substrings, from every node."""
-        for node_group in list(self.attributions.values()):
-            to_discard = [symptom for symptom in node_group.symptoms() if any(sub in symptom for sub in substrings)]
+        """Discard symptoms containing any of the given substrings, from every node and the job-level set."""
+        for _node, group in self.symptom_groups():
+            to_discard = [symptom for symptom in group.symptoms() if any(sub in symptom for sub in substrings)]
             if to_discard:
-                node_group.attributions.discard_seq(to_discard, purge=purge)
+                group.discard_seq(to_discard, purge=purge)
 
     def purge_from_node(self, node: str, symptom: str) -> None:
         if node in self.attributions:
@@ -293,6 +315,7 @@ class JobNodeAttributions:
         for node, att_grp in other.attributions.items():
             node = _normalize_node(node)
             self.attributions.setdefault(node, NodeAttributionGroup(node)).update(att_grp)
+        self.job_level.update(other.job_level)
         return self
 
     def extract_bad_interesting_epilog(

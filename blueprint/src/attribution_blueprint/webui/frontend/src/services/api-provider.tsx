@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// SPDX-License-Identifier: Apache-2.0
+
 // src/services/api-provider.tsx
 import { useMemo, type ReactNode } from 'react'
 import type { ApiService } from '@/services/api.service'

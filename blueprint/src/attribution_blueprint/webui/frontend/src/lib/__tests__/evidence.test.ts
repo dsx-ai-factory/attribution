@@ -1,5 +1,5 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-// SPDX-License-Identifier: LicenseRef-NvidiaProprietary
+// SPDX-License-Identifier: Apache-2.0
 
 import { describe, it, expect, vi } from 'vitest'
 import { buildNodeMarkdown, buildVerdictMarkdown } from '@/lib/evidence'

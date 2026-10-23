@@ -1,12 +1,5 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-# SPDX-License-Identifier: LicenseRef-NvidiaProprietary
-#
-# NVIDIA CORPORATION, its affiliates and licensors retain all intellectual
-# property and proprietary rights in and to this material, related
-# documentation and any modifications thereto. Any use, reproduction,
-# disclosure or distribution of this material and related documentation
-# without an express license agreement from NVIDIA CORPORATION or
-# its affiliates is strictly prohibited.
+# SPDX-License-Identifier: Apache-2.0
 
 from collections.abc import Mapping
 from dataclasses import dataclass, field
@@ -23,7 +16,7 @@ from attribution_lib.bundled_rules.common.scrub_helpers import get_clean_bad_nod
 from attribution_lib.decision_trace_recorder import DecisionRecorder
 from attribution_lib.events import EventStream
 from attribution_lib.filter import run_post_outcome_refiners, run_pre_outcome_refiners, run_scrub_phase_refiners
-from attribution_lib.job_info import JobInfo
+from attribution_lib.job_info import JobInfo, Scheduler
 from attribution_lib.observation.inbound import Source as ObservationSource
 from attribution_lib.observation.processing import BodyFallbacks, EntrySourceBase
 from attribution_lib.outcome import (
@@ -313,6 +306,8 @@ def calculate_symptoms(
     for _node, node_group in my_bad_nodes.items():
         for symptom_str in list(node_group.symptoms()):
             symptoms.add(node_group.attributions[symptom_str])
+    for symptom_str in list(my_bad_nodes.job_level.symptoms()):
+        symptoms.add(my_bad_nodes.job_level[symptom_str])
 
     node_symptoms_base, skipped_symptom_ids = run_pre_outcome_refiners(
         event_stream,
@@ -342,6 +337,11 @@ def attribute(
     rule_params: Optional[Mapping[RuleId, RuleParameters]] = None,
     run_collectors: bool = False,
 ) -> AttributionResult:
+    # KAI is accepted on the wire, but no KAI rules or logic exist yet.
+    # Fail loudly rather than incorrectlyfallback to Slurm behavior.
+    if job_info.scheduler is Scheduler.KAI:
+        raise NotImplementedError("Attribution for scheduler 'kai' is not implemented yet")
+
     result = AttributionResult(event_stream=event_stream, bad_nodes_attr=bad_node_result)
 
     symp = calculate_symptoms(

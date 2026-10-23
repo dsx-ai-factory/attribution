@@ -102,8 +102,8 @@ those is a per-source contract of the service: for `applog` it falls back to
 parsing timestamp and node out of the body, so bare `{"body": ...}` entries are
 enough. For `syslog` every entry needs a `ts`; build them with
 `syslog_entries_from_text`, which dates each line from its own timestamp and
-drops lines it cannot date. The shape is in the
-[observation API reference](./rest-api.md#2-submit-an-observation).
+drops lines it cannot date. The entry shape and the full per-source rules are in
+[Observation entry format](../../service/service-app/docs/api/observation-format.md).
 
 `time_interval` defaults per source through `log_observation`
 (`DEFAULT_TIME_INTERVAL` in
@@ -222,9 +222,9 @@ run it with the command above. The
 [sample corpus](./sample-data/static/README.md) describes what the static
 workloads contain.
 
-## Before Opening The MR
+## Before Opening The PR
 
-- [ ] New files carry the appropriate license header, copied from an existing file
+- [ ] New first-party files that support comments carry the Apache-2.0 SPDX header, copied from an existing first-party file
 - [ ] `schema=` declares every key `_build` reads, and a bad config raises
       `MCAError`
 - [ ] Any third-party library is an extra in [`pyproject.toml`](../pyproject.toml) with

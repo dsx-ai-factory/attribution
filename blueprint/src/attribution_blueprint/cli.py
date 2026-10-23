@@ -1,12 +1,5 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-# SPDX-License-Identifier: LicenseRef-NvidiaProprietary
-#
-# NVIDIA CORPORATION, its affiliates and licensors retain all intellectual
-# property and proprietary rights in and to this material, related
-# documentation and any modifications thereto. Any use, reproduction,
-# disclosure or distribution of this material and related documentation
-# without an express license agreement from NVIDIA CORPORATION or
-# its affiliates is strictly prohibited.
+# SPDX-License-Identifier: Apache-2.0
 
 import argparse
 import os
@@ -100,6 +93,11 @@ def _build_parser() -> argparse.ArgumentParser:
         "--dump-observations",
         metavar="DIR",
         help="Write each observation body to DIR/<ctx-id>.<source>.json before submitting.",
+    )
+    parser.add_argument(
+        "--strict",
+        action="store_true",
+        help="Exit 1 when any verdict was issued with evidence_status other than complete.",
     )
     return parser
 
@@ -232,7 +230,7 @@ def _run_config(
         cli_dict: Settings parsed from CLI connector overrides.
         dump_observations: Optional directory for observation debug dumps.
         parser: Parser used to report configuration errors.
-        aggregate_runs: Optional collector for multi-config aggregate logging.
+        aggregate_runs: Optional collector of per-config stats and summaries.
 
     Returns:
         Process-style return code for this config run.
@@ -314,30 +312,49 @@ def _write_aggregate_run_summary(run_results: list[tuple[dict[str, int], list[di
 
     attempted = 0
     succeeded = 0
+    conflicted = 0
     for stats, _summaries in run_results:
         attempted += stats.get("attempted", 0)
         succeeded += stats.get("succeeded", 0)
-    _write_run_summary({"attempted": attempted, "succeeded": succeeded}, [])
+        conflicted += stats.get("conflicted", 0)
+    _write_run_summary({"attempted": attempted, "succeeded": succeeded, "conflicted": conflicted}, [])
 
 
 def _write_run_summary(stats: dict[str, int], summaries: list[dict[str, str]]) -> None:
     """Log a concise per-run completion summary after an attribution attempt."""
     attempted = stats.get("attempted", 0)
     succeeded = stats.get("succeeded", 0)
+    conflicted = stats.get("conflicted", 0)
     if attempted == 0:
         logger.info("Attribution complete: 0 execution contexts discovered.")
         return
-    logger.info(f"Attribution complete: {succeeded}/{attempted} execution contexts succeeded.")
+    conflict_summary = f" {conflicted} execution contexts conflicted." if conflicted else ""
+    logger.info(f"Attribution complete: {succeeded}/{attempted} execution contexts succeeded.{conflict_summary}")
     for summary in summaries:
         attempt = summary.get("attempt_id")
         if attempt is None or attempt == "":
             attempt = "n/a"
+        if summary.get("status") == "conflicted":
+            logger.info(
+                f"- {summary.get('job_id', '?')} attempt={attempt} "
+                f"context={summary.get('context_id', '?')} status=conflicted "
+                f"attributor_id={summary.get('attributor_id', '?')}"
+            )
+            continue
         logger.info(
             f"- {summary.get('job_id', '?')} attempt={attempt} "
             f"terminal_state={summary.get('terminal_state', 'unknown')} "
             f"sub_domain={summary.get('sub_domain', 'unclassified')} "
             f"root_symptom={summary.get('root_symptom', 'none')} "
-            f"symptoms={summary.get('symptoms', 'none')}"
+            f"symptoms={summary.get('symptoms', 'none')} "
+            f"evidence={summary.get('evidence_status', 'unknown')}"
+        )
+    verdicts = [summary for summary in summaries if summary.get("status") == "attributed"]
+    incomplete = sum(1 for summary in verdicts if summary.get("evidence_status") != "complete")
+    if incomplete > 0:
+        logger.warning(
+            f"{incomplete} of {len(verdicts)} verdicts were issued with incomplete evidence; "
+            "see connector_reports and ingestion_reports in the saved result."
         )
 
 
@@ -361,10 +378,7 @@ def main(argv: list[str] | None = None) -> int:
     except MCAError as e:
         parser.error(str(e))
 
-    aggregate_runs: list[tuple[dict[str, int], list[dict[str, str]]]] | None = []
-    if len(config_paths) <= 1:
-        aggregate_runs = None
-
+    run_results: list[tuple[dict[str, int], list[dict[str, str]]]] = []
     for toml_path in config_paths:
         rc = _run_config(
             toml_path=toml_path,
@@ -372,12 +386,19 @@ def main(argv: list[str] | None = None) -> int:
             cli_dict=cli_dict,
             dump_observations=args.dump_observations,
             parser=parser,
-            aggregate_runs=aggregate_runs,
+            aggregate_runs=run_results,
         )
         if rc != 0:
             return rc
-    if aggregate_runs is not None:
-        _write_aggregate_run_summary(aggregate_runs)
+    if len(config_paths) > 1:
+        _write_aggregate_run_summary(run_results)
+    if args.strict and any(
+        summary.get("status") == "attributed" and summary.get("evidence_status") != "complete"
+        for _stats, summaries in run_results
+        for summary in summaries
+    ):
+        logger.error("--strict: at least one verdict was issued with incomplete evidence")
+        return 1
     return 0
 
 

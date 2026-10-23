@@ -1,12 +1,5 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-# SPDX-License-Identifier: LicenseRef-NvidiaProprietary
-#
-# NVIDIA CORPORATION, its affiliates and licensors retain all intellectual
-# property and proprietary rights in and to this material, related
-# documentation and any modifications thereto. Any use, reproduction,
-# disclosure or distribution of this material and related documentation
-# without an express license agreement from NVIDIA CORPORATION or
-# its affiliates is strictly prohibited.
+# SPDX-License-Identifier: Apache-2.0
 
 from __future__ import annotations
 
@@ -24,10 +17,27 @@ class ConnectorReport(TypedDict):
     observation_count: int
 
 
+EvidenceStatus = Literal["complete", "partial", "none"]
+
+
+class IngestionReport(TypedDict):
+    connector: str
+    source: str
+    status: Literal["ok", "partial", "error", "empty"]
+    attempted: int
+    failed: int
+    empty: int
+    accepted: int
+    dropped: dict[str, int]
+    reason: str
+
+
 class AttributionBlueprintResult(TypedDict, total=False):
     terminal_state: str
     sub_domain: str
     connector_reports: list[ConnectorReport]
+    ingestion_reports: list[IngestionReport]
+    evidence_status: EvidenceStatus
     tenant_sre_action: str
     cloud_operator_sre_action: str
     verdict: dict
@@ -52,6 +62,7 @@ def service_outcome(result: dict | None) -> str:
 def enrich_attribution_result(
     service_result: dict | None,
     connector_reports: list[ConnectorReport],
+    ingestion_reports: list[IngestionReport],
 ) -> AttributionBlueprintResult:
     """Add Blueprint contract fields around an attribution service response."""
     result = {} if service_result is None else deepcopy(service_result)
@@ -60,6 +71,8 @@ def enrich_attribution_result(
     result["terminal_state"] = taxonomy.terminal_state
     result["sub_domain"] = taxonomy.sub_domain
     result["connector_reports"] = [dict(report) for report in connector_reports]
+    result["ingestion_reports"] = [dict(report) for report in ingestion_reports]
+    result["evidence_status"] = _evidence_status(connector_reports, ingestion_reports)
     result["tenant_sre_action"] = _action_value(result, "tenant_sre_action")
     result["cloud_operator_sre_action"] = _action_value(result, "cloud_operator_sre_action")
     symptoms = result.get("symptoms")
@@ -67,6 +80,21 @@ def enrich_attribution_result(
         result["symptoms"] = _enrich_symptoms(symptoms)
     _enrich_root_symptom(result)
     return result
+
+
+def _evidence_status(
+    connector_reports: list[ConnectorReport],
+    ingestion_reports: list[IngestionReport],
+) -> EvidenceStatus:
+    """Classify how much collected evidence reached the service for this verdict."""
+    if all(report["attempted"] == 0 for report in ingestion_reports):
+        return "none"
+    collectors_ok = all(report["status"] == "ok" for report in connector_reports)
+    if collectors_ok and all(report["status"] == "ok" for report in ingestion_reports):
+        return "complete"
+    if any(report["attempted"] > 0 and report["status"] in ("ok", "partial") for report in ingestion_reports):
+        return "partial"
+    return "none"
 
 
 def _action_value(result: dict, field: str) -> str:

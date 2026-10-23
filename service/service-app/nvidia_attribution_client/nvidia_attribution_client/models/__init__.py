@@ -2,14 +2,7 @@
 
 # flake8: noqa
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-# SPDX-License-Identifier: LicenseRef-NvidiaProprietary
-
-# NVIDIA CORPORATION, its affiliates and licensors retain all intellectual
-# property and proprietary rights in and to this material, related
-# documentation and any modifications thereto. Any use, reproduction,
-# disclosure or distribution of this material and related documentation
-# without an express license agreement from NVIDIA CORPORATION or
-# its affiliates is strictly prohibited.
+# SPDX-License-Identifier: Apache-2.0
 
 # import models into model package
 from nvidia_attribution_client.models.attribution_class_enum import AttributionClassEnum
@@ -30,6 +23,7 @@ from nvidia_attribution_client.models.decision_edge import DecisionEdge
 from nvidia_attribution_client.models.decision_graph import DecisionGraph
 from nvidia_attribution_client.models.decision_node import DecisionNode
 from nvidia_attribution_client.models.decision_node_type import DecisionNodeType
+from nvidia_attribution_client.models.drop_reason import DropReason
 from nvidia_attribution_client.models.duplicate_attributor_error import DuplicateAttributorError
 from nvidia_attribution_client.models.duplicate_observation_error import DuplicateObservationError
 from nvidia_attribution_client.models.errors import Errors
@@ -39,6 +33,7 @@ from nvidia_attribution_client.models.format import Format
 from nvidia_attribution_client.models.global_attribution import GlobalAttribution
 from nvidia_attribution_client.models.http_validation_error import HTTPValidationError
 from nvidia_attribution_client.models.incompatible_observation_source_format_error import IncompatibleObservationSourceFormatError
+from nvidia_attribution_client.models.ingest_summary_v2 import IngestSummaryV2
 from nvidia_attribution_client.models.invalid_observation_body_error import InvalidObservationBodyError
 from nvidia_attribution_client.models.location_inner import LocationInner
 from nvidia_attribution_client.models.new_response_v1 import NewResponseV1

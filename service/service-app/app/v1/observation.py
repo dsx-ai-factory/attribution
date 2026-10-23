@@ -1,12 +1,5 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-# SPDX-License-Identifier: LicenseRef-NvidiaProprietary
-#
-# NVIDIA CORPORATION, its affiliates and licensors retain all intellectual
-# property and proprietary rights in and to this material, related
-# documentation and any modifications thereto. Any use, reproduction,
-# disclosure or distribution of this material and related documentation
-# without an express license agreement from NVIDIA CORPORATION or
-# its affiliates is strictly prohibited.
+# SPDX-License-Identifier: Apache-2.0
 
 """V1 observation wire model. Accepts every legacy `Format`; kept as-is for existing V1 consumers."""
 
@@ -20,7 +13,6 @@ from attribution_lib.observation.inbound import (
     Source as ObservationSource,
     TimeInterval as LibTimeInterval,
 )
-from attribution_lib.resources import AllJobResources
 from pydantic import model_validator
 
 from app.entry_timeseries import decode_timeseries_entries
@@ -37,7 +29,7 @@ class ObservationContextV1(HashableModel):
     """Describes the scope of an observation."""
 
     time_interval: TimeInterval
-    resources: str = "AllJobResources"
+    resources: str = "AllJobResources"  # Accepted for wire compatibility; the lib context has no resources.
     source: ObservationSource
     format: ObservationFormat
     is_prefiltered: bool = False
@@ -75,7 +67,6 @@ class ObservationContextV1(HashableModel):
     def _lib_context(self, time_interval: LibTimeInterval, format: LibFormat, timezone: ZoneInfo) -> InboundContext:
         return InboundContext(
             time_interval,
-            AllJobResources,
             self.source,
             format,
             timezone,

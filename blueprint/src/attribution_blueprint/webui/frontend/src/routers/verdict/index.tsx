@@ -1,5 +1,5 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-// SPDX-License-Identifier: LicenseRef-NvidiaProprietary
+// SPDX-License-Identifier: Apache-2.0
 
 import { useId } from 'react'
 import { useParams } from 'react-router-dom'
@@ -26,7 +26,7 @@ import { Identifier, NotRecorded } from '@/components/field'
 import { InfoHint } from '@/components/info-hint'
 import { LogExcerpt } from '@/components/log-excerpt'
 import { NodeHoverCard } from '@/components/node-hover-card'
-import { OutcomeBadge } from '@/components/outcome'
+import { CompoundOutcomeBadge } from '@/components/outcome'
 import { PageBreadcrumb, PageHeader, type PageCrumb } from '@/components/page-header'
 import { SectionCard } from '@/components/section-card'
 import { SiteStatusBadge } from '@/components/site-status-badge'
@@ -47,8 +47,55 @@ import { DescriptionList, type DescriptionListItem } from '@/components/ui/descr
 import { Empty, EmptyHeader, EmptyTitle } from '@/components/ui/empty'
 import { RouterLink } from '@/components/ui/router-link'
 import { Skeleton } from '@/components/ui/skeleton'
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { DecisionGraphAction } from '@/routers/verdict/components/decision-graph/dialog'
 import { SymptomsSection } from '@/routers/verdict/components/symptom-sites'
+
+const TERMINAL_STATE_LABELS: Record<string, string> = {
+  Pass: 'Pass',
+  Fail: 'Fail',
+  ExpectedFail: 'Expected failure',
+  Cancelled: 'Cancelled',
+}
+
+const FAILURE_DOMAIN_LABELS: Record<string, string> = {
+  User: 'Application',
+  InfraHW: 'Infrastructure (hardware)',
+  InfraSW: 'Infrastructure (software)',
+}
+
+const CANCELLATION_ACTOR_LABELS: Record<string, string> = {
+  User: 'Workload owner',
+  Operator: 'Operator',
+}
+
+const UNCERTAINTY_LABELS: Record<string, string> = {
+  Aleatoric: 'Aleatoric (data ambiguity)',
+  Epistemic: 'Epistemic (rule gap)',
+}
+
+const EVIDENCE_STATUS_LABELS: Record<string, { label: string; tooltip: string }> = {
+  complete: { label: 'Complete', tooltip: 'All collected evidence was delivered to the attribution service' },
+  partial: { label: 'Partial', tooltip: 'A collector failed or some evidence was not delivered' },
+  none: { label: 'None', tooltip: 'No evidence reached the attribution service' },
+}
+
+// Focusable so the tooltip opens from the keyboard; the dotted underline marks it as explained.
+function HelpTooltip({ text, children }: { text: string; children: string }) {
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <span tabIndex={0} className="cursor-help underline decoration-dotted underline-offset-4">{children}</span>
+      </TooltipTrigger>
+      <TooltipContent side="top" sideOffset={6}>{text}</TooltipContent>
+    </Tooltip>
+  )
+}
+
+function evidenceStatusValue(status: string) {
+  const entry = EVIDENCE_STATUS_LABELS[status]
+  return entry ? <HelpTooltip text={entry.tooltip}>{entry.label}</HelpTooltip> : status
+}
 
 // The scheduler's status enum, read as words.
 const RUN_STATUS_LABELS: Record<RunSummary['status'], string> = {
@@ -171,6 +218,21 @@ function verdictFacts(run: RunDetail): DescriptionListItem[] {
           ),
         }]
       : []),
+    ...((run.terminalStates ?? []).length > 0
+      ? [{ key: 'terminal-state', label: 'Terminal state', value: (run.terminalStates ?? []).map(s => TERMINAL_STATE_LABELS[s] ?? s).join(', ') }]
+      : []),
+    ...((run.failureDomains ?? []).length > 0
+      ? [{ key: 'failure-domain', label: 'Failure domain', value: (run.failureDomains ?? []).map(d => FAILURE_DOMAIN_LABELS[d] ?? d).join(', ') }]
+      : []),
+    ...((run.cancellationActors ?? []).length > 0
+      ? [{ key: 'cancellation-actor', label: 'Cancelled by', value: (run.cancellationActors ?? []).map(a => CANCELLATION_ACTOR_LABELS[a] ?? a).join(', ') }]
+      : []),
+    ...((run.uncertaintyType ?? null) !== null
+      ? [{ key: 'uncertainty-type', label: 'Uncertainty type', value: UNCERTAINTY_LABELS[run.uncertaintyType!] ?? run.uncertaintyType! }]
+      : []),
+    ...((run.evidenceStatus ?? null) !== null
+      ? [{ key: 'evidence-status', label: <HelpTooltip text="Whether all collected evidence reached the attribution service before this verdict was issued">Evidence</HelpTooltip>, value: evidenceStatusValue(run.evidenceStatus!) }]
+      : []),
   ]
 }
 
@@ -242,7 +304,7 @@ function VerdictCard({ run }: { run: RunDetail }) {
               {/* The badge is the title itself, beside the card's action and
                   no text, so it takes no mark offset: centered in the header
                   as the action's label is. */}
-              <OutcomeBadge outcome={run.outcome} label={run.verdictLabel} className="top-0" />
+              <CompoundOutcomeBadge run={run} className="top-0" />
             </h2>
           </CardTitle>
           <CardAction>
@@ -372,6 +434,9 @@ function PayloadsSection({ run }: { run: RunDetail }) {
             end_time: run.endTime,
           }}
         />
+        {(run.ingestionReports ?? null) !== null && (
+          <Payload label="Ingestion reports" payload={run.ingestionReports!} />
+        )}
       </div>
     </SectionCard>
   )

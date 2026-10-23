@@ -1,12 +1,5 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-# SPDX-License-Identifier: LicenseRef-NvidiaProprietary
-#
-# NVIDIA CORPORATION, its affiliates and licensors retain all intellectual
-# property and proprietary rights in and to this material, related
-# documentation and any modifications thereto. Any use, reproduction,
-# disclosure or distribution of this material and related documentation
-# without an express license agreement from NVIDIA CORPORATION or
-# its affiliates is strictly prohibited.
+# SPDX-License-Identifier: Apache-2.0
 
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Optional
@@ -22,7 +15,7 @@ if TYPE_CHECKING:
     from attribution_lib.rules_engine import RuleEngine
     from attribution_lib.symptoms.registry_generation import GeneratedSymptomRegistry
 
-__version__ = "0.5.0.dev0"
+__version__ = "0.5.0"
 
 ip_to_nodenames: dict[str, str] = {}
 ignored_hostname_prefixes: list[str] = []

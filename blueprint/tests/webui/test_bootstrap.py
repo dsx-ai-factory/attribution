@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
 import json
 import os
 from datetime import datetime, timezone
@@ -139,6 +142,28 @@ def test_run_to_react_falls_back_when_catalog_is_empty(tmp_path, monkeypatch):
     assert r["operatorDiagnose"]["title"] == "GpuFell"
     assert r["operatorDiagnose"]["summary"] == "GPU off bus"
     assert r["operatorDiagnose"]["catalogId"] is None
+
+
+def test_generic_nvrx_failure_reports_unavailable_reason(tmp_path):
+    """Keep the unavailable-reason detail visible in the report and Diagnose cards."""
+    detail = "Underlying failure reason unavailable from the collected evidence."
+    run = _seed_one(
+        tmp_path,
+        catalog_id="nvrx-detected-failure",
+        symptom="NVRx detected failure",
+        rule="NVRXFailureDetected",
+        line="Cycle: 1 Event: failure_detected Node: node-a Rank: 0",
+        detail=detail,
+    )
+    run.raw_result["verdict"]["attribution_outcome"] = "Fail Undetermined"
+
+    result = bootstrap.run_to_react(run)
+
+    assert result["verdictLabel"] == "Unattributed"
+    assert result["detail"] == detail
+    assert result["rootSymptom"]["symptom"] == "NVRx detected failure"
+    assert result["diagnose"]["summary"] == detail
+    assert result["operatorDiagnose"]["summary"] == detail
 
 
 def test_symptom_text_without_catalog_id_yields_no_persona_card(tmp_path):
@@ -343,3 +368,69 @@ def test_inject_escapes_script_breakout():
     end = out.index("</script>", start)
     restored = json.loads(out[start:end].replace("\\u003c", "<").replace("\\u003e", ">").replace("\\u0026", "&"))
     assert restored["runs"][0]["log"][0]["text"] == "</script><img src=x onerror=alert(1)>"
+
+
+def test_run_to_react_passes_compound_outcome_fields(tmp_path):
+    p = tmp_path / "m.db"
+    out = SQLiteOutput(str(p))
+    ctx = {
+        "id": "s1",
+        "sluid": "s1",
+        "attempt_id": "s1",
+        "workload_type": "slurm",
+        "scheduler": "slurm",
+        "job_id": "job-1",
+        "nodes": ["node-a"],
+        "start_time": datetime(2026, 5, 1, 0, tzinfo=timezone.utc),
+        "end_time": datetime(2026, 5, 1, 1, tzinfo=timezone.utc),
+        "state": "FAILED",
+        "user_name": "alice",
+        "gpus_per_node": 8,
+    }
+    out.write(
+        ctx,
+        {
+            "verdict": {
+                "attribution_outcome": "Fail InfraHW",
+                "detail": "",
+                "root_symptom": {"symptom": "GpuFell", "source": {"rule": "r", "line": "l", "time": "2026-05-01T00:30:00+00:00"}},
+                "terminal_states": ["Fail"],
+                "failure_domains": ["InfraHW"],
+                "cancellation_actors": [],
+                "uncertainty_type": None,
+            },
+            "model_type": "AttributionResponseV2",
+            "connector_reports": [{"connector": "c", "source": "syslog", "status": "ok", "reason": "", "observation_count": 1}],
+            "ingestion_reports": [{"connector": "c", "source": "syslog", "status": "error", "attempted": 1, "failed": 1, "reason": "HTTP 500"}],
+            "evidence_status": "partial",
+        },
+    )
+    out.close()
+    run = dbmod.get_run(str(p), dbmod.list_runs(str(p))[0].run_id)
+    r = bootstrap.run_to_react(run)
+
+    assert r["terminalStates"] == ["Fail"]
+    assert r["failureDomains"] == ["InfraHW"]
+    assert r["cancellationActors"] == []
+    assert r["uncertaintyType"] is None
+    assert r["evidenceStatus"] == "partial"
+    assert r["ingestionReports"] == {
+        "connector_reports": [{"connector": "c", "source": "syslog", "status": "ok", "reason": "", "observation_count": 1}],
+        "ingestion_reports": [{"connector": "c", "source": "syslog", "status": "error", "attempted": 1, "failed": 1, "reason": "HTTP 500"}],
+    }
+
+
+def test_run_to_react_defaults_compound_fields_when_absent(tmp_path):
+    run = _seed_one(tmp_path)
+    # Rows saved before ingestion reports were recorded still carry connector_reports.
+    run.raw_result["connector_reports"] = [
+        {"connector": "c", "source": "syslog", "status": "ok", "reason": "", "observation_count": 1}
+    ]
+    r = bootstrap.run_to_react(run)
+
+    assert r["terminalStates"] == []
+    assert r["failureDomains"] == []
+    assert r["cancellationActors"] == []
+    assert r["uncertaintyType"] is None
+    assert r["evidenceStatus"] is None
+    assert r["ingestionReports"] is None

@@ -1,5 +1,5 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-// SPDX-License-Identifier: LicenseRef-NvidiaProprietary
+// SPDX-License-Identifier: Apache-2.0
 
 export type OutcomeKey = 'hardware' | 'software' | 'multi' | 'user' | 'undetermined' | 'pass'
 
@@ -140,6 +140,13 @@ export interface RunSummary {
   startTime: string
   outcome: OutcomeKey
   verdictLabel: string
+  terminalStates?: string[]
+  failureDomains?: string[]
+  cancellationActors?: string[]
+  uncertaintyType?: string | null
+  evidenceStatus?: string | null
+  // Why evidence was partial or missing.
+  ingestionReports?: { connector_reports: object[]; ingestion_reports: object[] } | null
   detail: string
   rootSymptom: RootSymptom
   symptoms: SymptomEntry[]

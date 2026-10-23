@@ -1,12 +1,5 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-# SPDX-License-Identifier: LicenseRef-NvidiaProprietary
-#
-# NVIDIA CORPORATION, its affiliates and licensors retain all intellectual
-# property and proprietary rights in and to this material, related
-# documentation and any modifications thereto. Any use, reproduction,
-# disclosure or distribution of this material and related documentation
-# without an express license agreement from NVIDIA CORPORATION or
-# its affiliates is strictly prohibited.
+# SPDX-License-Identifier: Apache-2.0
 
 from collections.abc import Iterable, Mapping, Sequence
 from datetime import datetime, timedelta
@@ -15,6 +8,7 @@ from typing import NamedTuple, Optional, TypeVar
 from zoneinfo import ZoneInfo
 
 from attribution_lib import ufmlog_common, utils
+from attribution_lib.cluster_context import ClusterIncidentContext
 from attribution_lib.exceptions import (
     InvalidRankError,
     JobInfoDuplicateFieldError,
@@ -27,6 +21,7 @@ from attribution_lib.exceptions import (
     UnknownNodeError,
     UnknownNodeExtractionSourceError,
 )
+from attribution_lib.execution_cancellation import ExecutionCancellation
 from attribution_lib.hostlist import parse_hostlist
 from attribution_lib.observation import Context as ObservationContext
 from attribution_lib.observation.inbound import (
@@ -36,6 +31,7 @@ from attribution_lib.observation.inbound import (
     TimeInterval,
 )
 from attribution_lib.resources.resource_set import AllJobResources
+from attribution_lib.scheduler_failure import SchedulerFailure
 from attribution_lib.sources import Source, SourceSet
 
 T = TypeVar("T")
@@ -56,6 +52,8 @@ class Scheduler(StrEnum):
     UNKNOWN = ""
     SLURM = "slurm"
     KUEUE = "kueue"
+    # Identity only; attribution raises NotImplementedError until KAI rules land.
+    KAI = "kai"
 
 
 def normalize_scheduler_identity(raw: "str | None") -> Scheduler:
@@ -107,7 +105,11 @@ def _coerce_tags(raw: "str | Iterable[str] | None") -> frozenset[str]:
 
 
 class JobInfo(NamedTuple):
-    """Container class for parameters extracted from the job system, intended to be given to attribution engines (and not modified)"""
+    """Immutable inputs supplied by a client to attribution engines.
+
+    Most fields describe the job system. ``cluster_incident_context`` is separately
+    validated incident context inferred from telemetry outside the job.
+    """
 
     id: str
     # Legacy workload/category token from the wire (e.g. "slurm", "runai", "",
@@ -147,6 +149,68 @@ class JobInfo(NamedTuple):
     timezone: ZoneInfo
 
     l_context: ObservationContext
+    # Ownership alone preserves legacy attribution. Suppression additionally
+    # requires cancellation associated with this execution.
+    allocation_failure: Optional[SchedulerFailure] = None
+    # Associated execution evidence does not overwrite the raw allocation fields.
+    execution_cancellation: Optional[ExecutionCancellation] = None
+    # Temporary bridge until cluster context enters as native CLUSTER_CONTEXT
+    # observations scoped to non-job cluster resources, where rules can consume
+    # it through normal event, scrub, and cascade processing. Remove this field then.
+    cluster_incident_context: Optional[ClusterIncidentContext] = None
+
+    @property
+    def attributed_cancellation(self) -> Optional[ExecutionCancellation]:
+        """Return explicitly associated cancellation; reject a mismatched target."""
+        evidence = self.execution_cancellation
+        if evidence is not None and evidence.execution_id != self.id:
+            raise ValueError("Cancellation evidence belongs to a different execution")
+        return evidence
+
+    @property
+    def attributed_cancelled_by(self) -> Optional[str]:
+        """Use execution-owned identity when supplied, otherwise retain legacy input."""
+        evidence = self.attributed_cancellation
+        return evidence.cancelled_by if evidence is not None else self.cancelled_by
+
+    @property
+    def inherited_node_failure(self) -> bool:
+        """Whether allocation NODE_FAIL names a node outside this participation.
+
+        Keep existing attribution when membership or the failed node is unknown,
+        when the allocation's failed node participates, or when the record names
+        a separate participating-node failure. This bounded guard does not
+        resolve which cycle owns an in-set allocation failure.
+        """
+        failure = self.allocation_failure
+        if not (
+            failure is not None
+            and failure.allocation_id != self.id
+            and failure.state == "NODE_FAIL"
+            and self.state == "NODE_FAIL"
+            and bool(failure.node.strip())
+            and bool(self.nodes)
+        ):
+            return False
+        allocation_node = utils.convert_hostname_to_short_format(failure.node.casefold())
+        participating_nodes = {utils.convert_hostname_to_short_format(node.casefold()) for node in self.nodes}
+        if allocation_node in participating_nodes:
+            return False
+        if self.failed_node is not None and self.failed_node.strip() != "":
+            reported_node = utils.convert_hostname_to_short_format(self.failed_node.casefold())
+            if reported_node != allocation_node and reported_node in participating_nodes:
+                return False
+        return True
+
+    @property
+    def suppress_inherited_node_failure(self) -> bool:
+        """Suppress inherited scheduler blame only with associated cancellation.
+
+        Allocation ownership and excluded-node membership alone do not supply
+        an execution outcome. Preserve legacy attribution until the caller
+        supplies valid cancellation evidence for this execution.
+        """
+        return self.inherited_node_failure and self.attributed_cancellation is not None
 
     def context(self) -> ObservationContext:
         return self.l_context
@@ -310,6 +374,10 @@ class JobInfoBuilder:
     _cancelled_by: Optional[str] = None
     _state: str
     _failed_node: Optional[str] = None
+    _allocation_failure: Optional[SchedulerFailure] = None
+    _execution_cancellation: Optional[ExecutionCancellation] = None
+    _cluster_incident_context: Optional[ClusterIncidentContext] = None
+    _cluster_incident_context_set: bool
     _cluster: str
     _slurm_node_infos: dict[str, dict[str, str]] = dict()
     _job_start_time: datetime
@@ -355,6 +423,7 @@ class JobInfoBuilder:
         self._framework = framework
         self._source_name = source_name
         self._timezone = timezone
+        self._cluster_incident_context_set = False
 
         copied = {k.lower(): list(v) for k, v in node_to_ranks.items()}
 
@@ -434,8 +503,7 @@ class JobInfoBuilder:
         return self
 
     def scheduler(self, in_scheduler: Optional[str]) -> "JobInfoBuilder":
-        """Set the explicit scheduler identity (e.g. "slurm", "kueue").
-        """
+        """Set the explicit scheduler identity (e.g. "slurm", "kueue")."""
         if self._scheduler is not None:
             raise JobInfoDuplicateFieldError("scheduler")
         if in_scheduler:  # Normalize empty/None scheduler to unset, like cancelled_by.
@@ -453,6 +521,42 @@ class JobInfoBuilder:
         if self._failed_node is not None:
             raise JobInfoDuplicateFieldError("failed_node")
         self._failed_node = in_failed_node
+        return self
+
+    def allocation_failure(self, failure: Optional[SchedulerFailure]) -> "JobInfoBuilder":
+        """Supply allocation-owned failure evidence without assigning it to this record."""
+        if self._allocation_failure is not None:
+            raise JobInfoDuplicateFieldError("allocation_failure")
+        self._allocation_failure = failure
+        return self
+
+    def execution_cancellation(self, evidence: Optional[ExecutionCancellation]) -> "JobInfoBuilder":
+        """Supply cancellation explicitly associated with this execution."""
+        if self._execution_cancellation is not None:
+            raise JobInfoDuplicateFieldError("execution_cancellation")
+        if evidence is not None and evidence.execution_id != self._id:
+            raise ValueError("Cancellation evidence belongs to a different execution")
+        self._execution_cancellation = evidence
+        return self
+
+    def cluster_incident_context(self, context: Optional[ClusterIncidentContext]) -> "JobInfoBuilder":
+        """Supply client-projected incident context for attribution refiners.
+
+        Args:
+            context: Validated incident context projected by the client.
+
+        Returns:
+            This builder.
+
+        Raises:
+            TypeError: If the client supplies an unvalidated value.
+        """
+        if self._cluster_incident_context_set:
+            raise JobInfoDuplicateFieldError("cluster_incident_context")
+        if context is not None and not isinstance(context, ClusterIncidentContext):
+            raise TypeError("cluster_incident_context must be a ClusterIncidentContext")
+        self._cluster_incident_context = context
+        self._cluster_incident_context_set = True
         return self
 
     def slurm_node_infos(self, in_slurm_node_infos: dict[str, dict[str, str]]) -> "JobInfoBuilder":
@@ -509,7 +613,6 @@ class JobInfoBuilder:
 
         context = ObservationContext(
             TimeInterval(self._interest_start_time, self._interest_end_time),
-            AllJobResources,
             ObservationSource.JOB_INFO,
             ObservationFormat.UNDEFINED,
             self._timezone,
@@ -543,6 +646,9 @@ class JobInfoBuilder:
             cancelled_by=self._cancelled_by,
             state=self._state,
             failed_node=self._failed_node,
+            allocation_failure=self._allocation_failure,
+            execution_cancellation=self._execution_cancellation,
+            cluster_incident_context=self._cluster_incident_context,
             cluster=self._cluster,
             nodes=derived_nodes,
             slurm_node_infos=self._slurm_node_infos,

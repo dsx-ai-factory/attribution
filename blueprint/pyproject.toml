@@ -1,15 +1,22 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
 [build-system]
-requires = ["hatchling"]
+requires = ["hatchling>=1.27"]
 build-backend = "hatchling.build"
 
 [project]
 name = "nvidia-attribution-blueprint"
 dynamic = ["version"]
+license = "Apache-2.0"
+license-files = ["LICENSE"]
 requires-python = ">=3.11"
 dependencies = [
     "nvidia-attribution-client",
     "requests>=2.31",
     "loguru>=0.7",
+    "kubernetes>36.0.0",  # 36.0.0 drops the Authorization header for token-based auth
+    "pyyaml>=6.0",  # KAI adapter parses the kai.scheduler/top-owner-metadata annotation
 ]
 
 [project.optional-dependencies]
@@ -25,9 +32,7 @@ web = [
     "uvicorn>=0.27",
     "pyyaml>=6.0",
 ]
-pod-placement-recorder = [
-    "kubernetes>=34.1",
-]
+pod-placement-recorder = []
 
 [project.scripts]
 nvidia-attribution-blueprint = "attribution_blueprint.cli:main"

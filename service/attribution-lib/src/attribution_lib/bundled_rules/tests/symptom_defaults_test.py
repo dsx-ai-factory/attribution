@@ -1,12 +1,5 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-# SPDX-License-Identifier: LicenseRef-NvidiaProprietary
-#
-# NVIDIA CORPORATION, its affiliates and licensors retain all intellectual
-# property and proprietary rights in and to this material, related
-# documentation and any modifications thereto. Any use, reproduction,
-# disclosure or distribution of this material and related documentation
-# without an express license agreement from NVIDIA CORPORATION or
-# its affiliates is strictly prohibited.
+# SPDX-License-Identifier: Apache-2.0
 
 """Regression tests for bundled symptom defaults."""
 
@@ -48,12 +41,19 @@ def test_xid_family_represents_declared_identifier_shapes() -> None:
         "port_down_reason_code": int,
         "port_down_reason": str,
         "error_status": int,
+        "poison_victim": str,
     }
     assert registry.families["XID-94-"].properties == {"number": 94}
     assert registry.families["XID-94-CONTAINED_ERROR"].properties == {
         "number": 94,
         "mnemonic": "CONTAINED_ERROR",
     }
+    for poison_victim in ("CE", "GSP", "SM"):
+        assert registry.families[f"XID-94-CONTAINED_ERROR-{poison_victim}"].properties == {
+            "number": 94,
+            "mnemonic": "CONTAINED_ERROR",
+            "poison_victim": poison_victim,
+        }
     assert registry.families["XID-140-"].properties == {"number": 140}
     assert registry.family_for("XID-140-UNRECOVERABLE_ECC_ERROR_ESCAPE").properties == {
         "number": 140,
@@ -130,3 +130,18 @@ def test_cuda_illegal_address_resolves_its_own_guidance():
         assert match.symptom == expected_symptom
         assert match.outcome == expected_outcome
         assert match.doc == expected_doc
+
+
+def test_ext4_corruption_outranks_the_application_errors_it_causes():
+    """Corrupted node-local files break the application; the kernel corruption is the root cause."""
+    loader = RuleLoader()
+    loader.load(str(get_bundled_rules_path() / "symptom_defaults.py"))
+    registry = registry_from_declarations(loader.symptom_declarations)
+
+    match = registry.outcome_for(
+        ["cudaErrorInvalidPtx", "No such file or directory", "IO error", "ext4 filesystem corruption"]
+    )
+    assert match is not None
+    assert match.symptom == "ext4 filesystem corruption"
+    assert match.outcome == "Fail InfraSW"
+    assert match.doc == "ext4-filesystem-corruption"

@@ -1,0 +1,64 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+name: Bug report
+description: Report a reproducible problem in NVIDIA Attribution.
+title: "[Bug]: "
+labels:
+  - bug
+body:
+  - type: checkboxes
+    id: report-checks
+    attributes:
+      label: Before submitting
+      options:
+        - label: I read SECURITY.md and this report does not disclose a security vulnerability.
+          required: true
+        - label: I reproduced the problem on the current main branch without custom changes.
+          required: true
+        - label: I removed credentials, customer data, private hostnames, and other confidential information.
+          required: true
+  - type: input
+    id: commit
+    attributes:
+      label: Main branch commit SHA
+      description: Provide the full commit SHA used for the reproduction.
+    validations:
+      required: true
+  - type: textarea
+    id: problem
+    attributes:
+      label: Actual behavior
+      description: Describe the observed behavior, its impact, and the full error output.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Steps and inputs to reproduce
+      description: Provide a minimal reproduction with the commands, configuration, and sanitized inputs.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: Include installation or deployment method, operating system and kernel, component and dependency versions, and GPU driver and CUDA versions where applicable.
+    validations:
+      required: true
+  - type: textarea
+    id: attribution-evidence
+    attributes:
+      label: Evidence for an incorrect attribution decision
+      description: If the diagnosis is incorrect, include the returned and expected diagnoses, observations, supporting evidence, and relevant NVLink, CPU, GPU, and NIC topology.
+  - type: textarea
+    id: service-blueprint
+    attributes:
+      label: Service or Blueprint workflow
+      description: For Service or Blueprint defects, include the API call or workflow, exact request, connectors, and versions of the external systems they use.
