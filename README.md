@@ -1,5 +1,7 @@
 # NVIDIA Attribution
 
+[![Tests](https://github.com/dsx-ai-factory/attribution/actions/workflows/tests.yml/badge.svg?branch=main)](https://github.com/dsx-ai-factory/attribution/actions/workflows/tests.yml)
+
 **Open source · pre-1.0**
 
 NVIDIA Attribution is a service-plus-orchestrator that turns the raw symptoms of a failed GPU workload into one structured diagnosis with the symptom chain that produced it.
