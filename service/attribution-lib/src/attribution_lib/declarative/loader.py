@@ -40,7 +40,7 @@ from attribution_lib.declarative.families import stamp_family
 from attribution_lib.declarative.lifecycle import LIFECYCLE_INJECTIONS, LIFECYCLE_PREDICATES
 from attribution_lib.exceptions import RuleIngestionError
 from attribution_lib.observation.inbound import Source as ObsSource
-from attribution_lib.prefilters import PreFilterSpec
+from attribution_lib.prefilters import PreFilterSpec, exclude_re
 from attribution_lib.rule_types.definitions import ExtractorRule, Rule, RuleId, RuleLocation
 from attribution_lib.rule_types.registration import normalize_tags
 
@@ -124,7 +124,7 @@ _FAMILY_KEYS = frozenset(
 
 _PROCESSOR_KEYS = frozenset({"processor", "derived_rules", "derived_event_types"})
 
-_PREFILTER_KEYS = frozenset({"sources", "include", "exclude"})
+_PREFILTER_KEYS = frozenset({"sources", "include", "exclude", "exclude_re"})
 
 
 def _reject_unknown_keys(declared: dict[str, Any], known: Collection[str], *, where: str) -> None:
@@ -960,6 +960,12 @@ def _load_prefilter(loader: "RuleLoader", pf_doc: dict[str, Any], ctx: _LoadCont
         include_terms=_checked_str_list("include"),
         exclude_terms=_checked_str_list("exclude"),
     )
+    exclude_patterns = _checked_str_list("exclude_re")
+    if len(exclude_patterns) > 0:
+        try:
+            spec.callables.append(exclude_re(*exclude_patterns))
+        except (ValueError, re.error) as exc:
+            raise RegistrationError(f"{filepath}: [prefilter].exclude_re: {exc}") from exc
     for source in sources:
         loader.register_pre_filter(source, spec)
 
