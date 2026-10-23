@@ -4,7 +4,7 @@
 """Public authoring surface for Python rule modules."""
 
 from attribution_lib.declarative.context import const, expr_helper, rows, rule_processor
-from attribution_lib.prefilters import MetricSpec, PreFilterSpec, register_metric_spec, register_pre_filter
+from attribution_lib.prefilters import MetricSpec, PreFilterSpec, exclude_re, register_metric_spec, register_pre_filter
 from attribution_lib.rule_types.definitions import (
     CollectorRule,
     EventTriple,
@@ -56,6 +56,7 @@ __all__ = [
     "const",
     "declare_event_types",
     "declare_rule_names",
+    "exclude_re",
     "expr_helper",
     "extractor_accumulator_def",
     "filter_def",
