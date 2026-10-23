@@ -46,15 +46,15 @@ not the ECA.
 Pod ownership is resolved via the **standard batch/v1 Job pod labels**,
 not the Kueue label. `kueue.x-k8s.io/job-uid` is set by Kueue on the
 **Workload** object (carrying the owner Job's UID so callers can link a
-Workload back to its Job. The pods are created by the Kubernetes Job 
-controller, which stamps the `batch.kubernetes.io/controller-uid=<job.uid>` 
-and `batch.kubernetes.io/job-name=<job.name>` labels. 
-This adapter pulls the owner Job's UID out of the Workload's 
-`ownerReferences` and selects pods with 
-`batch.kubernetes.io/controller-uid=<owner_uid>`. 
+Workload back to its Job. The pods are created by the Kubernetes Job
+controller, which stamps the `batch.kubernetes.io/controller-uid=<job.uid>`
+and `batch.kubernetes.io/job-name=<job.name>` labels.
+This adapter pulls the owner Job's UID out of the Workload's
+`ownerReferences` and selects pods with
+`batch.kubernetes.io/controller-uid=<owner_uid>`.
 
 The JobSet pod label carries only a name, which is unique per namespace
-but not cluster-wide, so `_pod_selector_for`/`_pod_matches_selector` 
+but not cluster-wide, so `_pod_selector_for`/`_pod_matches_selector`
 always scope matching to the Workload's own namespace.
 
 Owner Jobs/JobSet children are looked up by namespace/name, but names are
@@ -74,13 +74,17 @@ from attribution_blueprint.connectors.execution_contexts.kubernetes_client impor
     KubernetesClient,
     KubernetesClientError,
 )
-from attribution_blueprint.connectors.execution_contexts.kueue.helpers import (
+from attribution_blueprint.connectors.execution_contexts.kubernetes_helpers import (
     NODE_LOSS_DISRUPTION_REASONS as _NODE_LOSS_DISRUPTION_REASONS,
+    earliest_job_failure_reason as _earliest_job_failure_reason,
+    job_time_limit_minutes as _job_time_limit_minutes,
+    pod_node_failure_reason as _pod_node_failure_reason,
+)
+from attribution_blueprint.connectors.execution_contexts.kueue.helpers import (
     POD_JOBSET_LABEL as _POD_JOBSET_LABEL,
     jobs_for_workload as _jobs_for_workload,
     owner_job_uids as _owner_job_uids,
     pod_matches_selector as _pod_matches_selector,
-    pod_node_failure_reason as _pod_node_failure_reason,
     pod_selector_for as _pod_selector_for,
 )
 from attribution_blueprint.connectors.execution_contexts.kueue.pod_placement.models import (
@@ -133,8 +137,8 @@ class KueueExecutionContext(TypedDict):
     queue_name: NotRequired[str]
     priority_class: NotRequired[int]
     gpu_count: NotRequired[int]
-    # Pod names belonging to this Workload at the time of discovery. Empty 
-    # list when the owner type isn't supported or all pods have been 
+    # Pod names belonging to this Workload at the time of discovery. Empty
+    # list when the owner type isn't supported or all pods have been
     # garbage-collected.
     pod_names: NotRequired[list[str]]
     pod_placements: NotRequired[list[PodPlacement]]
@@ -245,7 +249,7 @@ def _condition_time(conditions: list[dict], cond_type: str) -> datetime | None:
 def _pod_reports_node_failure(pod: dict) -> bool:
     """Return whether a Pod carries a node-loss signal.
 
-    Delegates to the shared `helpers.pod_node_failure_reason` so this check
+    Delegates to the shared `kubernetes_helpers.pod_node_failure_reason` so this check
     and the placement recorder's copy (which captures the same evidence
     before Pod GC removes it) can never drift apart.
     """
@@ -419,34 +423,6 @@ def _node_from_scheduled_events(
     return None
 
 
-def _owner_job_failure_reason(workload: dict, owner_jobs: dict[str, dict]) -> str | None:
-    """Return the failure reason of the earliest-failing direct or JobSet child Job.
-
-    Mirrors JobSet's own controller convention for resolving multiple child
-    failures (kubernetes-sigs/jobset's `pkg/controllers/failure_policy.go`): the
-    earliest `Failed`/`FailureTarget` condition by `lastTransitionTime` is
-    authoritative.
-    """
-    earliest_time: datetime | None = None
-    earliest_reason: str | None = None
-    for job in _jobs_for_workload(workload, owner_jobs):
-        conditions = (job.get("status") or {}).get("conditions") or []
-        for condition_type in ("Failed", "FailureTarget"):
-            condition = _condition(conditions, condition_type)
-            if not condition or condition.get("status") != "True":
-                continue
-            reason = (condition.get("reason") or "").strip()
-            if not reason:
-                continue
-            transition_time = _parse_dt(condition.get("lastTransitionTime"))
-            if transition_time is None:
-                continue
-            if earliest_time is None or transition_time < earliest_time:
-                earliest_time = transition_time
-                earliest_reason = reason
-    return earliest_reason
-
-
 def _has_node_failure_pod(pods: list[dict], selector: tuple[str, str, str] | None) -> bool:
     """Return whether a selected Pod reports a Kubernetes node-loss signal."""
     if selector is None:
@@ -501,29 +477,14 @@ def _service_state(
         return "EVICTED"
     if kueue_state != "FINISHED_FAILED":
         return kueue_state
-    if _owner_job_failure_reason(workload, owner_jobs) == "DeadlineExceeded":
+    if _earliest_job_failure_reason(_jobs_for_workload(workload, owner_jobs)) == "DeadlineExceeded":
         return "TIMEOUT"
     return "FAILED"
 
 
 def _extract_time_limit(workload: dict, owner_jobs: dict[str, dict]) -> int | None:
-    """Pull activeDeadlineSeconds as service-facing minutes.
-
-    `owner_jobs` maps `"<namespace>/<name>"` of any batch/v1 Job objects the
-    caller fetched alongside the workloads. For a JobSet, the shortest child
-    deadline is the effective limit. Partial minutes are rounded up because the
-    service's `time_limit` contract uses positive integer minutes. Returns None
-    when no matching Job has a deadline.
-    """
-    deadlines_seconds: list[int] = []
-    for job in _jobs_for_workload(workload, owner_jobs):
-        deadline = (job.get("spec") or {}).get("activeDeadlineSeconds")
-        if isinstance(deadline, int) and not isinstance(deadline, bool) and deadline > 0:
-            deadlines_seconds.append(deadline)
-    if not deadlines_seconds:
-        return None
-    shortest_deadline_seconds = min(deadlines_seconds)
-    return (shortest_deadline_seconds + 59) // 60
+    """Pull the verified owner Job deadline as service-facing minutes."""
+    return _job_time_limit_minutes(_jobs_for_workload(workload, owner_jobs))
 
 
 def _non_negative_int(value: object) -> int | None:
