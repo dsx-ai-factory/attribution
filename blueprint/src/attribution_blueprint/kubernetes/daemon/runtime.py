@@ -26,6 +26,10 @@ from attribution_blueprint.kubernetes.helpers import pod_node_failure_reason
 _WORK_GENERATIONS = count()
 
 
+class RequiredPersistenceError(RuntimeError):
+    """A required placement write failed before its watch checkpoint."""
+
+
 class KubernetesDaemon:
     """Watch Pods, record their placement, and enrich it with ownership and
     scheduler-specific evidence, independently of whether enrichment succeeds."""
@@ -106,8 +110,12 @@ class KubernetesDaemon:
                     allow_watch_bookmarks=True,
                 ):
                     pod_dict = _as_dict(event.get("object"))
-                    resource_version = (pod_dict.get("metadata") or {}).get("resourceVersion") or resource_version
+                    next_resource_version = (
+                        (pod_dict.get("metadata") or {}).get("resourceVersion")
+                        or resource_version
+                    )
                     self._enqueue(pod_dict, deleted=event.get("type") == "DELETED")
+                    resource_version = next_resource_version
                     if self.stop_event.is_set():
                         watcher.stop()
                         break
@@ -119,6 +127,8 @@ class KubernetesDaemon:
                     self.health.update(initial_list_complete=False)
                     continue
                 logger.warning(f"Pod watch failed: {error}")
+            except RequiredPersistenceError as error:
+                logger.warning(f"{error}; replaying from the last persisted resourceVersion")
             except Exception:
                 logger.exception("Pod watch failed")
             self.stop_event.wait(backoff + random.uniform(0, backoff / 4))
@@ -142,7 +152,7 @@ class KubernetesDaemon:
             for pod in pods
             if (uid := (pod.get("metadata") or {}).get("uid"))
         }
-        self.store.reconcile_active_pods(self.namespace, active_pod_uids)
+        self._reconcile_active_pods(active_pod_uids)
         return listing.metadata.resource_version
 
     def _enqueue(self, pod: dict, *, deleted: bool = False) -> None:
@@ -152,9 +162,14 @@ class KubernetesDaemon:
             return
         pod_uid = (pod.get("metadata") or {}).get("uid")
         captured = self._capture_placement(pod)
+        deletion_persisted = True
         if deleted and pod_uid:
-            self._mark_deleted(pod_uid)
-        if not captured or not pod_uid:
+            deletion_persisted = self._mark_deleted(pod_uid)
+        if not captured or not deletion_persisted:
+            raise RequiredPersistenceError(
+                f"required placement persistence failed for Pod UID {pod_uid}"
+            )
+        if not pod_uid:
             return
         self._schedule(pod_uid, pod)
 
@@ -177,15 +192,9 @@ class KubernetesDaemon:
                     f"KubernetesDaemon enrichment capacity ({self.enrichment_capacity}) is saturated; "
                     f"skipped owner/scheduler enrichment for new Pod UID {pod_uid}"
                 )
-                self.health.update(queue_saturated=True)
                 return
             self._latest_generation[pod_uid] = generation
-            self.health.update(queue_saturated=self._is_saturated())
             self._work_available.notify()
-
-    def _is_saturated(self) -> bool:
-        admitted = self._pending.keys() | self._in_flight | self._retry.keys()
-        return len(admitted) >= self.enrichment_capacity
 
     def _take_work(self, timeout: float) -> tuple[str, dict, int] | None:
         # A Pod UID already in `_in_flight` is excluded here: only one worker
@@ -215,7 +224,6 @@ class KubernetesDaemon:
             ):
                 self._latest_generation.pop(pod_uid, None)
                 self._retry_attempts.pop(pod_uid, None)
-            self.health.update(queue_saturated=self._is_saturated())
             self._work_available.notify()
 
     def _schedule_retry(self, pod_uid: str, pod: dict, generation: int) -> None:
@@ -234,7 +242,6 @@ class KubernetesDaemon:
                 return
             self._retry_attempts[pod_uid] = attempts
             self._retry[pod_uid] = (pod, generation)
-            self.health.update(queue_saturated=self._is_saturated())
 
     def _retry_loop(self) -> None:
         while not self.stop_event.is_set():
@@ -250,14 +257,12 @@ class KubernetesDaemon:
             for pod_uid in ready:
                 self._pending[pod_uid] = self._retry.pop(pod_uid)
             if ready:
-                self.health.update(queue_saturated=self._is_saturated())
                 self._work_available.notify_all()
 
     def _worker(self) -> None:
         while not self.stop_event.is_set() or self._pending or self._in_flight:
             item = self._take_work(timeout=0.5)
             if item is None:
-                self.health.update(queue_saturated=self._is_saturated())
                 continue
             pod_uid, pod, generation = item
             needs_retry = False
@@ -266,10 +271,7 @@ class KubernetesDaemon:
             except Exception:
                 # A malformed observation or an unexpected enrichment bug
                 # must never terminate a recording worker.
-                self.health.update(recording_failed=True)
                 logger.exception("unexpected KubernetesDaemon recording failure")
-            else:
-                self.health.update(recording_failed=False)
             finally:
                 if needs_retry:
                     self._schedule_retry(pod_uid, pod, generation)
@@ -430,12 +432,25 @@ class KubernetesDaemon:
         self.health.update(persistence_failed=False)
         return result
 
-    def _mark_deleted(self, pod_uid: str) -> None:
+    def _mark_deleted(self, pod_uid: str) -> bool:
         try:
             self.store.mark_deleted(pod_uid)
         except Exception:
             self.health.update(persistence_failed=True)
             logger.exception(f"failed to persist deletion for Pod UID {pod_uid}")
+            return False
+        return True
+
+    def _reconcile_active_pods(self, active_pod_uids: set[str]) -> None:
+        try:
+            self.store.reconcile_active_pods(self.namespace, active_pod_uids)
+        except Exception as error:
+            self.health.update(persistence_failed=True)
+            logger.exception("failed to reconcile active Pod placements")
+            raise RequiredPersistenceError(
+                f"required placement reconciliation failed for namespace {self.namespace}"
+            ) from error
+        self.health.update(persistence_failed=False)
 
 
 def _stored_owner_matches_pod(record: PlacementRecord, pod: dict) -> bool:
