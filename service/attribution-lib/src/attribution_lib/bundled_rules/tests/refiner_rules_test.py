@@ -1205,28 +1205,33 @@ class TestIBSymptomCleanup:
     "classification",
     [None, "InfraHW", "InfraSW", "MultiCategory", "Undetermined"],
 )
-def test_kernel_panic_precedes_xid145(stream, obs_ctx, xid_node, classification):
-    """Select kernel panic while preserving same-node or peer XID evidence.
+@pytest.mark.parametrize(
+    "kernel_crash",
+    ["kernel panic", "kernel soft lockup", "kernel oops", "kernel invalid memory access"],
+)
+def test_kernel_crash_precedes_xid145(stream, obs_ctx, xid_node, classification, kernel_crash):
+    """Select a kernel crash while preserving same-node or peer XID evidence.
 
     Args:
         stream: Event stream used by refiners.
         obs_ctx: Synthetic evidence context.
         xid_node: Node reporting the XID.
         classification: Optional XID-145 classification marker.
+        kernel_crash: Kernel crash symptom on node01.
     """
     xid = "XID-145-RLW_RXPIPE-8"
     xid_symptoms = [xid]
     if classification is not None:
         xid_symptoms.append(f"XID-145-{classification}")
-    node_symptoms = {"node01": ["kernel panic"]}
+    node_symptoms = {"node01": [kernel_crash]}
     node_symptoms.setdefault(xid_node, []).extend(xid_symptoms)
-    symptoms = _make_symptoms(obs_ctx, "kernel panic", *xid_symptoms)
+    symptoms = _make_symptoms(obs_ctx, kernel_crash, *xid_symptoms)
     bad_nodes = _make_bad_nodes(obs_ctx, node_symptoms)
 
     _run(stream, _job_info_with(nodes=["node01", "node02"]), symptoms, bad_nodes)
     outcome = calculate_outcome(symptoms).value()
 
-    assert outcome.root_cause_symptom == "kernel panic"
+    assert outcome.root_cause_symptom == kernel_crash
     assert outcome.outcome == "Fail InfraSW"
     assert xid in symptoms
     assert xid in bad_nodes[xid_node].attributions
@@ -1239,7 +1244,9 @@ class TestKernelCrashIbCascadeCleanup:
     def two_node_job(self):
         return _job_info_with(nodes=["node01", "node02"])
 
-    @pytest.mark.parametrize("crash_symptom", ["kernel panic", "kernel oops", "kernel invalid memory access"])
+    @pytest.mark.parametrize(
+        "crash_symptom", ["kernel panic", "kernel soft lockup", "kernel oops", "kernel invalid memory access"]
+    )
     def test_peer_kernel_crash_discards_ib_error_12(self, stream, obs_ctx, two_node_job, crash_symptom):
         """Every kernel crash type makes a peer's IB Error-12 a cascade."""
         ib12 = "IB Error-12 (IBV_WC_RETRY_EXC_ERR)"
@@ -1327,17 +1334,6 @@ class TestKernelCrashIbCascadeCleanup:
         assert ib12 in symptoms
         assert ib12 in bad_nodes["node01"].attributions
         assert ib12 not in bad_nodes["node02"].attributions
-
-    def test_soft_lockup_does_not_trigger_peer_cleanup(self, stream, obs_ctx, two_node_job):
-        """A soft lockup is not one of the kernel crash signals."""
-        ib12 = "IB Error-12 (IBV_WC_RETRY_EXC_ERR)"
-        symptoms = _make_symptoms(obs_ctx, "kernel soft lockup", ib12)
-        bad_nodes = _make_bad_nodes(obs_ctx, {"node01": ["kernel soft lockup"], "node02": [ib12]})
-
-        _run(stream, two_node_job, symptoms, bad_nodes)
-
-        assert ib12 in symptoms
-        assert ib12 in bad_nodes["node02"].attributions
 
     def test_peer_without_error_12_is_unchanged(self, stream, obs_ctx, two_node_job):
         """A peer carrying only another IB error does not trigger cleanup."""
@@ -1430,8 +1426,9 @@ class TestSlurmStateSymptoms:
         else:
             assert "Cancelled by cluster operators" not in symptoms
 
-    def test_requeued_state_with_no_nodes_remains_incomplete(self, stream, obs_ctx):
-        ji = _job_info_with(state="REQUEUED", nodes=[], scheduler=Scheduler.KUEUE)
+    @pytest.mark.parametrize("scheduler", [Scheduler.KUEUE, Scheduler.KAI])
+    def test_requeued_state_with_no_nodes_remains_incomplete(self, stream, obs_ctx, scheduler):
+        ji = _job_info_with(state="REQUEUED", nodes=[], scheduler=scheduler)
         symptoms = _make_symptoms(obs_ctx)
 
         _run(stream, ji, symptoms)
@@ -1440,12 +1437,13 @@ class TestSlurmStateSymptoms:
         assert "Job didn't start" not in symptoms
         assert calculate_outcome(symptoms).value().outcome == "Incomplete Info"
 
-    def test_kueue_eviction_without_evidence_remains_incomplete(self, stream, obs_ctx):
+    @pytest.mark.parametrize("scheduler", [Scheduler.KUEUE, Scheduler.KAI])
+    def test_queue_scheduler_eviction_without_evidence_remains_incomplete(self, stream, obs_ctx, scheduler):
         # The Kueue connector normalizes every eviction reason with no
         # dedicated service state (queue stopped, admission check failed,
         # pods-ready timeout, deactivated, ...) to the single EVICTED value;
         # rules never see the raw per-reason string.
-        ji = _job_info_with(state="EVICTED", nodes=[], scheduler=Scheduler.KUEUE)
+        ji = _job_info_with(state="EVICTED", nodes=[], scheduler=scheduler)
         symptoms = _make_symptoms(obs_ctx)
 
         _run(stream, ji, symptoms)
@@ -1453,8 +1451,9 @@ class TestSlurmStateSymptoms:
         assert not symptoms
         assert calculate_outcome(symptoms).value().outcome == "Incomplete Info"
 
-    def test_kueue_eviction_preserves_real_failure_evidence(self, stream, obs_ctx):
-        ji = _job_info_with(state="EVICTED", nodes=[], scheduler=Scheduler.KUEUE)
+    @pytest.mark.parametrize("scheduler", [Scheduler.KUEUE, Scheduler.KAI])
+    def test_queue_scheduler_eviction_preserves_real_failure_evidence(self, stream, obs_ctx, scheduler):
+        ji = _job_info_with(state="EVICTED", nodes=[], scheduler=scheduler)
         symptoms = _make_symptoms(obs_ctx, "Python Exception")
 
         _run(stream, ji, symptoms)
@@ -1462,11 +1461,12 @@ class TestSlurmStateSymptoms:
         assert "Python Exception" in symptoms
         assert calculate_outcome(symptoms).value().outcome == "Fail User"
 
-    def test_node_fail_without_specific_node_uses_scheduler_evidence(self, stream, obs_ctx):
+    @pytest.mark.parametrize("scheduler", [Scheduler.KUEUE, Scheduler.KAI])
+    def test_node_fail_without_specific_node_uses_scheduler_evidence(self, stream, obs_ctx, scheduler):
         ji = _job_info_with(
             state="NODE_FAIL",
             nodes=["node01", "node02"],
-            scheduler=Scheduler.KUEUE,
+            scheduler=scheduler,
         )._replace(failed_node=None)
         symptoms = _make_symptoms(obs_ctx)
 
@@ -2138,13 +2138,14 @@ class TestSlurmTimeoutXid145Cascade:
         assert bad_nodes["node01"].attributions._data[self._RXPIPE].has_interesting()
         assert bad_nodes["node01"].attributions._data[self._DYNAMIC].has_interesting()
 
-    def test_kueue_timeout_does_not_apply_slurm_teardown_cascade(self, stream, obs_ctx):
+    @pytest.mark.parametrize("scheduler", [Scheduler.KUEUE, Scheduler.KAI])
+    def test_queue_scheduler_timeout_does_not_apply_slurm_teardown_cascade(self, stream, obs_ctx, scheduler):
         job_end = _DEFAULT_START + timedelta(minutes=60, seconds=5)
         ji = default_job_info(
             state="TIMEOUT",
             job_end_time=job_end,
             time_limit=60,
-            scheduler=Scheduler.KUEUE,
+            scheduler=scheduler,
         )
         source_time = job_end - timedelta(seconds=1)
         symptoms = _make_symptoms(
@@ -3450,8 +3451,9 @@ class TestNodeFailureNfsCleanup:
 
 
 class TestLastResortSymptoms:
-    def test_empty_symptoms_completed_job(self, stream, obs_ctx):
-        ji = _job_info_with(state="COMPLETED", scheduler=Scheduler.KUEUE)
+    @pytest.mark.parametrize("scheduler", [Scheduler.KUEUE, Scheduler.KAI])
+    def test_empty_symptoms_completed_job(self, stream, obs_ctx, scheduler):
+        ji = _job_info_with(state="COMPLETED", scheduler=scheduler)
         symptoms = _make_symptoms(obs_ctx)
         _run(stream, ji, symptoms)
         assert "the process completes" in symptoms
@@ -3472,8 +3474,9 @@ class TestLastResortSymptoms:
         assert "Cancelled by user" not in symptoms
         assert "job failed" not in symptoms
 
-    def test_empty_symptoms_unknown_state(self, stream, obs_ctx):
-        ji = _job_info_with(state="OUT_OF_MEMORY", scheduler=Scheduler.KUEUE)
+    @pytest.mark.parametrize("scheduler", [Scheduler.KUEUE, Scheduler.KAI])
+    def test_empty_symptoms_unknown_state(self, stream, obs_ctx, scheduler):
+        ji = _job_info_with(state="OUT_OF_MEMORY", scheduler=scheduler)
         symptoms = _make_symptoms(obs_ctx)
         _run(stream, ji, symptoms)
         assert "job failed" in symptoms
@@ -4366,8 +4369,9 @@ class TestFilterFatalXidNoise:
 
 
 class TestOutcomeReclassification:
-    def test_preempted_reclassified_to_pass(self, stream, obs_ctx):
-        ji = _job_info_with(state="PREEMPTED", scheduler=Scheduler.KUEUE)
+    @pytest.mark.parametrize("scheduler", [Scheduler.KUEUE, Scheduler.KAI])
+    def test_preempted_reclassified_to_pass(self, stream, obs_ctx, scheduler):
+        ji = _job_info_with(state="PREEMPTED", scheduler=scheduler)
         bad_nodes_result = CalcBadNodesAttributionResult()
         result = AttributionResult(event_stream=stream, bad_nodes_attr=bad_nodes_result)
         result.outcome_attr = _make_outcome("Fail User")
@@ -4381,8 +4385,9 @@ class TestOutcomeReclassification:
         assert result.outcome_attr.value().outcome == "Pass"
         assert result.outcome_attr.value().root_cause_symptom == "SLURM preempted"
 
-    def test_preempted_does_not_override_failure_evidence(self, stream, obs_ctx):
-        ji = _job_info_with(state="PREEMPTED", scheduler=Scheduler.KUEUE)
+    @pytest.mark.parametrize("scheduler", [Scheduler.KUEUE, Scheduler.KAI])
+    def test_preempted_does_not_override_failure_evidence(self, stream, obs_ctx, scheduler):
+        ji = _job_info_with(state="PREEMPTED", scheduler=scheduler)
         result = AttributionResult(event_stream=stream, bad_nodes_attr=CalcBadNodesAttributionResult())
         symptoms = _make_symptoms(obs_ctx, "XID-94-CONTAINED_ERROR")
         result.symptoms.update(symptoms)
@@ -4409,12 +4414,13 @@ class TestOutcomeReclassification:
 
         assert result.outcome_attr.value().outcome == "Pass"
 
-    def test_timeout_only_reclassified_to_pass(self, stream, obs_ctx):
+    @pytest.mark.parametrize("scheduler", [Scheduler.KUEUE, Scheduler.KAI])
+    def test_timeout_only_reclassified_to_pass(self, stream, obs_ctx, scheduler):
         ji = _job_info_with(
             state="TIMEOUT",
             cancelled_by="Timeout",
             time_limit=3600,
-            scheduler=Scheduler.KUEUE,
+            scheduler=scheduler,
         )
         bad_nodes_result = CalcBadNodesAttributionResult()
         result = AttributionResult(event_stream=stream, bad_nodes_attr=bad_nodes_result)
@@ -4466,6 +4472,14 @@ class TestOutcomeReclassification:
             attribution_result=result,
         )
         assert result.outcome_attr.value().outcome == "Fail InfraHW"
+
+    def test_nvrx_detected_failure_with_inherited_success_not_pass(self, stream, obs_ctx):
+        # A failed cycle inherits the recovered job's 0:0; NVRx detected failure must stay a failure.
+        ji = _job_info_with(state="FAILED", tags=frozenset({"nvrx"}), exit_code=0, exit_code_signal=0, time_limit=None)
+        symptoms = _make_symptoms(obs_ctx, "NVRx detected failure")
+        result = self._nvrx_result(stream, calculate_outcome(symptoms).value().outcome, symptoms)
+        _run_post_outcome(stream, ji, symptoms, outcome=result.outcome_attr, attribution_result=result)
+        assert result.outcome_attr.value().outcome == "Fail MultiCategory"
 
     def test_nvrx_recovered_cycle_still_passes(self, stream, obs_ctx):
         # Job-level 0:0 -> Pass even if an intermediate cycle failed (DerivedExitCode is not used).

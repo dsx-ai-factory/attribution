@@ -2,13 +2,15 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import json
-import subprocess
 from copy import deepcopy
 from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
 
+from attribution_blueprint.connectors.execution_contexts.kubernetes_client import (
+    KubernetesClientError,
+)
 from attribution_blueprint.connectors.execution_contexts.kueue import (
     KueueExecutionContextAdapter,
 )
@@ -19,40 +21,38 @@ PODS = json.loads((FIXTURES / "kueue_pods.json").read_text())
 JOBS = json.loads((FIXTURES / "kueue_jobs.json").read_text())
 
 
-def _kubectl_router(
-    workloads_payload=WORKLOADS,
-    pods_payload=PODS,
-    jobs_payload=JOBS,
-    events_payload=None,
-):
-    """Return a `subprocess.run` side_effect that dispatches by kubectl args.
+class _FakeKubernetesClient:
+    """A `KubernetesClient` stand-in that answers `get_one`/`list` the same
+    way a real API server would, against in-memory fixture payloads.
 
-    The adapter issues these shapes of kubectl call:
-      - `kubectl get workloads [-A | -n NS]`            -> list
-      - `kubectl get workload <name> -n <ns>`           -> single workload
-      - `kubectl get pods -l <owner-selector> -A|-n NS` -> list
-      - `kubectl get job <name> -n <ns>`                -> single Job
-      - `kubectl get jobs -l jobset.sigs.k8s.io/jobset-name=NAME -n <ns>` -> JobSet children
-      - `kubectl get events --field-selector involvedObject.uid=UID,involvedObject.kind=Job,reason=SuccessfulCreate -n <ns>` -> list
-      - `kubectl get events --field-selector involvedObject.name=POD,involvedObject.kind=Pod,reason=Scheduled -n <ns>` -> list
-
-    `events_payload` simulates the API server: `_matches_field_selector`
-    below filters it by the `--field-selector` clauses on each call, the
-    same way a real apiserver would, so tests exercise the actual selector
-    strings the adapter sends rather than relying on the adapter's own
-    Python-side filtering to compensate for an untargeted mock.
+    Every call is appended to `.calls` as a dict (`op`, `kind`, `name`,
+    `namespace`, `label_selector`, `field_selector`), so tests can assert on
+    exactly which queries the adapter issued without needing a real
+    transport. `.call_count` mirrors `unittest.mock`'s call-count property
+    for tests that only care whether any query was issued.
     """
-    if events_payload is None:
-        events_payload = {"apiVersion": "v1", "kind": "List", "items": []}
 
-    def _by_uid(uid: str) -> dict:
-        items = [
-            p
-            for p in pods_payload["items"]
-            if (p.get("metadata") or {}).get("labels", {}).get("batch.kubernetes.io/controller-uid") == uid
-        ]
-        return {"apiVersion": "v1", "kind": "List", "items": items}
+    def __init__(
+        self,
+        *args,
+        workloads_payload=WORKLOADS,
+        pods_payload=PODS,
+        jobs_payload=JOBS,
+        events_payload=None,
+        **kwargs,
+    ):
+        del args, kwargs  # accepts and ignores KubernetesClient's constructor kwargs
+        self.workloads_payload = workloads_payload
+        self.pods_payload = pods_payload
+        self.jobs_payload = jobs_payload
+        self.events_payload = events_payload or {"apiVersion": "v1", "kind": "List", "items": []}
+        self.calls: list[dict] = []
 
+    @property
+    def call_count(self) -> int:
+        return len(self.calls)
+
+    @staticmethod
     def _by_name(items: list[dict], name: str, namespace: str | None) -> dict | None:
         for item in items:
             meta = item.get("metadata") or {}
@@ -63,9 +63,10 @@ def _kubectl_router(
             return item
         return None
 
-    def _by_label(items: list[dict], selector: str | None, namespace: str | None) -> dict:
+    @staticmethod
+    def _by_label(items: list[dict], selector: str | None, namespace: str | None) -> list[dict]:
         if not selector or "=" not in selector:
-            return {"apiVersion": "v1", "kind": "List", "items": []}
+            return []
         key, value = selector.split("=", 1)
         matches = []
         for item in items:
@@ -76,10 +77,19 @@ def _kubectl_router(
             annotations = metadata.get("annotations") or {}
             if labels.get(key) == value or annotations.get(key) == value:
                 matches.append(item)
-        return {"apiVersion": "v1", "kind": "List", "items": matches}
+        return matches
 
+    def _by_controller_uid(self, uid: str, namespace: str | None) -> list[dict]:
+        return [
+            p
+            for p in self.pods_payload["items"]
+            if (p.get("metadata") or {}).get("labels", {}).get("batch.kubernetes.io/controller-uid") == uid
+            and (not namespace or (p.get("metadata") or {}).get("namespace") == namespace)
+        ]
+
+    @staticmethod
     def _matches_field_selector(event: dict, selector: str | None) -> bool:
-        """Emulate apiserver-side `--field-selector` filtering for Events."""
+        """Emulate apiserver-side field-selector filtering for Events."""
         if not selector:
             return True
         involved = event.get("involvedObject") or {}
@@ -98,90 +108,152 @@ def _kubectl_router(
                 return False
         return True
 
-    def _side_effect(cmd, **kwargs):
-        # cmd is the full subprocess argv. Strip kubectl + flags, isolate the
-        # kubectl sub-command vs. positional args.
-        args = list(cmd)
-        # The first non-flag positional is the kubectl verb.
-        positional: list[str] = []
-        ns: str | None = None
-        label_selector: str | None = None
-        field_selector: str | None = None
-        all_namespaces = False
-        i = 0
-        while i < len(args):
-            tok = args[i]
-            if tok in ("--kubeconfig", "--context"):
-                i += 2
-                continue
-            if tok == "-o":
-                i += 2
-                continue
-            if tok == "-n":
-                ns = args[i + 1]
-                i += 2
-                continue
-            if tok == "-A":
-                all_namespaces = True
-                i += 1
-                continue
-            if tok == "-l":
-                label_selector = args[i + 1]
-                i += 2
-                continue
-            if tok == "--field-selector":
-                field_selector = args[i + 1]
-                i += 2
-                continue
-            positional.append(tok)
-            i += 1
-
-        # positional now starts with the kubectl binary path. Drop it.
-        positional = positional[1:]
-        if not positional or positional[0] != "get":
-            stdout = "{}"
-            return subprocess.CompletedProcess(args=cmd, returncode=0, stdout=stdout, stderr="")
-        kind = positional[1] if len(positional) > 1 else ""
-        name = positional[2] if len(positional) > 2 else None
-
+    def get_one(
+        self,
+        resource_kind,
+        name: str,
+        *,
+        namespace: str,
+        group=None,
+        api_version=None,
+        prefix=None,
+    ) -> dict:
+        kind = resource_kind.lower() + "s"
+        self.calls.append(
+            {"op": "get_one", "kind": kind, "name": name, "namespace": namespace, "label_selector": None,
+             "field_selector": None}
+        )
         if kind == "workloads":
-            stdout = json.dumps(workloads_payload)
-        elif kind == "workload":
-            obj = _by_name(workloads_payload["items"], name, ns)
-            if obj is None:
-                raise subprocess.CalledProcessError(returncode=1, cmd=cmd, stderr="NotFound")
-            stdout = json.dumps(obj)
-        elif kind == "pods":
-            if label_selector and label_selector.startswith("batch.kubernetes.io/controller-uid="):
-                stdout = json.dumps(_by_uid(label_selector.split("=", 1)[1]))
-            else:
-                stdout = json.dumps(_by_label(pods_payload["items"], label_selector, ns))
-        elif kind == "job":
-            obj = _by_name(jobs_payload["items"], name, ns)
-            if obj is None:
-                raise subprocess.CalledProcessError(returncode=1, cmd=cmd, stderr="NotFound")
-            stdout = json.dumps(obj)
+            items = self.workloads_payload["items"]
         elif kind == "jobs":
-            stdout = json.dumps(_by_label(jobs_payload["items"], label_selector, ns))
-        elif kind == "events":
-            matches = [
-                event
-                for event in events_payload.get("items", [])
-                if (not ns or (event.get("involvedObject") or {}).get("namespace", ns) == ns)
-                and _matches_field_selector(event, field_selector)
-            ]
-            stdout = json.dumps({"apiVersion": "v1", "kind": "List", "items": matches})
+            items = self.jobs_payload["items"]
         else:
-            stdout = json.dumps({"items": []})
+            raise AssertionError(f"_FakeKubernetesClient.get_one: unexpected kind {kind!r}")
+        obj = self._by_name(items, name, namespace)
+        if obj is None:
+            raise KubernetesClientError(f"{kind} {name!r} not found in {namespace!r}", status=404)
+        return obj
 
-        _ = all_namespaces  # silence unused-warning; behavior is identical here
-        return subprocess.CompletedProcess(args=cmd, returncode=0, stdout=stdout, stderr="")
+    def list(
+        self,
+        resource_kind,
+        *,
+        namespace: str | None,
+        field_selector: str | None = None,
+        label_selector: str | None = None,
+        group=None,
+        api_version=None,
+        prefix=None,
+    ) -> list[dict]:
+        kind = resource_kind.lower() + "s"
+        self.calls.append(
+            {
+                "op": "list",
+                "kind": kind,
+                "name": None,
+                "namespace": namespace,
+                "label_selector": label_selector,
+                "field_selector": field_selector,
+            }
+        )
+        if kind == "workloads":
+            items = self.workloads_payload["items"]
+            if namespace:
+                items = [item for item in items if (item.get("metadata") or {}).get("namespace") == namespace]
+            return items
+        if kind == "pods":
+            if label_selector and label_selector.startswith("batch.kubernetes.io/controller-uid="):
+                return self._by_controller_uid(label_selector.split("=", 1)[1], namespace)
+            return self._by_label(self.pods_payload["items"], label_selector, namespace)
+        if kind == "jobs":
+            return self._by_label(self.jobs_payload["items"], label_selector, namespace)
+        if kind == "events":
+            return [
+                event
+                for event in self.events_payload.get("items", [])
+                if (not namespace or (event.get("involvedObject") or {}).get("namespace", namespace) == namespace)
+                and self._matches_field_selector(event, field_selector)
+            ]
+        raise AssertionError(f"_FakeKubernetesClient.list: unexpected kind {kind!r}")
 
-    return _side_effect
+
+def _kubectl_router(**kwargs):
+    """Back-compat alias: returns a fake reader configured the same way the
+    old subprocess-argv router was, for call sites that build one directly
+    (rather than through `_wire_kubectl`) to compose a custom side effect."""
+    return _FakeKubernetesClient(**kwargs)
 
 
 def _wire_kubectl(mocker, **kwargs):
-    return mocker.patch("subprocess.run", side_effect=_kubectl_router(**kwargs))
+    """Patch the adapter's `KubernetesClient` construction to return a fake
+    reader backed by in-memory fixtures, and return that fake so tests can
+    assert on `.calls`/`.call_count`."""
+    fake = _FakeKubernetesClient(**kwargs)
+    mocker.patch(
+        "attribution_blueprint.connectors.execution_contexts.kueue.connector.KubernetesClient",
+        return_value=fake,
+    )
+    return fake
+
+
+class _FailingKindReader:
+    """Wraps a `_FakeKubernetesClient`, raising `error` for any `get_one`/
+    `list` call `should_fail` accepts and delegating every other call."""
+
+    def __init__(self, fake: _FakeKubernetesClient, error: Exception, should_fail):
+        self._fake = fake
+        self._error = error
+        self._should_fail = should_fail
+
+    def get_one(self, resource_kind, name, *, namespace, group=None, api_version=None, prefix=None):
+        kind = resource_kind.lower()
+        if self._should_fail(kind, {"name": name, "namespace": namespace}):
+            raise self._error
+        return self._fake.get_one(
+            resource_kind,
+            name,
+            namespace=namespace,
+            group=group,
+            api_version=api_version,
+            prefix=prefix,
+        )
+
+    def list(
+        self,
+        resource_kind,
+        *,
+        namespace,
+        field_selector=None,
+        label_selector=None,
+        group=None,
+        api_version=None,
+        prefix=None,
+    ):
+        kind = resource_kind.lower() + "s"
+        if self._should_fail(kind, {"namespace": namespace, "field_selector": field_selector,
+                                     "label_selector": label_selector}):
+            raise self._error
+        return self._fake.list(
+            resource_kind,
+            namespace=namespace,
+            field_selector=field_selector,
+            label_selector=label_selector,
+            group=group,
+            api_version=api_version,
+            prefix=prefix,
+        )
+
+
+def _wire_failing_kind(mocker, *, failing_kinds, error, **fake_kwargs):
+    """`_wire_kubectl`, but any query for a kind in `failing_kinds` raises
+    `error` instead of answering from the fixtures."""
+    fake = _FakeKubernetesClient(**fake_kwargs)
+    reader = _FailingKindReader(fake, error, lambda kind, _args: kind in failing_kinds)
+    mocker.patch(
+        "attribution_blueprint.connectors.execution_contexts.kueue.connector.KubernetesClient",
+        return_value=reader,
+    )
+    return fake
 
 
 def test_discover_returns_empty_with_no_filter(mocker):
@@ -913,63 +985,118 @@ def test_discover_by_time_range_intersects_nodelist(mocker):
     assert names == {"job-llama-7b-pretrain-xyz77"}
 
 
-def test_kubectl_invocation_carries_kubeconfig_and_context(mocker):
-    run_mock = _wire_kubectl(mocker)
-    eca = KueueExecutionContextAdapter(
-        kubectl_path="/usr/local/bin/kubectl",
+def test_adapter_constructs_kubernetes_client_with_kubeconfig_and_context(mocker):
+    """`kubeconfig`/`context`/`timeout_seconds` must reach the underlying
+    `KubernetesClient` unchanged, so it loads the right kubeconfig/context."""
+    client_cls = mocker.patch(
+        "attribution_blueprint.connectors.execution_contexts.kueue.connector.KubernetesClient",
+        return_value=_FakeKubernetesClient(),
+    )
+    KueueExecutionContextAdapter(
         kubeconfig="/tmp/kc",
         context="kind-kueue-demo",
+        timeout_seconds=42,
     )
-    eca.discover_by_ids(["team-alpha/job-train-mnist-abc12"])
-    first_call = run_mock.call_args_list[0]
-    cmd = first_call.args[0]
-    assert cmd[0] == "/usr/local/bin/kubectl"
-    assert "--kubeconfig" in cmd and "/tmp/kc" in cmd
-    assert "--context" in cmd and "kind-kueue-demo" in cmd
-    assert "-o" in cmd and "json" in cmd
+    client_cls.assert_called_once_with(
+        kubeconfig="/tmp/kc",
+        context="kind-kueue-demo",
+        timeout_seconds=42,
+    )
 
 
-def test_namespace_scoped_list_uses_minus_n_not_dash_a(mocker):
-    run_mock = _wire_kubectl(mocker)
+def test_namespace_scoped_list_passes_namespace_not_none(mocker):
+    fake = _wire_kubectl(mocker)
     eca = KueueExecutionContextAdapter(namespace="team-alpha")
     start = datetime(2026, 5, 1, 0, 0, 0, tzinfo=timezone.utc)
     end = datetime(2026, 5, 2, 0, 0, 0, tzinfo=timezone.utc)
     eca.discover_by_time_range(start, end)
-    listing_call = run_mock.call_args_list[0]
-    cmd = listing_call.args[0]
-    assert "-n" in cmd and "team-alpha" in cmd
-    assert "-A" not in cmd
+    listing_call = fake.calls[0]
+    assert listing_call["kind"] == "workloads"
+    assert listing_call["namespace"] == "team-alpha"
 
 
-def test_unscoped_list_uses_dash_a(mocker):
-    run_mock = _wire_kubectl(mocker)
+def test_unscoped_list_passes_namespace_none(mocker):
+    fake = _wire_kubectl(mocker)
     eca = KueueExecutionContextAdapter()
     start = datetime(2026, 5, 1, 0, 0, 0, tzinfo=timezone.utc)
     end = datetime(2026, 5, 2, 0, 0, 0, tzinfo=timezone.utc)
     eca.discover_by_time_range(start, end)
-    listing_call = run_mock.call_args_list[0]
-    cmd = listing_call.args[0]
-    assert "-A" in cmd
+    listing_call = fake.calls[0]
+    assert listing_call["namespace"] is None
 
 
-def test_invalid_json_from_kubectl_treated_as_empty(mocker):
-    completed = subprocess.CompletedProcess(args=[], returncode=0, stdout="not-json{", stderr="")
-    mocker.patch("subprocess.run", return_value=completed)
+def test_namespace_scoped_discovery_excludes_other_namespaces(mocker):
+    """A namespace-scoped adapter must only see Workloads (and their Pods)
+    in its configured namespace, exercising the same scoping the real API
+    server enforces when a namespace is supplied to `list`."""
+    _wire_kubectl(mocker)
+    eca = KueueExecutionContextAdapter(namespace="team-alpha")
+    start = datetime(2026, 5, 1, 0, 0, 0, tzinfo=timezone.utc)
+    end = datetime(2026, 5, 2, 23, 59, 0, tzinfo=timezone.utc)
+
+    contexts = eca.discover_by_time_range(start, end)
+
+    assert "job-hpl-bench-pp99" not in {c["name"] for c in contexts}
+    assert all(c["namespace"] == "team-alpha" for c in contexts)
+
+
+def test_denied_workload_list_fails_discovery(mocker):
+    """Required reads (unlike optional Event recovery) must never be
+    swallowed: a failed Workload listing fails discovery outright."""
+    _wire_failing_kind(mocker, failing_kinds={"workloads"}, error=KubernetesClientError("Forbidden"))
     eca = KueueExecutionContextAdapter()
-    assert (
+    with pytest.raises(KubernetesClientError, match="Forbidden"):
         eca.discover_by_time_range(
             datetime(2026, 5, 1, tzinfo=timezone.utc),
             datetime(2026, 5, 2, tzinfo=timezone.utc),
         )
-        == []
+
+
+def test_missing_workload_is_skipped(mocker):
+    _wire_kubectl(mocker, workloads_payload={"items": []})
+
+    assert KueueExecutionContextAdapter().discover_by_ids(["team-alpha/gone"]) == []
+
+
+def test_denied_owner_job_lookup_fails_discovery(mocker):
+    _wire_failing_kind(mocker, failing_kinds={"job"}, error=KubernetesClientError("Forbidden"))
+
+    with pytest.raises(KubernetesClientError, match="Forbidden"):
+        KueueExecutionContextAdapter().discover_by_ids(["team-alpha/job-train-mnist-abc12"])
+
+
+def test_denied_pod_list_fails_discovery(mocker):
+    _wire_failing_kind(mocker, failing_kinds={"pods"}, error=KubernetesClientError("Forbidden"))
+
+    with pytest.raises(KubernetesClientError, match="Forbidden"):
+        KueueExecutionContextAdapter().discover_by_ids(["team-alpha/job-train-mnist-abc12"])
+
+
+def test_denied_jobset_child_job_list_fails_discovery(mocker):
+    workload = {
+        "metadata": {
+            "name": "jobset-training",
+            "namespace": "team-alpha",
+            "uid": "workload-jobset",
+            "creationTimestamp": "2026-05-01T12:00:00Z",
+            "ownerReferences": [
+                {"kind": "JobSet", "name": "training", "uid": "jobset-uid"},
+            ],
+        },
+        "spec": {},
+        "status": {},
+    }
+    _wire_failing_kind(
+        mocker,
+        failing_kinds={"jobs"},
+        error=KubernetesClientError("Forbidden"),
+        workloads_payload={"items": [workload]},
+        pods_payload={"items": []},
+        jobs_payload={"items": []},
     )
 
-
-def test_kubectl_timeout_returns_empty(mocker):
-    err = subprocess.TimeoutExpired(cmd=["kubectl"], timeout=60)
-    mocker.patch("subprocess.run", side_effect=err)
-    eca = KueueExecutionContextAdapter()
-    assert eca.discover_by_ids(["team-alpha/anything"]) == []
+    with pytest.raises(KubernetesClientError, match="Forbidden"):
+        KueueExecutionContextAdapter().discover_by_ids(["team-alpha/jobset-training"])
 
 
 def test_finished_state_wins_over_earlier_evicted(mocker):
@@ -1010,10 +1137,7 @@ def test_finished_state_wins_over_earlier_evicted(mocker):
         ]
     }
     pods = {"items": []}
-    mocker.patch(
-        "subprocess.run",
-        side_effect=_kubectl_router(workloads_payload=payload, pods_payload=pods, jobs_payload={"items": []}),
-    )
+    _wire_kubectl(mocker, workloads_payload=payload, pods_payload=pods, jobs_payload={"items": []})
     contexts = KueueExecutionContextAdapter().discover_by_time_range(
         datetime(2026, 5, 3, tzinfo=timezone.utc),
         datetime(2026, 5, 4, tzinfo=timezone.utc),
@@ -1035,10 +1159,7 @@ def test_missing_uid_workload_skipped(mocker):
             }
         ]
     }
-    mocker.patch(
-        "subprocess.run",
-        side_effect=_kubectl_router(workloads_payload=payload, pods_payload={"items": []}, jobs_payload={"items": []}),
-    )
+    _wire_kubectl(mocker, workloads_payload=payload, pods_payload={"items": []}, jobs_payload={"items": []})
     contexts = KueueExecutionContextAdapter().discover_by_time_range(
         datetime(2026, 5, 1, tzinfo=timezone.utc),
         datetime(2026, 5, 4, tzinfo=timezone.utc),
@@ -1142,10 +1263,7 @@ def test_pods_filtered_by_batch_controller_uid_not_workload_uid_or_kueue_label(m
             }
         ]
     }
-    mocker.patch(
-        "subprocess.run",
-        side_effect=_kubectl_router(workloads_payload=workloads, pods_payload=pods, jobs_payload=jobs),
-    )
+    _wire_kubectl(mocker, workloads_payload=workloads, pods_payload=pods, jobs_payload=jobs)
     ctxs = KueueExecutionContextAdapter().discover_by_ids(["team-alpha/regression"])
     assert len(ctxs) == 1
     assert ctxs[0]["nodes"] == ["node-correct"]
@@ -1221,6 +1339,65 @@ def test_missing_live_pods_are_recovered_from_uid_matched_events(mocker):
     assert ctx["nodes"] == ["node-new"]
 
 
+@pytest.mark.parametrize(
+    "failing_reason, expected_pods, expected_nodes",
+    [
+        ("SuccessfulCreate", None, []),
+        ("Scheduled", ["train-mnist-new"], []),
+    ],
+    ids=["creation-events-fail", "scheduled-events-fail"],
+)
+def test_failed_event_query_is_skipped_not_fatal(mocker, failing_reason, expected_pods, expected_nodes):
+    """Events are optional evidence: a failed Event query degrades the
+    recovered pods/nodes instead of failing discovery."""
+    events = {
+        "items": [
+            {
+                "metadata": {"creationTimestamp": "2026-05-01T12:00:10Z"},
+                "involvedObject": {
+                    "kind": "Job",
+                    "namespace": "team-alpha",
+                    "name": "train-mnist",
+                    "uid": "owner-1001",
+                },
+                "reason": "SuccessfulCreate",
+                "message": "Created pod: train-mnist-new",
+                "lastTimestamp": "2026-05-01T12:00:10Z",
+            },
+            {
+                "metadata": {"creationTimestamp": "2026-05-01T12:00:11Z"},
+                "involvedObject": {
+                    "kind": "Pod",
+                    "namespace": "team-alpha",
+                    "name": "train-mnist-new",
+                    "uid": "pod-NEW",
+                },
+                "reason": "Scheduled",
+                "message": "Successfully assigned team-alpha/train-mnist-new to node-new",
+                "lastTimestamp": "2026-05-01T12:00:11Z",
+            },
+        ]
+    }
+    fake = _FakeKubernetesClient(pods_payload={"items": []}, events_payload=events)
+    reader = _FailingKindReader(
+        fake,
+        KubernetesClientError("Forbidden"),
+        lambda kind, args: kind == "events" and f"reason={failing_reason}" in (args.get("field_selector") or ""),
+    )
+    mocker.patch(
+        "attribution_blueprint.connectors.execution_contexts.kueue.connector.KubernetesClient",
+        return_value=reader,
+    )
+    warning = mocker.patch("attribution_blueprint.connectors.execution_contexts.kueue.connector.logger.warning")
+
+    eca = KueueExecutionContextAdapter(event_max_age_seconds=2**31)
+    ctx = eca.discover_by_ids(["team-alpha/job-train-mnist-abc12"])[0]
+
+    assert ctx.get("pod_names") == expected_pods
+    assert ctx["nodes"] == expected_nodes
+    assert any("event lookup" in str(call.args[0]) for call in warning.call_args_list)
+
+
 def test_event_recovery_skipped_for_workloads_older_than_max_age(mocker):
     """A workload whose end_time is older than `event_max_age_seconds` skips
     Event recovery entirely (no `kubectl get events` calls), even though
@@ -1241,15 +1418,14 @@ def test_event_recovery_skipped_for_workloads_older_than_max_age(mocker):
             },
         ]
     }
-    run_mock = _wire_kubectl(mocker, pods_payload={"items": []}, events_payload=events)
+    fake = _wire_kubectl(mocker, pods_payload={"items": []}, events_payload=events)
 
     eca = KueueExecutionContextAdapter(event_max_age_seconds=1)
     ctx = eca.discover_by_ids(["team-alpha/job-train-mnist-abc12"])[0]
 
     assert "pod_names" not in ctx
     assert ctx["nodes"] == []
-    for call in run_mock.call_args_list:
-        assert "events" not in call.args[0]
+    assert not any(call["kind"] in ("event", "events") for call in fake.calls)
 
 
 def test_missing_pod_and_node_lists_are_reported_when_events_cannot_recover_them(mocker):
@@ -1266,17 +1442,16 @@ def test_missing_pod_and_node_lists_are_reported_when_events_cannot_recover_them
     )
 
 
-def test_kubectl_pod_selector_uses_batch_controller_uid_label(mocker):
-    """The label selector kubectl sees on the wire must be
+def test_pod_selector_uses_batch_controller_uid_label(mocker):
+    """The label selector the adapter sends must be
     `batch.kubernetes.io/controller-uid=<owner-job-uid>`. Kueue's own label
     (`kueue.x-k8s.io/job-uid`) is set on Workloads, not pods - using it as
     a pod selector matches zero pods on a real cluster."""
-    run_mock = _wire_kubectl(mocker)
+    fake = _wire_kubectl(mocker)
     KueueExecutionContextAdapter().discover_by_ids(["team-alpha/job-train-mnist-abc12"])
-    pod_calls = [call for call in run_mock.call_args_list if "pods" in call.args[0] and "-l" in call.args[0]]
-    assert pod_calls, "expected at least one `kubectl get pods -l ...` invocation"
-    cmd = pod_calls[0].args[0]
-    selector = cmd[cmd.index("-l") + 1]
+    pod_calls = [call for call in fake.calls if call["kind"] == "pods" and call["label_selector"]]
+    assert pod_calls, "expected at least one pod list query with a label selector"
+    selector = pod_calls[0]["label_selector"]
     assert selector.startswith("batch.kubernetes.io/controller-uid=")
     assert "kueue.x-k8s.io/job-uid" not in selector
 
@@ -1358,10 +1533,7 @@ def test_discover_by_time_range_skips_pod_and_job_fetches_for_out_of_window_work
             }
         ]
     }
-    run_mock = mocker.patch(
-        "subprocess.run",
-        side_effect=_kubectl_router(workloads_payload=workloads, pods_payload=pods, jobs_payload=jobs),
-    )
+    fake = _wire_kubectl(mocker, workloads_payload=workloads, pods_payload=pods, jobs_payload=jobs)
     eca = KueueExecutionContextAdapter()
     contexts = eca.discover_by_time_range(
         datetime(2026, 4, 30, tzinfo=timezone.utc),
@@ -1369,22 +1541,19 @@ def test_discover_by_time_range_skips_pod_and_job_fetches_for_out_of_window_work
     )
     assert {c["name"] for c in contexts} == {"in-window"}
 
-    # Inspect every kubectl invocation. Pod / owner-Job fetches must only target
+    # Inspect every query issued. Pod / owner-Job fetches must only target
     # the in-window workload's owner Job. Out-of-window owners must NOT
-    # appear in any selector or positional arg.
+    # appear in any selector or name.
     out_owner_uids = {"owner-out1", "owner-out2"}
     out_job_names = {"job-out1", "job-out2"}
-    for call in run_mock.call_args_list:
-        argv = call.args[0]
-        kind = argv[argv.index("get") + 1] if "get" in argv else ""
-        if kind == "pods":
-            selector = argv[argv.index("-l") + 1]
+    for call in fake.calls:
+        if call["kind"] == "pods":
+            selector = call["label_selector"] or ""
             assert not any(u in selector for u in out_owner_uids), (
-                f"unexpected pod fetch for out-of-window owner: {argv}"
+                f"unexpected pod fetch for out-of-window owner: {call}"
             )
-        elif kind == "job":
-            positional = argv[argv.index("get") + 2]  # `get job <name>`
-            assert positional not in out_job_names, f"unexpected job fetch: {argv}"
+        elif call["kind"] == "jobs":
+            assert call["name"] not in out_job_names, f"unexpected job fetch: {call}"
 
 
 def test_failed_node_is_deterministic_across_pod_orderings():
@@ -1634,10 +1803,7 @@ def test_start_time_uses_earliest_admitted_not_latest(mocker):
             }
         ]
     }
-    mocker.patch(
-        "subprocess.run",
-        side_effect=_kubectl_router(workloads_payload=payload, pods_payload={"items": []}, jobs_payload={"items": []}),
-    )
+    _wire_kubectl(mocker, workloads_payload=payload, pods_payload={"items": []}, jobs_payload={"items": []})
     contexts = KueueExecutionContextAdapter().discover_by_ids(["team-alpha/reattempted"])
     assert len(contexts) == 1
     assert contexts[0]["start_time"] == datetime(2026, 5, 3, 12, 0, 0, tzinfo=timezone.utc)
@@ -1645,12 +1811,39 @@ def test_start_time_uses_earliest_admitted_not_latest(mocker):
 
 def test_build_with_none_timeout_falls_back_to_default():
     """TOML `null` (Python None) for timeout_seconds must fall back to the
-    documented 60s default - NOT propagate to `subprocess.run(timeout=None)`,
-    which would silently disable the timeout."""
+    documented 60s default rather than disabling the request timeout."""
     from attribution_blueprint.connectors.execution_contexts.kueue import _build
 
     adapter = _build({"timeout_seconds": None}, ctx={"framework": "eca"})
     assert adapter.timeout_seconds == 60
+
+
+def test_build_without_workload_api_version_uses_adapter_default():
+    from attribution_blueprint.connectors.execution_contexts.kueue import _build
+    from attribution_blueprint.connectors.execution_contexts.kueue.connector import (
+        _DEFAULT_WORKLOAD_API_VERSION,
+    )
+
+    adapter = _build({}, ctx={"framework": "eca"})
+    assert adapter.workload_api_version == _DEFAULT_WORKLOAD_API_VERSION
+
+
+def test_build_passes_configured_workload_api_version_to_adapter():
+    """`eca.kueue.workload_api_version` must reach the adapter unchanged —
+    it's documented as the override for clusters serving a Workload CRD
+    version other than the default."""
+    from attribution_blueprint.connectors.execution_contexts.kueue import _build
+
+    adapter = _build({"workload_api_version": "kueue.x-k8s.io/v1"}, ctx={"framework": "eca"})
+    assert adapter.workload_api_version == "kueue.x-k8s.io/v1"
+
+
+def test_build_rejects_empty_workload_api_version():
+    from attribution_blueprint.connectors.execution_contexts.kueue import _build
+    from attribution_blueprint.exceptions import MCAError
+
+    with pytest.raises(MCAError, match="workload_api_version"):
+        _build({"workload_api_version": ""}, ctx={"framework": "eca"})
 
 
 def test_build_rejects_placement_records_without_namespace():

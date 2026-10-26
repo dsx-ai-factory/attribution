@@ -98,6 +98,71 @@ line   = '[rank: 3]: print("AssertionError: global_batch_size (12) must be divis
 expect = "none"
 line   = "3: global_batch_size (12) must be divisible by micro_batch_size (4)"
 
+# Require a failed C compiler invocation and explicit Inductor or Triton context.
+# A bare CalledProcessError may come from an unrelated subprocess.
+[[extractor]]
+name     = "TritonInductorCCompilationFailure"
+match_re = '''^\s*(?:\d+:\s*)?(?:\[default\d+\]:\s*)?(?:\[rank\s*:?\s*\d+\]:\s*)?(?:(?:torch\._inductor\.exc\.)?InductorError:\s+(?:subprocess\.)?CalledProcessError:|subprocess\.CalledProcessError:(?=[^\r\n]*/(?:site|dist)-packages/triton/))\s+Command '\['(?:[^'\r\n]*/)?(?:[A-Za-z0-9_]+(?:-[A-Za-z0-9_]+)+-)?(?:gcc|g\+\+|cc|c\+\+|clang(?:\+\+)?)(?:-\d+(?:\.\d+)*)?', [^\r\n]*\]' returned non-zero exit status [1-9]\d*\.\s*$'''
+emit     = { type = "bad_node", symptom = "Triton/Inductor JIT C-compilation failure" }
+[[extractor.cases]]
+expect  = "bad"
+line    = " 1: [rank1]: torch._inductor.exc.InductorError: CalledProcessError: Command '['/usr/bin/gcc', '/tmp/jit/cuda_utils.c', '-shared', '-I/site-packages/triton/backends/nvidia/include']' returned non-zero exit status 1.\n"
+symptom = "Triton/Inductor JIT C-compilation failure"
+[[extractor.cases]]
+expect  = "bad"
+line    = "[rank: 1]: InductorError: subprocess.CalledProcessError: Command '['clang-18', '/tmp/jit/kernel.cpp', '-shared']' returned non-zero exit status 2."
+symptom = "Triton/Inductor JIT C-compilation failure"
+[[extractor.cases]]
+expect  = "bad"
+line    = "subprocess.CalledProcessError: Command '['/usr/bin/gcc', '/tmp/jit/cuda_utils.c', '-I/site-packages/triton/backends/nvidia/include']' returned non-zero exit status 1."
+symptom = "Triton/Inductor JIT C-compilation failure"
+[[extractor.cases]]
+expect  = "bad"
+line    = "[default1]: InductorError: CalledProcessError: Command '['gcc', '/tmp/jit/kernel.c', '-shared']' returned non-zero exit status 1."
+symptom = "Triton/Inductor JIT C-compilation failure"
+[[extractor.cases]]
+expect  = "bad"
+line    = " 1: [default1]:[rank1]: subprocess.CalledProcessError: Command '['gcc', '/tmp/jit/kernel.c', '-I/dist-packages/triton/backends/nvidia/include']' returned non-zero exit status 1."
+symptom = "Triton/Inductor JIT C-compilation failure"
+[[extractor.cases]]
+expect  = "bad"
+line    = "[default1]: InductorError: subprocess.CalledProcessError: Command '['/usr/bin/aarch64-linux-gnu-gcc', '/tmp/jit/kernel.c', '-shared']' returned non-zero exit status 1."
+symptom = "Triton/Inductor JIT C-compilation failure"
+[[extractor.cases]]
+expect  = "bad"
+line    = "subprocess.CalledProcessError: Command '['x86_64-linux-gnu-g++-13', '/tmp/jit/kernel.cpp', '-I/site-packages/triton/backends/nvidia/include']' returned non-zero exit status 1."
+symptom = "Triton/Inductor JIT C-compilation failure"
+[[extractor.cases]]
+expect = "none"
+line   = "InductorError: CalledProcessError: Command '['aarch64-linux-gnu-gcc-ar', '/tmp/jit/kernel.o']' returned non-zero exit status 1."
+[[extractor.cases]]
+expect = "none"
+line   = "subprocess.CalledProcessError: Command '['aarch64-linux-gnu-gcc', '/tmp/extension.c']' returned non-zero exit status 1."
+[[extractor.cases]]
+expect = "none"
+line   = "[default1]: subprocess.CalledProcessError: Command '['gcc', '/home/user/triton/kernel.c']' returned non-zero exit status 1."
+[[extractor.cases]]
+expect = "none"
+line   = "subprocess.CalledProcessError: Command '['gcc', '/home/user/my-site-packages/triton/kernel.c']' returned non-zero exit status 1."
+[[extractor.cases]]
+expect = "none"
+line   = "subprocess.CalledProcessError: Command '['gcc', '/tmp/extension.c']' returned non-zero exit status 1."
+[[extractor.cases]]
+expect = "none"
+line   = "torch._inductor.exc.InductorError: CalledProcessError: Command '['python', '/tmp/triton/worker.py']' returned non-zero exit status 1."
+[[extractor.cases]]
+expect = "none"
+line   = "torch._inductor.exc.InductorError: CalledProcessError: Command '['gcc', '/tmp/jit/cuda_utils.c']' returned non-zero exit status 0."
+[[extractor.cases]]
+expect = "none"
+line   = "[rank1]: handled torch._inductor.exc.InductorError: CalledProcessError: Command '['gcc', '/tmp/jit/cuda_utils.c']' returned non-zero exit status 1."
+[[extractor.cases]]
+expect = "none"
+line   = "[rank1]: Compiling Triton kernel with /usr/bin/gcc; compilation completed successfully."
+[[extractor.cases]]
+expect = "none"
+line   = "torch._inductor.exc.InductorError: RuntimeError: unsupported operator"
+
 [[extractor]]
 name     = "BusErrorSignal"
 match_re = "Caught signal \\d+ \\(Bus error: nonexistent physical address\\)"

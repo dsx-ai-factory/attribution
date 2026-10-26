@@ -156,6 +156,7 @@ export interface RunSummary {
   service: string
   sibling?: string
   diagnose?: PersonaDiagnose
+  // Legacy payloads may include this; tenant views and exports must ignore it.
   operatorDiagnose?: PersonaDiagnose
 }
 

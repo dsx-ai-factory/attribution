@@ -15,11 +15,6 @@ POD_JOBSET_LABEL = "jobset.sigs.k8s.io/jobset-name"
 WORKLOAD_ANNOTATION = "kueue.x-k8s.io/workload"
 WORKLOAD_OWNER_UID_LABEL = "kueue.x-k8s.io/job-uid"
 
-# PodGC sets this only after the Node API object is deleted. Broader
-# DisruptionTarget reasons such as DeletionByTaintManager are intentionally
-# excluded because they can represent transient unreachability or routine
-# eviction rather than node loss.
-NODE_LOSS_DISRUPTION_REASONS = frozenset({"DeletionByPodGC"})
 
 
 def controller_owner(resource: dict, kind: str | None = None) -> dict | None:
@@ -126,30 +121,6 @@ def workload_matches_owner(workload: dict, owner: OwnerIdentity) -> bool:
     if ref and ref.get("kind") == owner.kind and ref.get("uid") == owner.uid:
         return True
     return (metadata.get("labels") or {}).get(WORKLOAD_OWNER_UID_LABEL) == owner.uid
-
-
-def _most_recent_condition(conditions: list[dict], cond_type: str) -> dict | None:
-    """Return the most recent (by lastTransitionTime) condition of `cond_type`."""
-    matches = [c for c in conditions if c.get("type") == cond_type]
-    if not matches:
-        return None
-    return max(matches, key=lambda c: c.get("lastTransitionTime", ""))
-
-
-def pod_node_failure_reason(pod: dict) -> str | None:
-    """Return the node-loss reason a Pod's status reports, or None.
-
-    Checks the legacy ``NodeLost`` status and PodGC's ``DisruptionTarget``
-    condition. The adapter and recorder share this helper so their
-    classification cannot drift.
-    """
-    status = pod.get("status") or {}
-    if status.get("reason") == "NodeLost":
-        return "NodeLost"
-    disruption = _most_recent_condition(status.get("conditions") or [], "DisruptionTarget")
-    if disruption and disruption.get("status") == "True" and disruption.get("reason") in NODE_LOSS_DISRUPTION_REASONS:
-        return disruption["reason"]
-    return None
 
 
 def pod_container_exit_reason(pod: dict) -> str | None:
