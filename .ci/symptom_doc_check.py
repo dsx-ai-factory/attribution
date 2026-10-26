@@ -31,6 +31,9 @@ from attribution_lib.symptoms.doc_validation import (
 
 CATALOG = "blueprint/src/attribution_blueprint/data/failures.yml"
 SHA = re.compile(r"[0-9a-f]{40}")
+# Bound each local Git operation within the 15-minute CI job budget, allowing
+# filesystem work to finish while leaving time to report an unavailable check.
+GIT_TIMEOUT_SECONDS = 120
 DYNAMIC_CASES = {
     "NV_ERR_RESET_REQUIRED kernel_channel.c": "gpu-reset-required",
     "NV_ERR_NO_MEMORY mem_multicast_fabric.c": "nv-err-no-memory",
@@ -43,7 +46,9 @@ DYNAMIC_CASES = {
 
 
 def git(root: Path, *args: str) -> str:
-    return subprocess.check_output(["git", "-C", str(root), *args], text=True).strip()
+    return subprocess.check_output(
+        ["git", "-C", str(root), *args], text=True, timeout=GIT_TIMEOUT_SECONDS
+    ).strip()
 
 
 def collect(root: Path) -> dict:

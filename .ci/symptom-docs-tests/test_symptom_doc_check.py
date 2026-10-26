@@ -159,6 +159,57 @@ def test_invalid_catalog_does_not_pass():
         check.compare(snapshot(), head)
 
 
+def test_git_helper_bounds_commands_and_preserves_output(tmp_path, monkeypatch):
+    """Keep the subprocess argument list and stripped output with a timeout."""
+    calls = []
+
+    def output(command, **kwargs):
+        calls.append((command, kwargs))
+        return "  example-output\n"
+
+    monkeypatch.setattr(check.subprocess, "check_output", output)
+    assert check.git(tmp_path, "rev-parse", "HEAD") == "example-output"
+    assert calls == [
+        (
+            ["git", "-C", str(tmp_path), "rev-parse", "HEAD"],
+            {"text": True, "timeout": 120},
+        )
+    ]
+
+
+def test_git_timeout_reports_unavailable_and_clears_previous_success(
+    tmp_path, monkeypatch, capsys
+):
+    """A stalled Git command is an error, not an advisory coverage success."""
+    (tmp_path / "result.json").write_text('{"status":"success"}')
+    summary = tmp_path / "summary.md"
+    monkeypatch.setenv("GITHUB_ACTIONS", "true")
+    monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(summary))
+
+    def timeout(command, **kwargs):
+        raise subprocess.TimeoutExpired(command, kwargs["timeout"])
+
+    monkeypatch.setattr(check.subprocess, "check_output", timeout)
+    assert (
+        check.main(
+            [
+                "check",
+                "--root",
+                str(tmp_path),
+                "--base",
+                "a" * 40,
+                "--output",
+                str(tmp_path),
+                "--advisory",
+            ]
+        )
+        == 2
+    )
+    assert json.loads((tmp_path / "result.json").read_text())["status"] == "error"
+    assert "Check unavailable" in summary.read_text()
+    assert "TimeoutExpired" in capsys.readouterr().err
+
+
 def test_invalid_base_does_not_report_success(tmp_path):
     (tmp_path / "result.json").write_text('{"status": "success"}')
     (tmp_path / "head.json").write_text("old contract")
