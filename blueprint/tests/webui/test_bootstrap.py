@@ -108,6 +108,24 @@ def test_run_to_react_includes_bad_pairs(tmp_path):
     assert r["errorPairs"] == bad_pairs
 
 
+def test_run_to_react_shows_jit_compilation_tenant_guidance(tmp_path):
+    """Expose compiler recovery actions and support evidence for the catalog ID."""
+    run = _seed_one(
+        tmp_path,
+        catalog_id="jit-c-compilation-failure",
+        symptom="Triton/Inductor JIT C-compilation failure",
+        rule="JitCCompilationFailure",
+        line="InductorError: subprocess.CalledProcessError: Command 'gcc' returned non-zero exit status 1.",
+        detail="Underlying cause of JIT C-compilation failure is undetermined.",
+    )
+    result = bootstrap.run_to_react(run)["diagnose"]
+    assert result["hasPersona"] is True
+    assert result["catalogId"] == "jit-c-compilation-failure"
+    assert result["title"] == "JIT C compilation failed"
+    assert "compilation and execution both complete" in result["action"]
+    assert any("NVIDIA Attribution diagnosis" in detail for detail in result["supportDetails"])
+
+
 @pytest.mark.parametrize("collectors", [None, {}, {"bad_pairs": None}, {"bad_pairs": ""}, {"bad_pairs": 0}])
 def test_run_to_react_omits_invalid_bad_pairs(tmp_path, collectors):
     """Return empty error pairs for missing or malformed collector data.
