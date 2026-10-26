@@ -85,6 +85,77 @@ jobs:
       - name: Run ${{ matrix.suite }} with coverage
         run: bash .ci/run-tests.sh "${{ matrix.suite }}"
 
+  symptom-docs:
+    name: Documentation coverage
+    needs: secret-scan
+    if: ${{ always() }}
+    runs-on: linux-arm64-cpu16
+    timeout-minutes: 15
+    steps:
+      - name: Require successful secret scan
+        if: ${{ needs.secret-scan.result != 'success' }}
+        run: exit 1
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Detect symptom documentation changes
+        id: changes
+        env:
+          BEFORE_SHA: ${{ github.event.before }}
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          set -euo pipefail
+          if [[ "$GITHUB_REF_NAME" == "main" && "$EVENT_NAME" == "push" ]]; then
+            base_sha="$BEFORE_SHA"
+          else
+            base_sha="$(git merge-base HEAD origin/main)"
+          fi
+          git cat-file -e "${base_sha}^{commit}"
+          echo "base_sha=$base_sha" >> "$GITHUB_OUTPUT"
+          if [[ "$EVENT_NAME" == "workflow_dispatch" ]]; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          elif git diff --quiet --no-ext-diff "$base_sha" HEAD -- \
+              service/attribution-lib/ \
+              blueprint/src/attribution_blueprint/data/failures.yml \
+              .ci/symptom_doc_check.py .ci/symptom-docs-tests/ \
+              .ci/run-tests.sh .github/workflows/tests.yml; then
+            echo "run=false" >> "$GITHUB_OUTPUT"
+            echo "No relevant changes; documentation validation skipped." | tee -a "$GITHUB_STEP_SUMMARY"
+          else
+            diff_status=$?
+            if [[ "$diff_status" != "1" ]]; then
+              exit "$diff_status"
+            fi
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          fi
+      - uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7.6.0
+        if: steps.changes.outputs.run == 'true'
+        with:
+          version: "0.12.3"
+          enable-cache: false
+      - name: Install Python
+        if: steps.changes.outputs.run == 'true'
+        run: uv python install "$UV_PYTHON"
+      - name: Check symptom documentation
+        if: steps.changes.outputs.run == 'true'
+        env:
+          SYMPTOM_DOC_BASE: ${{ steps.changes.outputs.base_sha }}
+          SYMPTOM_DOC_ADVISORY: "true"
+        run: bash .ci/run-tests.sh symptom-docs
+      - name: Save public documentation contract
+        if: ${{ always() && needs.secret-scan.result == 'success' && steps.changes.outputs.run == 'true' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: symptom-doc-contract
+          path: |
+            .symptom-doc-check/head.json
+            .symptom-doc-check/base.json
+            .symptom-doc-check/result.json
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 7
+
   frontend-tests:
     name: frontend
     needs: secret-scan
