@@ -1,60 +1,53 @@
 # Kubernetes daemon
 
-`kubernetes-daemon` retains Pod-to-node placement and ownership evidence after
-Kubernetes deletes the Pods, independent of whether a Kueue Workload, a KAI
-PodGroup, both, or neither can be resolved for that Pod.
+`kubernetes-daemon` provides best-effort Pod placement history after Kubernetes
+deletes Pods.
 
 ## Architecture
 
-One daemon runs in each workload namespace:
+One daemon runs in each workload namespace. For each observed bound Pod, it
+writes Pod identity, node, owner references, and observed `NodeLost`,
+`DeletionByPodGC`, or non-zero-exit evidence before asynchronous enrichment.
+Within configured capacity, it retries enabled scheduler associations and
+enrichment writes without requiring another Pod event. Required base,
+deletion, and reconciliation write failures replay from the last accepted
+watch resource version. Per-Pod enrichment is serialized, newer observations
+reject stale writes, and successful associations remain queryable after Pod
+deletion until retention expires.
 
-```text
-Pod LIST/WATCH
-  -> record namespace, Pod UID, node, and owner references immediately
-  -> resolve the Job or JobSet owner (Kubernetes-native, no scheduler required)
-  -> resolve optional scheduler-specific associations (Kueue Workload, KAI
-     PodGroup, ...) via configured resource resolvers
-  -> serve scheduler-neutral records over HTTP
-  -> each adapter merges retained and live placement
-```
-
-Base placement, Pod UID, namespace, node, and owner references, is retained
-even when ownership or scheduler resolution is still pending or fails; "owner
-not resolved yet" describes the evidence rather than discarding it.
+This is bounded recovery, not complete history. Capacity exhaustion can skip
+enrichment for a new Pod UID while retaining its base placement, so
+resource-UID queries can omit that Pod. Retries can exhaust, in-memory retries
+are lost on restart, deleted relationship evidence may be unavailable, and
+Pods created and deleted while the daemon is unavailable can be missed.
+Placement records do not distinguish execution attempts.
 
 The Helm chart deploys a single-replica StatefulSet with a PVC, a
 namespace-scoped ServiceAccount and Role, health probes, and a ClusterIP
 Service. SQLite is deliberately single-writer; do not scale the StatefulSet
 above one replica or mount the database from multiple writers.
 
-Records are removed automatically after `retentionDays` since their last
-update. The default is 30 days. Cleanup runs when the store starts and during
-normal daemon and API activity.
+Records become eligible for removal `retentionDays` after a deletion marker is
+stored from a Pod deletion event or full-list reconciliation. Active or
+otherwise unmarked records are not age-pruned. The default is 30 days; cleanup
+runs during store and API activity.
 
-The daemon captures placement plus `NodeLost`, PodGC `DeletionByPodGC`, and
-non-zero container exit evidence. It does not retain Pod logs or Pod
-specifications.
+It does not retain Pod logs or Pod specifications.
 
 ## Usage
 
-Build and publish the image, then install the daemon before submitting the
-workloads whose placement must be retained:
+Build and publish the image:
 
 ```bash
 docker build \
   -f blueprint/docker/kubernetes-daemon.Dockerfile \
   -t registry.example/kubernetes-daemon:VERSION .
 docker push registry.example/kubernetes-daemon:VERSION
-
-helm upgrade --install attribution blueprint/deploy/kubernetes-daemon \
-  --namespace team-a --create-namespace \
-  --set image.repository=registry.example/kubernetes-daemon \
-  --set image.tag=VERSION
 ```
 
-For kind, load the locally built image with
-`kind load docker-image kubernetes-daemon:local --name CLUSTER` and keep the
-chart's default image values.
+When distributing an image, preserve the applicable licenses and notices for
+the Blueprint, generated client, base image, and installed dependencies. The
+build does not create a consolidated notice bundle.
 
 ### Enabling scheduler integrations
 
@@ -121,13 +114,11 @@ endpoint = "http://attribution-kubernetes-daemon.team-a.svc:8080"
 timeout_seconds = 10
 ```
 
-When `placement_records_enabled` is `true` for either adapter, the endpoint is
-required and attribution fails if retained placement cannot be read. Keep it
-`false` when the daemon is not deployed for that namespace. Each `[eca.*.kubernetes_daemon]`
-section accepts the same optional `auth` block (`token` with `token_env`, or
-`mtls` with `cert_path`/`key_path`/`ca_cert_path`); the daemon's API has no
-built-in authentication, so keep its Service private or place an
-authenticated proxy in front of it.
+When `placement_records_enabled` is `true`, attribution fails if the endpoint
+cannot be read. The chart serves plain HTTP and provides no authentication or
+TLS. Keep the Service private or terminate those controls at a proxy. Adapter
+`auth` settings configure requests to that proxy: `token` adds credentials,
+while `mtls` requires an HTTPS endpoint that terminates client TLS.
 
 ### Verify the installation
 
@@ -156,8 +147,8 @@ UID matches a resource associated with that Pod by a configured integration.
 **The daemon is not ready**
 
 Check `/readyz` and logs. Readiness requires the initial Pod list to complete
-and the worker queue to remain healthy. Verify access to Pods and, when
-enabled, Kueue Workloads, KAI PodGroups, Jobs, and any installed JobSet API.
+and required storage writes to succeed. Verify access to Pods and, when enabled,
+Kueue Workloads, KAI PodGroups, Jobs, and any installed JobSet API.
 
 **Placement is missing**
 
@@ -170,14 +161,13 @@ the associated Kueue Workload or KAI PodGroup resource UID.
 
 Confirm the corresponding `integrations.*.enabled` value is `true` and that
 the RBAC generated by the chart includes that scheduler's API group. Base
-placement and owner evidence remain retained even when scheduler resolution
-has not completed or the relevant CRD is absent.
+placement remains available when scheduler resolution is incomplete, but
+resource-UID lookup requires the corresponding association.
 
 **Attribution fails when placement is enabled**
 
 Enabled reads are intentionally fail-closed. Verify the configured endpoint is
-reachable from the Blueprint host and that any proxy token or mTLS settings
-are valid.
+reachable and that any proxy authentication or TLS settings are valid.
 
 **Records disappear too early or consume too much storage**
 

@@ -241,21 +241,13 @@ timeout_seconds = 10
 ```
 
 `endpoint` is required when this section is present; `timeout_seconds`
-defaults to `10`. Optional `auth` supports `token` (`token_env`, optional
-`org_id`) or `mtls` (`cert_path`, `key_path`, optional `ca_cert_path` and
-`org_id`).
+defaults to `10`. The daemon chart serves plain HTTP without authentication.
+Optional `auth` configures requests to a terminating proxy; `mtls` requires an
+HTTPS proxy endpoint.
 
-When enabled, daemon lookup is fail-closed. After deleting a completed Pod,
-a validation run should retain the
-same Pod UID and node with `pod_placements[].source = "placement_record"`.
-For node-loss validation, `nodeFailureReason` must be present before the
-Pod disappears; post-hoc attribution should then return `NODE_FAIL` and the
-recorded `failed_node`. If Blueprint runs outside the cluster, use an
-authenticated proxy or port-forward and set the endpoint to that reachable
-URL. Optional `kubernetes_daemon.auth` supports the same `token` and `mtls`
-fields as the Prometheus source. The daemon itself does not terminate
-authentication, so keep its Service private or place an authenticated proxy
-in front of it.
+When enabled, daemon lookup is fail-closed. See the
+[daemon reference](../src/attribution_blueprint/kubernetes/daemon/docs/README.md)
+for transport, retention, and recovery limits.
 
 To recover Job and JobSet placement from retained kube-state-metrics, configure a
 Prometheus-compatible endpoint under the Kueue adapter:
@@ -448,15 +440,11 @@ timeout_seconds = 10
 ```
 
 `endpoint` is required when this section is present; `timeout_seconds`
-defaults to `10`. Optional `auth` supports `token` (`token_env`, optional
-`org_id`) or `mtls` (`cert_path`, `key_path`, optional `ca_cert_path` and
-`org_id`), identical to the Kueue adapter's `kubernetes_daemon.auth`.
+defaults to `10`. `auth` has the same proxy-only behavior as the Kueue daemon
+client; it does not enable authentication or TLS on the daemon.
 
-When enabled, daemon lookup is fail-closed. After deleting a completed Pod, a
-validation run should retain the same Pod UID and node with
-`pod_placements[].source = "kubernetes_daemon"`. For node-loss validation,
-`nodeFailureReason` must be present before the Pod disappears; post-hoc
-attribution should then return `NODE_FAIL` and the recorded `failed_node`.
+When enabled, daemon lookup is fail-closed. See the daemon reference above for
+transport, retention, and recovery limits.
 
 ### `[eca.static]`
 

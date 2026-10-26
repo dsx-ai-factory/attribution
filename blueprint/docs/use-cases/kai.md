@@ -27,26 +27,9 @@ attribution runs, the resulting context can have missing `nodes` or
 
 ### Deploy kubernetes-daemon with the KAI integration enabled
 
-Install one `kubernetes-daemon` release per workload namespace, with the KAI
-integration enabled, before submitting workloads whose placement must survive
-Pod deletion. Schedule it outside the workload failure domain so it can
-observe the final Pod update.
-
-```bash
-docker build \
-  -f blueprint/docker/kubernetes-daemon.Dockerfile \
-  -t registry.example/kubernetes-daemon:VERSION .
-docker push registry.example/kubernetes-daemon:VERSION
-
-helm upgrade --install attribution blueprint/deploy/kubernetes-daemon \
-  --namespace team-a --create-namespace \
-  --set image.repository=registry.example/kubernetes-daemon \
-  --set image.tag=VERSION \
-  --set integrations.kai.enabled=true
-```
-
-The same installation, with the Kueue integration also enabled, serves the
-Kueue adapter; see [Attribute Kueue Workloads](./kueue.md).
+Install one daemon per workload namespace as described in the
+[daemon reference](../../src/attribution_blueprint/kubernetes/daemon/docs/README.md),
+with `integrations.kai.enabled=true`, before submitting workloads.
 
 ### Configure the adapter's endpoint
 
@@ -61,36 +44,19 @@ timeout_seconds = 10
 ```
 
 `endpoint` is required when this section is present; `timeout_seconds`
-defaults to `10`. Optional `auth` supports `token` (`token_env`, optional
-`org_id`) or `mtls` (`cert_path`, `key_path`, optional `ca_cert_path` and
-`org_id`). Daemon reads are fail-closed: when `placement_records_enabled =
-true`, the endpoint is required and attribution fails if it cannot be read.
-The daemon retains Pod UID, name, node, owner, and observed `NodeLost`,
-`DeletionByPodGC`, or non-zero-exit evidence scoped by PodGroup UID. It does
-not retain Pod logs or Pod specifications.
+defaults to `10`. The chart serves plain HTTP without authentication; `auth`
+only configures requests to a terminating proxy, and `mtls` requires an HTTPS
+proxy endpoint. Daemon reads are fail-closed: when
+`placement_records_enabled = true`, attribution fails if the endpoint cannot
+be read.
 
 ### Verify recovery
 
-Run `port-forward` in its own terminal (it stays in the foreground), then query it from another:
-
-```bash
-kubectl -n team-a port-forward service/attribution-kubernetes-daemon 18080:8080
-```
-
-```bash
-curl -fsS \
-  'http://127.0.0.1:18080/v1/placements?namespace=team-a&resource_uid=PODGROUP_UID'
-```
-
-After deleting a completed Pod, a validation run should retain the same Pod
-UID and node with `pod_placements[].source = "kubernetes_daemon"`. For
-node-loss validation, `nodeFailureReason` must be present before the Pod
-disappears; post-hoc attribution should then return `NODE_FAIL` and the
-recorded `failed_node`.
-
-See the
-[kubernetes-daemon reference](../../src/attribution_blueprint/kubernetes/daemon/docs/README.md)
-for architecture, retention, RBAC, and troubleshooting.
+For a Pod observed and associated before deletion, a validation run should
+return the same Pod UID and node with
+`pod_placements[].source = "kubernetes_daemon"`. For node-loss validation,
+`nodeFailureReason` must be observed before deletion. The daemon reference
+defines retention and recovery limits.
 
 ## Current Scope
 
