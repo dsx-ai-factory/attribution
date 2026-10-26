@@ -331,6 +331,13 @@ def test_records_placement_before_any_resolution(tmp_path):
     assert record.associated_resources == ()
 
 
+def test_default_retry_window_is_four_seconds(tmp_path):
+    store = SQLitePlacementStore(str(tmp_path / "placements.db"))
+    daemon = KubernetesDaemon(core_api=None, store=store, namespace="team-a")
+
+    assert daemon.retry_poll_seconds * (daemon.max_resolution_attempts - 1) == 4
+
+
 def test_transient_placement_read_failure_still_enriches_owner(tmp_path):
     backing_store = SQLitePlacementStore(str(tmp_path / "placements.db"))
     store = _FailReadOnceStore(backing_store)
@@ -901,13 +908,36 @@ def test_transient_enrichment_write_failure_retries_without_another_pod_event(tm
     assert "pod-uid-1" in daemon._retry
     assert backing_store.get_by_pod_uid("pod-uid-1").owner is None
 
-    daemon._promote_retries()
     daemon.stop_event.clear()
+    daemon._promote_retries()
     daemon.stop_event.set()
     daemon._worker()
 
     assert backing_store.get_by_pod_uid("pod-uid-1").owner.uid == "job-uid-1"
     assert "pod-uid-1" not in daemon._retry
+
+
+def test_retry_promotion_does_not_enqueue_work_after_stop(tmp_path):
+    store = SQLitePlacementStore(str(tmp_path / "placements.db"))
+    daemon = KubernetesDaemon(core_api=None, store=store, namespace="team-a")
+    daemon._retry["pod-uid-1"] = (_pod(), 1)
+    promotion_started = threading.Event()
+
+    def promote():
+        promotion_started.set()
+        daemon._promote_retries()
+
+    with daemon._work_available:
+        promoter = threading.Thread(target=promote)
+        promoter.start()
+        assert promotion_started.wait(timeout=2)
+        daemon.stop_event.set()
+
+    promoter.join(timeout=2)
+
+    assert not promoter.is_alive()
+    assert "pod-uid-1" in daemon._retry
+    assert "pod-uid-1" not in daemon._pending
 
 
 def test_worker_survives_unexpected_recording_failure(tmp_path):
@@ -957,8 +987,8 @@ def test_transient_owner_failure_is_retried_outside_the_worker(tmp_path):
     assert store.get_by_pod_uid("pod-uid-1").owner is None
 
     # Simulate the dedicated retry loop's next tick, outside any worker.
-    daemon._promote_retries()
     daemon.stop_event.clear()
+    daemon._promote_retries()
     daemon.stop_event.set()
     daemon._worker()
 
@@ -982,8 +1012,8 @@ def test_retry_gives_up_after_max_resolution_attempts(tmp_path):
     daemon._worker()
     assert "pod-uid-1" in daemon._retry
 
-    daemon._promote_retries()
     daemon.stop_event.clear()
+    daemon._promote_retries()
     daemon.stop_event.set()
     daemon._worker()
 
@@ -1071,8 +1101,8 @@ def test_unexpected_owner_resolution_error_is_retried_not_dropped(tmp_path):
     assert "pod-uid-1" in daemon._retry
     assert store.get_by_pod_uid("pod-uid-1").owner is None
 
-    daemon._promote_retries()
     daemon.stop_event.clear()
+    daemon._promote_retries()
     daemon.stop_event.set()
     daemon._worker()
 
@@ -1099,8 +1129,8 @@ def test_unexpected_resource_resolution_error_is_retried_not_dropped(tmp_path):
     assert "pod-uid-1" in daemon._retry
     assert store.get_by_pod_uid("pod-uid-1").associated_resources == ()
 
-    daemon._promote_retries()
     daemon.stop_event.clear()
+    daemon._promote_retries()
     daemon.stop_event.set()
     daemon._worker()
 

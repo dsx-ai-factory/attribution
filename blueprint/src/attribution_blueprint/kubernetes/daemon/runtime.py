@@ -46,7 +46,7 @@ class KubernetesDaemon:
         workers: int = 2,
         watch_timeout_seconds: int = 60,
         max_resolution_attempts: int = 5,
-        retry_poll_seconds: float = 0.5,
+        retry_poll_seconds: float = 1.0,
     ):
         if queue_size <= 0:
             raise ValueError("queue_size must be positive")
@@ -253,6 +253,8 @@ class KubernetesDaemon:
 
         Called on a fixed interval by `_retry_loop`, never by a worker."""
         with self._work_available:
+            if self.stop_event.is_set():
+                return
             ready = list(self._retry)
             for pod_uid in ready:
                 self._pending[pod_uid] = self._retry.pop(pod_uid)
