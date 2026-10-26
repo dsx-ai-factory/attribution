@@ -3,9 +3,9 @@
 
 from __future__ import annotations
 
-import queue
 import random
 import threading
+import time
 from itertools import count
 
 from loguru import logger
@@ -27,7 +27,8 @@ _WORK_GENERATIONS = count()
 
 
 class KubernetesDaemon:
-    """Record Pod placement before optional ownership/scheduler enrichment."""
+    """Watch Pods, record their placement, and enrich it with ownership and
+    scheduler-specific evidence, independently of whether enrichment succeeds."""
 
     def __init__(
         self,
@@ -41,11 +42,14 @@ class KubernetesDaemon:
         workers: int = 2,
         watch_timeout_seconds: int = 60,
         max_resolution_attempts: int = 5,
+        retry_poll_seconds: float = 0.5,
     ):
         if queue_size <= 0:
             raise ValueError("queue_size must be positive")
         if workers <= 0:
             raise ValueError("workers must be positive")
+        if max_resolution_attempts <= 0:
+            raise ValueError("max_resolution_attempts must be positive")
         self.core_api = core_api
         self.store = store
         self.namespace = namespace
@@ -53,12 +57,21 @@ class KubernetesDaemon:
         self.resource_resolvers = resource_resolvers
         self.watch_timeout_seconds = watch_timeout_seconds
         self.max_resolution_attempts = max_resolution_attempts
+        self.retry_poll_seconds = retry_poll_seconds
         self.health = HealthState()
-        self.items: queue.Queue[tuple[dict, int]] = queue.Queue(maxsize=queue_size)
         self.worker_count = workers
         self.stop_event = threading.Event()
+
+        # `enrichment_capacity` bounds the distinct Pod UIDs tracked below
+        # across `_pending`, `_in_flight`, and `_retry` combined.
+        self.enrichment_capacity = queue_size
+        self._pending: dict[str, tuple[dict, int]] = {}
+        self._in_flight: set[str] = set()
+        self._retry: dict[str, tuple[dict, int]] = {}
+        self._retry_attempts: dict[str, int] = {}
         self._latest_generation: dict[str, int] = {}
-        self._generation_lock = threading.Lock()
+        self._lock = threading.Lock()
+        self._work_available = threading.Condition(self._lock)
 
     def run(self) -> None:
         from kubernetes.client.exceptions import ApiException
@@ -68,8 +81,12 @@ class KubernetesDaemon:
             threading.Thread(target=self._worker, name=f"kubernetes-daemon-worker-{index}", daemon=True)
             for index in range(self.worker_count)
         ]
+        retry_thread = threading.Thread(
+            target=self._retry_loop, name="kubernetes-daemon-retry", daemon=True
+        )
         for worker in workers:
             worker.start()
+        retry_thread.start()
 
         resource_version = None
         backoff = 1.0
@@ -107,7 +124,11 @@ class KubernetesDaemon:
             self.stop_event.wait(backoff + random.uniform(0, backoff / 4))
             backoff = min(backoff * 2, 30)
 
-        self.items.join()
+        # Drain whatever is already pending or in flight before returning;
+        # anything still deferred in `_retry` is abandoned on shutdown.
+        while self._pending or self._in_flight:
+            with self._work_available:
+                self._work_available.wait(timeout=0.5)
 
     def stop(self) -> None:
         self.stop_event.set()
@@ -133,30 +154,115 @@ class KubernetesDaemon:
         captured = self._capture_placement(pod)
         if deleted and pod_uid:
             self._mark_deleted(pod_uid)
-        if not captured:
+        if not captured or not pod_uid:
             return
+        self._schedule(pod_uid, pod)
+
+    def _schedule(self, pod_uid: str, pod: dict) -> None:
+        """Track the latest `(pod, generation)` snapshot for `pod_uid`.
+
+        An already-tracked UID is updated in place; there's no special-casing
+        for what changed about it. New UIDs are skipped when capacity is full."""
         generation = next(_WORK_GENERATIONS)
-        if pod_uid:
-            with self._generation_lock:
-                self._latest_generation[pod_uid] = generation
-        while not self.stop_event.is_set():
-            try:
-                self.items.put((pod, generation), timeout=0.5)
-                self.health.update(queue_saturated=False)
-                return
-            except queue.Full:
+        with self._work_available:
+            admitted = self._pending.keys() | self._in_flight | self._retry.keys()
+            if pod_uid in admitted:
+                self._retry.pop(pod_uid, None)
+                self._retry_attempts.pop(pod_uid, None)
+                self._pending[pod_uid] = (pod, generation)
+            elif len(admitted) < self.enrichment_capacity:
+                self._pending[pod_uid] = (pod, generation)
+            else:
+                logger.error(
+                    f"KubernetesDaemon enrichment capacity ({self.enrichment_capacity}) is saturated; "
+                    f"skipped owner/scheduler enrichment for new Pod UID {pod_uid}"
+                )
                 self.health.update(queue_saturated=True)
-                logger.error("KubernetesDaemon work queue is saturated; readiness is failing")
-        self._complete_generation(pod_uid, generation)
+                return
+            self._latest_generation[pod_uid] = generation
+            self.health.update(queue_saturated=self._is_saturated())
+            self._work_available.notify()
+
+    def _is_saturated(self) -> bool:
+        admitted = self._pending.keys() | self._in_flight | self._retry.keys()
+        return len(admitted) >= self.enrichment_capacity
+
+    def _take_work(self, timeout: float) -> tuple[str, dict, int] | None:
+        # A Pod UID already in `_in_flight` is excluded here: only one worker
+        # may enrich a given Pod UID at a time. A newer snapshot for that UID
+        # waits in `_pending` until the active attempt finishes, instead of
+        # racing it on another worker.
+        deadline = time.monotonic() + timeout
+        with self._work_available:
+            while True:
+                pod_uid = next((uid for uid in self._pending if uid not in self._in_flight), None)
+                if pod_uid is not None:
+                    pod, generation = self._pending.pop(pod_uid)
+                    self._in_flight.add(pod_uid)
+                    return pod_uid, pod, generation
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    return None
+                self._work_available.wait(timeout=remaining)
+
+    def _complete_work(self, pod_uid: str) -> None:
+        with self._work_available:
+            self._in_flight.discard(pod_uid)
+            if (
+                pod_uid not in self._pending
+                and pod_uid not in self._in_flight
+                and pod_uid not in self._retry
+            ):
+                self._latest_generation.pop(pod_uid, None)
+                self._retry_attempts.pop(pod_uid, None)
+            self.health.update(queue_saturated=self._is_saturated())
+            self._work_available.notify()
+
+    def _schedule_retry(self, pod_uid: str, pod: dict, generation: int) -> None:
+        """Defer a failed enrichment attempt for retry, unless a newer
+        snapshot for this Pod UID has already superseded it."""
+        with self._work_available:
+            if pod_uid in self._pending:
+                return
+            attempts = self._retry_attempts.get(pod_uid, 0) + 1
+            if attempts >= self.max_resolution_attempts:
+                logger.warning(
+                    f"retained unresolved Pod placement for Pod UID {pod_uid} "
+                    f"after {attempts} enrichment attempts"
+                )
+                self._retry_attempts.pop(pod_uid, None)
+                return
+            self._retry_attempts[pod_uid] = attempts
+            self._retry[pod_uid] = (pod, generation)
+            self.health.update(queue_saturated=self._is_saturated())
+
+    def _retry_loop(self) -> None:
+        while not self.stop_event.is_set():
+            self._promote_retries()
+            self.stop_event.wait(self.retry_poll_seconds)
+
+    def _promote_retries(self) -> None:
+        """Move deferred retries back into pending.
+
+        Called on a fixed interval by `_retry_loop`, never by a worker."""
+        with self._work_available:
+            ready = list(self._retry)
+            for pod_uid in ready:
+                self._pending[pod_uid] = self._retry.pop(pod_uid)
+            if ready:
+                self.health.update(queue_saturated=self._is_saturated())
+                self._work_available.notify_all()
 
     def _worker(self) -> None:
-        while not self.stop_event.is_set() or not self.items.empty():
-            try:
-                pod, generation = self.items.get(timeout=0.5)
-            except queue.Empty:
+        while not self.stop_event.is_set() or self._pending or self._in_flight:
+            item = self._take_work(timeout=0.5)
+            if item is None:
+                self.health.update(queue_saturated=self._is_saturated())
                 continue
+            pod_uid, pod, generation = item
+            needs_retry = False
             try:
-                self._record(pod, generation=generation)
+                needs_retry = self._record(pod, generation=generation)
             except Exception:
                 # A malformed observation or an unexpected enrichment bug
                 # must never terminate a recording worker.
@@ -165,22 +271,17 @@ class KubernetesDaemon:
             else:
                 self.health.update(recording_failed=False)
             finally:
-                pod_uid = (pod.get("metadata") or {}).get("uid")
-                self._complete_generation(pod_uid, generation)
-                self.items.task_done()
-
-    def _complete_generation(self, pod_uid: str | None, generation: int) -> None:
-        if pod_uid:
-            with self._generation_lock:
-                if self._latest_generation.get(pod_uid) == generation:
-                    del self._latest_generation[pod_uid]
+                if needs_retry:
+                    self._schedule_retry(pod_uid, pod, generation)
+                self._complete_work(pod_uid)
 
     def _record(
         self,
         pod: dict,
         *,
         generation: int | None = None,
-    ) -> None:
+    ) -> bool:
+        """Enrich `pod`. Returns True when enrichment should be retried later."""
         metadata = pod.get("metadata") or {}
         try:
             base = self.store.get_by_pod_uid(metadata.get("uid"))
@@ -193,8 +294,8 @@ class KubernetesDaemon:
                 f"cannot enrich Pod {self.namespace}/{metadata.get('name')}: "
                 "base placement is not persisted"
             )
-            return
-        self._enrich_placement(pod, base, generation)
+            return False
+        return self._enrich_placement(pod, base, generation)
 
     def _capture_placement(self, pod: dict) -> bool:
         failure_reason = pod_node_failure_reason(pod) or _pod_container_exit_reason(pod)
@@ -213,99 +314,111 @@ class KubernetesDaemon:
         pod: dict,
         base: PlacementRecord,
         generation: int | None,
-    ) -> None:
+    ) -> bool:
+        """Resolve and persist owner/resource enrichment for `pod`.
+
+        Each resolver is called exactly once; a failure that should be
+        retried is reported via the return value, not retried inline."""
         metadata = pod.get("metadata") or {}
         if self.owner_resolver is None:
-            return
+            return False
         # Unobserved relationship changes cannot be reconstructed after deletion.
         cached_owner = (
             base.owner
             if _stored_owner_matches_pod(base, pod)
             else None
         )
-        owner = None
-        for attempt in range(self.max_resolution_attempts):
-            try:
-                owner = self.owner_resolver.resolve(pod)
-                break
-            except ResolutionPending as error:
-                if attempt == 0 and cached_owner is not None:
-                    owner = cached_owner
-                    break
-                if attempt + 1 == self.max_resolution_attempts or self.stop_event.is_set():
-                    logger.warning(f"retained unresolved Pod placement: {error}")
-                    return
-                self.stop_event.wait(min(2**attempt, 8))
-            except UnsupportedOwner as error:
-                logger.info(f"retained placement without supported owner: {error}")
-                return
-            except StaleOwnerReference as error:
-                logger.warning(f"retained placement with stale owner reference: {error}")
-                return
-            except Exception:
-                logger.exception("failed to enrich Pod placement; scheduler-neutral evidence was retained")
-                return
+        try:
+            owner = self.owner_resolver.resolve(pod)
+        except ResolutionPending as error:
+            if cached_owner is not None:
+                owner = cached_owner
+            else:
+                logger.info(f"deferred Pod owner enrichment for retry: {error}")
+                return True
+        except UnsupportedOwner as error:
+            logger.info(f"retained placement without supported owner: {error}")
+            return False
+        except StaleOwnerReference as error:
+            logger.warning(f"retained placement with stale owner reference: {error}")
+            return False
+        except Exception as error:
+            # Resolvers treat all other errors as retryable rather
+            # than dropping enrichment outright.
+            logger.warning(f"deferred Pod owner enrichment after an unexpected failure, will retry: {error}")
+            return True
 
-        assert owner is not None
         current = PlacementRecord.for_pod(pod)
         owned = current.enriched(owner=owner)
-        owner_result = self._persist_enrichment(
+        owner_result, owner_retry = self._persist_enrichment(
             owned,
             "Pod owner enrichment",
             generation,
         )
+        if owner_retry:
+            return True
         if owner_result is None:
-            return
+            # A newer generation for this Pod UID already superseded this
+            # write; that newer work owns any further enrichment.
+            return False
         if owner_result != CreateResult.DUPLICATE:
             logger.info(f"{owner_result.value} owner metadata for Pod {self.namespace}/{metadata.get('name')}")
 
         enriched = owned
+        needs_retry = False
         for resolver in self.resource_resolvers:
             resolver_name = type(resolver).__name__
-            for attempt in range(self.max_resolution_attempts):
-                try:
-                    resources = resolver.resolve(pod, owner)
-                    enriched = enriched.enriched(associated_resources=resources)
-                    resource_result = self._persist_enrichment(
-                        enriched,
-                        f"resources from {resolver_name}",
-                        generation,
-                    )
-                    if resource_result is None:
-                        break
-                    if resource_result != CreateResult.DUPLICATE:
-                        logger.info(
-                            f"{resource_result.value} resources from {resolver_name} for "
-                            f"Pod {self.namespace}/{metadata.get('name')}"
-                        )
-                    break
-                except ResolutionPending as error:
-                    if attempt + 1 == self.max_resolution_attempts or self.stop_event.is_set():
-                        logger.warning(f"retained Pod placement without resources from {resolver_name}: {error}")
-                        break
-                    self.stop_event.wait(min(2**attempt, 8))
-                except UnsupportedOwner as error:
-                    logger.info(f"retained Pod placement without resources from {resolver_name}: {error}")
-                    break
-                except Exception:
-                    logger.exception(
-                        f"failed to enrich resources from {resolver_name}; "
-                        "scheduler-neutral evidence was retained"
-                    )
-                    break
+            try:
+                resources = resolver.resolve(pod, owner)
+            except ResolutionPending as error:
+                logger.info(
+                    f"deferred Pod resources from {resolver_name} for retry: {error}"
+                )
+                needs_retry = True
+                continue
+            except UnsupportedOwner as error:
+                logger.info(f"retained Pod placement without resources from {resolver_name}: {error}")
+                continue
+            except Exception as error:
+                # Same reasoning as the owner-resolution case above: an
+                # unexpected error (e.g. a transient HTTP 503) is retryable,
+                # not a reason to permanently drop this resolver's evidence.
+                logger.warning(
+                    f"deferred Pod resources from {resolver_name} after an unexpected failure, "
+                    f"will retry: {error}"
+                )
+                needs_retry = True
+                continue
+            enriched = enriched.enriched(associated_resources=resources)
+            resource_result, resource_retry = self._persist_enrichment(
+                enriched,
+                f"resources from {resolver_name}",
+                generation,
+            )
+            if resource_retry:
+                needs_retry = True
+                continue
+            if resource_result is not None and resource_result != CreateResult.DUPLICATE:
+                logger.info(
+                    f"{resource_result.value} resources from {resolver_name} for "
+                    f"Pod {self.namespace}/{metadata.get('name')}"
+                )
+        return needs_retry
 
     def _persist_enrichment(
         self,
         record: PlacementRecord,
         operation: str,
         generation: int | None,
-    ) -> CreateResult | None:
+    ) -> tuple[CreateResult | None, bool]:
         if generation is None:
-            return self._persist(record, operation)
-        with self._generation_lock:
+            result = self._persist(record, operation)
+            return result, result is None
+        with self._work_available:
             if self._latest_generation.get(record.pod_uid) != generation:
-                return None
-            return self._persist(record, operation)
+                return None, False
+            result = self._persist(record, operation)
+            return result, result is None
 
     def _persist(self, record: PlacementRecord, operation: str) -> CreateResult | None:
         try:
@@ -347,16 +460,17 @@ def _stored_owner_matches_pod(record: PlacementRecord, pod: dict) -> bool:
     return False
 
 
-def _as_dict(resource) -> dict:
-    if isinstance(resource, dict):
-        return resource
-    return normalize_resource(resource.to_dict())
-
-
 def _pod_container_exit_reason(pod: dict) -> str | None:
+    """Return ``ExitCode:<n>`` for the first non-zero container exit."""
     for container_status in (pod.get("status") or {}).get("containerStatuses") or []:
         terminated = (container_status.get("state") or {}).get("terminated") or {}
         exit_code = terminated.get("exitCode")
         if isinstance(exit_code, int) and exit_code != 0:
             return f"ExitCode:{exit_code}"
     return None
+
+
+def _as_dict(resource) -> dict:
+    if isinstance(resource, dict):
+        return resource
+    return normalize_resource(resource.to_dict())

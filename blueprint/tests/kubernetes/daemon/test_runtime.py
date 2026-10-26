@@ -47,6 +47,23 @@ class _OwnerResolver:
         return ResourceIdentity("batch/v1", "Job", "team-a", "trainer", "job-uid-1")
 
 
+class _EchoOwnerResolver:
+    """Resolve the owner using the Pod's own controller reference.
+
+    Unlike `_OwnerResolver`, the returned identity reflects whichever Pod
+    snapshot was actually passed to `resolve`, so tests can prove which
+    snapshot the daemon chose to enrich.
+    """
+
+    def __init__(self):
+        self.calls = 0
+
+    def resolve(self, pod):
+        self.calls += 1
+        reference = pod["metadata"]["ownerReferences"][0]
+        return ResourceIdentity("batch/v1", "Job", "team-a", reference["name"], reference["uid"])
+
+
 class _ReassignedThenPendingResolver(_OwnerResolver):
     def resolve(self, pod):
         self.calls += 1
@@ -75,6 +92,51 @@ class _ReassignedOwnerResolver(_OwnerResolver):
             "training",
             "jobset-uid-1",
         )
+
+
+class _PendingThenResolvedOwnerResolver:
+    def __init__(self):
+        self.calls = 0
+
+    def resolve(self, pod):
+        self.calls += 1
+        if self.calls == 1:
+            raise ResolutionPending("owner not visible yet")
+        return ResourceIdentity("batch/v1", "Job", "team-a", "trainer", "job-uid-1")
+
+
+class _AlwaysPendingOwnerResolver:
+    def __init__(self):
+        self.calls = 0
+
+    def resolve(self, pod):
+        self.calls += 1
+        raise ResolutionPending("owner never appears")
+
+
+class _TransientlyFailingOwnerResolver:
+    """Raises an error not modeled by any named resolver exception, the way
+    an unhandled HTTP 503 from the Kubernetes API would surface."""
+
+    def __init__(self):
+        self.calls = 0
+
+    def resolve(self, pod):
+        self.calls += 1
+        if self.calls == 1:
+            raise TimeoutError("Kubernetes API temporarily unavailable (HTTP 503)")
+        return ResourceIdentity("batch/v1", "Job", "team-a", "trainer", "job-uid-1")
+
+
+class _TransientlyFailingResourceResolver:
+    def __init__(self):
+        self.calls = 0
+
+    def resolve(self, pod, owner):
+        self.calls += 1
+        if self.calls == 1:
+            raise ConnectionError("Kubernetes API temporarily unavailable (HTTP 503)")
+        return (ResourceIdentity("scheduling.example.io/v1", "Admission", "team-a", "admission-a", "admission-uid-a"),)
 
 
 class _BlockingReassignmentResolver:
@@ -149,7 +211,11 @@ class _BlockingResourceResolver:
 
 
 class _PendingResourceResolver:
+    def __init__(self):
+        self.calls = 0
+
     def resolve(self, pod, owner):
+        self.calls += 1
         raise ResolutionPending("Workload has not appeared")
 
 
@@ -187,6 +253,21 @@ class _FailOnEnrichmentStore:
 
     def get_by_pod_uid(self, pod_uid):
         return self.base
+
+
+class _FailEnrichmentOnceStore:
+    def __init__(self, delegate):
+        self.delegate = delegate
+        self.failed = False
+
+    def create(self, record):
+        if record.owner is not None and not self.failed:
+            self.failed = True
+            raise OSError("synthetic enrichment write failure")
+        return self.delegate.create(record)
+
+    def __getattr__(self, name):
+        return getattr(self.delegate, name)
 
 
 def test_records_placement_before_any_resolution(tmp_path):
@@ -232,8 +313,7 @@ def test_complete_listing_reconciles_absent_placements(mocker):
         "team-a",
         {"pod-uid-1"},
     )
-    queued_pod, _generation = daemon.items.get_nowait()
-    assert queued_pod == pod
+    assert daemon._pending["pod-uid-1"][0] == pod
 
 
 def test_relist_marks_queued_but_now_absent_pod_deleted(tmp_path):
@@ -256,20 +336,119 @@ def test_relist_marks_queued_but_now_absent_pod_deleted(tmp_path):
     assert marker == ("pod-uid-1",)
 
 
-def test_retains_owner_when_optional_scheduler_resolution_exhausts(tmp_path):
+def test_saturation_preserves_admitted_retry_and_skips_new_uid(tmp_path):
     store = SQLitePlacementStore(str(tmp_path / "placements.db"))
     daemon = KubernetesDaemon(
         core_api=None,
         store=store,
         namespace="team-a",
+        queue_size=2,
+    )
+    # Both capacity slots are already occupied by admitted work.
+    daemon._in_flight.add("occupying-uid")
+    other_retry = _pod()
+    other_retry["metadata"]["uid"] = "pod-uid-other"
+    daemon._retry["pod-uid-other"] = (other_retry, -1)
+    replacement = _pod()
+    replacement["metadata"]["uid"] = "pod-uid-2"
+    replacement["metadata"]["name"] = "trainer-1"
+
+    daemon._enqueue(replacement)
+
+    # Placement is never subject to enrichment capacity: it is persisted
+    # synchronously regardless of overflow.
+    record = store.get_by_pod_uid("pod-uid-2")
+    assert record is not None
+    assert record.node_name == "node-a"
+    assert daemon.health.queue_saturated is True
+    # Existing recovery work is preserved; the new distinct UID is skipped.
+    assert "pod-uid-other" in daemon._retry
+    assert "pod-uid-2" not in daemon._retry
+    assert "pod-uid-2" not in daemon._pending
+
+
+def test_saturation_skips_new_uid_when_active_work_fills_capacity(tmp_path):
+    """New enrichment is skipped when admitted work fills capacity.
+
+    Base placement is still persisted.
+    """
+    store = SQLitePlacementStore(str(tmp_path / "placements.db"))
+    daemon = KubernetesDaemon(
+        core_api=None,
+        store=store,
+        namespace="team-a",
+        queue_size=1,
+    )
+    daemon._in_flight.add("occupying-uid")
+    replacement = _pod()
+    replacement["metadata"]["uid"] = "pod-uid-2"
+    replacement["metadata"]["name"] = "trainer-1"
+
+    daemon._enqueue(replacement)
+
+    assert store.get_by_pod_uid("pod-uid-2") is not None
+    assert "pod-uid-2" not in daemon._retry
+    assert "pod-uid-2" not in daemon._pending
+    assert "pod-uid-2" not in daemon._latest_generation
+
+
+def test_latest_pod_snapshot_always_wins_without_controller_tracking(tmp_path):
+    """A later event for the same Pod UID replaces the earlier snapshot
+    outright, even at capacity 1 and even across a controller change. There
+    is no special "controller changed" or "controller reverted" case: the
+    daemon only ever tracks one latest snapshot per Pod UID."""
+    store = SQLitePlacementStore(str(tmp_path / "placements.db"))
+    resolver = _EchoOwnerResolver()
+    daemon = KubernetesDaemon(
+        core_api=None,
+        store=store,
+        namespace="team-a",
+        owner_resolver=resolver,
+        queue_size=1,
+    )
+    daemon._enqueue(_pod())
+    reassigned = _pod()
+    reassigned["metadata"]["ownerReferences"][0].update({"name": "trainer-2", "uid": "job-uid-2"})
+
+    daemon._enqueue(reassigned)
+
+    # Updating an already-tracked Pod UID never consumes extra capacity.
+    assert daemon._pending["pod-uid-1"][0] == reassigned
+    daemon.stop_event.set()
+    daemon._worker()
+
+    assert resolver.calls == 1
+    assert store.get_by_pod_uid("pod-uid-1").owner.uid == "job-uid-2"
+
+
+def test_empty_worker_clears_stale_saturation(mocker):
+    daemon = KubernetesDaemon(core_api=None, store=mocker.Mock(), namespace="team-a")
+    daemon.health.update(queue_saturated=True)
+    daemon.stop_event = mocker.Mock()
+    daemon.stop_event.is_set.side_effect = [False, True]
+    mocker.patch.object(daemon, "_take_work", return_value=None)
+
+    daemon._worker()
+
+    assert daemon.health.queue_saturated is False
+
+
+def test_recording_attempt_does_not_retry_scheduler_resolution_inline(tmp_path):
+    store = SQLitePlacementStore(str(tmp_path / "placements.db"))
+    resolver = _PendingResourceResolver()
+    daemon = KubernetesDaemon(
+        core_api=None,
+        store=store,
+        namespace="team-a",
         owner_resolver=_OwnerResolver(),
-        resource_resolvers=(_PendingResourceResolver(),),
-        max_resolution_attempts=1,
+        resource_resolvers=(resolver,),
+        max_resolution_attempts=5,
     )
 
     daemon._capture_placement(_pod())
     daemon._record(_pod())
 
+    assert resolver.calls == 1
     record = store.get_by_pod_uid("pod-uid-1")
     assert record is not None
     assert record.owner == ResourceIdentity("batch/v1", "Job", "team-a", "trainer", "job-uid-1")
@@ -298,6 +477,8 @@ def test_reassigned_owner_refreshes_controller_reference_for_later_fallback(tmp_
 
     stored = store.get_by_pod_uid("pod-uid-1")
     assert resolver.calls == 3
+    # Retries never block inside a single enrichment attempt; deferred
+    # scheduling is entirely the retry loop's responsibility.
     wait.assert_not_called()
     assert stored.owner.uid == "jobset-uid-1"
     assert stored.owner_references[0].uid == "job-uid-2"
@@ -371,16 +552,17 @@ def test_stale_owner_write_cannot_overwrite_newer_event(tmp_path):
         {"name": "trainer-2", "uid": "job-uid-2"}
     )
     daemon._enqueue(older)
-    daemon._enqueue(newer)
     workers = [threading.Thread(target=daemon._worker) for _ in range(2)]
     for worker in workers:
         worker.start()
 
     assert resolver.started.wait(timeout=2)
+    # The newer event for the same Pod UID cannot start on the other worker
+    # while the older one is still in flight; it only runs after release.
+    daemon._enqueue(newer)
+    resolver.release.set()
     assert store.newer_owner_written.wait(timeout=2)
     daemon.stop_event.set()
-    resolver.release.set()
-    daemon.items.join()
     for worker in workers:
         worker.join(timeout=2)
 
@@ -408,13 +590,14 @@ def test_stale_resource_write_cannot_overwrite_newer_event(tmp_path):
     first.start()
     assert resolver.started.wait(timeout=2)
 
+    # The newer event for the same Pod UID cannot start on the second worker
+    # while the older one is still in flight; it only runs after release.
     daemon._enqueue(newer)
     second = threading.Thread(target=daemon._worker)
     second.start()
+    resolver.release.set()
     assert store.newer_resource_written.wait(timeout=2)
     daemon.stop_event.set()
-    resolver.release.set()
-    daemon.items.join()
     first.join(timeout=2)
     second.join(timeout=2)
 
@@ -429,7 +612,7 @@ def test_missing_generation_tracking_rejects_enrichment_write(tmp_path):
         owner=ResourceIdentity("batch/v1", "Job", "team-a", "trainer", "job-uid-1")
     )
 
-    assert daemon._persist_enrichment(record, "test enrichment", generation=1) is None
+    assert daemon._persist_enrichment(record, "test enrichment", generation=1) == (None, False)
     assert store.get_by_pod_uid("pod-uid-1") is None
 
 
@@ -488,6 +671,24 @@ def test_deleted_event_starts_placement_retention(tmp_path):
     assert marker == ("pod-uid-1",)
 
 
+def test_failed_deleted_capture_still_starts_retention(tmp_path, mocker):
+    path = tmp_path / "placements.db"
+    store = SQLitePlacementStore(str(path))
+    daemon = KubernetesDaemon(core_api=None, store=store, namespace="team-a")
+    daemon._capture_placement(_pod())
+    mocker.patch.object(store, "create", side_effect=OSError("synthetic storage failure"))
+
+    daemon._enqueue(_pod(), deleted=True)
+
+    with sqlite3.connect(path) as connection:
+        marker = connection.execute(
+            "SELECT pod_uid FROM placement_deletion"
+        ).fetchone()
+    assert marker == ("pod-uid-1",)
+    assert daemon.health.persistence_failed is True
+    assert not daemon._pending and not daemon._in_flight
+
+
 def test_resource_version_expiry_resets_readiness_before_relisting(mocker):
     """A relist triggered by an expired watch resourceVersion (HTTP 410) must
     clear `initial_list_complete` until the relist completes, so `/readyz`
@@ -535,17 +736,46 @@ def test_owner_enrichment_write_failure_does_not_escape_or_kill_recording():
     )
 
     daemon._capture_placement(_pod())
-    daemon._record(_pod())
+    assert daemon._record(_pod()) is True
 
     assert store.calls == 2
     assert daemon.health.persistence_failed is True
+
+
+def test_transient_enrichment_write_failure_retries_without_another_pod_event(tmp_path):
+    backing_store = SQLitePlacementStore(str(tmp_path / "placements.db"))
+    store = _FailEnrichmentOnceStore(backing_store)
+    daemon = KubernetesDaemon(
+        core_api=None,
+        store=store,
+        namespace="team-a",
+        owner_resolver=_OwnerResolver(),
+    )
+    daemon._enqueue(_pod())
+    daemon.stop_event.set()
+
+    daemon._worker()
+
+    assert "pod-uid-1" in daemon._retry
+    assert backing_store.get_by_pod_uid("pod-uid-1").owner is None
+
+    daemon._promote_retries()
+    daemon.stop_event.clear()
+    daemon.stop_event.set()
+    daemon._worker()
+
+    assert backing_store.get_by_pod_uid("pod-uid-1").owner.uid == "job-uid-1"
+    assert "pod-uid-1" not in daemon._retry
 
 
 def test_worker_survives_unexpected_recording_failure(tmp_path):
     store = SQLitePlacementStore(str(tmp_path / "placements.db"))
     daemon = KubernetesDaemon(core_api=None, store=store, namespace="team-a")
     daemon._enqueue(_pod())
-    daemon._enqueue(_pod())
+    other = _pod()
+    other["metadata"]["uid"] = "pod-uid-2"
+    other["metadata"]["name"] = "trainer-1"
+    daemon._enqueue(other)
     daemon.stop_event.set()
     calls = 0
 
@@ -560,5 +790,178 @@ def test_worker_survives_unexpected_recording_failure(tmp_path):
     daemon._worker()
 
     assert calls == 2
-    assert daemon.items.unfinished_tasks == 0
+    assert not daemon._pending and not daemon._in_flight
     assert daemon.health.recording_failed is False
+
+
+def test_transient_owner_failure_is_retried_outside_the_worker(tmp_path):
+    store = SQLitePlacementStore(str(tmp_path / "placements.db"))
+    resolver = _PendingThenResolvedOwnerResolver()
+    daemon = KubernetesDaemon(
+        core_api=None,
+        store=store,
+        namespace="team-a",
+        owner_resolver=resolver,
+    )
+    daemon._enqueue(_pod())
+    daemon.stop_event.set()
+
+    daemon._worker()
+
+    # The failed attempt is deferred for retry, not dropped and not retried
+    # inline by the worker itself.
+    assert resolver.calls == 1
+    assert "pod-uid-1" in daemon._retry
+    assert "pod-uid-1" not in daemon._pending
+    assert store.get_by_pod_uid("pod-uid-1").owner is None
+
+    # Simulate the dedicated retry loop's next tick, outside any worker.
+    daemon._promote_retries()
+    daemon.stop_event.clear()
+    daemon.stop_event.set()
+    daemon._worker()
+
+    assert resolver.calls == 2
+    assert store.get_by_pod_uid("pod-uid-1").owner.uid == "job-uid-1"
+
+
+def test_retry_gives_up_after_max_resolution_attempts(tmp_path):
+    store = SQLitePlacementStore(str(tmp_path / "placements.db"))
+    resolver = _AlwaysPendingOwnerResolver()
+    daemon = KubernetesDaemon(
+        core_api=None,
+        store=store,
+        namespace="team-a",
+        owner_resolver=resolver,
+        max_resolution_attempts=2,
+    )
+    daemon._enqueue(_pod())
+    daemon.stop_event.set()
+
+    daemon._worker()
+    assert "pod-uid-1" in daemon._retry
+
+    daemon._promote_retries()
+    daemon.stop_event.clear()
+    daemon.stop_event.set()
+    daemon._worker()
+
+    assert resolver.calls == 2
+    assert "pod-uid-1" not in daemon._retry
+    assert "pod-uid-1" not in daemon._pending
+    assert store.get_by_pod_uid("pod-uid-1").owner is None
+
+
+def test_newer_pod_event_waits_instead_of_racing_the_in_flight_attempt(tmp_path):
+    """A second event for a Pod UID already in flight must not be picked up
+    by another worker concurrently: it waits in `_pending` until the active
+    attempt completes."""
+    store = SQLitePlacementStore(str(tmp_path / "placements.db"))
+    daemon = KubernetesDaemon(core_api=None, store=store, namespace="team-a")
+    daemon._enqueue(_pod())
+    taken = daemon._take_work(timeout=0.1)
+    assert taken is not None
+    pod_uid, _older_pod, older_generation = taken
+
+    reassigned = _pod()
+    reassigned["metadata"]["ownerReferences"][0]["uid"] = "job-uid-2"
+    daemon._enqueue(reassigned)
+
+    # The newer snapshot is queued for this Pod UID, but no worker may start
+    # it while the older attempt is still in flight.
+    queued_pod, queued_generation = daemon._pending[pod_uid]
+    assert queued_pod == reassigned
+    assert queued_generation != older_generation
+    assert daemon._take_work(timeout=0.1) is None
+
+    daemon._complete_work(pod_uid)
+
+    # Only now does the newer snapshot become available.
+    taken_again = daemon._take_work(timeout=0.1)
+    assert taken_again is not None
+    _pod_uid, newer_pod, newer_generation = taken_again
+    assert newer_pod == reassigned
+    assert newer_generation != older_generation
+
+
+def test_in_flight_completion_preserves_generation_for_queued_newer_work(tmp_path):
+    """Finishing the older (in-flight) attempt for a Pod UID must not clear
+    generation tracking while a newer snapshot for that same UID is still
+    queued and waiting to run; otherwise the newer attempt's later write
+    would be wrongly rejected as stale."""
+    store = SQLitePlacementStore(str(tmp_path / "placements.db"))
+    daemon = KubernetesDaemon(core_api=None, store=store, namespace="team-a")
+    daemon._capture_placement(_pod())
+    daemon._schedule("pod-uid-1", _pod())
+    pod_uid, _older_pod, older_generation = daemon._take_work(timeout=0.1)
+
+    reassigned = _pod()
+    daemon._schedule("pod-uid-1", reassigned)
+    newer_generation = daemon._latest_generation["pod-uid-1"]
+    assert newer_generation != older_generation
+
+    # The older attempt finishes (e.g. its own write was rejected as stale).
+    daemon._complete_work(pod_uid)
+
+    assert daemon._latest_generation.get("pod-uid-1") == newer_generation
+    record = PlacementRecord.for_pod(reassigned).enriched(
+        owner=ResourceIdentity("batch/v1", "Job", "team-a", "trainer", "job-uid-1")
+    )
+    result, retry = daemon._persist_enrichment(record, "test enrichment", newer_generation)
+    assert result is not None
+    assert retry is False
+
+
+def test_unexpected_owner_resolution_error_is_retried_not_dropped(tmp_path):
+    store = SQLitePlacementStore(str(tmp_path / "placements.db"))
+    resolver = _TransientlyFailingOwnerResolver()
+    daemon = KubernetesDaemon(
+        core_api=None,
+        store=store,
+        namespace="team-a",
+        owner_resolver=resolver,
+    )
+    daemon._enqueue(_pod())
+    daemon.stop_event.set()
+
+    daemon._worker()
+
+    assert resolver.calls == 1
+    assert "pod-uid-1" in daemon._retry
+    assert store.get_by_pod_uid("pod-uid-1").owner is None
+
+    daemon._promote_retries()
+    daemon.stop_event.clear()
+    daemon.stop_event.set()
+    daemon._worker()
+
+    assert resolver.calls == 2
+    assert store.get_by_pod_uid("pod-uid-1").owner.uid == "job-uid-1"
+
+
+def test_unexpected_resource_resolution_error_is_retried_not_dropped(tmp_path):
+    store = SQLitePlacementStore(str(tmp_path / "placements.db"))
+    resolver = _TransientlyFailingResourceResolver()
+    daemon = KubernetesDaemon(
+        core_api=None,
+        store=store,
+        namespace="team-a",
+        owner_resolver=_OwnerResolver(),
+        resource_resolvers=(resolver,),
+    )
+    daemon._enqueue(_pod())
+    daemon.stop_event.set()
+
+    daemon._worker()
+
+    assert resolver.calls == 1
+    assert "pod-uid-1" in daemon._retry
+    assert store.get_by_pod_uid("pod-uid-1").associated_resources == ()
+
+    daemon._promote_retries()
+    daemon.stop_event.clear()
+    daemon.stop_event.set()
+    daemon._worker()
+
+    assert resolver.calls == 2
+    assert store.get_by_pod_uid("pod-uid-1").associated_resources[0].uid == "admission-uid-a"
