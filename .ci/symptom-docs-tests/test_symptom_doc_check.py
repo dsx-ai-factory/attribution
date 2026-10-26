@@ -8,6 +8,8 @@ import os
 from pathlib import Path
 import shutil
 import subprocess
+from types import SimpleNamespace
+from unittest.mock import Mock
 
 import pytest
 import yaml
@@ -421,20 +423,39 @@ def test_real_snapshot_contains_only_document_metadata(tmp_path):
     assert check.compare(result, result) == []
 
 
-def test_saved_contract_matches_real_producer():
+def test_saved_contract_matches_controlled_producer(change_repo, monkeypatch):
+    """Check the historical format without freezing the live rule/catalog data."""
+    import attribution_lib
+    import attribution_lib.core
+
+    root, base = change_repo
     fixture = json.loads(
         (Path(__file__).parent / "fixtures/public-symptom-contract.json").read_text()
     )
-    actual = check.collect(ROOT)
-    assert actual.keys() == fixture.keys()
-    assert actual["schema_version"] == fixture["schema_version"]
-    prefixes = {r["prefix"] for r in fixture["declarations"]}
-    ids = {r["id"] for r in fixture["documents"]}
-    assert [r for r in actual["declarations"] if r["prefix"] in prefixes] == fixture[
-        "declarations"
-    ]
-    assert [r for r in actual["documents"] if r["id"] in ids] == fixture["documents"]
-    assert actual["dynamic"] == fixture["dynamic"]
+    catalog = root / check.CATALOG
+    catalog.parent.mkdir(parents=True)
+    catalog.write_text(yaml.safe_dump({"failures": fixture["documents"]}))
+    engine = SimpleNamespace(
+        symptom_declarations=[
+            check.SymptomDeclaration(**row) for row in fixture["declarations"]
+        ]
+    )
+    matches = {
+        row["name"]: SimpleNamespace(doc=row["doc"], matched_prefix=row["prefix"])
+        for row in fixture["dynamic"]
+    }
+    registry = SimpleNamespace(outcome_for=lambda names: matches[names[0]])
+    setup = Mock()
+    monkeypatch.setattr(attribution_lib.core, "setup_rules", setup)
+    monkeypatch.setattr(attribution_lib, "get_rules_engine", lambda: engine)
+    monkeypatch.setattr(attribution_lib, "get_symptom_registry", lambda: registry)
+    monkeypatch.setattr(
+        check,
+        "DYNAMIC_CASES",
+        {row["name"]: row["expected_doc"] for row in fixture["dynamic"]},
+    )
+    assert check.collect(root) == {**fixture, "commit_sha": base}
+    setup.assert_called_once_with(force=True)
 
 
 def commit(root, message):
@@ -519,6 +540,55 @@ def test_real_commit_comparison_and_worktree_cleanup(
     report = json.loads((output / "result.json").read_text())
     assert report["status"] == "success" and report["new_gaps"] == []
     assert report["head_sha"] == fixed_head
+
+
+def test_adding_live_catalog_alias_is_not_a_regression(committed_repo, tmp_path):
+    root, base = committed_repo
+    catalog = root / check.CATALOG
+    payload = yaml.safe_load(catalog.read_text())
+    entry = next(
+        row for row in payload["failures"] if row["id"] == "detected-bad-nic-state"
+    )
+    entry.setdefault("aliases", []).append("Additional NIC failure spelling")
+    catalog.write_text(yaml.safe_dump(payload, sort_keys=False))
+    commit(root, "Add a public documentation alias")
+    output = tmp_path / "output"
+    assert (
+        check.main(
+            ["check", "--root", str(root), "--base", base, "--output", str(output)]
+        )
+        == 0
+    )
+    report = json.loads((output / "result.json").read_text())
+    assert report["status"] == "success" and report["new_gaps"] == []
+
+
+def test_error_details_are_actionable_and_stay_on_one_line(
+    tmp_path, monkeypatch, capsys
+):
+    monkeypatch.delenv("GITHUB_ACTIONS", raising=False)
+    message = "duplicate documentation id: 'example-id'\n::error::injected"
+
+    def invalid_catalog(_root):
+        raise ValueError(message)
+
+    monkeypatch.setattr(check, "collect", invalid_catalog)
+    assert (
+        check.main(
+            [
+                "snapshot",
+                "--root",
+                str(ROOT),
+                "--output",
+                str(tmp_path / "snapshot.json"),
+            ]
+        )
+        == 2
+    )
+    lines = capsys.readouterr().err.splitlines()
+    assert len(lines) == 1
+    assert "ValueError" in lines[0] and "example-id" in lines[0]
+    assert lines[0].endswith(json.dumps(message))
 
 
 def test_advisory_missing_then_corrected_real_catalog(

@@ -60,7 +60,7 @@ def collect(root: Path) -> dict:
     declarations = sorted(
         (
             {"prefix": d.prefix, "doc": d.doc, "outcome": d.outcome}
-            for d in attribution_lib._rules_engine.symptom_declarations
+            for d in attribution_lib.get_rules_engine().symptom_declarations
             if symptom_requires_doc(d)
         ),
         key=lambda d: d["prefix"],
@@ -326,7 +326,8 @@ def main(argv: list[str] | None = None) -> int:
             except OSError:
                 pass  # The nonzero exit still prevents a successful CI result.
         print(
-            f"Symptom documentation check could not complete: {type(exc).__name__}",
+            f"Symptom documentation check could not complete: {type(exc).__name__}: "
+            f"{json.dumps(str(exc))}",
             file=sys.stderr,
         )
         if args.command == "check":

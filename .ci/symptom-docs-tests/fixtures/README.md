@@ -14,6 +14,9 @@ Only the `detected-bad-nic-state` and `irisc-not-responding` declarations
 and public document metadata are retained; the seven runtime examples are
 unchanged. There is no tenant guidance or private manifest data.
 
-The public test compares these records with fresh producer output. Keep any
-consumer's copy identical when deliberately updating the contract. The recorded
-SHA is fixture provenance, not the current PR's identity or an attestation.
+The public test feeds controlled declarations, catalog entries, and registry
+matches into the producer to verify this historical format. Separate integration
+tests exercise the live registry and catalog, which may evolve without updating
+this fixture. Keep any consumer's copy identical when deliberately updating the
+contract. The recorded SHA is fixture provenance, not the current PR's identity
+or an attestation.
