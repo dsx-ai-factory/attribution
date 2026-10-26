@@ -3770,11 +3770,12 @@ class TestExtractJobMetadataFallback:
 
 
 class TestXid149AndNvlinkFiltering:
-    def test_xid149_4_discards_others(self, stream, obs_ctx, job_info):
+    def test_xid149_4_discards_others_except_149_21(self, stream, obs_ctx, job_info):
         symptoms = _make_symptoms(
             obs_ctx,
             "XID-149.4-NETIR_LINK_DOWN-ALIGNMENT_LOSS-0",
             "XID-149.10-NETIR_LINK_DOWN-PHY_LAYER_RETRANSMIT_TIMEOUT-0",
+            "XID-149.21-NETIR_LINK_DOWN-RECEIEVED_TS1-0",
             "XID-149.0-GENERIC-0",
         )
         bad_nodes = _make_bad_nodes(
@@ -3783,12 +3784,15 @@ class TestXid149AndNvlinkFiltering:
                 "node01": [
                     "XID-149.4-NETIR_LINK_DOWN-ALIGNMENT_LOSS-0",
                     "XID-149.10-NETIR_LINK_DOWN-PHY_LAYER_RETRANSMIT_TIMEOUT-0",
+                    "XID-149.21-NETIR_LINK_DOWN-RECEIEVED_TS1-0",
                     "effective_ber_high",
                 ],
             },
         )
         _run(stream, job_info, symptoms, bad_nodes)
         assert "XID-149.4-NETIR_LINK_DOWN-ALIGNMENT_LOSS-0" in symptoms
+        assert "XID-149.21-NETIR_LINK_DOWN-RECEIEVED_TS1-0" in symptoms
+        assert "XID-149.21-NETIR_LINK_DOWN-RECEIEVED_TS1-0" in bad_nodes["node01"].attributions
         assert "XID-149.10-NETIR_LINK_DOWN-PHY_LAYER_RETRANSMIT_TIMEOUT-0" not in symptoms
         assert "XID-149.0-GENERIC-0" not in symptoms
 

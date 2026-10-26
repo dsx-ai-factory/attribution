@@ -2139,7 +2139,10 @@ _SYMPTOMS_TO_CHECK = [
 def xid149_and_nvlink_filtering(context: RefinerContext):
     """XID-149 priority filtering and nvlink symptom cleanup.
 
-    Priority: XID-149.4 > XID-149.10 > other XID-149.x > XID-149.0
+    Overall Priority: XID-149.4 > XID-149.10 > other XID-149.x > XID-149.0
+    
+    Exceptions:
+    - XID-149.21 survives XID-149.4
     """
     symptoms = context.symptoms
     my_bad_nodes = context.my_bad_nodes
@@ -2155,9 +2158,9 @@ def xid149_and_nvlink_filtering(context: RefinerContext):
         has_xid_149_0 = any("XID-149.0-" in sym for sym in xid_149_symptoms)
 
         if has_xid_149_4:
-            # If XID-149.4 is seen, discard all other XID-149 symptoms
+            # If XID-149.4 is seen, discard all other XID-149 symptoms except 149.21
             for sym in xid_149_symptoms:
-                if "XID-149.4-" not in sym:
+                if not sym.startswith(("XID-149.4-", "XID-149.21-")):
                     symptoms.discard(sym)
         elif has_xid_149_10:
             # If XID-149.10 is seen, discard all other XID-149 symptoms
@@ -2176,6 +2179,7 @@ def xid149_and_nvlink_filtering(context: RefinerContext):
                 [
                     "XID-149.4-NETIR_LINK_DOWN-ALIGNMENT_LOSS-0",
                     "XID-149.10-NETIR_LINK_DOWN-PHY_LAYER_RETRANSMIT_TIMEOUT-0",
+                    "XID-149.21-NETIR_LINK_DOWN-RECEIEVED_TS1-0",
                     "effective_ber_high",
                     "plr_tx_bw_loss_high",
                     "hist15_high",
