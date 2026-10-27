@@ -208,6 +208,33 @@ def test_deleted_placement_expires_after_retention_window(tmp_path):
     assert reopened.get_by_pod_uid(record.pod_uid) is None
 
 
+def test_deleted_capture_rolls_back_observation_and_placement_with_marker(tmp_path):
+    path = tmp_path / "placements.db"
+    store = SQLitePlacementStore(str(path))
+    observation = _observation(event_type="DELETED")
+    record = _record(associated=False)
+    with sqlite3.connect(path) as connection:
+        connection.execute(
+            """
+            CREATE TRIGGER fail_deletion_marker
+            BEFORE INSERT ON placement_deletion
+            BEGIN
+                SELECT RAISE(ABORT, 'synthetic deletion marker failure');
+            END
+            """
+        )
+
+    with pytest.raises(sqlite3.IntegrityError, match="synthetic deletion marker failure"):
+        store.capture_observation(
+            observation,
+            placement=record,
+            mark_deleted=True,
+        )
+
+    assert store.list_observations_for_uid("cluster-a", "team-a", record.pod_uid) == []
+    assert store.get_by_pod_uid(record.pod_uid) is None
+
+
 def test_reconcile_marks_absent_pods_without_resetting_deletion_time(tmp_path):
     path = tmp_path / "placements.db"
     store = SQLitePlacementStore(str(path))

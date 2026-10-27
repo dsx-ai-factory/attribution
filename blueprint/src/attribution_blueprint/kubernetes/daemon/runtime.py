@@ -208,19 +208,34 @@ class KubernetesDaemon:
                 }
             ),
         )
+        placement = None
+        if observation.kind == "Pod" and (resource.get("spec") or {}).get("nodeName"):
+            failure_reason = pod_node_failure_reason(resource) or pod_container_exit_reason(resource)
+            placement = PlacementRecord.for_pod(resource, node_failure_reason=failure_reason)
         try:
-            self.store.append_observation(observation)
+            result = self.store.capture_observation(
+                observation,
+                placement=placement,
+                mark_deleted=placement is not None and event_type == "DELETED",
+            )
         except Exception:
             self.health.update(persistence_failed=True)
             logger.exception(
-                f"failed to persist {source.name} observation "
+                f"failed to persist {source.name} capture "
                 f"{observation.namespace}/{observation.name}@{observation.resource_version}"
             )
             return False
         self.health.update(persistence_failed=False)
 
-        if observation.kind == "Pod" and (resource.get("spec") or {}).get("nodeName"):
-            self._enqueue(resource, deleted=event_type == "DELETED")
+        if placement is not None:
+            assert result.placement is not None
+            if result.placement != CreateResult.DUPLICATE:
+                logger.info(
+                    f"{result.placement.value} placement for Pod "
+                    f"{placement.namespace}/{placement.pod_name}"
+                )
+            if observation.uid:
+                self._schedule(observation.uid, resource)
         return True
 
     def _mark_initial_list_complete(self, source_name: str) -> None:

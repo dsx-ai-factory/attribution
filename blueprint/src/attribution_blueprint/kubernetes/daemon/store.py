@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from enum import Enum
 from typing import Protocol
 
@@ -28,6 +29,12 @@ class ObservationConflictError(RuntimeError):
     pass
 
 
+@dataclass(frozen=True)
+class CaptureResult:
+    observation: ObservationAppendResult
+    placement: CreateResult | None
+
+
 class ObservationJournal(Protocol):
     def append_observation(self, observation: ResourceObservation) -> ObservationAppendResult: ...
 
@@ -51,6 +58,14 @@ class PlacementReader(Protocol):
 
 
 class PlacementStore(PlacementReader, ObservationJournal, Protocol):
+    def capture_observation(
+        self,
+        observation: ResourceObservation,
+        *,
+        placement: PlacementRecord | None,
+        mark_deleted: bool = False,
+    ) -> CaptureResult: ...
+
     def get_by_pod_uid(self, pod_uid: str) -> PlacementRecord | None: ...
 
     def create(self, record: PlacementRecord) -> CreateResult: ...
