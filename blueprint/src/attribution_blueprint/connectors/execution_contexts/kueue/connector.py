@@ -1056,28 +1056,40 @@ class KueueExecutionContextAdapter:
         self,
         histories: list[dict],
         *,
-        workload_name: str,
+        workload_name: str | None,
     ) -> list[KueueExecutionContext]:
         assert self.placement_reader is not None
         now = datetime.now(tz=timezone.utc)
         contexts: list[KueueExecutionContext] = []
         for history in histories:
+            workloads = {
+                metadata["uid"]: metadata["name"]
+                for observation in history.get("observations") or []
+                if observation.get("kind") == "Workload"
+                and (metadata := observation.get("metadata") or {}).get("uid")
+                and metadata.get("name")
+                and (
+                    workload_name is None
+                    or metadata["name"] == workload_name
+                )
+            }
             history_placements = [
                 PlacementRecord.from_resource(resource)
                 for resource in history.get("placements") or []
             ]
-            for attempt in attempts_from_workload_history(
-                history,
-                workload_name=workload_name,
-                now=now,
-            ):
-                contexts.append(
-                    self._context_from_history_attempt(
-                        attempt,
-                        history_placements,
-                        history.get("coverage") or {},
+            for retained_name in sorted(set(workloads.values())):
+                for attempt in attempts_from_workload_history(
+                    history,
+                    workload_name=retained_name,
+                    now=now,
+                ):
+                    contexts.append(
+                        self._context_from_history_attempt(
+                            attempt,
+                            history_placements,
+                            history.get("coverage") or {},
+                        )
                     )
-                )
         return contexts
 
     @staticmethod
@@ -1157,15 +1169,37 @@ class KueueExecutionContextAdapter:
         """
         assert_aware(start, "discover_by_time_range.start")
         assert_aware(end, "discover_by_time_range.end")
-        listing = self._kubernetes.list(
-            "Workload",
-            namespace=self.namespace or None,
-            api_version=self.workload_api_version,
-        )
+        histories = []
+        retained_contexts: list[KueueExecutionContext] = []
+        if self.history_reader is not None:
+            if not self.namespace:
+                raise ValueError(
+                    "kueue retained-history time-range discovery requires "
+                    "eca.kueue.namespace"
+                )
+            histories = self.history_reader.find_histories(
+                self.namespace,
+                "Workload",
+            )
+            retained_contexts = self._contexts_from_histories(
+                histories,
+                workload_name=None,
+            )
+        try:
+            listing = self._kubernetes.list(
+                "Workload",
+                namespace=self.namespace or None,
+                api_version=self.workload_api_version,
+            )
+        except KubernetesClientError:
+            if not histories:
+                raise
+            logger.warning(
+                "live Workload list failed; using retained history"
+            )
+            listing = []
         # parse only the timestamps each workload object
         # already carries (conditions + creationTimestamp).
-        from datetime import timezone
-
         now = datetime.now(tz=timezone.utc)
         survivors: list[dict] = []
         for wl in listing:
@@ -1176,7 +1210,16 @@ class KueueExecutionContextAdapter:
             if wl_start <= end and wl_end >= start:
                 survivors.append(wl)
         # Full parse (which fetches pods + owner Jobs) only on survivors.
-        filtered = self._finalize(survivors)
+        contexts = self._reconcile_live_contexts(
+            retained_contexts,
+            self._finalize(survivors),
+        )
+        filtered = [
+            context
+            for context in contexts
+            if context["start_time"] <= end
+            and context["end_time"] >= start
+        ]
         if not nodelist:
             return filtered
         wanted: set[str] = set()
