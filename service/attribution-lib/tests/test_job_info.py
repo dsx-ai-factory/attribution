@@ -106,6 +106,16 @@ class TestJobInfo:
 
         assert job_info.applog_extract_node(line) == "node-12"
 
+    def test_applog_extract_node_prefers_megatron_node_over_out_of_range_rank(self, simple_job_factory):
+        """Megatron's node field in this job wins even when the srun rank is out of range."""
+        job_info = simple_job_factory(nodes=["node-01", "node-12"], ranks_per_node=4)
+        line = (
+            "814: [rank814]: RuntimeError: Rank 814, node node-12, device 2, iteration 100: "
+            "Unexpected result nan (message='found NaN in local grad norm')"
+        )
+
+        assert job_info.applog_extract_node(line) == "node-12"
+
     def test_applog_extract_node_falls_back_to_rank_for_foreign_nccl_hostname(self, simple_job_factory):
         """Hostnames that are not in this job still map via rank when the rank is valid."""
         job_info = simple_job_factory(nodes=["node-01", "node-12"], ranks_per_node=4)

@@ -280,6 +280,25 @@ class TestApplogExtractNodeRank:
         line = "[rank2]: " + "a" * 8192 + " node-12:123:456 [0] NCCL WARN NET/IB error"
         assert applog_extract_node_rank(line) == ("node-12", 2)
 
+    @pytest.mark.parametrize(
+        "line,expected",
+        [
+            (
+                "814: [rank814]: RuntimeError: Rank 814, node node-12, device 2, iteration 100: "
+                "Unexpected result nan (message='found NaN in local grad norm')",
+                ("node-12", 814),
+            ),
+            (
+                "[rank3]: RuntimeError: Rank 3, node node-12.example.internal, device 3: found NaN",
+                ("node-12.example.internal", 3),
+            ),
+            ("RuntimeError: Rank 3, node node-12, device 3: found NaN", ("node-12", None)),
+        ],
+    )
+    def test_megatron_rank_error_names_its_node(self, line, expected):
+        """Megatron rank errors name their node; keep only an explicit leading rank."""
+        assert applog_extract_node_rank(line) == expected
+
 
 class TestNormalizeNode:
     """Test cases for _normalize_node in attr_types."""
