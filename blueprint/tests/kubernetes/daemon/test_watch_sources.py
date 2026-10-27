@@ -214,6 +214,7 @@ def test_attempt_and_scheduler_identity_metadata_is_allowlisted():
     metadata = selected_metadata(
         {
             "metadata": {
+                "deletionTimestamp": "2026-10-14T10:05:00Z",
                 "labels": {
                     "jobset.sigs.k8s.io/replicatedjob-name": "workers",
                     "jobset.sigs.k8s.io/job-index": "2",
@@ -233,6 +234,7 @@ def test_attempt_and_scheduler_identity_metadata_is_allowlisted():
     )
 
     assert metadata == {
+        "deletionTimestamp": "2026-10-14T10:05:00Z",
         "labels": {
             "jobset.sigs.k8s.io/job-index": "2",
             "jobset.sigs.k8s.io/replicatedjob-name": "workers",

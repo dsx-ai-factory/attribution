@@ -25,6 +25,7 @@ class WorkloadAttempt:
     end_time: datetime
     terminal: dict | None
     open: bool
+    boundary_resolved: bool
     pod_uids: frozenset[str]
 
     @property
@@ -59,6 +60,7 @@ def attempts_from_workload_history(
     restart_starts = _restart_starts(observations)
     terminals = _terminal_events(observations)
     pod_events = _pod_events(observations)
+    workload_boundaries = _workload_boundaries(workloads)
     attempts = []
     for workload_uid, timeline in workloads.items():
         latest_metadata = timeline[-1].get("metadata") or {}
@@ -73,18 +75,31 @@ def attempts_from_workload_history(
                 if index + 1 < len(starts)
                 else None
             )
+            boundary = workload_boundaries[workload_uid]
+            workload_end = boundary.end
+            attempt_end = min(
+                (
+                    boundary
+                    for boundary in (next_start, workload_end)
+                    if boundary is not None
+                ),
+                key=_parse_time,
+                default=None,
+            )
             terminal = _terminal_for(
                 start,
                 next_start,
                 terminals,
                 workload_uid=workload_uid,
-                owner=owner,
+                owner=owner if boundary.resolved else None,
+                workload_end=workload_end,
+                allow_owner_at_workload_end=boundary.allow_owner_at_end,
             )
             end_time = (
                 _parse_time(terminal["time"])
                 if terminal is not None
-                else _parse_time(next_start)
-                if next_start is not None
+                else _parse_time(attempt_end)
+                if attempt_end is not None
                 else now
             )
             attempts.append(
@@ -98,15 +113,21 @@ def attempts_from_workload_history(
                     start_time=_parse_time(start["time"]),
                     end_time=end_time,
                     terminal=terminal,
-                    open=terminal is None and next_start is None,
+                    open=(
+                        terminal is None
+                        and attempt_end is None
+                        and not boundary.retired
+                    ),
+                    boundary_resolved=boundary.resolved,
                     pod_uids=frozenset(
                         uid
                         for uid, event in pod_events.items()
-                        if _pod_in_attempt(
+                        if boundary.resolved
+                        and _pod_in_attempt(
                             event,
                             start["restart_attempt"],
                             start["time"],
-                            next_start,
+                            attempt_end,
                         )
                     ),
                 )
@@ -118,6 +139,14 @@ def attempts_from_workload_history(
             attempt.attempt_id,
         ),
     )
+
+
+@dataclass(frozen=True)
+class _WorkloadBoundary:
+    end: str | None
+    retired: bool
+    resolved: bool
+    allow_owner_at_end: bool
 
 
 def _admissions(timeline: list[dict]) -> list[dict]:
@@ -136,6 +165,92 @@ def _admissions(timeline: list[dict]) -> list[dict]:
                     "time": transition,
                 }
     return sorted(boundaries.values(), key=lambda item: _parse_time(item["time"]))
+
+
+def _workload_boundaries(
+    workloads: dict[str, list[dict]],
+) -> dict[str, _WorkloadBoundary]:
+    """Bound each Workload UID using source lifecycle timestamps only."""
+    incarnations = []
+    for workload_uid, timeline in workloads.items():
+        admissions = _admissions(timeline)
+        admitted_at = admissions[0]["time"] if admissions else None
+        incarnations.append(
+            (
+                admitted_at or timeline[0]["observedAt"],
+                workload_uid,
+                timeline,
+                admitted_at,
+            )
+        )
+    incarnations.sort()
+    boundaries = {}
+    for index, (_first_seen, workload_uid, timeline, _admitted_at) in enumerate(
+        incarnations
+    ):
+        deletion_observations = [
+            observation
+            for observation in timeline
+            if observation.get("eventType") == "DELETED"
+        ]
+        deletion = min(
+            (
+                selected_metadata["deletionTimestamp"]
+                for observation in deletion_observations
+                if (
+                    selected_metadata := observation.get("selectedMetadata")
+                    or {}
+                ).get("deletionTimestamp")
+            ),
+            key=_parse_time,
+            default=None,
+        )
+        terminal = min(
+            (
+                condition["lastTransitionTime"]
+                for observation in timeline
+                for condition in (
+                    (observation.get("status") or {}).get("conditions") or []
+                )
+                if condition.get("status") == "True"
+                and condition.get("type") == "Finished"
+                and condition.get("lastTransitionTime")
+            ),
+            key=_parse_time,
+            default=None,
+        )
+        replacement = next(
+            (
+                admitted_at
+                for _sort_time, _uid, _timeline, admitted_at in incarnations[
+                    index + 1 :
+                ]
+                if admitted_at is not None
+            ),
+            None,
+        )
+        end = min(
+            (
+                boundary
+                for boundary in (deletion, terminal, replacement)
+                if boundary is not None
+            ),
+            key=_parse_time,
+            default=None,
+        )
+        has_successor = index + 1 < len(incarnations)
+        retired = bool(deletion_observations) or has_successor
+        boundaries[workload_uid] = _WorkloadBoundary(
+            end=end,
+            retired=retired,
+            resolved=not retired or end is not None,
+            allow_owner_at_end=(
+                terminal is not None
+                and end is not None
+                and _parse_time(terminal) == _parse_time(end)
+            ),
+        )
+    return boundaries
 
 
 def _restart_starts(observations: list[dict]) -> dict[str, str]:
@@ -242,12 +357,13 @@ def _terminal_for(
     *,
     workload_uid: str,
     owner: dict | None,
+    workload_end: str | None,
+    allow_owner_at_workload_end: bool,
 ) -> dict | None:
-    return next(
-        (
-            terminal
-            for terminal in terminals
-            if (
+    candidates = [
+        terminal
+        for terminal in terminals
+        if (
                 terminal["kind"] == "Workload"
                 and terminal["uid"] == workload_uid
                 or owner is not None
@@ -264,13 +380,44 @@ def _terminal_for(
                 start["time"],
                 next_start,
             )
+            and (
+                workload_end is None
+                or _parse_time(terminal["time"]) < _parse_time(workload_end)
+                or (
+                    (
+                        terminal["kind"] == "Workload"
+                        and terminal["uid"] == workload_uid
+                        or allow_owner_at_workload_end
+                    )
+                    and _parse_time(terminal["time"]) == _parse_time(workload_end)
+                )
+            )
             and terminal["restart_attempt"] in {
                 None,
                 start["restart_attempt"],
             }
+    ]
+    return min(
+        candidates,
+        key=lambda terminal: (
+            -_terminal_priority(terminal),
+            _parse_time(terminal["time"]),
         ),
-        None,
+        default=None,
     )
+
+
+def _terminal_priority(terminal: dict) -> int:
+    """Prefer specific owner outcomes over aggregate Workload failures."""
+    if (
+        terminal["kind"] == "Job"
+        and terminal["type"] == "Failed"
+        and terminal.get("reason") == "DeadlineExceeded"
+    ):
+        return 3
+    if terminal["kind"] in {"Job", "JobSet"}:
+        return 2
+    return 1
 
 
 def _terminal_within(
