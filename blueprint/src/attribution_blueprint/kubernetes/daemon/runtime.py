@@ -62,6 +62,7 @@ class KubernetesDaemon:
         watch_timeout_seconds: int = 60,
         max_resolution_attempts: int = 5,
         retry_poll_seconds: float = 1.0,
+        prune_interval_seconds: float = 300.0,
         cluster_id: str = "default",
         watch_sources: tuple[ResourceWatchSource, ...] | None = None,
     ):
@@ -71,6 +72,8 @@ class KubernetesDaemon:
             raise ValueError("workers must be positive")
         if max_resolution_attempts <= 0:
             raise ValueError("max_resolution_attempts must be positive")
+        if prune_interval_seconds <= 0:
+            raise ValueError("prune_interval_seconds must be positive")
         self.core_api = core_api
         self.store = store
         self.namespace = namespace
@@ -79,6 +82,8 @@ class KubernetesDaemon:
         self.watch_timeout_seconds = watch_timeout_seconds
         self.max_resolution_attempts = max_resolution_attempts
         self.retry_poll_seconds = retry_poll_seconds
+        self.prune_interval_seconds = prune_interval_seconds
+        self._last_pruned_at = time.monotonic()
         self.cluster_id = cluster_id
         self.watch_sources = watch_sources
         if self.watch_sources is None:
@@ -444,7 +449,23 @@ class KubernetesDaemon:
     def _retry_loop(self) -> None:
         while not self.stop_event.is_set():
             self._promote_retries()
+            self._prune_expired_if_due()
             self.stop_event.wait(self.retry_poll_seconds)
+
+    def _prune_expired_if_due(self) -> None:
+        """Run the retention sweep at most once per `prune_interval_seconds`.
+
+        Reuses the already-running retry-loop thread instead of paying the
+        sweep's cost (a full observation-table scan and a recursive
+        owner-graph walk per expired candidate) on every store read/write."""
+        now = time.monotonic()
+        if now - self._last_pruned_at < self.prune_interval_seconds:
+            return
+        self._last_pruned_at = now
+        try:
+            self.store.prune_expired()
+        except Exception:
+            logger.exception("periodic retention sweep failed")
 
     def _promote_retries(self) -> None:
         """Move deferred retries back into pending.

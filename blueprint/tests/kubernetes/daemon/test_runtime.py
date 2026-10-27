@@ -3,6 +3,7 @@
 
 import sqlite3
 import threading
+import time
 from types import SimpleNamespace
 
 import pytest
@@ -1164,6 +1165,55 @@ def test_retry_promotion_does_not_enqueue_work_after_stop(tmp_path):
     assert not promoter.is_alive()
     assert "pod-uid-1" in daemon._retry
     assert "pod-uid-1" not in daemon._pending
+
+
+def test_prune_expired_if_due_skips_within_interval(tmp_path, mocker):
+    store = SQLitePlacementStore(str(tmp_path / "placements.db"))
+    daemon = KubernetesDaemon(
+        core_api=None,
+        store=store,
+        namespace="team-a",
+        prune_interval_seconds=300,
+    )
+    prune = mocker.patch.object(store, "prune_expired")
+    daemon._last_pruned_at = time.monotonic()
+
+    daemon._prune_expired_if_due()
+
+    prune.assert_not_called()
+
+
+def test_prune_expired_if_due_runs_once_interval_elapses(tmp_path, mocker):
+    store = SQLitePlacementStore(str(tmp_path / "placements.db"))
+    daemon = KubernetesDaemon(
+        core_api=None,
+        store=store,
+        namespace="team-a",
+        prune_interval_seconds=300,
+    )
+    prune = mocker.patch.object(store, "prune_expired")
+    daemon._last_pruned_at = time.monotonic() - 301
+
+    daemon._prune_expired_if_due()
+
+    prune.assert_called_once()
+    # The clock resets so a second call within the interval is a no-op.
+    daemon._prune_expired_if_due()
+    prune.assert_called_once()
+
+
+def test_prune_expired_if_due_logs_and_continues_on_failure(tmp_path, mocker):
+    store = SQLitePlacementStore(str(tmp_path / "placements.db"))
+    daemon = KubernetesDaemon(
+        core_api=None,
+        store=store,
+        namespace="team-a",
+        prune_interval_seconds=300,
+    )
+    mocker.patch.object(store, "prune_expired", side_effect=OSError("synthetic prune failure"))
+    daemon._last_pruned_at = time.monotonic() - 301
+
+    daemon._prune_expired_if_due()  # must not raise
 
 
 def test_worker_survives_unexpected_recording_failure(tmp_path):
