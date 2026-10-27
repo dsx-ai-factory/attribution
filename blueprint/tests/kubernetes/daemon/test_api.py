@@ -293,6 +293,45 @@ def test_history_endpoint_discovers_controller_observations(tmp_path):
     }
 
 
+def test_history_endpoint_computes_coverage_once_for_multiple_controllers(tmp_path, mocker):
+    """Coverage/gaps are scoped to (cluster_id, namespace), not to any one
+    controller, so the handler must compute them once per request rather
+    than once per controller in the response."""
+    store = SQLitePlacementStore(str(tmp_path / "placements.db"))
+    for index in range(2):
+        _capture(
+            store,
+            ResourceObservation(
+                cluster_id="cluster-a",
+                api_version="batch/v1",
+                kind="Job",
+                namespace="team-a",
+                name=f"trainer-{index}",
+                uid=f"job-uid-{index}",
+                resource_version="1",
+                event_type="ADDED",
+                observed_at="2026-10-14T00:00:00Z",
+            ),
+        )
+    coverages = mocker.spy(store, "list_watch_coverages")
+    gaps = mocker.spy(store, "list_coverage_gaps")
+    server = serve_api(HealthState(), store, 0, "team-a", cluster_id="cluster-a")
+    try:
+        response = requests.get(
+            f"http://127.0.0.1:{server.server_port}/v1/history",
+            params={"namespace": "team-a", "kind": "Job"},
+            timeout=2,
+        )
+    finally:
+        server.shutdown()
+        server.server_close()
+
+    assert response.status_code == 200
+    assert len(response.json()["items"]) == 2
+    assert coverages.call_count == 1
+    assert gaps.call_count == 1
+
+
 def test_daemon_client_finds_retained_history(tmp_path):
     store = SQLitePlacementStore(str(tmp_path / "placements.db"))
     observation = ResourceObservation(
