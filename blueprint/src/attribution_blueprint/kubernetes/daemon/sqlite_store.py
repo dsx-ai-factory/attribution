@@ -16,6 +16,7 @@ from attribution_blueprint.kubernetes.daemon.models import (
     ResourceObservation,
 )
 from attribution_blueprint.kubernetes.daemon.store import (
+    CaptureResult,
     CreateResult,
     ObservationAppendResult,
     ObservationConflictError,
@@ -132,44 +133,7 @@ class SQLitePlacementStore:
         with self._connection() as connection:
             connection.execute("BEGIN IMMEDIATE")
             self._prune_expired(connection)
-            row = connection.execute(
-                "SELECT raw_json FROM placement_record WHERE pod_uid = ?",
-                (record.pod_uid,),
-            ).fetchone()
-            if row is None:
-                self._insert(connection, record)
-                return CreateResult.CREATED
-
-            existing = PlacementRecord.from_resource(json.loads(row["raw_json"]))
-            if _placement_identity(existing) != _placement_identity(record):
-                raise PlacementConflictError(
-                    f"placement for Pod UID {record.pod_uid} already exists with different immutable data"
-                )
-            if (
-                existing.scheduled_at
-                and record.scheduled_at
-                and existing.scheduled_at != record.scheduled_at
-            ):
-                raise PlacementConflictError(
-                    f"placement for Pod UID {record.pod_uid} has conflicting scheduling timestamps"
-                )
-            failure_reason = existing.node_failure_reason
-            if _failure_evidence_rank(record.node_failure_reason) > _failure_evidence_rank(failure_reason):
-                failure_reason = record.node_failure_reason
-            merge_base = existing
-            if record.owner is not None and record.owner != existing.owner:
-                merge_base = replace(existing, associated_resources=())
-            merged = merge_base.enriched(
-                scheduled_at=record.scheduled_at,
-                owner_references=record.owner_references if record.owner is not None else None,
-                owner=record.owner,
-                associated_resources=record.associated_resources,
-                node_failure_reason=failure_reason,
-            )
-            if merged == existing:
-                return CreateResult.DUPLICATE
-            self._update(connection, merged)
-            return CreateResult.UPDATED
+            return self._create(connection, record)
 
     def get_by_pod_uid(self, pod_uid: str) -> PlacementRecord | None:
         with self._connection() as connection:
@@ -237,72 +201,36 @@ class SQLitePlacementStore:
             self._prune_expired(connection)
 
     def append_observation(self, observation: ResourceObservation) -> ObservationAppendResult:
-        owner_references_json = _owner_references_json(observation.owner_references)
-        selected_metadata_json = _optional_json(observation.selected_metadata)
-        status_json = _optional_json(observation.status)
         with self._connection() as connection:
             connection.execute("BEGIN IMMEDIATE")
-            row = connection.execute(
-                """
-                SELECT *
-                FROM resource_observation
-                WHERE cluster_id = ? AND api_version = ? AND kind = ?
-                  AND uid = ? AND resource_version = ?
-                """,
-                (
-                    observation.cluster_id,
-                    observation.api_version,
-                    observation.kind,
-                    observation.uid,
-                    observation.resource_version,
-                ),
-            ).fetchone()
-            if row is not None:
-                existing = _observation_from_row(row)
-                if _observation_content(existing) != _observation_content(observation):
-                    raise ObservationConflictError(
-                        f"resource {observation.kind} {observation.namespace}/{observation.name} "
-                        f"UID {observation.uid} version {observation.resource_version} changed during replay"
-                    )
-                self._prune_expired(connection)
-                return ObservationAppendResult.DUPLICATE
-
-            cursor = connection.execute(
-                """
-                INSERT INTO resource_observation(
-                    cluster_id, api_version, kind, namespace, name, uid,
-                    resource_version, event_type, observed_at, source_timestamp,
-                    owner_references_json, selected_metadata_json, status_json
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    observation.cluster_id,
-                    observation.api_version,
-                    observation.kind,
-                    observation.namespace,
-                    observation.name,
-                    observation.uid,
-                    observation.resource_version,
-                    observation.event_type,
-                    observation.observed_at,
-                    observation.source_timestamp,
-                    owner_references_json,
-                    selected_metadata_json,
-                    status_json,
-                ),
-            )
-            connection.executemany(
-                """
-                INSERT INTO observation_owner_reference(observation_id, owner_uid, controller)
-                VALUES (?, ?, ?)
-                """,
-                [
-                    (cursor.lastrowid, owner.uid, int(owner.controller))
-                    for owner in observation.owner_references
-                ],
-            )
+            result = self._append_observation(connection, observation)
             self._prune_expired(connection)
-        return ObservationAppendResult.APPENDED
+        return result
+
+    def capture_observation(
+        self,
+        observation: ResourceObservation,
+        *,
+        placement: PlacementRecord | None,
+        mark_deleted: bool = False,
+    ) -> CaptureResult:
+        if mark_deleted and placement is None:
+            raise ValueError("mark_deleted requires a placement")
+        with self._connection() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            observation_result = self._append_observation(connection, observation)
+            placement_result = self._create(connection, placement) if placement is not None else None
+            if mark_deleted:
+                connection.execute(
+                    """
+                    INSERT INTO placement_deletion(pod_uid)
+                    VALUES (?)
+                    ON CONFLICT(pod_uid) DO NOTHING
+                    """,
+                    (placement.pod_uid,),
+                )
+            self._prune_expired(connection)
+            return CaptureResult(observation_result, placement_result)
 
     def list_observations_for_uid(
         self,
@@ -345,6 +273,120 @@ class SQLitePlacementStore:
                 (cluster_id, namespace, owner_uid),
             ).fetchall()
         return [_observation_from_row(row) for row in rows]
+
+    def _create(
+        self,
+        connection: sqlite3.Connection,
+        record: PlacementRecord,
+    ) -> CreateResult:
+        row = connection.execute(
+            "SELECT raw_json FROM placement_record WHERE pod_uid = ?",
+            (record.pod_uid,),
+        ).fetchone()
+        if row is None:
+            self._insert(connection, record)
+            return CreateResult.CREATED
+
+        existing = PlacementRecord.from_resource(json.loads(row["raw_json"]))
+        if _placement_identity(existing) != _placement_identity(record):
+            raise PlacementConflictError(
+                f"placement for Pod UID {record.pod_uid} already exists with different immutable data"
+            )
+        if (
+            existing.scheduled_at
+            and record.scheduled_at
+            and existing.scheduled_at != record.scheduled_at
+        ):
+            raise PlacementConflictError(
+                f"placement for Pod UID {record.pod_uid} has conflicting scheduling timestamps"
+            )
+        failure_reason = existing.node_failure_reason
+        if _failure_evidence_rank(record.node_failure_reason) > _failure_evidence_rank(
+            failure_reason
+        ):
+            failure_reason = record.node_failure_reason
+        merge_base = existing
+        if record.owner is not None and record.owner != existing.owner:
+            merge_base = replace(existing, associated_resources=())
+        merged = merge_base.enriched(
+            scheduled_at=record.scheduled_at,
+            owner_references=record.owner_references if record.owner is not None else None,
+            owner=record.owner,
+            associated_resources=record.associated_resources,
+            node_failure_reason=failure_reason,
+        )
+        if merged == existing:
+            return CreateResult.DUPLICATE
+        self._update(connection, merged)
+        return CreateResult.UPDATED
+
+    def _append_observation(
+        self,
+        connection: sqlite3.Connection,
+        observation: ResourceObservation,
+    ) -> ObservationAppendResult:
+        owner_references_json = _owner_references_json(observation.owner_references)
+        selected_metadata_json = _optional_json(observation.selected_metadata)
+        status_json = _optional_json(observation.status)
+        row = connection.execute(
+            """
+            SELECT *
+            FROM resource_observation
+            WHERE cluster_id = ? AND api_version = ? AND kind = ?
+              AND uid = ? AND resource_version = ?
+            """,
+            (
+                observation.cluster_id,
+                observation.api_version,
+                observation.kind,
+                observation.uid,
+                observation.resource_version,
+            ),
+        ).fetchone()
+        if row is not None:
+            existing = _observation_from_row(row)
+            if _observation_content(existing) != _observation_content(observation):
+                raise ObservationConflictError(
+                    f"resource {observation.kind} {observation.namespace}/{observation.name} "
+                    f"UID {observation.uid} version {observation.resource_version} changed during replay"
+                )
+            return ObservationAppendResult.DUPLICATE
+
+        cursor = connection.execute(
+            """
+            INSERT INTO resource_observation(
+                cluster_id, api_version, kind, namespace, name, uid,
+                resource_version, event_type, observed_at, source_timestamp,
+                owner_references_json, selected_metadata_json, status_json
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                observation.cluster_id,
+                observation.api_version,
+                observation.kind,
+                observation.namespace,
+                observation.name,
+                observation.uid,
+                observation.resource_version,
+                observation.event_type,
+                observation.observed_at,
+                observation.source_timestamp,
+                owner_references_json,
+                selected_metadata_json,
+                status_json,
+            ),
+        )
+        connection.executemany(
+            """
+            INSERT INTO observation_owner_reference(observation_id, owner_uid, controller)
+            VALUES (?, ?, ?)
+            """,
+            [
+                (cursor.lastrowid, owner.uid, int(owner.controller))
+                for owner in observation.owner_references
+            ],
+        )
+        return ObservationAppendResult.APPENDED
 
     def _insert(self, connection: sqlite3.Connection, record: PlacementRecord) -> None:
         raw_json = json.dumps(record.to_resource(), separators=(",", ":"), sort_keys=True)
