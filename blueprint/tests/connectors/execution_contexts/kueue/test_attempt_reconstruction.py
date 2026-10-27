@@ -7,6 +7,8 @@ from copy import deepcopy
 from datetime import datetime, timezone
 from unittest.mock import MagicMock
 
+import pytest
+
 from attribution_blueprint.connectors.execution_contexts.kueue.attempts import (
     attempts_from_workload_history,
 )
@@ -287,9 +289,28 @@ def test_retained_jobset_retries_flow_as_distinct_execution_contexts(
             "get_one",
             return_value=None,
         )
+        live_list = mocker.patch.object(
+            adapter._kubernetes,
+            "list",
+            return_value=[],
+        )
         contexts = adapter.discover_by_ids(["training-workload"])
         replayed = adapter.discover_by_ids(["training-workload"])
         assert live_lookup.call_count == 2
+        ranged = adapter.discover_by_time_range(
+            datetime(2026, 10, 14, 9, 59, tzinfo=timezone.utc),
+            datetime(2026, 10, 14, 11, 1, tzinfo=timezone.utc),
+        )
+        node_a_only = adapter.discover_by_time_range(
+            datetime(2026, 10, 14, 9, 59, tzinfo=timezone.utc),
+            datetime(2026, 10, 14, 11, 1, tzinfo=timezone.utc),
+            nodelist=["node-a"],
+        )
+        outside = adapter.discover_by_time_range(
+            datetime(2026, 10, 15, tzinfo=timezone.utc),
+            datetime(2026, 10, 16, tzinfo=timezone.utc),
+        )
+        assert live_list.call_count == 3
         history = client.find_histories(
             "team-a",
             "Workload",
@@ -307,6 +328,14 @@ def test_retained_jobset_retries_flow_as_distinct_execution_contexts(
         server.server_close()
 
     assert len(contexts) == 2
+    assert [context["attempt_id"] for context in ranged] == [
+        context["attempt_id"]
+        for context in contexts
+    ]
+    assert [context["attempt_id"] for context in node_a_only] == [
+        contexts[0]["attempt_id"]
+    ]
+    assert outside == []
     assert [context["attempt_id"] for context in replayed] == [
         context["attempt_id"]
         for context in contexts
@@ -981,3 +1010,21 @@ def test_live_state_replaces_open_retained_attempt():
     assert reconciled["nodes"] == ["node-b"]
     assert reconciled["pod_names"] == ["retry-pod"]
     assert reconciled["history_complete"] is False
+
+
+def test_retained_time_range_requires_namespace():
+    reader = MagicMock()
+    reader.find_histories = MagicMock(return_value=[])
+    adapter = KueueExecutionContextAdapter(
+        placement_records_enabled=True,
+        placement_reader=reader,
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="retained-history time-range discovery requires",
+    ):
+        adapter.discover_by_time_range(
+            datetime(2026, 10, 14, tzinfo=timezone.utc),
+            datetime(2026, 10, 15, tzinfo=timezone.utc),
+        )
