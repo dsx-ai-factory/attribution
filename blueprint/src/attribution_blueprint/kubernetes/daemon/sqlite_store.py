@@ -164,12 +164,10 @@ class SQLitePlacementStore:
     def create(self, record: PlacementRecord) -> CreateResult:
         with self._connection() as connection:
             connection.execute("BEGIN IMMEDIATE")
-            self._prune_expired(connection)
             return self._create(connection, record)
 
     def get_by_pod_uid(self, pod_uid: str) -> PlacementRecord | None:
         with self._connection() as connection:
-            self._prune_expired(connection)
             row = connection.execute(
                 "SELECT raw_json FROM placement_record WHERE pod_uid = ?",
                 (pod_uid,),
@@ -178,7 +176,6 @@ class SQLitePlacementStore:
 
     def list_for_resource(self, namespace: str, resource_uid: str) -> list[PlacementRecord]:
         with self._connection() as connection:
-            self._prune_expired(connection)
             rows = connection.execute(
                 """
                 SELECT record.raw_json
@@ -203,7 +200,6 @@ class SQLitePlacementStore:
                 """,
                 (pod_uid,),
             )
-            self._prune_expired(connection)
 
     def reconcile_active_pods(
         self,
@@ -230,7 +226,6 @@ class SQLitePlacementStore:
                 """,
                 (namespace,),
             )
-            self._prune_expired(connection)
 
     def capture_observation(
         self,
@@ -265,7 +260,6 @@ class SQLitePlacementStore:
                     resource_version=observation.resource_version,
                     checkpointed_at=observation.observed_at,
                 )
-            self._prune_expired(connection)
             return CaptureResult(observation_result, placement_result)
 
     def list_observations_for_uid(
@@ -275,7 +269,6 @@ class SQLitePlacementStore:
         uid: str,
     ) -> list[ResourceObservation]:
         with self._connection() as connection:
-            self._prune_expired(connection)
             rows = connection.execute(
                 """
                 SELECT *
@@ -294,7 +287,6 @@ class SQLitePlacementStore:
         owner_uid: str,
     ) -> list[ResourceObservation]:
         with self._connection() as connection:
-            self._prune_expired(connection)
             rows = connection.execute(
                 """
                 SELECT observation.*
@@ -741,6 +733,12 @@ class SQLitePlacementStore:
                 WHERE started_at IS NULL
                 """
             )
+
+    def prune_expired(self) -> None:
+        """Run the retention sweep once, in its own transaction."""
+        with self._connection() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            self._prune_expired(connection)
 
     def _prune_expired(self, connection: sqlite3.Connection) -> None:
         connection.execute(
