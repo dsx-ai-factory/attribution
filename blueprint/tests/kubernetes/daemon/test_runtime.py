@@ -1414,7 +1414,11 @@ def test_capture_journals_deletion_before_enqueuing_bound_pod(tmp_path):
     assert daemon._pending["pod-uid-1"][0]["metadata"]["uid"] == "pod-uid-1"
 
 
-def test_failed_deleted_capture_still_starts_retention(tmp_path, mocker):
+def test_failed_deleted_capture_leaves_no_partial_retention_marker(tmp_path, mocker):
+    """A failed atomic capture must not leave a deletion marker behind: the
+    observation, placement, and marker are one transaction, so a failure
+    rolls all of them back together instead of partially persisting. The
+    watch loop retries the whole capture from the last persisted checkpoint."""
     path = tmp_path / "placements.db"
     store = SQLitePlacementStore(str(path))
     daemon = KubernetesDaemon(core_api=None, store=store, namespace="team-a", cluster_id="cluster-a")
@@ -1433,7 +1437,7 @@ def test_failed_deleted_capture_still_starts_retention(tmp_path, mocker):
         marker = connection.execute(
             "SELECT pod_uid FROM placement_deletion"
         ).fetchone()
-    assert marker == ("pod-uid-1",)
+    assert marker is None
     assert daemon.health.persistence_failed is True
     assert not daemon._pending and not daemon._in_flight
 
