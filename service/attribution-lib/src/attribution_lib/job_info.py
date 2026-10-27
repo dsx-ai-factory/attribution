@@ -1,6 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
+import functools
 from collections.abc import Iterable, Mapping, Sequence
 from datetime import datetime, timedelta
 from enum import StrEnum
@@ -102,6 +103,20 @@ def _coerce_tags(raw: "str | Iterable[str] | None") -> frozenset[str]:
     if isinstance(raw, str):
         return frozenset((raw,)) if raw else frozenset()
     return frozenset(raw)
+
+
+@functools.lru_cache(maxsize=64)
+def _qualified_nodes_by_short_name(nodes: tuple[str, ...]) -> dict[str, tuple[str, ...]]:
+    """Map each short name to the fully qualified allocation entries that have it.
+
+    Cached per allocation, so verifying many log lines does not rescan the node list.
+    """
+    index: dict[str, list[str]] = {}
+    for allocated in nodes:
+        short_node = utils.convert_hostname_to_short_format(allocated)
+        if short_node != allocated:
+            index.setdefault(short_node, []).append(allocated)
+    return {short_node: tuple(entries) for short_node, entries in index.items()}
 
 
 class JobInfo(NamedTuple):
@@ -240,7 +255,11 @@ class JobInfo(NamedTuple):
     def verify_node(self, node: str) -> str:
         """Check that node is part of this job.
 
-        A fully qualified name also matches its short form in the allocation.
+        A fully qualified name also matches its short form in the allocation, and
+        a short name matches a fully qualified allocation entry when exactly one
+        allocated node has that short name. Kubernetes node names are often fully
+        qualified while host syslog carries the short hostname. A fully qualified
+        name never matches an allocation entry in another domain.
 
         Args:
             node: The node name to verify.
@@ -249,14 +268,20 @@ class JobInfo(NamedTuple):
             The normalized node name (lowercase), as the allocation lists it.
 
         Raises:
-            UnknownNodeError: If the node is not in the job.
+            UnknownNodeError: If the node is not in the job, or it is a short name
+                that matches more than one fully qualified allocation entry.
         """
         normalized_node = node.lower()
-        if len(self.nodes) > 0 and normalized_node not in self.nodes:
-            normalized_node = utils.convert_hostname_to_short_format(normalized_node)
-            if normalized_node not in self.nodes:
-                raise UnknownNodeError(node)
-        return normalized_node
+        if len(self.nodes) == 0 or normalized_node in self.nodes:
+            return normalized_node
+        short_node = utils.convert_hostname_to_short_format(normalized_node)
+        if short_node in self.nodes:
+            return short_node
+        if short_node == normalized_node:
+            matches = _qualified_nodes_by_short_name(tuple(self.nodes)).get(short_node, ())
+            if len(matches) == 1:
+                return matches[0]
+        raise UnknownNodeError(node)
 
     def rank_exists(self, rank: int) -> bool:
         """Check if a rank exists in the job."""
