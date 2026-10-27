@@ -47,33 +47,45 @@ def _load_committed_registry():
 
 
 @pytest.mark.parametrize(
-    ("symptoms", "expected"),
+    "kernel_crash",
+    ["kernel panic", "kernel soft lockup", "kernel oops", "kernel invalid memory access"],
+)
+@pytest.mark.parametrize(
+    ("other_symptoms", "expected"),
     [
-        (["kernel panic", "ECC Error"], "ECC Error"),
-        (["kernel panic", "XID-79-GPU_HAS_FALLEN_OFF_THE_BUS"], "XID-79-GPU_HAS_FALLEN_OFF_THE_BUS"),
-        (["XID-145-RLW_RXPIPE-8", "XID-145-MultiCategory"], "XID-145-MultiCategory"),
+        (["ECC Error"], "ECC Error"),
+        (["XID-79-GPU_HAS_FALLEN_OFF_THE_BUS"], "XID-79-GPU_HAS_FALLEN_OFF_THE_BUS"),
         (
             [
-                "kernel panic",
                 "XID-145-RLW_RXPIPE-8",
                 "XID-145-MultiCategory",
                 "Call to ibv_modify_qp failed: eno 22 invalid argument(Mismatched GID)",
             ],
-            "kernel panic",
+            None,
         ),
     ],
 )
-def test_kernel_panic_priority_preserves_hardware_precedence(symptoms, expected):
-    """Preserve hardware precedence and select panic over XID-145 and error 22.
+def test_kernel_crash_priority_preserves_hardware_precedence(kernel_crash, other_symptoms, expected):
+    """Preserve hardware precedence and select a kernel crash over XID-145 and error 22.
 
     Args:
-        symptoms: Synthetic symptoms to classify.
-        expected: Root cause that should retain precedence.
+        kernel_crash: Kernel crash symptom to classify.
+        other_symptoms: Synthetic symptoms reported with the crash.
+        expected: Root cause that should retain precedence, or None for the crash itself.
     """
-    match = _load_committed_registry().outcome_for(symptoms)
+    match = _load_committed_registry().outcome_for([kernel_crash, *other_symptoms])
 
     assert match is not None
-    assert match.symptom == expected
+    assert match.symptom == (kernel_crash if expected is None else expected)
+
+
+def test_xid145_alone_selects_multicategory():
+    """XID-145 RXPIPE-8 without a kernel crash keeps its MultiCategory outcome."""
+    match = _load_committed_registry().outcome_for(["XID-145-RLW_RXPIPE-8", "XID-145-MultiCategory"])
+
+    assert match is not None
+    assert match.symptom == "XID-145-MultiCategory"
+    assert match.outcome == "Fail MultiCategory"
 
 
 def test_known_prefixes_from_committed_declarations():
@@ -406,13 +418,13 @@ def test_bare_nv_err_no_memory_maps_to_multicategory():
     assert match.hw_cause == "Not Applicable"
 
 
-def test_nvrx_detected_failure_maps_to_fail_undetermined():
+def test_nvrx_detected_failure_maps_to_fail_multicategory():
     registry = _load_committed_registry()
 
     match = registry.outcome_for(["NVRx detected failure"])
 
     assert match is not None
-    assert match.outcome == "Fail Undetermined"
+    assert match.outcome == "Fail MultiCategory"
     assert match.tier_index == OUTCOME_PRIORITIES.index(OutcomePriority.LOW_GENERIC)
 
 
@@ -1058,16 +1070,17 @@ def test_symptoms_package_exports_declaration_types():
         ("ibv_open_device failed", "Fail InfraHW"),
     ],
 )
-def test_bad_nic_state_supersedes_only_secondary_outcomes(secondary, baseline_outcome):
+@pytest.mark.parametrize("diagnosis", ["detected bad NIC state", "irisc not responding"])
+def test_bad_nic_state_supersedes_only_secondary_outcomes(secondary, baseline_outcome, diagnosis):
     registry = _load_committed_registry()
     baseline = registry.outcome_for([secondary])
     assert baseline is not None
     assert baseline.outcome == baseline_outcome
-    for symptoms in ([secondary, "detected bad NIC state"], ["detected bad NIC state", secondary]):
+    for symptoms in ([secondary, diagnosis], [diagnosis, secondary]):
         match = registry.outcome_for(symptoms)
         assert match is not None
         assert match.outcome == "Fail InfraSW"
-        assert match.symptom == "detected bad NIC state"
+        assert match.symptom == diagnosis
 
 
 @pytest.mark.parametrize(
@@ -1080,8 +1093,9 @@ def test_bad_nic_state_supersedes_only_secondary_outcomes(secondary, baseline_ou
     ],
 )
 @pytest.mark.parametrize("secondary", [None, "Call to ibv_modify_qp failed", "ibv_open_device failed"])
-def test_bad_nic_state_preserves_independent_outcomes(independent, expected_outcome, secondary):
-    symptoms = ["detected bad NIC state", independent]
+@pytest.mark.parametrize("diagnosis", ["detected bad NIC state", "irisc not responding"])
+def test_bad_nic_state_preserves_independent_outcomes(independent, expected_outcome, secondary, diagnosis):
+    symptoms = [diagnosis, independent]
     if secondary is not None:
         symptoms.append(secondary)
     match = _load_committed_registry().outcome_for(symptoms)

@@ -14,10 +14,12 @@ pod evidence.
 from __future__ import annotations
 
 import json
-import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
 
+from attribution_blueprint.connectors.execution_contexts.kubernetes_client import (
+    KubernetesClientError,
+)
 from attribution_blueprint.connectors.execution_contexts.kueue import (
     KueueExecutionContextAdapter,
 )
@@ -29,24 +31,25 @@ def _load(name: str) -> dict:
     return json.loads((LIVE / name).read_text())
 
 
-def _kubectl_live_router(workloads: list[dict], pods: list[dict], jobs: list[dict]):
-    """Dispatch kubectl calls against in-memory lists of captured objects.
+class _FakeLiveKubernetesClient:
+    """A `KubernetesClient` stand-in answering `get_one`/`list` against
+    in-memory lists of captured live objects.
 
     Mirrors the call shapes the adapter issues (list workloads, get a single
     workload, list pods by owner label, get a direct Job, and list JobSet
-    child Jobs). The synthetic fixture router lives in
-    `test_connector.py`; this one is intentionally separate so live payloads
-    don't bleed into the synthetic tests' shared module-level state.
+    child Jobs). The synthetic fixture fake lives in `test_connector.py`;
+    this one is intentionally separate so live payloads don't bleed into the
+    synthetic tests' shared module-level state.
     """
 
-    def _pods_by_label(key: str, value: str) -> list[dict]:
-        out = []
-        for p in pods:
-            labels = (p.get("metadata") or {}).get("labels") or {}
-            if labels.get(key) == value:
-                out.append(p)
-        return out
+    def __init__(self, *args, workloads: list[dict], pods: list[dict], jobs: list[dict], **kwargs):
+        del args, kwargs  # accepts and ignores KubernetesClient's constructor kwargs
+        self.workloads = workloads
+        self.pods = pods
+        self.jobs = jobs
+        self.calls: list[dict] = []
 
+    @staticmethod
     def _by_name(items: list[dict], name: str, namespace: str | None) -> dict | None:
         for item in items:
             meta = item.get("metadata") or {}
@@ -57,81 +60,78 @@ def _kubectl_live_router(workloads: list[dict], pods: list[dict], jobs: list[dic
             return item
         return None
 
-    def _side_effect(cmd, **_kwargs):
-        args = list(cmd)
-        positional: list[str] = []
-        ns: str | None = None
-        label_selector: str | None = None
-        i = 0
-        while i < len(args):
-            tok = args[i]
-            if tok in ("--kubeconfig", "--context"):
-                i += 2
-                continue
-            if tok == "-o":
-                i += 2
-                continue
-            if tok == "-n":
-                ns = args[i + 1]
-                i += 2
-                continue
-            if tok == "-A":
-                i += 1
-                continue
-            if tok == "-l":
-                label_selector = args[i + 1]
-                i += 2
-                continue
-            positional.append(tok)
-            i += 1
-        positional = positional[1:]
-        kind = positional[1] if len(positional) > 1 else ""
-        name = positional[2] if len(positional) > 2 else None
+    def _pods_by_label(self, key: str, value: str) -> list[dict]:
+        return [p for p in self.pods if ((p.get("metadata") or {}).get("labels") or {}).get(key) == value]
 
+    def get_one(
+        self,
+        resource_kind,
+        name: str,
+        *,
+        namespace: str,
+        group=None,
+        api_version=None,
+    ) -> dict:
+        kind = resource_kind.lower() + "s"
+        self.calls.append({"op": "get_one", "kind": kind, "name": name, "namespace": namespace, "label_selector": None})
         if kind == "workloads":
-            payload = {"apiVersion": "v1", "kind": "List", "items": workloads}
-        elif kind == "workload":
-            obj = _by_name(workloads, name, ns)
-            if obj is None:
-                raise subprocess.CalledProcessError(returncode=1, cmd=cmd, stderr="NotFound")
-            payload = obj
-        elif kind == "pods":
-            items: list[dict] = []
+            items = self.workloads
+        elif kind == "jobs":
+            items = self.jobs
+        else:
+            raise AssertionError(f"_FakeLiveKubernetesClient.get_one: unexpected kind {kind!r}")
+        obj = self._by_name(items, name, namespace)
+        if obj is None:
+            raise KubernetesClientError(f"{kind} {name!r} not found in {namespace!r}", status=404)
+        return obj
+
+    def list(
+        self,
+        resource_kind,
+        *,
+        namespace: str | None,
+        field_selector: str | None = None,
+        label_selector: str | None = None,
+        group=None,
+        api_version=None,
+    ) -> list[dict]:
+        kind = resource_kind.lower() + "s"
+        self.calls.append(
+            {"op": "list", "kind": kind, "name": None, "namespace": namespace, "label_selector": label_selector}
+        )
+        if kind == "workloads":
+            return self.workloads
+        if kind == "pods":
             if label_selector and "=" in label_selector:
                 lkey, lvalue = label_selector.split("=", 1)
-                items = _pods_by_label(lkey, lvalue)
-            payload = {"apiVersion": "v1", "kind": "List", "items": items}
-        elif kind == "job":
-            obj = _by_name(jobs, name, ns)
-            if obj is None:
-                raise subprocess.CalledProcessError(returncode=1, cmd=cmd, stderr="NotFound")
-            payload = obj
-        elif kind == "jobs":
+                return self._pods_by_label(lkey, lvalue)
+            return []
+        if kind == "jobs":
             items = []
             if label_selector and "=" in label_selector:
                 lkey, lvalue = label_selector.split("=", 1)
-                for job in jobs:
+                for job in self.jobs:
                     metadata = job.get("metadata") or {}
                     labels = metadata.get("labels") or {}
                     annotations = metadata.get("annotations") or {}
-                    if (not ns or metadata.get("namespace") == ns) and (
+                    if (not namespace or metadata.get("namespace") == namespace) and (
                         labels.get(lkey) == lvalue or annotations.get(lkey) == lvalue
                     ):
                         items.append(job)
-            payload = {"apiVersion": "v1", "kind": "List", "items": items}
-        else:
-            payload = {"items": []}
-
-        return subprocess.CompletedProcess(args=cmd, returncode=0, stdout=json.dumps(payload), stderr="")
-
-    return _side_effect
+            return items
+        raise AssertionError(f"_FakeLiveKubernetesClient.list: unexpected kind {kind!r}")
 
 
 def _wire(mocker, *, workloads, pods, jobs):
-    return mocker.patch(
-        "subprocess.run",
-        side_effect=_kubectl_live_router(workloads=workloads, pods=pods, jobs=jobs),
+    """Patch the adapter's `KubernetesClient` construction to return a fake
+    reader backed by the captured live payloads, and return that fake so
+    tests can assert on `.calls`."""
+    fake = _FakeLiveKubernetesClient(workloads=workloads, pods=pods, jobs=jobs)
+    mocker.patch(
+        "attribution_blueprint.connectors.execution_contexts.kueue.connector.KubernetesClient",
+        return_value=fake,
     )
+    return fake
 
 
 # --- single Job that failed with exit 7 -----------------------------------
@@ -214,17 +214,13 @@ def test_live_jobset_pod_label_selector_uses_jobset_name(mocker):
     """
     workload = _load("workload_jobset_failed.json")
     pods = _load("pods_jobset_failed.json")["items"]
-    run_mock = _wire(mocker, workloads=[workload], pods=pods, jobs=[])
+    fake = _wire(mocker, workloads=[workload], pods=pods, jobs=[])
 
     adapter = KueueExecutionContextAdapter(namespace="kueue-demo")
     adapter.discover_by_ids(["kueue-demo/jobset-bp-train-fail-5677c"])
 
-    pod_selectors = []
-    for call in run_mock.call_args_list:
-        cmd = call.args[0]
-        if "pods" in cmd and "-l" in cmd:
-            pod_selectors.append(cmd[cmd.index("-l") + 1])
-    assert pod_selectors, "connector should have issued at least one `get pods -l ...` call"
+    pod_selectors = [call["label_selector"] for call in fake.calls if call["kind"] == "pods" and call["label_selector"]]
+    assert pod_selectors, "connector should have issued at least one pod list query with a label selector"
     assert all(s == "jobset.sigs.k8s.io/jobset-name=bp-train-fail" for s in pod_selectors)
 
 
@@ -342,18 +338,14 @@ def test_live_pod_fetch_uses_batch_controller_uid_label(mocker):
     workload = _load("workload_single_job_failed.json")
     pods = _load("pods_single_job_failed.json")["items"]
     job = _load("job_single.json")
-    run_mock = _wire(mocker, workloads=[workload], pods=pods, jobs=[job])
+    fake = _wire(mocker, workloads=[workload], pods=pods, jobs=[job])
 
     adapter = KueueExecutionContextAdapter(namespace="kueue-demo")
     adapter.discover_by_ids(["kueue-demo/job-bp-fail-fast-17027"])
 
-    # Job UID captured live; the pod label-selector in any `get pods` call
+    # Job UID captured live; the pod label-selector in any pod list query
     # must reference exactly this value.
     expected_uid = job["metadata"]["uid"]
-    pod_selectors = []
-    for call in run_mock.call_args_list:
-        cmd = call.args[0]
-        if "pods" in cmd and "-l" in cmd:
-            pod_selectors.append(cmd[cmd.index("-l") + 1])
-    assert pod_selectors, "connector should have issued at least one `get pods -l ...` call"
+    pod_selectors = [call["label_selector"] for call in fake.calls if call["kind"] == "pods" and call["label_selector"]]
+    assert pod_selectors, "connector should have issued at least one pod list query with a label selector"
     assert all(s == f"batch.kubernetes.io/controller-uid={expected_uid}" for s in pod_selectors)

@@ -389,3 +389,22 @@ symptom = "mlx5 device initialization failed"
 [[extractor.cases]]
 expect  = "none"
 line    = "mlx5_core 0000:01:00.0: mlx5_pci_init failed with error code -110"
+
+
+[[extractor]]
+name     = "SyslogIriscNotResponding"
+match_re = '\bmlx5_core\s+[0-9a-fA-F:.]+:.*\bHealth issue observed, irisc not responding\b'
+emit     = { type = "bad_node", symptom = "irisc not responding" }
+[[extractor.cases]]
+expect  = "bad"
+line    = "mlx5_core 0000:03:00.3: print_health_info:504:(pid 0): Health issue observed, irisc not responding, severity(3) ERROR:"
+symptom = "irisc not responding"
+[[extractor.cases]]
+expect  = "none"
+line    = "mlx5_core 0000:03:00.3: Health issue observed, unrecoverable hardware error, severity(3) ERROR:"
+[[extractor.cases]]
+expect  = "none"
+line    = "mlx5_core 0000:03:00.3: QUERY_Q_COUNTER timeout. Will cause a leak of a command resource"
+[[extractor.cases]]
+expect  = "none"
+line    = "other_driver 0000:03:00.3: Health issue observed, irisc not responding, severity(3) ERROR:"

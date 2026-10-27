@@ -310,7 +310,7 @@ class GeneratedSymptomRegistry:
         normalized_symptoms = sorted(symptoms)
         # Supersede only outcome mappings; retain symptoms and their evidence.
         superseded_mappings: set[str] = set()
-        if "detected bad NIC state" in normalized_symptoms:
+        if any(symptom in normalized_symptoms for symptom in ("detected bad NIC state", "irisc not responding")):
             superseded_mappings.update(
                 (
                     "Call to ibv_modify_qp failed",
