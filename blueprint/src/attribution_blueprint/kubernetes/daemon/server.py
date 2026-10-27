@@ -62,6 +62,17 @@ def serve_api(
                             ]
                         histories = []
                         seen_controllers: set[str] = set()
+                        # Coverage and gaps are scoped to (cluster_id, namespace)
+                        coverage = (
+                            _coverage_response(
+                                state,
+                                evidence_store,
+                                cluster_id,
+                                requested_namespace,
+                            )
+                            if candidates
+                            else None
+                        )
                         for candidate in candidates:
                             controller_uid = _controller_uid(candidate) or candidate.uid
                             if controller_uid in seen_controllers:
@@ -80,12 +91,7 @@ def serve_api(
                                         evidence_store,
                                         observations,
                                     ),
-                                    _coverage_response(
-                                        state,
-                                        evidence_store,
-                                        cluster_id,
-                                        requested_namespace,
-                                    ),
+                                    coverage,
                                 )
                             )
                         status, body = 200, {"items": histories}
