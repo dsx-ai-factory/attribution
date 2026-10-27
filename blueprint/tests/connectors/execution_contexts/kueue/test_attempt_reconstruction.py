@@ -541,6 +541,313 @@ def test_scheduler_readmission_creates_a_new_attempt():
     assert partial_context["history_complete"] is False
 
 
+def test_recreated_workloads_bound_pods_and_owner_terminal_by_incarnation():
+    job_owner = {
+        "apiVersion": "batch/v1",
+        "kind": "Job",
+        "name": "trainer",
+        "uid": "job-uid",
+        "controller": True,
+    }
+    pod_owner = {
+        "apiVersion": "batch/v1",
+        "kind": "Job",
+        "name": "trainer",
+        "uid": "job-uid",
+        "controller": True,
+    }
+    history = {
+        "observations": [
+            {
+                "kind": "Workload",
+                "metadata": {
+                    "namespace": "team-a",
+                    "name": "training-workload",
+                    "uid": "workload-old",
+                    "ownerReferences": [job_owner],
+                },
+                "eventType": "ADDED",
+                "observedAt": "2026-10-14T10:00:00Z",
+                "status": {
+                    "conditions": [
+                        _condition("Admitted", "2026-10-14T10:00:00Z")
+                    ]
+                },
+            },
+            {
+                "kind": "Pod",
+                "metadata": {
+                    "uid": "pod-old",
+                    "ownerReferences": [pod_owner],
+                },
+                "eventType": "ADDED",
+                "observedAt": "2026-10-14T10:01:00Z",
+                "status": {"startTime": "2026-10-14T10:01:00Z"},
+            },
+            {
+                "kind": "Workload",
+                "metadata": {
+                    "namespace": "team-a",
+                    "name": "training-workload",
+                    "uid": "workload-old",
+                    "ownerReferences": [job_owner],
+                },
+                "eventType": "DELETED",
+                "observedAt": "2026-10-14T10:15:00Z",
+                "sourceTimestamp": "2026-10-14T10:00:00Z",
+                "selectedMetadata": {
+                    "deletionTimestamp": "2026-10-14T10:15:00Z"
+                },
+                "status": {},
+            },
+            {
+                "kind": "Workload",
+                "metadata": {
+                    "namespace": "team-a",
+                    "name": "training-workload",
+                    "uid": "workload-new",
+                    "ownerReferences": [job_owner],
+                },
+                "eventType": "ADDED",
+                "observedAt": "2026-10-14T10:16:00Z",
+                "status": {
+                    "conditions": [
+                        _condition("Admitted", "2026-10-14T10:10:00Z")
+                    ]
+                },
+            },
+            {
+                "kind": "Pod",
+                "metadata": {
+                    "uid": "pod-new",
+                    "ownerReferences": [pod_owner],
+                },
+                "eventType": "ADDED",
+                "observedAt": "2026-10-14T10:16:00Z",
+                "status": {"startTime": "2026-10-14T10:11:00Z"},
+            },
+            {
+                "kind": "Job",
+                "metadata": {"uid": "job-uid"},
+                "eventType": "MODIFIED",
+                "observedAt": "2026-10-14T12:00:00Z",
+                "status": {
+                    "conditions": [
+                        _condition("Complete", "2026-10-14T12:00:00Z")
+                    ]
+                },
+            },
+        ]
+    }
+
+    attempts = attempts_from_workload_history(
+        history,
+        now=datetime(2026, 10, 14, 13, 0, tzinfo=timezone.utc),
+        workload_name="training-workload",
+    )
+
+    assert len(attempts) == 2
+    old, new = attempts
+    assert old.workload_uid == "workload-old"
+    assert old.end_time == datetime(2026, 10, 14, 10, 10, tzinfo=timezone.utc)
+    assert old.terminal is None
+    assert old.open is False
+    assert old.pod_uids == frozenset({"pod-old"})
+    assert new.workload_uid == "workload-new"
+    assert new.terminal["kind"] == "Job"
+    assert new.pod_uids == frozenset({"pod-new"})
+
+
+def test_deletion_request_timestamp_does_not_reuse_generic_source_timestamp():
+    history = {
+        "observations": [
+            {
+                "kind": "Workload",
+                "metadata": {
+                    "namespace": "team-a",
+                    "name": "training-workload",
+                    "uid": "workload-uid",
+                },
+                "eventType": "ADDED",
+                "observedAt": "2026-10-14T12:00:00Z",
+                "status": {
+                    "conditions": [
+                        _condition("Admitted", "2026-10-14T12:00:00Z")
+                    ]
+                },
+            },
+            {
+                "kind": "Pod",
+                "metadata": {"uid": "pod-uid"},
+                "eventType": "ADDED",
+                "observedAt": "2026-10-14T12:01:00Z",
+                "status": {"startTime": "2026-10-14T12:01:00Z"},
+            },
+            {
+                "kind": "Workload",
+                "metadata": {
+                    "namespace": "team-a",
+                    "name": "training-workload",
+                    "uid": "workload-uid",
+                },
+                "eventType": "DELETED",
+                "observedAt": "2026-10-14T12:10:00Z",
+                # Generic sourceTimestamp can point at an earlier status
+                # transition; only explicit deletionTimestamp is authoritative.
+                "sourceTimestamp": "2026-10-14T12:00:00Z",
+                "selectedMetadata": {
+                    "deletionTimestamp": "2026-10-14T12:10:00Z"
+                },
+                "status": {},
+            },
+        ]
+    }
+
+    [attempt] = attempts_from_workload_history(
+        history,
+        now=datetime(2026, 10, 14, 13, 0, tzinfo=timezone.utc),
+        workload_name="training-workload",
+    )
+
+    assert attempt.end_time == datetime(
+        2026, 10, 14, 12, 10, tzinfo=timezone.utc
+    )
+    assert attempt.pod_uids == frozenset({"pod-uid"})
+
+
+def test_replacement_without_source_boundary_preserves_uncertainty():
+    now = datetime(2026, 10, 14, 12, 0, tzinfo=timezone.utc)
+    history = {
+        "observations": [
+            {
+                "kind": "Workload",
+                "metadata": {
+                    "namespace": "team-a",
+                    "name": "training-workload",
+                    "uid": "workload-old",
+                    "ownerReferences": [
+                        {
+                            "kind": "Job",
+                            "name": "trainer",
+                            "uid": "job-uid",
+                            "controller": True,
+                        }
+                    ],
+                },
+                "eventType": "ADDED",
+                "observedAt": "2026-10-14T10:00:00Z",
+                "status": {
+                    "conditions": [
+                        _condition("Admitted", "2026-10-14T10:00:00Z")
+                    ]
+                },
+            },
+            {
+                "kind": "Workload",
+                "metadata": {
+                    "namespace": "team-a",
+                    "name": "training-workload",
+                    "uid": "workload-new",
+                },
+                "eventType": "ADDED",
+                "observedAt": "2026-10-14T10:15:00Z",
+                "status": {"conditions": []},
+            },
+            {
+                "kind": "Pod",
+                "metadata": {"uid": "ambiguous-pod"},
+                "eventType": "ADDED",
+                "observedAt": "2026-10-14T10:16:00Z",
+                "status": {"startTime": "2026-10-14T10:16:00Z"},
+            },
+            {
+                "kind": "Job",
+                "metadata": {"uid": "job-uid"},
+                "eventType": "MODIFIED",
+                "observedAt": "2026-10-14T10:20:00Z",
+                "status": {
+                    "conditions": [
+                        _condition("Complete", "2026-10-14T10:20:00Z")
+                    ]
+                },
+            },
+        ]
+    }
+
+    [attempt] = attempts_from_workload_history(
+        history,
+        now=now,
+        workload_name="training-workload",
+    )
+
+    assert attempt.end_time == now
+    assert attempt.open is False
+    assert attempt.boundary_resolved is False
+    assert attempt.terminal is None
+    assert attempt.pod_uids == frozenset()
+
+
+def test_deadline_exceeded_outranks_generic_workload_failure():
+    history = {
+        "observations": [
+            {
+                "kind": "Workload",
+                "metadata": {
+                    "namespace": "team-a",
+                    "name": "training-workload",
+                    "uid": "workload-uid",
+                    "ownerReferences": [
+                        {
+                            "kind": "Job",
+                            "name": "trainer",
+                            "uid": "job-uid",
+                            "controller": True,
+                        }
+                    ],
+                },
+                "observedAt": "2026-10-14T10:00:00Z",
+                "status": {
+                    "conditions": [
+                        _condition("Admitted", "2026-10-14T10:00:00Z"),
+                        _condition(
+                            "Finished",
+                            "2026-10-14T11:00:00Z",
+                            reason="Failed",
+                        ),
+                    ]
+                },
+            },
+            {
+                "kind": "Job",
+                "metadata": {"uid": "job-uid"},
+                "observedAt": "2026-10-14T11:00:00Z",
+                "status": {
+                    "conditions": [
+                        _condition(
+                            "Failed",
+                            "2026-10-14T11:00:00Z",
+                            reason="DeadlineExceeded",
+                        )
+                    ]
+                },
+            },
+        ]
+    }
+
+    [attempt] = attempts_from_workload_history(
+        history,
+        now=datetime(2026, 10, 14, 12, 0, tzinfo=timezone.utc),
+        workload_name="training-workload",
+    )
+    context = KueueExecutionContextAdapter._context_from_history_attempt(
+        attempt,
+        [],
+        {},
+    )
+
+    assert context["state"] == "TIMEOUT"
+
+
 def test_child_job_completion_does_not_finish_jobset_attempt():
     history = {
         "observations": [
