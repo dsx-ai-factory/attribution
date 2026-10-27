@@ -280,11 +280,11 @@ class _FailCreateOnceStore:
         self.delegate = delegate
         self.failed = False
 
-    def create(self, record):
+    def capture_observation(self, observation, **kwargs):
         if not self.failed:
             self.failed = True
             raise OSError("synthetic placement write failure")
-        return self.delegate.create(record)
+        return self.delegate.capture_observation(observation, **kwargs)
 
     def __getattr__(self, name):
         return getattr(self.delegate, name)
@@ -382,11 +382,11 @@ class _FailObservationOnceStore:
         self.resource_version = resource_version
         self.failed = False
 
-    def append_observation(self, observation):
+    def capture_observation(self, observation, **kwargs):
         if observation.resource_version == self.resource_version and not self.failed:
             self.failed = True
             raise OSError("synthetic journal failure")
-        return self.delegate.append_observation(observation)
+        return self.delegate.capture_observation(observation, **kwargs)
 
     def create(self, record):
         return self.delegate.create(record)
@@ -803,13 +803,16 @@ def test_failed_capture_preserves_earlier_queued_generation(tmp_path, mocker):
     second["metadata"]["resourceVersion"] = "11"
     daemon._capture(_PodWatchSource(), first, "SNAPSHOT")
     queued_generation = daemon._latest_generation["pod-uid-1"]
-    create = mocker.patch.object(store, "create", side_effect=OSError("synthetic storage failure"))
+    capture = mocker.patch.object(
+        store,
+        "capture_observation",
+        side_effect=OSError("synthetic storage failure"),
+    )
 
-    with pytest.raises(RequiredPersistenceError):
-        daemon._capture(_PodWatchSource(), second, "SNAPSHOT")
+    assert daemon._capture(_PodWatchSource(), second, "SNAPSHOT") is False
 
     assert daemon._latest_generation["pod-uid-1"] == queued_generation
-    mocker.stop(create)
+    mocker.stop(capture)
     daemon.stop_event.set()
     daemon._worker()
     assert store.get_by_pod_uid("pod-uid-1").owner.uid == "job-uid-1"
