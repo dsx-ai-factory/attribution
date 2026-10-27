@@ -853,6 +853,8 @@ def _history_complete(
     attempt: WorkloadAttempt,
     coverage: dict,
 ) -> bool:
+    if not attempt.boundary_resolved:
+        return False
     required_sources = {"kueue-workloads", "jobs", "pods"}
     if attempt.owner_kind == "JobSet":
         required_sources.add("jobsets")
@@ -1036,10 +1038,17 @@ class KueueExecutionContextAdapter:
                     if field in live:
                         updated[field] = live[field]
                 reconciled[open_index] = updated
-            elif (
-                not matching
-                or reconciled[matching[-1]]["state"] != live["state"]
-            ):
+            elif matching:
+                # The live Workload represents the latest execution for this
+                # UID. Reconcile that execution regardless of whether the
+                # retained generic outcome and live specific outcome differ.
+                latest_index = matching[-1]
+                updated = dict(reconciled[latest_index])
+                for field in ("state", "kueue_state", "end_time"):
+                    if field in live:
+                        updated[field] = live[field]
+                reconciled[latest_index] = updated
+            else:
                 reconciled.append(live)
         return reconciled
 
@@ -1053,20 +1062,10 @@ class KueueExecutionContextAdapter:
         now = datetime.now(tz=timezone.utc)
         contexts: list[KueueExecutionContext] = []
         for history in histories:
-            workload_uids = {
-                metadata["uid"]
-                for observation in history.get("observations") or []
-                if observation.get("kind") == "Workload"
-                and (metadata := observation.get("metadata") or {}).get("uid")
-            }
             history_placements = [
                 PlacementRecord.from_resource(resource)
                 for resource in history.get("placements") or []
             ]
-            placements = {
-                uid: history_placements
-                for uid in workload_uids
-            }
             for attempt in attempts_from_workload_history(
                 history,
                 workload_name=workload_name,
@@ -1075,7 +1074,7 @@ class KueueExecutionContextAdapter:
                 contexts.append(
                     self._context_from_history_attempt(
                         attempt,
-                        placements.get(attempt.workload_uid, []),
+                        history_placements,
                         history.get("coverage") or {},
                     )
                 )
