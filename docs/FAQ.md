@@ -27,7 +27,7 @@ The Blueprint's attribution connector calls the Service over HTTP with `service_
 
 ## Can I extend the rule set?
 
-During private preview, the bundled rules are not a supported customer extension point. Upstream contributions open at GA. See the Contributing tab for the EA-period stance.
+Propose changes to the bundled rules through [CONTRIBUTING.md](https://github.com/dsx-ai-factory/attribution/blob/main/CONTRIBUTING.md). The Library and Blueprint do not offer stable external interfaces. Upstream bug reports must reproduce on the unmodified main branch, as described in [SUPPORT.md](https://github.com/dsx-ai-factory/attribution/blob/main/SUPPORT.md).
 
 ## What's the schema-versioning policy?
 

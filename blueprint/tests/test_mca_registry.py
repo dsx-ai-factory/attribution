@@ -1,12 +1,5 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-# SPDX-License-Identifier: LicenseRef-NvidiaProprietary
-#
-# NVIDIA CORPORATION, its affiliates and licensors retain all intellectual
-# property and proprietary rights in and to this material, related
-# documentation and any modifications thereto. Any use, reproduction,
-# disclosure or distribution of this material and related documentation
-# without an express license agreement from NVIDIA CORPORATION or
-# its affiliates is strictly prohibited.
+# SPDX-License-Identifier: Apache-2.0
 
 import sys
 
@@ -144,7 +137,17 @@ def test_built_schema_has_expected_shape():
     schema = mca.SCHEMA
     assert "eca" in schema
     assert schema["eca"]["_aliases"] == ("execution_context",)
-    assert set(schema["eca"]["_selector"]) == {"slurm", "static", "kueue"}
+    assert set(schema["eca"]["_selector"]) == {"slurm", "static", "kueue", "kai"}
+    assert set(schema["eca"]["_selector"]["kai"]) == {
+        "ids",
+        "start_time",
+        "end_time",
+        "nodelist",
+        "kubeconfig",
+        "context",
+        "namespace",
+        "timeout_seconds",
+    }
     assert set(schema["eca"]["_selector"]["slurm"]) == {
         "ids",
         "start_time",
@@ -175,11 +178,11 @@ def test_built_schema_has_expected_shape():
         "start_time",
         "end_time",
         "nodelist",
-        "kubectl_path",
         "kubeconfig",
         "context",
         "namespace",
         "timeout_seconds",
+        "workload_api_version",
         "placement_records_enabled",
         "placement_recorder",
         "event_max_age_seconds",

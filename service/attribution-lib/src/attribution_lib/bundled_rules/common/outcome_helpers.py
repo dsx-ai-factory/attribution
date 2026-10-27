@@ -1,12 +1,5 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-# SPDX-License-Identifier: LicenseRef-NvidiaProprietary
-#
-# NVIDIA CORPORATION, its affiliates and licensors retain all intellectual
-# property and proprietary rights in and to this material, related
-# documentation and any modifications thereto. Any use, reproduction,
-# disclosure or distribution of this material and related documentation
-# without an express license agreement from NVIDIA CORPORATION or
-# its affiliates is strictly prohibited.
+# SPDX-License-Identifier: Apache-2.0
 
 from typing import TYPE_CHECKING
 
@@ -14,12 +7,15 @@ from attribution_lib.events import EventStream
 
 _SYSTEM_CANCEL_FLAGS = frozenset({"root", "Timeout", "PyTorch NCCL watchdog"})
 from .megatron import get_pytorch_timeout_minutes
-from attribution_lib.job_info import JobInfo
+from attribution_lib.job_info import JobInfo, Scheduler
 from attribution_lib.outcome import OutcomeAttribution
 from attribution_lib.sources import SourceSet
 
 if TYPE_CHECKING:
     from attribution_lib.core import AttributionResult
+
+# Kubernetes queue schedulers that share rule semantics.
+KUBERNETES_SCHEDULER_TYPES = frozenset({Scheduler.KUEUE, Scheduler.KAI})
 
 
 def apply_user_cancellation_reclassification(
@@ -37,15 +33,18 @@ def apply_user_cancellation_reclassification(
     """
 
     current_outcome = attribution_result.outcome_attr.value().outcome
-    if job_info.cancelled_by is None or current_outcome != "Fail User":
+    if job_info.attributed_cancelled_by is None or current_outcome != "Fail User":
         return False
 
-    cancelled_by = job_info.cancelled_by
+    cancelled_by = job_info.attributed_cancelled_by
     if cancelled_by in _SYSTEM_CANCEL_FLAGS or cancelled_by.startswith("svc-"):
         return False
 
-    previous_source = attribution_result.outcome_attr.one_source() or job_info.source(
-        cancelled_by, "slurmdb cancelled_by"
+    cancellation = job_info.attributed_cancellation
+    previous_source = (
+        cancellation.source
+        if cancellation is not None
+        else attribution_result.outcome_attr.one_source() or job_info.source(cancelled_by, "slurmdb cancelled_by")
     )
 
     new_outcome = OutcomeAttribution(
@@ -67,14 +66,15 @@ def apply_outcome_reclassification_rules(
 ) -> None:
     """Apply post-processing outcome reclassification rules."""
 
-    kueue_has_only_preemption_fallback = all(
+    has_only_preemption_fallback = all(
         symptom == "job failed" for symptom in attribution_result.symptoms.symptoms()
     )
 
-    # Kueue preemption must not mask evidence-backed failures. Other scheduler
-    # types retain their historical PREEMPTED reclassification behavior.
+    # Kubernetes scheduler preemption must not mask evidence-backed
+    # failures. Other scheduler types retain their original behavior.
     if (
-        (job_info.type != "kueue" or kueue_has_only_preemption_fallback)
+        job_info.attributed_cancellation is None
+        and (job_info.scheduler not in KUBERNETES_SCHEDULER_TYPES or has_only_preemption_fallback)
         and job_info.state is not None
         and job_info.state.upper() == "PREEMPTED"
     ):

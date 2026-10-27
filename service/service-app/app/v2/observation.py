@@ -1,12 +1,5 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-# SPDX-License-Identifier: LicenseRef-NvidiaProprietary
-#
-# NVIDIA CORPORATION, its affiliates and licensors retain all intellectual
-# property and proprietary rights in and to this material, related
-# documentation and any modifications thereto. Any use, reproduction,
-# disclosure or distribution of this material and related documentation
-# without an express license agreement from NVIDIA CORPORATION or
-# its affiliates is strictly prohibited.
+# SPDX-License-Identifier: Apache-2.0
 
 """V2 observation wire model. The body is always an `entry_timeseries` entry list."""
 
@@ -20,7 +13,6 @@ from attribution_lib.observation.inbound import (
     Source as ObservationSource,
     TimeInterval as LibTimeInterval,
 )
-from attribution_lib.resources import AllJobResources
 from pydantic import ConfigDict, Field, model_validator
 
 from app.entry_timeseries import decode_timeseries_entries
@@ -57,7 +49,6 @@ class ObservationContextV2(HashableModel):
         """Convert the observation context to a lib context."""
         return InboundContext(
             LibTimeInterval(start=self.time_interval.start, end=self.time_interval.end),
-            AllJobResources,
             self.source,
             ObservationFormat.ENTRY_TIMESERIES,
             timezone,

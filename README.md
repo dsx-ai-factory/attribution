@@ -1,12 +1,12 @@
 # NVIDIA Attribution
 
-**NVIDIA Early Access - pre-1.0**
+**Open source · pre-1.0**
 
 NVIDIA Attribution is a service-plus-orchestrator that turns the raw symptoms of a failed GPU workload into one structured diagnosis with the symptom chain that produced it.
 
 Modern AI training and inference workloads fail in dozens of ways. A multi-rank workload at 10k-GPU scale typically produces hundreds to tens of thousands of log lines across application logs, host syslogs, scheduler database entries, GPU driver dmesg, fabric manager logs, and metric backends. Application logs in particular scale with rank count, so volume grows with the size of the workload. Triaging them by hand breaks down at production-cluster volume. NVIDIA Attribution automates the cross-correlation. Each failed workload becomes one structured diagnosis, with the cascade rendered as the symptom chain that produced it.
 
-**Status.** Currently in private preview. The V1 public surface is the Attribution Service HTTP API and the Blueprint reference orchestrator. External rule-catalog contributions and additional scheduler connectors land at V1 GA.
+**Status.** NVIDIA Attribution is open-source software. The Service exposes a versioned HTTP API. The Library and Blueprint interfaces can change. See [SUPPORT.md](SUPPORT.md#interface-compatibility) for compatibility commitments and [CONTRIBUTING.md](CONTRIBUTING.md) to propose improvements.
 
 <p align="center">
   <img src="docs/media/attribution-demo.gif" alt="NVIDIA Attribution web UI showing a diagnosed workload and its symptom chain" width="640">
@@ -16,10 +16,10 @@ Modern AI training and inference workloads fail in dozens of ways. A multi-rank 
 
 NVIDIA Attribution ships in two components that share one rules engine. Pick the form that matches how you want to integrate.
 
-* **Attribution Blueprint.** A Python reference orchestrator that discovers workloads from your scheduler, collects log and metric evidence from your telemetry stack, calls the Attribution Service, and persists the diagnosis. The Blueprint owns the connector contracts (scheduler, logs, metrics, output) and is the fastest path to a running system. Use when you want a working deployment fast, for a proof-of-concept, an early-access deployment, or as the starting point for your own production topology. Ships with a read-side dashboard that renders the per-workload diagnosis and its symptom chain.
+* **Attribution Blueprint.** A Python reference orchestrator that discovers workloads from your scheduler, collects log and metric evidence from your telemetry stack, calls the Attribution Service, and persists the diagnosis. The Blueprint owns the connector contracts (scheduler, logs, metrics, output) and is the fastest path to a running system. Use when you want a working deployment fast, for a proof-of-concept or as the starting point for your own production topology. Ships with a read-side dashboard that renders the per-workload diagnosis and its symptom chain.
 * **Attribution Service.** A self-hosted HTTP REST service that owns the rules engine and returns one diagnosis per workload. Use when you want a shared attribution endpoint across many workloads and a single deployment to operate.
 
-Both are distributed under the NVIDIA AI Enterprise Early Access agreement during private preview. The Blueprint is the orchestrator that wires the Service into a real cluster. It implements a modular connector architecture designed to be extended and customized for your production environment. Run it as-is or adapt it to your topology, and contribute improvements back once the project reaches GA.
+Both use the Apache License 2.0. The Blueprint is the orchestrator that wires the Service into a real cluster. It implements a modular connector architecture designed to be extended and customized for your production environment. Run it as-is or adapt it to your topology, and propose improvements through the [contribution workflow](CONTRIBUTING.md).
 
 ## What NVIDIA Attribution does
 
@@ -76,7 +76,7 @@ Three cases the rules engine handles in production:
 
 * **Python.** `>=3.14.6,<3.15` on the host running the Attribution Service. 3.11+ on the host running the Blueprint orchestrator. The two can run on the same host or different hosts.
 * **uv package manager.** Install with `curl -LsSf https://astral.sh/uv/install.sh | sh`. Every `uv run` command resolves and installs dependencies on first invocation, no separate install step.
-* **Scheduler.** Slurm 25.11+ (SLUID required), or Kueue v0.6+ with JobSet v0.5+ for JobSet-shaped distributed training.
+* **Scheduler.** Slurm 25.11+ (SLUID required), or Kueue v0.6+ with JobSet v0.5+ for JobSet-shaped distributed training. NVIDIA KAI Scheduler support is pending: the Service API accepts `kai` as a scheduler value, but attribution for it is not implemented yet.
 * **Telemetry backends (any subset of):** Loki for application or system logs, a PromQL-compatible Prometheus or Mimir instance for node metrics, `kubectl` access for Kueue pod log collection, or local files for sacct-resolved StdOut/StdErr paths.
 * **Network reach.** The Blueprint must reach the Attribution Service over HTTP. The Service does not need outbound network access.
 * **Supported GPU architectures.** A100, H100, L40S, B200, GB200, GB300. GB200 and GB300 rule coverage continues to mature as coverage expands.
@@ -90,7 +90,7 @@ Run the attribution service and web UI in Docker, attribute sample AI factory ev
 Clone the repository and change into it:
 
 ```bash
-git clone <repository-url> nvidia-attribution
+git clone https://github.com/dsx-ai-factory/attribution.git nvidia-attribution
 cd nvidia-attribution
 ```
 
@@ -155,12 +155,26 @@ If `ATTRIBUTION_DB` already exists, the command appends a new attribution run fo
 
 Open `http://127.0.0.1:8080`, or the port you set in `ATTRIBUTION_WEB_PORT`.
 
-If you are running from a source checkout rather than the release bundle, use the source repository's web UI helper instead of Docker. The helper builds the React assets and starts the FastAPI backend directly against your database. See the source repository README for the full source workflow.
+To run the web UI from a source checkout without Docker, use [blueprint/scripts/webui.sh](blueprint/scripts/webui.sh). It builds the React assets and serves them from the FastAPI backend against a SQLite database. Pass your own database and port:
+
+```None
+blueprint/scripts/webui.sh --db "$ATTRIBUTION_DB" --port "$ATTRIBUTION_WEB_PORT"
+```
+
+Without `--db`, the helper seeds and serves a demo database. Run it with `--help` for all options, and see [Web UI Flags](blueprint/docs/CONFIGURATION.md#web-ui-flags) for the underlying `nvidia-attribution-blueprint-web` command.
 
 ## Where to go for more
 
+* Start here for operators: [Overview](docs/overview.md)
+* How the engine reaches a diagnosis: [How Attribution Works](docs/attribution.md)
+* System architecture: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
+* Running the Service, web UI, and database: [Service Operator Guide](docs/service-operators.md)
+* Common questions: [docs/FAQ.md](docs/FAQ.md)
+* Writing rules: [Add a New Extractor Rule](service/attribution-lib/docs/adding-a-rule.md)
 * Runnable release-bundle quickstart: [docs/quickstart.md](blueprint/docs/quickstart.md)
 * Blueprint configuration reference: [docs/CONFIGURATION.md](blueprint/docs/CONFIGURATION.md)
+* Bringing your own logs, the observation format every source accepts: [Observation Format](service/service-app/docs/api/observation-format.md)
+* Attributing from syslogs you collected yourself: [Manually Collected Syslogs](blueprint/docs/use-cases/manually-collected-syslogs.md)
 * Kueue example: [examples/kueue](blueprint/examples/kueue)
 * Attribution Service v2 REST walkthrough: [docs/rest-api.md](blueprint/docs/rest-api.md)
 * Static sample configs used by the quickstart: [examples/static/configs](blueprint/examples/static/configs)
@@ -168,22 +182,48 @@ If you are running from a source checkout rather than the release bundle, use th
 
 ## Maintainers
 
-* Aaron Blakeman, NVIDIA Attribution Blueprint engineering lead
-* Ben Gueret, Product Manager
-* Jason Sewall, NVIDIA Attribution Architect
+The repository maintainer team is listed in [CODEOWNERS](.github/CODEOWNERS).
 
 ## Contributing
 
-Contributions open at GA.
+Contributions are welcome. Read [CONTRIBUTING.md](CONTRIBUTING.md) for the
+proposal, testing, sign-off, and review process, and follow the
+[Code of Conduct](CODE_OF_CONDUCT.md).
 
-## Reporting issues
+## Support and releases
 
-* Bug reports and feature requests: get in touch with your NVIDIA account team during EA.
-* Security issues: report through your NVIDIA AI Enterprise security contact. Do not file security issues in any public channel.
+* Reproducible upstream bugs: [GitHub Issues](https://github.com/dsx-ai-factory/attribution/issues).
+* Usage questions and feature requests: [GitHub Discussions](https://github.com/dsx-ai-factory/attribution/discussions).
+* Support scope, response targets, and compatibility: [SUPPORT.md](SUPPORT.md).
+* Security vulnerabilities: use the private reporting route in [SECURITY.md](SECURITY.md).
+* Versions and release process: [RELEASE.md](RELEASE.md).
 
 ## License
 
-NVIDIA Attribution is currently distributed under the NVIDIA Software and Model Evaluation License during private preview. This project will download and install additional third-party open source software projects. Review the license terms of these open source projects before use.
+NVIDIA Attribution project code is licensed under the Apache License 2.0.
+See [LICENSE](LICENSE).
+
+The components retain their own Apache-2.0 license files so their source and
+package distributions include the license when distributed separately:
+
+| Component directory | License | License file |
+|---|---|---|
+| `blueprint/` | Apache-2.0 | [blueprint/LICENSE](blueprint/LICENSE) |
+| `service/attribution-lib/` | Apache-2.0 | [service/attribution-lib/LICENSE](service/attribution-lib/LICENSE) |
+| `service/service-app/` | Apache-2.0 | [service/service-app/LICENSE](service/service-app/LICENSE) |
+| `service/service-app/nvidia_attribution_client/` | Apache-2.0 | [service/service-app/nvidia_attribution_client/LICENSE](service/service-app/nvidia_attribution_client/LICENSE) |
+| `service/service-app/openapi/extras/` | Apache-2.0 | [service/service-app/openapi/extras/LICENSE](service/service-app/openapi/extras/LICENSE) |
+
+The `openapi/extras/` license is copied into the client package during generation.
+
+The [Code of Conduct](CODE_OF_CONDUCT.md) retains its CC BY-SA 4.0 terms.
+OpenAPI Generator templates retain [their upstream license](service/service-app/openapi/templates/LICENSE).
+Bundled font files and dependencies retain their respective notices and terms.
+See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for these license exceptions.
+
+The Blueprint WebUI and walkthrough builds also write
+`assets/THIRD_PARTY_NOTICES.txt` with the license and notice texts of the
+packages they bundle.
 
 ## Use cases
 

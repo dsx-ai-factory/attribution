@@ -1,12 +1,5 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-# SPDX-License-Identifier: LicenseRef-NvidiaProprietary
-#
-# NVIDIA CORPORATION, its affiliates and licensors retain all intellectual
-# property and proprietary rights in and to this material, related
-# documentation and any modifications thereto. Any use, reproduction,
-# disclosure or distribution of this material and related documentation
-# without an express license agreement from NVIDIA CORPORATION or
-# its affiliates is strictly prohibited.
+# SPDX-License-Identifier: Apache-2.0
 #
 # Declarative port of the PORTABLE single-leaf applog rules formerly defined as
 # @extractor_def functions in bundled_rules/applog_rules.py.
@@ -59,6 +52,116 @@ emit     = { type = "bad_node", symptom = "Python Exception", demotion = "KeyVal
 expect  = "bad"
 line    = "omegaconf.errors.KeyValidationError: ListConfig indices must be integers or slices, not NoneType"
 symptom = "Python Exception"
+
+# Recognize the Megatron configuration assertion with a stable symptom label.
+# Keep the full assertion and batch sizes in the source evidence.
+[[extractor]]
+name     = "BatchSizeAssertion"
+match_re = '^\s*(?:\d+:\s*)?(?:\[rank\s*:?\s*\d+\]:\s*)?AssertionError: (?:eval_)?global_batch_size \(\d+\) must be divisible by [^\r\n]+\s*$'
+emit     = { type = "bad_node", symptom = "Python Exception: AssertionError: batch size not divisible" }
+[[extractor.cases]]
+expect  = "bad"
+line    = "AssertionError: global_batch_size (12) must be divisible by micro_batch_size (4) * data_parallel_size (8)"
+symptom = "Python Exception: AssertionError: batch size not divisible"
+[[extractor.cases]]
+expect  = "bad"
+line    = " 3: AssertionError: eval_global_batch_size (12) must be divisible by eval_micro_batch_size (4) * data_parallel_size (8)\n"
+symptom = "Python Exception: AssertionError: batch size not divisible"
+[[extractor.cases]]
+expect  = "bad"
+line    = "[rank3]: AssertionError: global_batch_size (12) must be divisible by micro_batch_size (4)"
+symptom = "Python Exception: AssertionError: batch size not divisible"
+[[extractor.cases]]
+expect  = "bad"
+line    = "[rank 3]: AssertionError: global_batch_size (12) must be divisible by micro_batch_size (4) * data_parallel_size (8)"
+symptom = "Python Exception: AssertionError: batch size not divisible"
+[[extractor.cases]]
+expect  = "bad"
+line    = "[rank: 3]: AssertionError: eval_global_batch_size (12) must be divisible by eval_micro_batch_size (4) * data_parallel_size (8)"
+symptom = "Python Exception: AssertionError: batch size not divisible"
+[[extractor.cases]]
+expect = "none"
+line   = "AssertionError: process group is not initialized"
+[[extractor.cases]]
+expect = "none"
+line   = "3: handled AssertionError: global_batch_size (12) must be divisible by micro_batch_size (4)"
+[[extractor.cases]]
+expect = "none"
+line   = '3: print("AssertionError: global_batch_size (12) must be divisible by micro_batch_size (4)")'
+[[extractor.cases]]
+expect = "none"
+line   = "[rank 3]: handled AssertionError: global_batch_size (12) must be divisible by micro_batch_size (4)"
+[[extractor.cases]]
+expect = "none"
+line   = '[rank: 3]: print("AssertionError: global_batch_size (12) must be divisible by micro_batch_size (4)")'
+[[extractor.cases]]
+expect = "none"
+line   = "3: global_batch_size (12) must be divisible by micro_batch_size (4)"
+
+# Require a failed C compiler invocation and explicit Inductor or Triton context.
+# A bare CalledProcessError may come from an unrelated subprocess.
+[[extractor]]
+name     = "TritonInductorCCompilationFailure"
+match_re = '''^\s*(?:\d+:\s*)?(?:\[default\d+\]:\s*)?(?:\[rank\s*:?\s*\d+\]:\s*)?(?:(?:torch\._inductor\.exc\.)?InductorError:\s+(?:subprocess\.)?CalledProcessError:|subprocess\.CalledProcessError:(?=[^\r\n]*/(?:site|dist)-packages/triton/))\s+Command '\['(?:[^'\r\n]*/)?(?:[A-Za-z0-9_]+(?:-[A-Za-z0-9_]+)+-)?(?:gcc|g\+\+|cc|c\+\+|clang(?:\+\+)?)(?:-\d+(?:\.\d+)*)?', [^\r\n]*\]' returned non-zero exit status [1-9]\d*\.\s*$'''
+emit     = { type = "bad_node", symptom = "Triton/Inductor JIT C-compilation failure" }
+[[extractor.cases]]
+expect  = "bad"
+line    = " 1: [rank1]: torch._inductor.exc.InductorError: CalledProcessError: Command '['/usr/bin/gcc', '/tmp/jit/cuda_utils.c', '-shared', '-I/site-packages/triton/backends/nvidia/include']' returned non-zero exit status 1.\n"
+symptom = "Triton/Inductor JIT C-compilation failure"
+[[extractor.cases]]
+expect  = "bad"
+line    = "[rank: 1]: InductorError: subprocess.CalledProcessError: Command '['clang-18', '/tmp/jit/kernel.cpp', '-shared']' returned non-zero exit status 2."
+symptom = "Triton/Inductor JIT C-compilation failure"
+[[extractor.cases]]
+expect  = "bad"
+line    = "subprocess.CalledProcessError: Command '['/usr/bin/gcc', '/tmp/jit/cuda_utils.c', '-I/site-packages/triton/backends/nvidia/include']' returned non-zero exit status 1."
+symptom = "Triton/Inductor JIT C-compilation failure"
+[[extractor.cases]]
+expect  = "bad"
+line    = "[default1]: InductorError: CalledProcessError: Command '['gcc', '/tmp/jit/kernel.c', '-shared']' returned non-zero exit status 1."
+symptom = "Triton/Inductor JIT C-compilation failure"
+[[extractor.cases]]
+expect  = "bad"
+line    = " 1: [default1]:[rank1]: subprocess.CalledProcessError: Command '['gcc', '/tmp/jit/kernel.c', '-I/dist-packages/triton/backends/nvidia/include']' returned non-zero exit status 1."
+symptom = "Triton/Inductor JIT C-compilation failure"
+[[extractor.cases]]
+expect  = "bad"
+line    = "[default1]: InductorError: subprocess.CalledProcessError: Command '['/usr/bin/aarch64-linux-gnu-gcc', '/tmp/jit/kernel.c', '-shared']' returned non-zero exit status 1."
+symptom = "Triton/Inductor JIT C-compilation failure"
+[[extractor.cases]]
+expect  = "bad"
+line    = "subprocess.CalledProcessError: Command '['x86_64-linux-gnu-g++-13', '/tmp/jit/kernel.cpp', '-I/site-packages/triton/backends/nvidia/include']' returned non-zero exit status 1."
+symptom = "Triton/Inductor JIT C-compilation failure"
+[[extractor.cases]]
+expect = "none"
+line   = "InductorError: CalledProcessError: Command '['aarch64-linux-gnu-gcc-ar', '/tmp/jit/kernel.o']' returned non-zero exit status 1."
+[[extractor.cases]]
+expect = "none"
+line   = "subprocess.CalledProcessError: Command '['aarch64-linux-gnu-gcc', '/tmp/extension.c']' returned non-zero exit status 1."
+[[extractor.cases]]
+expect = "none"
+line   = "[default1]: subprocess.CalledProcessError: Command '['gcc', '/home/user/triton/kernel.c']' returned non-zero exit status 1."
+[[extractor.cases]]
+expect = "none"
+line   = "subprocess.CalledProcessError: Command '['gcc', '/home/user/my-site-packages/triton/kernel.c']' returned non-zero exit status 1."
+[[extractor.cases]]
+expect = "none"
+line   = "subprocess.CalledProcessError: Command '['gcc', '/tmp/extension.c']' returned non-zero exit status 1."
+[[extractor.cases]]
+expect = "none"
+line   = "torch._inductor.exc.InductorError: CalledProcessError: Command '['python', '/tmp/triton/worker.py']' returned non-zero exit status 1."
+[[extractor.cases]]
+expect = "none"
+line   = "torch._inductor.exc.InductorError: CalledProcessError: Command '['gcc', '/tmp/jit/cuda_utils.c']' returned non-zero exit status 0."
+[[extractor.cases]]
+expect = "none"
+line   = "[rank1]: handled torch._inductor.exc.InductorError: CalledProcessError: Command '['gcc', '/tmp/jit/cuda_utils.c']' returned non-zero exit status 1."
+[[extractor.cases]]
+expect = "none"
+line   = "[rank1]: Compiling Triton kernel with /usr/bin/gcc; compilation completed successfully."
+[[extractor.cases]]
+expect = "none"
+line   = "torch._inductor.exc.InductorError: RuntimeError: unsupported operator"
 
 [[extractor]]
 name     = "BusErrorSignal"

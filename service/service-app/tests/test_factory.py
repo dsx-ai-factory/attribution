@@ -1,12 +1,5 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-# SPDX-License-Identifier: LicenseRef-NvidiaProprietary
-#
-# NVIDIA CORPORATION, its affiliates and licensors retain all intellectual
-# property and proprietary rights in and to this material, related
-# documentation and any modifications thereto. Any use, reproduction,
-# disclosure or distribution of this material and related documentation
-# without an express license agreement from NVIDIA CORPORATION or
-# its affiliates is strictly prohibited.
+# SPDX-License-Identifier: Apache-2.0
 
 import asyncio
 import subprocess
@@ -17,6 +10,7 @@ from fastapi import Request, Response
 from loguru import logger
 
 import app.factory as factory
+from app import __version__
 
 
 def test_importing_factory_does_not_initialize_rules():
@@ -109,3 +103,8 @@ def test_http_logging_omits_bodies_and_preserves_request_handling(app, client):
     assert "RESPONSE: POST /_test/logging Status: 200" in logged
     assert "Error handling POST /_test/logging-error" in logged
     assert "expected test failure" in logged
+
+
+def test_app_and_openapi_version_follow_literal(app):
+    assert app.version == __version__
+    assert app.openapi()["info"]["version"] == __version__

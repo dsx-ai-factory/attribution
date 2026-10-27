@@ -1,12 +1,5 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-# SPDX-License-Identifier: LicenseRef-NvidiaProprietary
-#
-# NVIDIA CORPORATION, its affiliates and licensors retain all intellectual
-# property and proprietary rights in and to this material, related
-# documentation and any modifications thereto. Any use, reproduction,
-# disclosure or distribution of this material and related documentation
-# without an express license agreement from NVIDIA CORPORATION or
-# its affiliates is strictly prohibited.
+# SPDX-License-Identifier: Apache-2.0
 
 """Shared test fixtures for the bundled_rules test suite."""
 
@@ -15,7 +8,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
-from attribution_lib.job_info import JobInfo, JobInfoBuilder
+from attribution_lib.job_info import JobInfo, JobInfoBuilder, Scheduler
 
 from test_support.helpers import make_node_to_ranks
 
@@ -34,6 +27,7 @@ def default_job_info(
     cancelled_by: str | None = None,
     exit_code: int | None = None,
     tags: frozenset[str] = frozenset(),
+    scheduler: Scheduler | None = None,
 ) -> JobInfo:
     """Canonical JobInfo for bundled_rules tests, built through the real JobInfoBuilder.
 
@@ -55,6 +49,8 @@ def default_job_info(
         node_to_ranks=make_node_to_ranks(nodes_, ranks_per_node),
     )
     builder.srun_cmd("srun dummy")
+    if scheduler is not None:
+        builder.scheduler(scheduler)
     if exit_code_signal is not None:
         builder.exit_code_signal(exit_code_signal)
     if exit_code is not None:

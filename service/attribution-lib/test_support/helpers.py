@@ -1,12 +1,5 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-# SPDX-License-Identifier: LicenseRef-NvidiaProprietary
-#
-# NVIDIA CORPORATION, its affiliates and licensors retain all intellectual
-# property and proprietary rights in and to this material, related
-# documentation and any modifications thereto. Any use, reproduction,
-# disclosure or distribution of this material and related documentation
-# without an express license agreement from NVIDIA CORPORATION or
-# its affiliates is strictly prohibited.
+# SPDX-License-Identifier: Apache-2.0
 
 """Minimal helper utilities for attribution tests."""
 
@@ -20,7 +13,7 @@ from pytest import param as pparam
 
 from attribution_lib.attr_types import JobNodeAttributions
 from attribution_lib.events import EventStream
-from attribution_lib.job_info import JobInfo, JobInfoBuilder
+from attribution_lib.job_info import JobInfo, JobInfoBuilder, Scheduler
 from attribution_lib.observation import (
     Context as ObservationContext,
     Observation,
@@ -31,7 +24,7 @@ from attribution_lib.observation.inbound import (
     TimeInterval,
 )
 from attribution_lib.observation.processing import EntrySourceBase
-from attribution_lib.resources.resource_set import AllJobResources, ResourceSet
+from attribution_lib.resources.resource_set import ResourceSet
 from attribution_lib.rules_engine import body_fallbacks_for
 from attribution_lib.sources import Source, SourceSet
 
@@ -62,6 +55,7 @@ def create_simple_job_info(
     source_name="artificial slurm",
     slurm_node_infos=None,
     failed_node=None,
+    scheduler: Scheduler | str | None = None,
 ):
     if timezone is None:
         if request is None:
@@ -97,6 +91,8 @@ def create_simple_job_info(
         .exit_code_signal(exit_code_signal)
         .time_limit(time_limit)
     )
+    if scheduler is not None:
+        builder = builder.scheduler(scheduler)
     if slurm_node_infos is not None:
         builder = builder.slurm_node_infos(slurm_node_infos)
     if failed_node is not None:
@@ -109,7 +105,6 @@ def observation_base(jobinfo, timezone, source, data, *, format=ObservationForma
         time_interval = TimeInterval(jobinfo.job_start_time, jobinfo.job_end_time)
     context = InboundContext(
         time_interval=time_interval,
-        resources=AllJobResources,
         source=source,
         format=format,
         timezone=timezone,

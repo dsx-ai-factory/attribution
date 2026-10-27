@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// SPDX-License-Identifier: Apache-2.0
+
 import Decimal from 'decimal.js'
 import type {
   OutcomeKey,
@@ -6,103 +9,32 @@ import type {
   DailyBucket,
   DailyBreakdown,
   DailyBreakdownSeries,
-  NodeLedgerEntry,
-  SymptomLedgerEntry,
-  RuleLedgerEntry,
-  OutcomeLedgerEntry,
   SymptomMover,
+  SymptomSite,
 } from '@/interfaces/attribution'
 
+// Labels only: an outcome's color lives in src/styles/globals.css and is
+// reached through data-outcome (markup) or lib/tokens outcomeColor (canvas).
 export const OUTCOMES: Record<OutcomeKey, Outcome> = {
-  // Hex literals mirror --outcome-* / --color-*-400 tokens in src/styles/globals.css.
-  // Keep in sync if a token changes.
-  hardware: { id: 'hardware', label: 'Hardware Fault', short: 'HW', color: '#ec6358' },
-  software: { id: 'software', label: 'System Software Fault', short: 'SW', color: '#3a96d9' },
-  multi:    { id: 'multi',    label: 'Ambiguous Fault', short: 'AMB', color: '#a1a1a1' },
-  user:     { id: 'user',     label: 'Application Fault', short: 'APP', color: '#c58420' },
-  undetermined: { id: 'undetermined', label: 'Unattributed', short: 'UNA', color: '#a05ab4' },
-  pass:     { id: 'pass',     label: 'Pass', short: 'OK', color: '#76b900' },
+  hardware: { id: 'hardware', label: 'Hardware Fault' },
+  software: { id: 'software', label: 'System Software Fault' },
+  multi:    { id: 'multi',    label: 'Ambiguous Fault' },
+  user:     { id: 'user',     label: 'Application Fault' },
+  undetermined: { id: 'undetermined', label: 'Unattributed' },
+  pass:     { id: 'pass',     label: 'Pass' },
 }
 
-// ─── Ledger builders ──────────────────────────────────────────────────────
-// Pure derivations over a run set (e.g. window-filtered). The single data
-// boundary is the dashboard API; views fetch only the slices they need.
+// The order outcomes are listed in wherever they appear together.
+export const OUTCOME_ORDER: readonly OutcomeKey[] = ['hardware', 'software', 'multi', 'user', 'undetermined', 'pass']
+
+// The one wording of a symptom site's responsibility state.
+export const SITE_STATUS_LABELS: Record<SymptomSite['status'], string> = {
+  bad: 'Responsible',
+  interesting: 'Supporting evidence',
+}
 
 function attemptGpuHours(run: RunSummary): Decimal {
   return new Decimal(run.gpuCount).times(run.elapsedH)
-}
-
-function nodeGpuHours(run: RunSummary): Decimal {
-  const billedNodes = run.nodes > 0 ? run.nodes : 1
-  return attemptGpuHours(run).div(billedNodes)
-}
-
-export function buildSymptomLedger(runs: RunSummary[]): SymptomLedgerEntry[] {
-  const m: Record<string, SymptomLedgerEntry> = {}
-  const hours: Record<string, Decimal> = {}
-  runs.forEach((r) => {
-    const s = r.rootSymptom.symptom
-    if (!m[s]) {
-      m[s] = { symptom: s, count: 0, nodeHours: 0, outcomes: {} }
-      hours[s] = new Decimal(0)
-    }
-    m[s].count += 1
-    hours[s] = hours[s].plus(attemptGpuHours(r))
-    m[s].outcomes[r.outcome] = (m[s].outcomes[r.outcome] || 0) + 1
-  })
-  Object.keys(m).forEach((s) => { m[s].nodeHours = hours[s].toNumber() })
-  return Object.values(m).sort((a, b) => b.count - a.count)
-}
-
-export function buildRuleLedger(runs: RunSummary[]): RuleLedgerEntry[] {
-  const m: Record<string, RuleLedgerEntry> = {}
-  const hours: Record<string, Decimal> = {}
-  runs.forEach((r) => {
-    const s = r.rootSymptom.rule
-    if (!m[s]) {
-      m[s] = { rule: s, count: 0, nodeHours: 0, outcomes: {} }
-      hours[s] = new Decimal(0)
-    }
-    m[s].count += 1
-    hours[s] = hours[s].plus(attemptGpuHours(r))
-    m[s].outcomes[r.outcome] = (m[s].outcomes[r.outcome] || 0) + 1
-  })
-  Object.keys(m).forEach((s) => { m[s].nodeHours = hours[s].toNumber() })
-  return Object.values(m).sort((a, b) => b.count - a.count)
-}
-
-export function buildNodeLedger(runs: RunSummary[]): NodeLedgerEntry[] {
-  const m: Record<string, NodeLedgerEntry> = {}
-  const hours: Record<string, Decimal> = {}
-  runs.forEach((r) => {
-    r.responsibleNodes.forEach((n) => {
-      if (!m[n]) {
-        m[n] = { node: n, count: 0, outcomes: {}, symptoms: {}, nodeHours: 0 }
-        hours[n] = new Decimal(0)
-      }
-      m[n].count += 1
-      m[n].outcomes[r.outcome] = (m[n].outcomes[r.outcome] || 0) + 1
-      m[n].symptoms[r.rootSymptom.symptom] = (m[n].symptoms[r.rootSymptom.symptom] || 0) + 1
-      hours[n] = hours[n].plus(nodeGpuHours(r))
-    })
-  })
-  Object.keys(m).forEach((n) => { m[n].nodeHours = hours[n].toNumber() })
-  return Object.values(m).sort((a, b) => b.count - a.count)
-}
-
-export function buildOutcomeLedger(runs: RunSummary[]): OutcomeLedgerEntry[] {
-  const m: Partial<Record<OutcomeKey, OutcomeLedgerEntry>> = {}
-  const hours: Partial<Record<OutcomeKey, Decimal>> = {}
-  runs.forEach((r) => {
-    if (!m[r.outcome]) {
-      m[r.outcome] = { outcome: r.outcome, count: 0, nodeHours: 0 }
-      hours[r.outcome] = new Decimal(0)
-    }
-    m[r.outcome]!.count += 1
-    hours[r.outcome] = hours[r.outcome]!.plus(attemptGpuHours(r))
-  })
-  ;(Object.keys(m) as OutcomeKey[]).forEach((k) => { m[k]!.nodeHours = hours[k]!.toNumber() })
-  return Object.values(m).sort((a, b) => b.count - a.count) as OutcomeLedgerEntry[]
 }
 
 // ─── Movers (in-window symptom movement) ──────────────────────────────────
@@ -113,8 +45,8 @@ function clamp(v: number, lo: number, hi: number): number {
   return Math.max(lo, Math.min(hi, v))
 }
 
-// Equal-width buckets across [from, to]; last bucket includes `to` (matches
-// filterRunsByDate's inclusive end). NOT calendar-aligned. The hour/day switch
+// Equal-width buckets across [from, to]; last bucket includes `to` (the
+// window's end is inclusive). NOT calendar-aligned. The hour/day switch
 // sits at ~1.5 days, so only the 24h preset is hourly; 7d/30d and date-picker
 // (>= 1 day) ranges are daily.
 export function bucketCount(from: Date, to: Date): number {
@@ -226,14 +158,6 @@ export function buildDaily(runs: RunSummary[], from: Date, to: Date): DailyBucke
   return days
 }
 
-// Categorical palette for symptom stacks, readable on the #121212 card surface.
-// Assigned by series index; stable because buildDailyByOutcome orders series
-// deterministically. 'Other' uses OTHER_COLOR rather than a palette slot.
-export const SYMPTOM_PALETTE: string[] = [
-  '#3a96d9', '#ec6358', '#c58420', '#76b900', '#a78bfa', '#22d3ee', '#f472b6',
-]
-export const OTHER_COLOR = '#52525b'
-
 // Per-day stack of failed attempts for ONE outcome, split by root symptom.
 // Top-N symptoms by window total are kept; the rest fold into a trailing 'Other'.
 export function buildDailyByOutcome(
@@ -286,24 +210,4 @@ export function breakdownHighlight(
 ): string | undefined {
   if (!symptom || symptom === 'Other') return undefined
   return breakdown.series.some((s) => s.symptom === symptom) ? symptom : undefined
-}
-
-export function filterRunsByDate(runs: RunSummary[], from: Date, to: Date): RunSummary[] {
-  const fromT = from.getTime()
-  const toT = to.getTime()
-  return runs.filter((r) => {
-    const t = new Date(r.endTime).getTime()
-    return t >= fromT && t <= toT
-  })
-}
-
-/**
- * Anchor "now" to the latest endTime in the supplied runs. Served data is
- * fixed in time; a real-clock anchor would yield zero rows for "24h". For an
- * empty set there is nothing to anchor to, so fall back to the wall clock.
- */
-export function nowAnchor(runs: RunSummary[]): Date {
-  if (runs.length === 0) return new Date()
-  const t = runs.reduce((acc, r) => Math.max(acc, new Date(r.endTime).getTime()), 0)
-  return new Date(t || Date.now())
 }

@@ -1,57 +1,52 @@
-import { useState, type ReactNode } from 'react'
-import { Download, ChevronDown } from 'lucide-react'
+// SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// SPDX-License-Identifier: Apache-2.0
+
+import type { ReactNode } from 'react'
+import { ChevronDown, Download } from 'lucide-react'
 import { Button } from '@/components/ui/button'
-import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu'
 
 export interface ExportItem {
+  /** The file type the item downloads, as "Download as JSON". */
   label: string
-  hint?: string
   onSelect: () => void
 }
 
+// Downloads offered as a real menu (arrow keys, typeahead, Escape) on the
+// house DropdownMenu, opened from an outline button like every other page
+// action, and opening under its end, as page and toolbar actions end their
+// rows. Each item names only the file type it downloads; what the file holds
+// is the page's own. The panel is as wide as its longest item and never
+// narrower than its trigger, since those names can outrun the house
+// trigger-width panel.
 export function ExportMenu({
   items,
-  triggerLabel = 'Download',
-  align = 'end',
+  triggerLabel,
 }: {
   items: ExportItem[]
-  triggerLabel?: ReactNode
-  align?: 'start' | 'end' | 'center'
+  triggerLabel: ReactNode
 }) {
-  const [open, setOpen] = useState(false)
   return (
-    <Popover open={open} onOpenChange={setOpen}>
-      <PopoverTrigger asChild>
-        <Button variant="outline" size="sm" className="gap-1.5">
-          <Download className="size-3.5" />
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <Button>
+          <Download data-icon="inline-start" />
           {triggerLabel}
-          <ChevronDown className="size-3 opacity-70" />
+          <ChevronDown data-icon="inline-end" />
         </Button>
-      </PopoverTrigger>
-      <PopoverContent
-        align={align}
-        sideOffset={4}
-        className="w-56 p-1 bg-background-secondary border-border ring-0"
-      >
-        <div className="flex flex-col">
-          {items.map((item, i) => (
-            <button
-              key={i}
-              type="button"
-              onClick={() => {
-                item.onSelect()
-                setOpen(false)
-              }}
-              className="text-left px-2.5 py-1.5 rounded-sm font-mono text-xs text-foreground hover:bg-background-active focus-visible:outline-none focus-visible:bg-background-active focus-visible:ring-1 focus-visible:ring-primary"
-            >
-              <div>{item.label}</div>
-              {item.hint && (
-                <div className="text-[10px] text-foreground-muted mt-0.5">{item.hint}</div>
-              )}
-            </button>
-          ))}
-        </div>
-      </PopoverContent>
-    </Popover>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" className="w-auto min-w-(--radix-dropdown-menu-trigger-width)">
+        {items.map((item) => (
+          <DropdownMenuItem key={item.label} onSelect={item.onSelect} className="whitespace-nowrap">
+            {item.label}
+          </DropdownMenuItem>
+        ))}
+      </DropdownMenuContent>
+    </DropdownMenu>
   )
 }

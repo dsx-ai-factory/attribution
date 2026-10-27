@@ -1,9 +1,29 @@
+/*
+ * SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
 @import "tailwindcss";
 @import "tw-animate-css";
-@import "@fontsource-variable/inter/wght.css";
 @import "@fontsource-variable/jetbrains-mono/wght.css";
 
-@custom-variant dark (&:is(.dark *));
+/* NVIDIA Sans, the house face, is licensed for NVIDIA's own products only and
+   may not be distributed with open source software, so the UI names it but
+   does not ship it, as Kaizen UI's stylesheet for external projects does: text
+   is set in NVIDIA Sans where it is installed, and otherwise in Arial, the
+   brand's alternative. The fallback takes NVIDIA Sans's vertical metrics, so
+   text and the marks beside it sit the same in either face. It covers the
+   weights the UI sets text in; Arial has no medium, so 500 renders as its
+   regular. */
+@font-face {
+  font-family: "NVIDIA Sans Fallback";
+  font-style: normal;
+  font-weight: 400 500;
+  ascent-override: 98%;
+  descent-override: 28%;
+  line-gap-override: 0%;
+  src: local("Arial"), local("Inter"), local("Helvetica"), local("DejaVu Sans"), local("Liberation Sans"), local("Noto Sans"), local("Ubuntu"), local("FreeSans");
+}
 
 /* Custom variants (shadcn / radix data-state) */
 @custom-variant data-open {
@@ -70,6 +90,9 @@
    Tokens mirror the shared design-system globals.css */
 :root,
 .dark {
+  /* Font stacks are runtime variables so canvas renderers can read them through lib/tokens */
+  --app-font-sans: 'NVIDIA Sans', 'NVIDIA Sans Fallback', ui-sans-serif, system-ui, sans-serif, 'Apple Color Emoji', 'Segoe UI Emoji', 'Segoe UI Symbol', 'Noto Color Emoji';
+  --app-font-mono: 'JetBrains Mono Variable', ui-monospace, 'SFMono-Regular', Menlo, Consolas, monospace;
   --background: #121212;
   --background-secondary: #0a0a0a;
   --background-active: #1c1c1c;
@@ -95,39 +118,108 @@
   --border: var(--color-zinc-800);
   --input: var(--border);
   --ring: var(--border-active);
-  --chart-1: var(--color-primary-500);
-  --chart-2: var(--color-teal-500);
-  --chart-3: var(--color-blue-500);
-  --chart-4: var(--color-yellow-500);
-  --chart-5: var(--color-purple-500);
-  --radius: 0.125rem;
-  --sidebar: var(--background-secondary);
-  --sidebar-foreground: var(--foreground-secondary);
-  --sidebar-primary: var(--color-primary-500);
-  --sidebar-primary-foreground: #ffffff;
-  --sidebar-accent: var(--background-active);
-  --sidebar-accent-foreground: var(--foreground);
-  --sidebar-border: var(--border);
-  --sidebar-ring: var(--border-active);
+  --radius: 0.25rem;
 
-  /* Attribution outcome semantics — map to Tailwind palette tokens for consistency */
-  --outcome-hw: var(--color-teal-400);
-  --outcome-hw-bg: color-mix(in srgb, var(--color-teal-400) 10%, transparent);
-  --outcome-sw: var(--color-blue-400);
-  --outcome-sw-bg: color-mix(in srgb, var(--color-blue-400) 10%, transparent);
-  --outcome-mix: var(--color-zinc-400);
-  --outcome-mix-bg: color-mix(in srgb, var(--color-zinc-400) 10%, transparent);
-  --outcome-usr: var(--color-yellow-400);
-  --outcome-usr-bg: color-mix(in srgb, var(--color-yellow-400) 10%, transparent);
+  /* Outcome categories: a -500 mark fill with a -400 edge, the house StatusDots
+     dark pairing. Only the [data-outcome] rules below turn them into a tone. */
+  --outcome-hardware: var(--color-teal-500);
+  --outcome-hardware-edge: var(--color-teal-400);
+  --outcome-software: var(--color-blue-500);
+  --outcome-software-edge: var(--color-blue-400);
+  --outcome-multi: var(--color-zinc-400);
+  --outcome-multi-edge: var(--color-zinc-300);
+  --outcome-user: var(--color-yellow-500);
+  --outcome-user-edge: var(--color-yellow-400);
+  --outcome-undetermined: var(--color-purple-500);
+  --outcome-undetermined-edge: var(--color-purple-400);
   --outcome-pass: var(--color-primary-500);
-  --outcome-pass-bg: color-mix(in srgb, var(--color-primary-500) 10%, transparent);
-  --outcome-primary-glow: color-mix(in srgb, var(--color-primary-500) 16%, transparent);
+  --outcome-pass-edge: var(--color-primary-400);
+
+  /* Red is reserved for blame and worsening, so an improving trend stays neutral */
+  --trend-worse: var(--color-red-400);
+  --trend-better: var(--foreground-muted);
+  /* The decision graph's selected path, in the accent's light step, as selected text is elsewhere */
+  --graph-trace: var(--color-primary-300);
+  /* Chart chrome resolved by lib/tokens: gridlines match card borders, gaps match the card */
+  --chart-grid: var(--border);
+  --chart-surface: var(--background);
+  /* The app bar's height (TopBar), which a page's sticky band sticks under
+     and the page's scroll padding clears */
+  --app-bar-height: 3rem;
+  /* The height of a page's own sticky band under the app bar (the Fleet
+     window bar), set by the page while the band is mounted (useStickyBand) */
+  --page-sticky-height: 0px;
+  /* How far lowercase sits below the middle of its line box, whatever the
+     line's height: measured, the x-height's middle is 1.2px below it for 13px
+     NVIDIA Sans, the body text (0.95px for 12px, 0.93px for 12px at 500,
+     1.4px for 16px; 0.7px for 12px JetBrains Mono), and at most 0.05px less
+     in its Arial fallback, which takes NVIDIA Sans's vertical metrics. A mark
+     centered on a row beside text is lowered by it (markInRow in lib/utils),
+     so it centers on the text's lowercase; a context of other text declares
+     its own (the log's lines, a badge's label for the marks the badge holds),
+     and beside 12px sans the body's value leaves a mark 0.25px low, below
+     what reads. */
+  --mark-offset: 1.2px;
+}
+
+/* The single outcome → color join: markup sets data-outcome and paints with
+   var(--tone) / var(--tone-edge); TypeScript never passes an outcome color. */
+[data-outcome="hardware"] {
+  --tone: var(--outcome-hardware);
+  --tone-edge: var(--outcome-hardware-edge);
+}
+[data-outcome="software"] {
+  --tone: var(--outcome-software);
+  --tone-edge: var(--outcome-software-edge);
+}
+[data-outcome="multi"] {
+  --tone: var(--outcome-multi);
+  --tone-edge: var(--outcome-multi-edge);
+}
+[data-outcome="user"] {
+  --tone: var(--outcome-user);
+  --tone-edge: var(--outcome-user-edge);
+}
+[data-outcome="undetermined"] {
+  --tone: var(--outcome-undetermined);
+  --tone-edge: var(--outcome-undetermined-edge);
+}
+[data-outcome="pass"] {
+  --tone: var(--outcome-pass);
+  --tone-edge: var(--outcome-pass-edge);
 }
 
 @theme inline {
-  --font-sans: 'Inter Variable', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
-  --font-mono: 'JetBrains Mono Variable', ui-monospace, 'SFMono-Regular', Menlo, Consolas, monospace;
+  --font-sans: var(--app-font-sans);
+  --font-mono: var(--app-font-mono);
   --spacing: 0.25rem;
+
+  /* The compact reading size: body, table, control, menu and card-title text
+     is 13px on a 20px line, set here once so every text-sm primitive follows. */
+  --text-sm: 0.8125rem;
+  --text-sm--line-height: 1.25rem;
+
+  /* The page and card spacing, set here once so every inset that must line up
+     moves together (px-card-x, gap-card-gap, min-h-card-header, …); no name is
+     a prefix of another, so a mistyped utility generates nothing rather than
+     another value. Compact type and 28px controls keep the page dense; these
+     give it room: pages 24px from the window's sides at every width (the
+     house page shell: 16px, 32px from 640px), 16px under the app bar, as the
+     house, and 48px above the page's end (the house: 16px); 16px between a
+     page's blocks (its header, a sticky bar, its card stack), as the house's
+     slots; 12px between cards (the house: 16px); content 16px in from a
+     card's sides, as the house's small card, and 12px from its top and
+     bottom (the house: 16px); and a 38px card header (divider included), so a
+     28px control in it keeps 4.5px above and below, room for its 3px focus
+     ring inside the card's clipping edge. */
+  --spacing-page-x: 1.5rem;
+  --spacing-page-top: 1rem;
+  --spacing-page-bottom: 3rem;
+  --spacing-page-gap: 1rem;
+  --spacing-card-gap: 0.75rem;
+  --spacing-card-x: 1rem;
+  --spacing-card-y: 0.75rem;
+  --spacing-card-header: 2.375rem;
 
   /* Flat — all radius sizes collapse to --radius (Lepton style) */
   --radius-sm: var(--radius);
@@ -216,8 +308,18 @@
   --color-teal-900: #002522;
   --color-teal-950: #001514;
 
-  /* Purple */
+  /* Purple — the full house ladder, so no step falls through to Tailwind's default purple */
+  --color-purple-50: #fbeefe;
+  --color-purple-100: #f1dcf7;
+  --color-purple-200: #ead1f3;
+  --color-purple-300: #debae8;
+  --color-purple-400: #b579c6;
   --color-purple-500: #a05ab4;
+  --color-purple-600: #8c3ca0;
+  --color-purple-700: #5a066d;
+  --color-purple-800: #490457;
+  --color-purple-900: #3b0047;
+  --color-purple-950: #25002c;
 
   /* === Color mappings (shadcn aliases + Layer 2 neutrals) === */
   --color-background: var(--background);
@@ -259,43 +361,23 @@
   --color-destructive-900: var(--color-red-900);
   --color-destructive-950: var(--color-red-950);
 
-  /* Attribution outcome semantic colors (usable as bg-hw / text-hw / border-hw etc) */
-  --color-hw: var(--outcome-hw);
-  --color-hw-bg: var(--outcome-hw-bg);
-  --color-sw: var(--outcome-sw);
-  --color-sw-bg: var(--outcome-sw-bg);
-  --color-mix: var(--outcome-mix);
-  --color-mix-bg: var(--outcome-mix-bg);
-  --color-usr: var(--outcome-usr);
-  --color-usr-bg: var(--outcome-usr-bg);
-  --color-pass: var(--outcome-pass);
-  --color-pass-bg: var(--outcome-pass-bg);
-  --color-primary-glow: var(--outcome-primary-glow);
+  /* Neutral ladder → Zinc (house semantic group; Tailwind's own neutral has no 286 hue) */
+  --color-neutral-50: var(--color-zinc-50);
+  --color-neutral-100: var(--color-zinc-100);
+  --color-neutral-200: var(--color-zinc-200);
+  --color-neutral-300: var(--color-zinc-300);
+  --color-neutral-400: var(--color-zinc-400);
+  --color-neutral-500: var(--color-zinc-500);
+  --color-neutral-600: var(--color-zinc-600);
+  --color-neutral-700: var(--color-zinc-700);
+  --color-neutral-800: var(--color-zinc-800);
+  --color-neutral-900: var(--color-zinc-900);
+  --color-neutral-950: var(--color-zinc-950);
 
-  /* Accordion (radix) keyframes */
-  @keyframes accordion-down {
-    from {
-      height: 0;
-    }
-    to {
-      height: var(
-        --radix-accordion-content-height,
-        var(--accordion-panel-height, auto)
-      );
-    }
-  }
-
-  @keyframes accordion-up {
-    from {
-      height: var(
-        --radix-accordion-content-height,
-        var(--accordion-panel-height, auto)
-      );
-    }
-    to {
-      height: 0;
-    }
-  }
+  /* Role colors (text-trend-worse, border-graph-trace, …); outcomes deliberately have none */
+  --color-trend-worse: var(--trend-worse);
+  --color-trend-better: var(--trend-better);
+  --color-graph-trace: var(--graph-trace);
 }
 
 @layer base {
@@ -307,13 +389,25 @@
   * {
     @apply border-border outline-ring/50;
   }
+  /* What is brought into view (keyboard focus, scrollIntoView, an anchor)
+     lands one card gap under what stays stuck at the top of the page (the app
+     bar and a page's own sticky band under it), as a card sits under the one
+     before it, so that card's bottom edge stays just out of sight. */
   html {
     @apply font-sans h-full;
     color-scheme: dark;
+    --stuck-chrome: calc(var(--app-bar-height) + var(--page-sticky-height) + --theme(--spacing-card-gap inline));
+    scroll-padding-top: var(--stuck-chrome);
   }
+  /* A control inside those stuck bars (marked data-stuck-chrome) sits in the
+     very band the padding keeps clear, so its margin gives the band back:
+     focusing it never scrolls the page. */
+  [data-stuck-chrome] * {
+    scroll-margin-top: calc(-1 * var(--stuck-chrome));
+  }
+  /* The page is the base layer (#0a0a0a); cards (#121212) sit one step above it. */
   body {
-    @apply font-sans antialiased bg-background text-foreground text-sm leading-snug;
-    font-feature-settings: 'cv11', 'ss01';
+    @apply font-sans antialiased bg-background-secondary text-foreground text-sm;
     text-rendering: optimizeLegibility;
   }
   #root {
@@ -321,27 +415,21 @@
   }
 }
 
-/* Monaco log decorations — referenced by name from log-hero */
-.attr-log-symptom {
-  background-color: color-mix(in srgb, var(--color-primary-500) 16%, transparent) !important;
-}
-.attr-log-symptom-stripe {
-  background-color: var(--color-primary-500) !important;
-  width: 2px !important;
-  margin-left: 0 !important;
-}
-.attr-log-error {
-  background-color: rgba(255, 255, 255, 0.03) !important;
-}
-.attr-log-debug {
-  opacity: 0.7;
+/* Numeric data slots (table figures, KPI values, timestamps): the only mono outside machine-output blocks */
+@utility num {
+  font-family: var(--app-font-mono);
+  font-variant-numeric: tabular-nums;
 }
 
-@utility no-scrollbar {
-  -ms-overflow-style: none;
-  scrollbar-width: none;
+/* The NVIDIA accent fill of the page's one primary Button: white on it is
+   9.99:1 over the card. Defined once, so retuning the accent is one edit. */
+@utility primary-fill {
+  @apply bg-primary-700/60 text-white;
+}
 
-  &::-webkit-scrollbar {
-    display: none;
-  }
+/* A selected segment or calendar day: the primary Button's fill, edged by a
+   1px inset primary-600 ring (4.93:1 against the card) where the Button's
+   edge is its border of the same color. */
+@utility primary-selected {
+  @apply primary-fill inset-ring inset-ring-primary-600;
 }

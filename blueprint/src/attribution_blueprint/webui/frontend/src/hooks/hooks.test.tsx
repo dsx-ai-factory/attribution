@@ -1,9 +1,9 @@
 // @vitest-environment jsdom
 // SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-// SPDX-License-Identifier: LicenseRef-NvidiaProprietary
+// SPDX-License-Identifier: Apache-2.0
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { renderHook } from '@testing-library/react'
+import { act, renderHook } from '@testing-library/react'
 import type { RunSummary } from '@/interfaces/attribution'
 import { useDashboard } from '@/hooks/use-dashboard'
 import { useMeta } from '@/hooks/use-meta'
@@ -11,8 +11,10 @@ import { useNodeRuns } from '@/hooks/use-node-runs'
 import { useRuns } from '@/hooks/use-runs'
 import { useRunsTable } from '@/hooks/use-runs-table'
 import { useNav } from '@/hooks/use-nav'
+import { useDocumentTitle } from '@/hooks/use-document-title'
 import { useECharts } from '@/hooks/use-echarts'
 import { useSymptomDocumentation } from '@/hooks/use-symptom-documentation'
+import { useCopyToClipboard } from '@/hooks/use-copy-to-clipboard'
 
 const mocks = vi.hoisted(() => ({
   useSWR: vi.fn(),
@@ -20,13 +22,16 @@ const mocks = vi.hoisted(() => ({
   useApi: vi.fn(),
   useNavigate: vi.fn(),
   echartsInit: vi.fn(),
+  registerTheme: vi.fn(),
+  chartTheme: vi.fn(() => ({ textStyle: { fontFamily: 'token(--app-font-sans)' } })),
 }))
 
 vi.mock('swr', () => ({ default: mocks.useSWR }))
 vi.mock('@/services/http-client.service', () => ({ httpGet: mocks.httpGet }))
 vi.mock('@/services/api-context', () => ({ useApi: mocks.useApi }))
 vi.mock('react-router-dom', () => ({ useNavigate: mocks.useNavigate }))
-vi.mock('echarts', () => ({ init: mocks.echartsInit }))
+vi.mock('echarts', () => ({ init: mocks.echartsInit, registerTheme: mocks.registerTheme }))
+vi.mock('@/lib/tokens', () => ({ chartTheme: mocks.chartTheme }))
 
 const run = (id: string): RunSummary => ({
   id,
@@ -114,10 +119,12 @@ describe('data hooks', () => {
   })
 
   it('builds the dashboard cache key and request', async () => {
+    const mutate = vi.fn()
     mocks.useSWR.mockReturnValue({
       data: { metrics: { windowedRuns: 2 } },
       isLoading: false,
       error: undefined,
+      mutate,
     })
 
     const { result } = renderHook(() => useDashboard({
@@ -125,10 +132,12 @@ describe('data hooks', () => {
       to: '2026-05-02',
       outcome: 'hardware',
     }))
-    const [key, fetcher] = mocks.useSWR.mock.calls[0]
+    const [key, fetcher, options] = mocks.useSWR.mock.calls[0]
     mocks.httpGet.mockResolvedValue({ metrics: { windowedRuns: 2 } })
 
     expect(key).toEqual(['dashboard', '2026-05-01', '2026-05-02', 'hardware'])
+    // A view's dashboard is its own: nothing from the previous view stands in while it loads.
+    expect(options).toBeUndefined()
     await expect(fetcher()).resolves.toEqual({ metrics: { windowedRuns: 2 } })
     expect(mocks.httpGet).toHaveBeenCalledWith('/dashboard', {
       from: '2026-05-01',
@@ -137,10 +146,13 @@ describe('data hooks', () => {
     })
     expect(result.current.dashboard).toEqual({ metrics: { windowedRuns: 2 } })
     expect(result.current.error).toBeNull()
+    // The page's Refresh re-fetches this view through the key's own mutate.
+    expect(result.current.mutate).toBe(mutate)
   })
 
   it('reads the backend it is bound to from /meta under one static key', async () => {
-    mocks.useSWR.mockReturnValue({ data: { database: 'demo.db' }, isLoading: false, error: undefined })
+    const mutate = vi.fn()
+    mocks.useSWR.mockReturnValue({ data: { database: 'demo.db' }, isLoading: false, error: undefined, mutate })
     mocks.httpGet.mockResolvedValue({ database: 'demo.db' })
 
     const { result } = renderHook(() => useMeta())
@@ -150,6 +162,7 @@ describe('data hooks', () => {
     await expect(fetcher()).resolves.toEqual({ database: 'demo.db' })
     expect(mocks.httpGet).toHaveBeenCalledWith('/meta')
     expect(result.current.meta).toEqual({ database: 'demo.db' })
+    expect(result.current.mutate).toBe(mutate)
   })
 
   it('disables node requests without an ID and paginates enabled requests', async () => {
@@ -207,13 +220,18 @@ describe('data hooks', () => {
       metric: 'count' as const,
       symptom: 'Xid79',
     }
-    renderHook(() => useRunsTable({
+    const mutate = vi.fn()
+    mocks.useSWR.mockReturnValue({ data: undefined, isLoading: true, error: undefined, mutate })
+    const { result } = renderHook(() => useRunsTable({
       filter,
       outcomes: ['hardware', 'software'],
       pageByOutcome: { hardware: 2 },
       pageSize: 25,
     }))
-    const [, fetcher] = mocks.useSWR.mock.calls[0]
+    expect(result.current.mutate).toBe(mutate)
+    const [, fetcher, options] = mocks.useSWR.mock.calls[0]
+    // A view's pages are its own: nothing from the previous view stands in while they load.
+    expect(options).toBeUndefined()
     mocks.httpGet
       .mockResolvedValueOnce({ runs: [run('a')], total: 3, page: 2, pageSize: 25 })
       .mockResolvedValueOnce({ runs: [], total: 0, page: 0, pageSize: 25 })
@@ -245,6 +263,16 @@ describe('navigation and chart hooks', () => {
     expect(navigate).toHaveBeenCalledWith('/node/node%2Fa')
   })
 
+  it('titles the tab with the shown record first and follows it as it changes', () => {
+    const { rerender } = renderHook(({ subject }: { subject?: string }) => useDocumentTitle('Verdict', subject), {
+      initialProps: {},
+    })
+    expect(document.title).toBe('Verdict · Attribution')
+
+    rerender({ subject: 'team/job' })
+    expect(document.title).toBe('team/job · Verdict · Attribution')
+  })
+
   it('initializes, updates, dispatches, resizes, and disposes a chart', () => {
     const handlers = new Map<string, (event: unknown) => void>()
     const chart = {
@@ -271,13 +299,18 @@ describe('navigation and chart hooks', () => {
       { initialProps: { option: { title: { text: 'one' } }, click: firstClick } },
     )
 
-    expect(mocks.echartsInit).toHaveBeenCalledWith(ref.current)
-    expect(chart.setOption).toHaveBeenCalledWith({ title: { text: 'one' } }, { notMerge: false })
+    // Every chart paints from the one token theme, registered before the first chart.
+    expect(mocks.registerTheme).toHaveBeenCalledWith('attribution', { textStyle: { fontFamily: 'token(--app-font-sans)' } })
+    expect(mocks.echartsInit).toHaveBeenCalledWith(ref.current, 'attribution')
+    expect(chart.setOption).toHaveBeenCalledWith({ title: { text: 'one' } }, { notMerge: true })
     expect(observe).toHaveBeenCalledWith(ref.current)
     handlers.get('click')?.({ name: 'first' })
     expect(firstClick).toHaveBeenCalledWith({ name: 'first' })
 
     rerender({ option: { title: { text: 'two' } }, click: secondClick })
+    // A new option replaces the chart's last one whole, never merges into it.
+    expect(chart.setOption).toHaveBeenLastCalledWith({ title: { text: 'two' } }, { notMerge: true })
+    expect(chart.setOption).toHaveBeenCalledTimes(2)
     handlers.get('click')?.({ name: 'second' })
     handlers.get('mouseover')?.({ name: 'over' })
     handlers.get('mouseout')?.({ name: 'out' })
@@ -290,5 +323,70 @@ describe('navigation and chart hooks', () => {
     unmount()
     expect(disconnect).toHaveBeenCalled()
     expect(chart.dispose).toHaveBeenCalled()
+
+    // A second chart reuses the registered theme.
+    renderHook(() => useECharts(ref, { title: { text: 'three' } })).unmount()
+    expect(mocks.echartsInit).toHaveBeenLastCalledWith(ref.current, 'attribution')
+    expect(mocks.registerTheme).toHaveBeenCalledTimes(1)
+    expect(mocks.chartTheme).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('copy state', () => {
+  afterEach(() => {
+    vi.useRealTimers()
+    Reflect.deleteProperty(navigator, 'clipboard')
+  })
+
+  const stubWriteText = (writeText: () => Promise<void>) =>
+    Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText } })
+
+  it('keeps a repeated copy confirmed for the full delay after the last one', async () => {
+    vi.useFakeTimers()
+    stubWriteText(() => Promise.resolve())
+    const { result } = renderHook(() => useCopyToClipboard(1000))
+
+    await act(async () => { await result.current.copy('first') })
+    expect(result.current.copied).toBe(true)
+    await act(async () => { vi.advanceTimersByTime(600) })
+    await act(async () => { await result.current.copy('second') })
+    await act(async () => { vi.advanceTimersByTime(600) })
+    expect(result.current.copied).toBe(true)
+    await act(async () => { vi.advanceTimersByTime(400) })
+    expect(result.current.copied).toBe(false)
+  })
+
+  it('announces a copy that failed without confirming it, then resets', async () => {
+    vi.useFakeTimers()
+    // jsdom has no execCommand either, so the legacy fallback fails too.
+    stubWriteText(() => Promise.reject(new Error('denied')))
+    const { result } = renderHook(() => useCopyToClipboard(1000))
+    expect(result.current.announcement).toBe('')
+
+    await act(async () => { await result.current.copy('node-a') })
+    expect(result.current.copied).toBe(false)
+    expect(result.current.announcement).toBe('Copy failed')
+    await act(async () => { vi.advanceTimersByTime(1000) })
+    expect(result.current.announcement).toBe('')
+
+    // The next copy that lands is confirmed as usual.
+    stubWriteText(() => Promise.resolve())
+    await act(async () => { await result.current.copy('node-a') })
+    expect([result.current.copied, result.current.announcement]).toEqual([true, 'Copied'])
+  })
+
+  it('starts no timer for a copy that lands after the control unmounted', async () => {
+    vi.useFakeTimers()
+    let finishWrite = () => {}
+    stubWriteText(() => new Promise<void>((resolve) => { finishWrite = resolve }))
+    const { result, unmount } = renderHook(() => useCopyToClipboard(1000))
+
+    let pending: Promise<boolean> = Promise.resolve(false)
+    act(() => { pending = result.current.copy('node-a') })
+    unmount()
+    finishWrite()
+
+    await expect(pending).resolves.toBe(true)
+    expect(vi.getTimerCount()).toBe(0)
   })
 })

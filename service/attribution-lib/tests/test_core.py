@@ -1,12 +1,5 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-# SPDX-License-Identifier: LicenseRef-NvidiaProprietary
-#
-# NVIDIA CORPORATION, its affiliates and licensors retain all intellectual
-# property and proprietary rights in and to this material, related
-# documentation and any modifications thereto. Any use, reproduction,
-# disclosure or distribution of this material and related documentation
-# without an express license agreement from NVIDIA CORPORATION or
-# its affiliates is strictly prohibited.
+# SPDX-License-Identifier: Apache-2.0
 from collections import defaultdict
 from datetime import datetime
 from zoneinfo import ZoneInfo
@@ -25,7 +18,7 @@ from attribution_lib.core import (
     calculate_bad_nodes,
     calculate_symptoms,
 )
-from attribution_lib.job_info import JobInfoBuilder
+from attribution_lib.job_info import JobInfoBuilder, Scheduler
 from attribution_lib.observation import Context as ObservationContext
 from attribution_lib.observation.inbound import Id
 from attribution_lib.observation.processing import _extract_timestamp_from_log_line
@@ -105,7 +98,6 @@ def configured_node_domain_resolver(monkeypatch):
 class DummyInbound:
     def __init__(self):
         self.time_interval = 0
-        self.resources = None
         self.source = None
         self.format = None
         self.timezone = ZoneInfo("UTC")
@@ -206,13 +198,14 @@ class TestNeverRanJob:
 
         assert list(result.symptoms()) == ["Job didn't start"]
 
-    def test_kueue_terminal_failed_job_without_node_evidence_reports_failure(
-        self, event_stream, simple_job_factory
+    @pytest.mark.parametrize("scheduler", [Scheduler.KUEUE, Scheduler.KAI])
+    def test_queue_scheduler_terminal_failed_job_without_node_evidence_reports_failure(
+        self, event_stream, simple_job_factory, scheduler
     ):
         job_info = simple_job_factory(
             node_to_ranks={},
             state="FAILED",
-            job_type="kueue",
+            scheduler=scheduler,
         )
 
         result = calculate_symptoms(
@@ -223,6 +216,19 @@ class TestNeverRanJob:
 
         assert "job failed" in result
         assert "Job didn't start" not in result
+
+    def test_kueue_type_without_scheduler_retains_didnt_start_fallback(
+        self, event_stream, simple_job_factory
+    ):
+        job_info = simple_job_factory(node_to_ranks={}, state="FAILED", job_type="kueue")
+
+        result = calculate_symptoms(
+            event_stream=event_stream("test-job"),
+            job_info=job_info,
+            my_bad_nodes=JobNodeAttributions(),
+        )
+
+        assert list(result.symptoms()) == ["Job didn't start"]
 
     def test_non_kueue_terminal_failed_job_without_nodes_retains_didnt_start_fallback(
         self, event_stream, simple_job_factory
@@ -257,11 +263,12 @@ class TestRunningJob:
 
         assert "running without error" in result
 
-    def test_kueue_running_job_preserves_node_symptoms(
-        self, event_stream, simple_job_factory, source_set_factory
+    @pytest.mark.parametrize("scheduler", [Scheduler.KUEUE, Scheduler.KAI])
+    def test_queue_scheduler_running_job_preserves_node_symptoms(
+        self, event_stream, simple_job_factory, source_set_factory, scheduler
     ):
-        """A running Kueue workload must not hide collected failure evidence."""
-        job_info = simple_job_factory(state="RUNNING", job_type="kueue")
+        """A running queue-scheduler workload must not hide failure evidence."""
+        job_info = simple_job_factory(state="RUNNING", scheduler=scheduler)
         bad_nodes = JobNodeAttributions()
         bad_nodes.add("test-node-001", source_set_factory("XID-95-UNCONTAINED_ERROR"))
 
@@ -311,7 +318,7 @@ class TestJobLevelSymptoms:
 
         assert "NVRx detected failure" in symptoms
         assert not any(group.has_bad() for group in bad_nodes.attributions.values())
-        assert outcome.value().outcome == "Fail Undetermined"
+        assert outcome.value().outcome == "Fail MultiCategory"
 
 
 class TestMissingSrunCommand:
@@ -746,6 +753,71 @@ class TestNodeFailureReportedBySlurmDiscard:
             f"'{cascade_symptom}' should be preserved without "
             f"'Node failure reported by slurm': {list(bad_nodes['test-node-001'].symptoms())}"
         )
+
+
+class TestNvErrResetRequired:
+    """NV_ERR_RESET_REQUIRED means a prior GPU fault left the GPU awaiting reset."""
+
+    def test_maps_to_fail_infrahw(self, source_set_factory):
+        """A GPU awaiting reset is a node hardware fault, not a driver bug."""
+        symptoms = SymptomSet()
+        symptoms.add(source_set_factory("NV_ERR_RESET_REQUIRED kern_bus_gp100.c"))
+
+        outcome = calculate_outcome(symptoms).value()
+
+        assert outcome.outcome == "Fail InfraHW"
+        assert outcome.hw_cause == "Known HW Cause - Node"
+
+    @pytest.mark.parametrize(
+        "other_symptom",
+        ["NV_ERR_GENERIC rs_server.c", "NV_ERR_INVALID_STATE nv_gpu_ops.c", "NV_ERR_TIMEOUT nv_gpu_ops.c"],
+    )
+    def test_outranks_other_nv_err_codes(self, source_set_factory, other_symptom):
+        """Other driver calls against a GPU awaiting reset fail too, so their codes must not win."""
+        reset = "NV_ERR_RESET_REQUIRED gpu_fabric_probe.c"
+        symptoms = SymptomSet()
+        symptoms.add(source_set_factory(reset))
+        symptoms.add(source_set_factory(other_symptom))
+
+        outcome = calculate_outcome(symptoms).value()
+
+        assert outcome.root_cause_symptom == reset
+        assert outcome.outcome == "Fail InfraHW"
+
+    def test_generic_xid_still_wins(self, source_set_factory):
+        """The XID that caused the reset state stays the root cause."""
+        xid = "XID-999-UNKNOWN"
+        symptoms = SymptomSet()
+        symptoms.add(source_set_factory("NV_ERR_RESET_REQUIRED gpu_fabric_probe.c"))
+        symptoms.add(source_set_factory(xid))
+
+        assert calculate_outcome(symptoms).value().root_cause_symptom == xid
+
+    @pytest.mark.parametrize(
+        "cascade_symptom",
+        [
+            "Failed to collect nvlink status info",
+            "knvlinkUpdatePostRxDetectLinkMask_IMPL: Failed to update Rx Detect Link mask!",
+        ],
+    )
+    def test_discards_nvlink_cascade_symptom(self, core_test_job_info, source_set_factory, cascade_symptom):
+        """NVLink queries against a GPU awaiting reset fail as a consequence of the reset state.
+
+        Args:
+            core_test_job_info: Standard job info fixture.
+            source_set_factory: Factory fixture for SourceSet instances.
+            cascade_symptom: Symptom expected to be pruned.
+        """
+        reset = "NV_ERR_RESET_REQUIRED gpu_fabric_probe.c"
+        bad_nodes = JobNodeAttributions()
+        bad_nodes.add(["test-node-001"], source_set_factory(reset))
+        bad_nodes.add(["test-node-001"], source_set_factory(cascade_symptom))
+
+        node_symptoms_base, _ = translate_and_prune_node_attributions(bad_nodes, core_test_job_info)
+        project_node_symptoms_to_bad_nodes(bad_nodes, node_symptoms_base)
+
+        assert reset in bad_nodes["test-node-001"].symptoms()
+        assert cascade_symptom not in bad_nodes["test-node-001"].symptoms()
 
 
 class TestFabricManagerLostConnectionToAllGpusDiscard:
@@ -1835,7 +1907,12 @@ class TestSingleNodeNodeFail:
         return result.my_bad_nodes
 
     def test_single_node_nodefail_no_failed_node_attributes_sole_node(self, event_stream, simple_job_factory):
-        job_info = simple_job_factory(state="NODE_FAIL", nodes=["example-batch-node-00985"], job_type="slurm")
+        job_info = simple_job_factory(
+            state="NODE_FAIL",
+            nodes=["example-batch-node-00985"],
+            job_type="slurm",
+            scheduler=Scheduler.SLURM,
+        )
         assert job_info.failed_node is None or job_info.failed_node == ""
 
         my_bad_nodes = self._attributed_bad_nodes(event_stream, job_info)
@@ -1853,6 +1930,7 @@ class TestSingleNodeNodeFail:
             nodes=["node-a", "node-b"],
             failed_node="node-b",
             job_type="slurm",
+            scheduler=Scheduler.SLURM,
         )
 
         my_bad_nodes = self._attributed_bad_nodes(event_stream, job_info)
@@ -1861,7 +1939,12 @@ class TestSingleNodeNodeFail:
         assert source.rule == "slurm_failed_node_field"
 
     def test_multi_node_nodefail_no_failed_node_does_not_infer(self, event_stream, simple_job_factory):
-        job_info = simple_job_factory(state="NODE_FAIL", nodes=["node-a", "node-b"], job_type="slurm")
+        job_info = simple_job_factory(
+            state="NODE_FAIL",
+            nodes=["node-a", "node-b"],
+            job_type="slurm",
+            scheduler=Scheduler.SLURM,
+        )
         assert job_info.failed_node is None or job_info.failed_node == ""
 
         my_bad_nodes = self._attributed_bad_nodes(event_stream, job_info)
@@ -1871,19 +1954,21 @@ class TestSingleNodeNodeFail:
         )
         assert "" not in my_bad_nodes.attributions
 
-    def test_kueue_nodefail_uses_slurm_symptom_and_provenance(
-        self, event_stream, simple_job_factory
+    @pytest.mark.parametrize("scheduler", [Scheduler.KUEUE, Scheduler.KAI])
+    def test_queue_scheduler_nodefail_uses_slurm_symptom_and_provenance(
+        self, event_stream, simple_job_factory, scheduler
     ):
-        """Kueue uses the same "slurm" symptom/provenance as every other
-        scheduler: a scheduler-specific string here would need to be added
-        to every existing cascade_discards/pattern list that already
-        references "Node failure reported by slurm", which is easy to miss.
+        """Queue schedulers reuse the existing "slurm" symptom/provenance.
+
+        A scheduler-specific string would need to be added to every existing
+        cascade_discards/pattern list that references
+        "Node failure reported by slurm", which is easy to miss.
         """
         job_info = simple_job_factory(
             state="NODE_FAIL",
             nodes=["node-a", "node-b"],
             failed_node="node-b",
-            job_type="kueue",
+            scheduler=scheduler,
         )
 
         my_bad_nodes = self._attributed_bad_nodes(event_stream, job_info)

@@ -1,12 +1,14 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-// SPDX-License-Identifier: LicenseRef-NvidiaProprietary
+// SPDX-License-Identifier: Apache-2.0
 
-import { useId, useState } from 'react'
-import { Link, useParams } from 'react-router-dom'
+import { useId } from 'react'
+import { useParams } from 'react-router-dom'
 import useSWR from 'swr'
-import { ChevronRight, Server } from 'lucide-react'
-import type { RunDetail } from '@/interfaces/attribution'
+import { ArrowRight, ChevronRight, Link2, Server } from 'lucide-react'
+import type { PersonaDiagnose, RunDetail, RunSummary } from '@/interfaces/attribution'
 import { useApi } from '@/services/api-context'
+import { useDocumentTitle } from '@/hooks/use-document-title'
+import { navigateService } from '@/services/navigate.service'
 import { buildVerdictMarkdown } from '@/lib/evidence'
 import {
   downloadBlob,
@@ -16,358 +18,402 @@ import {
   utcDateStamp,
   verdictExportData,
 } from '@/lib/export'
-import { ExportMenu } from '@/components/export-menu'
-import { HoverCard, HoverCardContent, HoverCardTrigger } from '@/components/ui/hover-card'
-import { Button } from '@/components/ui/button'
-import { Badge } from '@/components/ui/badge'
-import {
-  Breadcrumb,
-  BreadcrumbItem,
-  BreadcrumbLink,
-  BreadcrumbList,
-  BreadcrumbPage,
-  BreadcrumbSeparator,
-} from '@/components/ui/breadcrumb'
-import { Card, CardContent, CardFooter, CardHeader, CardTitle } from '@/components/ui/card'
-import {
-  Collapsible,
-  CollapsibleContent,
-  CollapsibleTrigger,
-} from '@/components/ui/collapsible'
-import { ScrollArea, ScrollBar } from '@/components/ui/scroll-area'
-import { VerdictPill } from '@/components/chip'
-import { DefHover } from '@/components/def-hover'
-import { NodeHoverCard } from '@/components/node-hover-card'
-import { TimeHover } from '@/components/time-hover'
 import { attemptGpuHours } from '@/lib/metric'
-import { useNav } from '@/hooks/use-nav'
-import { navigateService } from '@/services/navigate.service'
-import { LogHero } from '@/routers/verdict/components/log-hero'
+import { cn, focusRing, markInText, subtitle } from '@/lib/utils'
+import { CopyButton } from '@/components/copy-button'
+import { ExportMenu } from '@/components/export-menu'
+import { Identifier, NotRecorded } from '@/components/field'
+import { InfoHint } from '@/components/info-hint'
+import { LogExcerpt } from '@/components/log-excerpt'
+import { NodeHoverCard } from '@/components/node-hover-card'
+import { CompoundOutcomeBadge } from '@/components/outcome'
+import { PageBreadcrumb, PageHeader, type PageCrumb } from '@/components/page-header'
+import { SectionCard } from '@/components/section-card'
+import { SiteStatusBadge } from '@/components/site-status-badge'
+import { TimeHover } from '@/components/time-hover'
+import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
+import { Card, CardAction, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import {
+  CodeBlock,
+  CodeBlockActions,
+  CodeBlockBody,
+  CodeBlockCopyButton,
+  CodeBlockHeader,
+} from '@/components/ui/code-block'
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
+import { Copyable } from '@/components/ui/copyable'
+import { DescriptionList, type DescriptionListItem } from '@/components/ui/description-list'
+import { Empty, EmptyHeader, EmptyTitle } from '@/components/ui/empty'
+import { RouterLink } from '@/components/ui/router-link'
+import { Skeleton } from '@/components/ui/skeleton'
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { DecisionGraphAction } from '@/routers/verdict/components/decision-graph/dialog'
 import { SymptomsSection } from '@/routers/verdict/components/symptom-sites'
 
-const SECTION_LABEL =
-  'font-mono text-xs font-semibold tracking-widest uppercase text-foreground-muted my-5 mb-2.5 flex items-center gap-2.5'
+const TERMINAL_STATE_LABELS: Record<string, string> = {
+  Pass: 'Pass',
+  Fail: 'Fail',
+  ExpectedFail: 'Expected failure',
+  Cancelled: 'Cancelled',
+}
 
-function Actions({ run }: { run: RunDetail }) {
-  const nav = useNav()
-  const [copied, setCopied] = useState('')
-  const flash = (label: string) => {
-    setCopied(label)
-    window.setTimeout(() => setCopied(''), 1200)
-  }
-  const writeClipboard = async (text: string) => {
-    try {
-      await navigator.clipboard.writeText(text)
-    } catch {
-      // Fallback for non-secure contexts
-      const ta = document.createElement('textarea')
-      ta.value = text
-      ta.style.position = 'fixed'
-      ta.style.opacity = '0'
-      document.body.appendChild(ta)
-      ta.select()
-      try { document.execCommand('copy') } catch { /* swallow */ }
-      document.body.removeChild(ta)
-    }
-  }
-  const copyEvidence = async () => {
-    await writeClipboard(buildVerdictMarkdown(run))
-    flash('evidence')
-  }
-  const copyLocalLink = async () => {
-    await writeClipboard(window.location.href)
-    flash('link')
-  }
+const FAILURE_DOMAIN_LABELS: Record<string, string> = {
+  User: 'Application',
+  InfraHW: 'Infrastructure (hardware)',
+  InfraSW: 'Infrastructure (software)',
+}
 
-  const baseName = `verdict-${slug(run.jobId)}-att${run.attempt}-${utcDateStamp()}`
+const CANCELLATION_ACTOR_LABELS: Record<string, string> = {
+  User: 'Workload owner',
+  Operator: 'Operator',
+}
+
+const UNCERTAINTY_LABELS: Record<string, string> = {
+  Aleatoric: 'Aleatoric (data ambiguity)',
+  Epistemic: 'Epistemic (rule gap)',
+}
+
+const EVIDENCE_STATUS_LABELS: Record<string, { label: string; tooltip: string }> = {
+  complete: { label: 'Complete', tooltip: 'All collected evidence was delivered to the attribution service' },
+  partial: { label: 'Partial', tooltip: 'A collector failed or some evidence was not delivered' },
+  none: { label: 'None', tooltip: 'No evidence reached the attribution service' },
+}
+
+// Focusable so the tooltip opens from the keyboard; the dotted underline marks it as explained.
+function HelpTooltip({ text, children }: { text: string; children: string }) {
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <span tabIndex={0} className="cursor-help underline decoration-dotted underline-offset-4">{children}</span>
+      </TooltipTrigger>
+      <TooltipContent side="top" sideOffset={6}>{text}</TooltipContent>
+    </Tooltip>
+  )
+}
+
+function evidenceStatusValue(status: string) {
+  const entry = EVIDENCE_STATUS_LABELS[status]
+  return entry ? <HelpTooltip text={entry.tooltip}>{entry.label}</HelpTooltip> : status
+}
+
+// The scheduler's status enum, read as words.
+const RUN_STATUS_LABELS: Record<RunSummary['status'], string> = {
+  FAILED: 'Failed',
+  COMPLETED: 'Completed',
+}
+
+// The page's place in the app, shown whether or not its record loads.
+const VERDICT_CRUMBS: PageCrumb[] = [{ label: 'Fleet', to: navigateService.getPath('fleet') }, { label: 'Verdict' }]
+
+// The answer and its lines share a row from 1024px, both as tall as the
+// taller: the lines take the first two of three equal columns, the answer the
+// last. That third is never narrower than what in the answer card cannot
+// wrap: its header on one line (the outcome beside the action), so the header
+// never wraps, and a fact that holds a timestamp, so the stamp never runs out
+// of its cell. Where either needs more than a third, near 1024px, the width
+// comes out of the lines. Stacked, the answer comes first, as it does in
+// reading order.
+const ANSWER_ROW = 'grid grid-cols-1 gap-card-gap lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_minmax(min-content,1fr)]'
+
+// Page-wide actions: the evidence as Markdown, a link to this page, and downloads.
+function VerdictActions({ run }: { run: RunDetail }) {
+  // Named when the download starts, so the stamp is the moment of export.
+  const fileName = (extension: string) =>
+    `verdict-${slug(run.jobId)}-att${run.attempt}-${utcDateStamp()}.${extension}`
   const exportItems = [
     {
-      label: 'Verdict + evidence (JSON)',
-      hint: 'machine-parseable, schema-stable',
+      label: 'Download as JSON',
       onSelect: () =>
-        downloadBlob(
-          `${baseName}.json`,
-          JSON.stringify(verdictExportData(run), null, 2),
-          'application/json',
-        ),
+        downloadBlob(fileName('json'), JSON.stringify(verdictExportData(run), null, 2), 'application/json'),
     },
     {
-      label: 'Verdict + evidence (YAML)',
-      hint: 'human-readable, drop into a ticket',
-      onSelect: () =>
-        downloadBlob(`${baseName}.yaml`, toYaml(verdictExportData(run)), 'application/yaml'),
+      label: 'Download as YAML',
+      onSelect: () => downloadBlob(fileName('yaml'), toYaml(verdictExportData(run)), 'application/yaml'),
     },
     {
-      label: 'Raw log (text)',
-      hint: 'attempt log lines, no scaffolding',
-      onSelect: () =>
-        downloadBlob(`${baseName}.log`, logToText(run), 'text/plain'),
+      label: 'Download as log',
+      onSelect: () => downloadBlob(fileName('log'), logToText(run), 'text/plain'),
     },
     {
-      label: 'Evidence (markdown)',
-      hint: 'same as the Copy button',
-      onSelect: () =>
-        downloadBlob(`${baseName}.md`, buildVerdictMarkdown(run), 'text/markdown'),
+      label: 'Download as Markdown',
+      onSelect: () => downloadBlob(fileName('md'), buildVerdictMarkdown(run), 'text/markdown'),
     },
   ]
 
   return (
     <>
-      <Button variant="outline" size="sm" onClick={copyEvidence} className="min-w-[12rem] justify-center">
-        {copied === 'evidence' ? 'Copied evidence ✓' : 'Copy evidence (markdown)'}
-      </Button>
-      <ExportMenu items={exportItems} triggerLabel="Download" />
-      <HoverCard openDelay={200} closeDelay={75}>
-        <HoverCardTrigger asChild>
-          <Button variant="outline" size="sm" onClick={copyLocalLink} className="min-w-[8.5rem] justify-center">
-            {copied === 'link' ? 'Copied link ✓' : 'Copy local link'}
-          </Button>
-        </HoverCardTrigger>
-        <HoverCardContent
-          align="start"
-          sideOffset={6}
-          className="w-72 p-3 bg-background-secondary border-border ring-0 font-mono text-[11px] leading-snug"
-        >
-          Only resolves on this Attribution instance. For cross-team sharing, prefer
-          Download (JSON / YAML / log).
-        </HoverCardContent>
-      </HoverCard>
-      {run.responsibleNodes.length > 0 && (
-        <Button
-          variant="outline"
-          size="sm"
-          onClick={() => nav('node', { id: run.responsibleNodes[0] })}
-        >
-          Other runs on {run.responsibleNodes[0]}
-        </Button>
-      )}
+      <CopyButton
+        label="Copy evidence"
+        getText={() => buildVerdictMarkdown(run)}
+        tooltip="Copies a Markdown summary"
+      />
+      <CopyButton
+        icon={Link2}
+        label="Copy link"
+        getText={() => window.location.href}
+        tooltip="Only opens on this Attribution instance"
+      />
+      <ExportMenu items={exportItems} triggerLabel="Export" />
     </>
   )
 }
 
-function CardHead({ title, sub }: { title: string; sub?: React.ReactNode }) {
-  return (
-    <CardHeader className="flex flex-row items-baseline gap-3">
-      <CardTitle className="text-xs font-semibold font-mono tracking-wide uppercase">
-        {title}
-      </CardTitle>
-      {sub && <span className="text-foreground-muted text-xs">{sub}</span>}
-    </CardHeader>
-  )
-}
-
-function KvCell({
-  label,
-  children,
-  className,
-  valueClass = 'font-mono text-xs text-foreground',
-}: {
-  label: React.ReactNode
-  children: React.ReactNode
-  className?: string
-  valueClass?: string
-}) {
-  return (
-    <div className={`flex flex-col gap-1.5 min-w-0 ${className ?? ''}`}>
-      <div className="font-mono text-xs text-foreground-muted tracking-wide uppercase">
-        {label}
-      </div>
-      <div className={`${valueClass} min-w-0`}>{children}</div>
-    </div>
-  )
-}
-
-function GuidanceLine({ label, children }: { label: string; children: React.ReactNode }) {
-  return (
-    <div className="grid grid-cols-[9rem_1fr] gap-3 text-xs">
-      <div className="font-mono uppercase tracking-wide text-foreground-muted">{label}</div>
-      <div className="text-foreground-secondary leading-snug">{children}</div>
-    </div>
-  )
-}
-
-function CloudOperatorGuidance({ run }: { run: RunDetail }) {
-  const card = run.operatorDiagnose
-  if (card?.hasPersona !== true) return null
-
-  return (
-    <div className="mt-4 border-t border-border pt-4 flex flex-col gap-2">
-      <div className="flex items-center gap-2">
-        <span className="font-mono text-xs font-semibold uppercase tracking-wide text-foreground-muted">
-          Cloud operator guidance
+// The page's facts, labelled whether or not the record has loaded; while it
+// loads (no run yet) the head holds each value's place.
+function verdictMeta(run: RunDetail | undefined): DescriptionListItem[] {
+  return [
+    { key: 'user', label: 'User', value: run && (run.user ? <Identifier>{run.user}</Identifier> : <NotRecorded />) },
+    { key: 'status', label: 'Status', value: run && RUN_STATUS_LABELS[run.status] },
+    { key: 'gpus', label: 'GPUs', value: run && <span className="num">{run.gpuCount}</span> },
+    {
+      key: 'gpu-hours',
+      label: <>GPU-hours <InfoHint term="gpu-hours" /></>,
+      value: run && <span className="num">{attemptGpuHours(run).toFixed(2)}</span>,
+    },
+    {
+      key: 'window',
+      label: 'Window',
+      value: run && (
+        <span className="inline-flex flex-wrap items-center gap-x-1.5">
+          <TimeHover date={run.startTime} />
+          <ArrowRight aria-hidden="true" className="size-3.5 text-foreground-muted" />
+          <span className="sr-only">to</span>
+          <TimeHover date={run.endTime} />
         </span>
-        {card.catalogId && (
-          <Badge variant="outline" className="font-mono text-[10px] text-foreground-muted border-border">
-            {card.catalogId}
-          </Badge>
-        )}
+      ),
+    },
+  ]
+}
+
+// The facts behind the answer, one per row on one label axis, in reading
+// order: what the service said, the rule and moment that matched, then where
+// the record comes from. A row the record leaves empty says so, except the
+// service detail and error pairs, which only appear when recorded.
+function verdictFacts(run: RunDetail): DescriptionListItem[] {
+  const errorPairs = run.errorPairs ?? ''
+  return [
+    ...(run.detail !== '' ? [{ key: 'detail', label: 'Service detail', value: run.detail }] : []),
+    { key: 'rule', label: 'Rule', value: run.rootSymptom.rule ? <Identifier>{run.rootSymptom.rule}</Identifier> : <NotRecorded /> },
+    { key: 'root-time', label: 'Root symptom time', value: <TimeHover date={run.rootSymptom.time} /> },
+    {
+      key: 'attempt-uid',
+      label: 'Attempt UID',
+      value: <Copyable text={run.attemptUid} label="Copy attempt UID" />,
+    },
+    {
+      key: 'pipeline',
+      label: 'Pipeline',
+      value: run.pipeline ? <span className="num">{run.pipeline}</span> : <NotRecorded />,
+    },
+    { key: 'service', label: 'Service', value: run.service ? <Identifier>{run.service}</Identifier> : <NotRecorded /> },
+    ...(errorPairs !== ''
+      ? [{
+          key: 'error-pairs',
+          label: 'Error pairs',
+          value: (
+            <ul aria-label="error pairs" className="flex flex-col gap-1">
+              {errorPairs.split('; ').map((pair) => <li key={pair}><Identifier>{pair}</Identifier></li>)}
+            </ul>
+          ),
+        }]
+      : []),
+    ...((run.terminalStates ?? []).length > 0
+      ? [{ key: 'terminal-state', label: 'Terminal state', value: (run.terminalStates ?? []).map(s => TERMINAL_STATE_LABELS[s] ?? s).join(', ') }]
+      : []),
+    ...((run.failureDomains ?? []).length > 0
+      ? [{ key: 'failure-domain', label: 'Failure domain', value: (run.failureDomains ?? []).map(d => FAILURE_DOMAIN_LABELS[d] ?? d).join(', ') }]
+      : []),
+    ...((run.cancellationActors ?? []).length > 0
+      ? [{ key: 'cancellation-actor', label: 'Cancelled by', value: (run.cancellationActors ?? []).map(a => CANCELLATION_ACTOR_LABELS[a] ?? a).join(', ') }]
+      : []),
+    ...((run.uncertaintyType ?? null) !== null
+      ? [{ key: 'uncertainty-type', label: 'Uncertainty type', value: UNCERTAINTY_LABELS[run.uncertaintyType!] ?? run.uncertaintyType! }]
+      : []),
+    ...((run.evidenceStatus ?? null) !== null
+      ? [{ key: 'evidence-status', label: <HelpTooltip text="Whether all collected evidence reached the attribution service before this verdict was issued">Evidence</HelpTooltip>, value: evidenceStatusValue(run.evidenceStatus!) }]
+      : []),
+  ]
+}
+
+function TenantGuidance({ card }: { card: PersonaDiagnose }) {
+  const lines: DescriptionListItem[] = [
+    { key: 'summary', label: 'Summary', value: card.summary },
+    { key: 'impact', label: 'Impact', value: card.impact },
+    { key: 'action', label: 'Action', value: card.action },
+    { key: 'include', label: 'Include when asking for help', value: card.supportDetails.join('\n\n') },
+  ].filter((line) => line.value !== '').map((line) => ({
+    ...line,
+    value: <div className="whitespace-pre-wrap">{line.value}</div>,
+  }))
+  return (
+    <CardContent className="flex flex-col gap-2 border-t">
+      <div className="flex flex-wrap items-center gap-2">
+        <h3 className={subtitle}>Tenant guidance</h3>
+        {card.catalogId && <Badge variant="zinc-subtle" size="wrap"><Identifier>{card.catalogId}</Identifier></Badge>}
       </div>
-      {card.summary !== '' && <GuidanceLine label="Summary">{card.summary}</GuidanceLine>}
-      {card.impact !== '' && <GuidanceLine label="Impact">{card.impact}</GuidanceLine>}
-      {card.action !== '' && <GuidanceLine label="Action">{card.action}</GuidanceLine>}
-      {card.supportDetails.length > 0 && (
-        <GuidanceLine label="Include">{card.supportDetails.join(', ')}</GuidanceLine>
-      )}
-    </div>
+      {lines.length > 0 && <DescriptionList items={lines} />}
+    </CardContent>
   )
 }
 
-function EvidenceList({ run }: { run: RunDetail }) {
-  const root = run.attribution.rootSymptom.state === 'available' ? run.attribution.rootSymptom.data : null
+// The lines the answer rests on, in the main column: the section fills the
+// height of its grid row and the lines fill the section, scrolling within it
+// once they outgrow it.
+function MatchedLines({ run }: { run: RunDetail }) {
   return (
-    <Card size="sm">
-      <CardHead title="Verdict" />
-      <CardContent>
-        <div className="grid grid-cols-2 lg:grid-cols-4 xl:grid-cols-2 gap-x-5 gap-y-4">
-          <KvCell label={<DefHover term="attribution-outcome">attribution_outcome</DefHover>}>
-            <VerdictPill outcome={run.outcome} label={run.verdictLabel} />
-          </KvCell>
-          <KvCell label={<DefHover term="root-symptom-symptom">root_symptom.symptom</DefHover>}>
-            <b className="wrap-anywhere font-semibold">{root ? root.symptom : run.rootSymptom.symptom}</b>
-          </KvCell>
-          <KvCell label={<DefHover term="rule">root_symptom.rule</DefHover>}>
-            <span className="wrap-anywhere">{run.rootSymptom.rule}</span>
-          </KvCell>
-          <KvCell label="root_symptom.time">
-            <TimeHover date={run.rootSymptom.time} format="YYYY-MM-DD HH:mm:ss" />
-          </KvCell>
-          <KvCell
-            label="detail"
-            className="col-span-2 lg:col-span-3 xl:col-span-2"
-            valueClass="text-sm text-foreground leading-snug"
-          >
-            {run.detail}
-          </KvCell>
-          {run.errorPairs !== undefined && run.errorPairs !== '' && (
-            <KvCell
-              label="error_pairs"
-              className="col-span-2 lg:col-span-4 xl:col-span-2"
-              valueClass="font-mono text-xs text-foreground-secondary whitespace-pre-wrap break-words"
-            >
-              <ul aria-label="error pairs" className="m-0 list-none p-0">
-                {run.errorPairs.split('; ').map((pair) => (
-                  <li key={pair}>{pair}</li>
-                ))}
-              </ul>
-            </KvCell>
-          )}
-          <KvCell label={<DefHover term="attempt-uid">attempt_uid</DefHover>} valueClass="font-mono text-xs text-foreground-secondary truncate">
-            {run.attemptUid}
-          </KvCell>
-        </div>
-        <CloudOperatorGuidance run={run} />
-        <div className="mt-4"><DecisionGraphAction run={run} detail={run} /></div>
-      </CardContent>
-      <CardFooter className="border-t flex-wrap gap-2 bg-background-secondary p-3">
-        <Actions run={run} />
-      </CardFooter>
+    <SectionCard
+      title="Matched lines"
+      count={run.log.length > 0 ? run.log.length : undefined}
+      flush
+      fill
+      className="lg:order-first lg:col-span-2"
+    >
+      <LogExcerpt
+        label="Matched lines"
+        emptyLabel="No matched lines were recorded."
+        lines={run.log.map((line, index) => ({
+          key: String(index),
+          time: line.t,
+          message: line.text,
+          // The root line is marked the same way whatever the outcome: it is the line to read, not a blame.
+          emphasis: line.level === 'symptom',
+        }))}
+      />
+    </SectionCard>
+  )
+}
+
+// The answer, compact beside the lines it rests on: the outcome titles the
+// card, with the attribution logic, the page's one primary action, at the
+// header's end; the root symptom opens the body, and the facts that back it
+// follow in one column on one label axis. Documentation links live beside
+// symptoms in the table, never here. In the row, the header stays on one line
+// and, with the facts' timestamp, sets the column's least width; every other
+// recorded value (the root symptom, the facts, the guidance) wraps anywhere,
+// so a long one wraps instead of widening the answer.
+function VerdictCard({ run }: { run: RunDetail }) {
+  const rootSymptom = run.attribution.rootSymptom.state === 'available'
+    ? run.attribution.rootSymptom.data.symptom
+    : run.rootSymptom.symptom
+  const guidance = run.diagnose?.hasPersona === true ? run.diagnose : null
+  return (
+    <Card asChild>
+      <section aria-label="Verdict">
+        <CardHeader className="border-b lg:flex-nowrap">
+          <CardTitle asChild>
+            <h2 className="flex items-center">
+              <span className="sr-only">Verdict:</span>{' '}
+              {/* The badge is the title itself, beside the card's action and
+                  no text, so it takes no mark offset: centered in the header
+                  as the action's label is. */}
+              <CompoundOutcomeBadge run={run} className="top-0" />
+            </h2>
+          </CardTitle>
+          <CardAction>
+            <DecisionGraphAction run={run} detail={run} />
+          </CardAction>
+        </CardHeader>
+        <CardContent className="flex flex-col gap-2">
+          {rootSymptom !== ''
+            ? <p className="font-medium wrap-anywhere"><span className="sr-only">Root symptom:</span> <Identifier>{rootSymptom}</Identifier></p>
+            : <p className="text-foreground-muted">Root symptom not recorded</p>}
+          <DescriptionList items={verdictFacts(run)} />
+        </CardContent>
+        {guidance && <TenantGuidance card={guidance} />}
+      </section>
     </Card>
   )
 }
 
 function NodesSection({ run }: { run: RunDetail }) {
-  const titleId = useId()
   const attemptNodes = new Set(run.nodeIds)
   const responsibleNodes = new Set(run.responsibleNodes)
   const nodes = [...new Set([...run.nodeIds, ...run.responsibleNodes])]
   return (
-    <section aria-labelledby={titleId} className="min-w-0 rounded-sm border border-border bg-card">
-      <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1 border-b border-border px-3.5 py-3">
-        <h2 id={titleId} className="m-0 text-xs font-semibold uppercase tracking-[0.055em]">Nodes</h2>
-        <p className="m-0 text-[11px] text-foreground-muted">
-          <span className="font-mono tabular-nums">{attemptNodes.size}</span> in attempt · <span className="font-mono tabular-nums">{responsibleNodes.size}</span> responsible
-        </p>
-        <span className="ml-auto text-[11px] text-foreground-muted"><span className="font-mono tabular-nums">{run.gpuCount}</span> GPUs</span>
-      </div>
-      {nodes.length > 0 ? (
-        <ul aria-label="Nodes" className="m-0 flex max-h-72 list-none flex-wrap items-center gap-x-[22px] gap-y-1 overflow-y-auto px-1.5 py-2.5">
-          {nodes.map((node) => (
-            <li key={node} className="max-w-full">
-              <NodeHoverCard nodeId={node} asChild>
-                <Link
-                  to={navigateService.getPath('node', { id: node })}
-                  className="inline-flex max-w-full items-center gap-2 rounded-sm px-2 py-[5px] text-xs text-foreground-secondary no-underline transition-colors hover:bg-background-active hover:text-foreground focus-visible:outline-1 focus-visible:outline-offset-2 focus-visible:outline-foreground-muted"
-                >
-                  <Server aria-hidden="true" className="size-3.5 shrink-0 text-foreground-muted" />
-                  <span className="min-w-0 break-words leading-5">
-                    {node}{' '}
-                    {!attemptNodes.has(node) && <span className="mt-0.5 block text-[11px] text-foreground-muted">Not listed in attempt nodes</span>}
-                  </span>{' '}
-                  {responsibleNodes.has(node) && (
-                    <Badge variant="accent" className="ml-1">Responsible</Badge>
-                  )}
-                </Link>
-              </NodeHoverCard>
-            </li>
-          ))}
-        </ul>
-      ) : (
-        <p className="m-0 px-3.5 py-3 text-xs leading-5 text-foreground-muted">No nodes recorded for this attempt.</p>
-      )}
-    </section>
+    <SectionCard
+      title="Nodes"
+      count={`${attemptNodes.size} in attempt · ${responsibleNodes.size} responsible`}
+      empty={nodes.length === 0 ? { title: 'No recorded nodes', description: 'No nodes recorded for this attempt.' } : undefined}
+    >
+      {/* The list scrolls within itself; its 4px inner margin, given back
+          outside, keeps the links' 3px focus ring from being cut at its edges.
+          The icon, on the name's first line, and the badge, after the name,
+          are marks in its running text (markInText): centered on its
+          lowercase, and never heightening its 20px line. The whole row is the
+          node's link, but its hover underline marks the name alone, not the
+          note or badge after it. */}
+      <ul
+        aria-label="Nodes"
+        className="-m-1 grid max-h-72 grid-cols-1 gap-x-4 gap-y-1 overflow-y-auto p-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4"
+      >
+        {nodes.map((node) => (
+          <li key={node} className="flex min-w-0 items-start gap-2 leading-5">
+            <span className="shrink-0">
+              <Server aria-hidden="true" className={cn('inline size-3.5 text-foreground-muted', markInText)} />
+            </span>
+            <NodeHoverCard nodeId={node}>
+              <RouterLink to={navigateService.getPath('node', { id: node })} underline="none" className="group/link min-w-0 break-words">
+                <span className="underline-offset-4 group-hover/link:underline"><Identifier>{node}</Identifier></span>
+                {!attemptNodes.has(node) && (
+                  <>
+                    {' '}<span aria-hidden="true" className="text-foreground-muted">·</span>{' '}
+                    <span className="text-foreground-muted">Not listed in attempt nodes</span>
+                  </>
+                )}
+                {responsibleNodes.has(node) && <>{' '}<SiteStatusBadge status="bad" className={markInText} /></>}
+              </RouterLink>
+            </NodeHoverCard>
+          </li>
+        ))}
+      </ul>
+    </SectionCard>
   )
 }
 
-function RawPayload({ label, payload }: { label: string; payload: object }) {
-  const json = JSON.stringify(payload, null, 2)
-  const [copied, setCopied] = useState(false)
-  const copy = async (e: React.MouseEvent) => {
-    e.stopPropagation()
-    try {
-      await navigator.clipboard.writeText(json)
-    } catch {
-      const ta = document.createElement('textarea')
-      ta.value = json
-      ta.style.position = 'fixed'
-      ta.style.opacity = '0'
-      document.body.appendChild(ta)
-      ta.select()
-      try { document.execCommand('copy') } catch { /* swallow */ }
-      document.body.removeChild(ta)
-    }
-    setCopied(true)
-    window.setTimeout(() => setCopied(false), 1200)
-  }
+// A payload rebuilt from the fields above, folded until asked for; copying it
+// never needs it open. Open, its body is as tall as the JSON, up to 20rem, and
+// scrolls within itself past that.
+function Payload({ label, payload }: { label: string; payload: object }) {
+  const titleId = useId()
   return (
-    <Collapsible className="border border-border rounded-sm bg-card group/raw overflow-hidden">
-      <div className="flex items-center w-full">
-        <CollapsibleTrigger className="flex-1 text-left flex items-center gap-1 px-3 py-2 cursor-pointer font-mono text-xs text-foreground-secondary select-none">
-          <ChevronRight className="size-3 transition-transform group-data-[state=open]/raw:rotate-90 text-foreground-muted" />
-          {label}
-        </CollapsibleTrigger>
-        <button
-          type="button"
-          onClick={copy}
-          aria-label={`Copy ${label} as JSON`}
-          className="opacity-0 group-hover/raw:opacity-100 focus-visible:opacity-100 transition-opacity mr-2 px-2 py-1 rounded-sm font-mono text-[10px] uppercase tracking-wider text-foreground-muted hover:text-foreground hover:bg-background-active cursor-pointer focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary"
-        >
-          {copied ? 'Copied ✓' : 'Copy JSON'}
-        </button>
-      </div>
-      <CollapsibleContent className="border-t border-border overflow-hidden">
-        <ScrollArea className="h-80 w-full">
-          <pre className="m-0 px-3.5 py-2.5 font-mono text-xs text-foreground-secondary leading-normal w-max">
-            {json}
-          </pre>
-          <ScrollBar orientation="horizontal" />
-          <ScrollBar orientation="vertical" />
-        </ScrollArea>
-      </CollapsibleContent>
+    <Collapsible>
+      <CodeBlock code={JSON.stringify(payload, null, 2)}>
+        <CodeBlockHeader>
+          <CollapsibleTrigger
+            className={cn(
+              'group/payload flex min-w-0 flex-1 cursor-pointer items-center gap-2 rounded-xs text-left transition-colors hover:text-foreground',
+              focusRing,
+            )}
+          >
+            <ChevronRight
+              aria-hidden="true"
+              className="size-3.5 shrink-0 text-foreground-muted transition-transform group-data-[state=open]/payload:rotate-90"
+            />
+            <span id={titleId}>{label}</span>{' '}
+            <span className="text-foreground-muted">JSON</span>
+          </CollapsibleTrigger>
+          <CodeBlockActions>
+            <CodeBlockCopyButton label={`Copy ${label} as JSON`} />
+          </CodeBlockActions>
+        </CodeBlockHeader>
+        <CollapsibleContent>
+          <CodeBlockBody labelledBy={titleId} className="max-h-80" />
+        </CollapsibleContent>
+      </CodeBlock>
     </Collapsible>
   )
 }
 
-function RawPayloads({ run }: { run: RunDetail }) {
+// The scheduler summary leaves out the attempt number: the adapter records 1
+// for every run, so, as everywhere on the page, it is not shown as data. The
+// downloads keep their fields.
+function PayloadsSection({ run }: { run: RunDetail }) {
   return (
-    <div>
-      <div className={SECTION_LABEL}>
-        Raw payloads
-        <span className="flex-1 h-px bg-border" />
-      </div>
-      <div className="flex flex-col gap-1.5">
-        <RawPayload
-          label="raw_result_json"
+    <SectionCard title="Payloads">
+      <div className="flex flex-col gap-2">
+        <Payload
+          label="Result summary"
           payload={{
             attempt_uid: run.attemptUid,
             outcome: run.outcome,
@@ -380,11 +426,10 @@ function RawPayloads({ run }: { run: RunDetail }) {
             service: run.service,
           }}
         />
-        <RawPayload
-          label="raw_scheduler_json"
+        <Payload
+          label="Scheduler summary"
           payload={{
             execution_context: run.jobId,
-            attempt: run.attempt,
             user: run.user,
             status: run.status,
             nodes: run.nodeIds,
@@ -392,6 +437,57 @@ function RawPayloads({ run }: { run: RunDetail }) {
             end_time: run.endTime,
           }}
         />
+        {(run.ingestionReports ?? null) !== null && (
+          <Payload label="Ingestion reports" payload={run.ingestionReports!} />
+        )}
+      </div>
+    </SectionCard>
+  )
+}
+
+// While the record loads, the page head holds its shape as the node page's
+// does (the way back, a placeholder title and actions, the facts' labels over
+// placeholder values), blocks shaped like the answer card and the matched
+// lines beside it hold theirs, and a status names what is loading.
+function VerdictLoading() {
+  return (
+    <div className="flex flex-col gap-page-gap">
+      <PageHeader
+        breadcrumb={VERDICT_CRUMBS}
+        actions={
+          <>
+            <Skeleton height="7" className="w-32" />
+            <Skeleton height="7" className="w-24" />
+            <Skeleton height="7" className="w-24" />
+          </>
+        }
+        meta={verdictMeta(undefined)}
+        metaLoading
+      />
+      <p role="status" className="sr-only">Loading execution context…</p>
+      <div className={ANSWER_ROW}>
+        <Card>
+          <CardHeader className="border-b">
+            <Skeleton height="5" className="w-28" />
+            <CardAction>
+              <Skeleton height="7" className="w-44" />
+            </CardAction>
+          </CardHeader>
+          <CardContent className="flex flex-col gap-2">
+            <Skeleton height="5" width="2/3" />
+            <Skeleton height="4" width="3/4" />
+            <Skeleton height="4" width="1/2" />
+            <Skeleton height="4" width="2/3" />
+          </CardContent>
+        </Card>
+        <Card className="lg:order-first lg:col-span-2">
+          <CardHeader className="border-b">
+            <Skeleton height="4" className="w-32" />
+          </CardHeader>
+          <CardContent flush className="flex flex-1 flex-col">
+            <Skeleton className="min-h-60 flex-1 rounded-none" />
+          </CardContent>
+        </Card>
       </div>
     </div>
   )
@@ -400,102 +496,50 @@ function RawPayloads({ run }: { run: RunDetail }) {
 export function VerdictView() {
   const { id: verdictId = '' } = useParams<{ id: string }>()
   const api = useApi()
-  const { data: fetchedRun, isLoading } = useSWR<RunDetail | undefined, Error>(
+  const { data: run, error, isLoading, mutate } = useSWR<RunDetail | undefined, Error>(
     verdictId !== '' ? ['run', verdictId] : null,
     () => api.getRun(verdictId),
   )
-  const run = fetchedRun
+  useDocumentTitle('Verdict', run?.jobId)
+  // Without a record there is no title to show, but the breadcrumb stays where it always is.
   if (!run) {
+    if (isLoading) return <VerdictLoading />
     return (
-      <div className="p-6 text-foreground-muted">
-        {isLoading ? 'Loading execution context...' : 'Execution context not found'}
+      <div className="flex flex-col gap-page-gap">
+        <PageBreadcrumb crumbs={VERDICT_CRUMBS} />
+        <Empty>
+          <EmptyHeader>
+            {error ? (
+              <>
+                <EmptyTitle role="alert">Execution context could not be loaded</EmptyTitle>
+                <Button onClick={() => void mutate()}>Try again</Button>
+              </>
+            ) : (
+              <EmptyTitle>Execution context not found</EmptyTitle>
+            )}
+          </EmptyHeader>
+        </Empty>
       </div>
     )
   }
 
-  const hasWorkload = run.workload && run.workload !== '—'
-
   return (
-    <div>
-      <Breadcrumb className="mb-3.5 font-sans">
-        <BreadcrumbList>
-          <BreadcrumbItem>
-            <BreadcrumbLink asChild className="text-primary cursor-pointer">
-              <Link to={navigateService.getPath('fleet')}>Attribution</Link>
-            </BreadcrumbLink>
-          </BreadcrumbItem>
-          <BreadcrumbSeparator />
-          <BreadcrumbItem>
-            <BreadcrumbPage className="inline-block text-foreground font-medium">
-              {run.jobId}
-              {hasWorkload && <> · attempt <span className="font-mono">{run.attempt}</span></>}
-            </BreadcrumbPage>
-          </BreadcrumbItem>
-        </BreadcrumbList>
-      </Breadcrumb>
-
-      <div className="flex items-start gap-4 my-1.5 mb-2">
-        <h1 className="min-w-0 break-words text-3xl font-bold m-0 tracking-tight">
-          {hasWorkload ? (
-            <>
-              Attempt <span className="font-mono text-foreground">{run.attempt}</span> ·{' '}
-              <span className="text-foreground-muted text-lg font-normal">{run.workload}</span>
-            </>
-          ) : (
-            <>
-              Execution Context <span className="font-mono text-foreground">{run.jobId}</span>
-            </>
-          )}
-        </h1>
-      </div>
-      <div className="flex flex-wrap gap-3.5 font-mono text-xs text-foreground-muted mb-1">
-        <span>
-          User <b className="text-foreground-secondary font-medium">{run.user}</b>
-        </span>
-        <span>
-          Status <b className="text-foreground-secondary font-medium">{run.status}</b>
-        </span>
-        <span>
-          GPUs <b className="text-foreground-secondary font-medium">{run.gpuCount}</b>
-        </span>
-        <span>
-          <DefHover term="gpu-hours">GPU-hours</DefHover>{' '}
-          <b className="text-foreground-secondary font-medium">{attemptGpuHours(run).toFixed(2)}</b>
-        </span>
-        <span>
-          Window{' '}
-          <b className="text-foreground-secondary font-medium">
-            <TimeHover date={run.startTime} format="MM-DD HH:mm" />
-          </b>{' '}
-          →{' '}
-          <b className="text-foreground-secondary font-medium">
-            <TimeHover date={run.endTime} format="MM-DD HH:mm" />
-          </b>
-        </span>
-        <span>
-          Pipeline <b className="text-foreground-secondary font-medium">{run.pipeline}</b>
-        </span>
-        <span>
-          Service <b className="text-foreground-secondary font-medium">{run.service}</b>
-        </span>
-      </div>
-
-      <div className="grid grid-cols-1 xl:grid-cols-12 gap-4 mt-3 mb-5 xl:items-start">
-        <div className="xl:col-span-8 min-w-0">
-          <LogHero run={run} />
+    <div className="flex flex-col gap-page-gap">
+      <PageHeader
+        breadcrumb={VERDICT_CRUMBS}
+        title={<Identifier>{run.jobId}</Identifier>}
+        actions={<VerdictActions run={run} />}
+        meta={verdictMeta(run)}
+      />
+      <div className="flex flex-col gap-card-gap">
+        <div className={ANSWER_ROW}>
+          <VerdictCard run={run} />
+          <MatchedLines run={run} />
         </div>
-        <div className="xl:col-span-4 xl:sticky xl:top-16 self-start min-w-0">
-          <EvidenceList run={run} />
-        </div>
-      </div>
-      <div className="mb-5">
-        <SymptomsSection run={run} />
-      </div>
-      <div className="mb-5">
         <NodesSection run={run} />
+        <SymptomsSection run={run} />
+        <PayloadsSection run={run} />
       </div>
-
-      <RawPayloads run={run} />
     </div>
   )
 }

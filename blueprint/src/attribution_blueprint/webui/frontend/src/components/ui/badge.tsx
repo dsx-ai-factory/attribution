@@ -1,44 +1,60 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-// SPDX-License-Identifier: LicenseRef-NvidiaProprietary
+// SPDX-License-Identifier: Apache-2.0
 
 import * as React from "react"
 import { cva, type VariantProps } from "class-variance-authority"
 import { Slot } from "radix-ui"
 
-import { cn } from "@/lib/utils"
+import { cn, focusRing } from "@/lib/utils"
 
-const compactBadge = "h-auto min-h-5 max-w-full rounded-sm px-1.5 font-sans text-[11px] leading-[14px] font-normal whitespace-normal wrap-anywhere"
-
+// The house Badge resolved to its dark values. Kept: outline (12.59:1 text on
+// the card), zinc-subtle for neutral evidence (11.84:1) and red-subtle for
+// blame (destructive-400 on destructive-900, 5.06:1). Dropped: the green
+// default fill, destructive (3.44:1), link and the colored subtle variants,
+// since an outcome category only ever shows as a dot. dashed is Attribution's
+// own, for discarded decision steps: its zinc-600 dash (2.41:1 on the card) is
+// a shape cue beside the muted text and icon that carry the state. Focus uses
+// the shared /80 ring instead of the house /50. At the compact density a badge
+// is 20px (12px text inset 6px), as tall as a 13px text line, so it sits in
+// that line and a badge row of a table stays 28px. Placed inline, it aligns to
+// the top of the line box: on the baseline, its 12px text's baseline would
+// meet the 13px line's and push the box 0.5px out of the line. A wrapping
+// badge is 20px too while its text fits on one line; wrapped, it keeps what it
+// holds to the first line. Tuned: every badge here is a mark beside text (a
+// row's, a table row's, a line's), so it takes the mark rule's row placement
+// itself (markInRow in lib/utils), lowered onto that text's lowercase; set in
+// running text it takes markInText, which cancels the offset. A badge that is
+// itself a title, beside no text, takes no offset. A mark it holds (an icon,
+// an outcome dot, a chip's clear button) is beside its own label wherever the
+// badge is set, so the badge declares its label's offset for what it holds
+// (0.93px, measured for its 12px at 500) and lowers its icons by it.
 const badgeVariants = cva(
-  "group/badge inline-flex h-5 w-fit shrink-0 items-center justify-center gap-1 overflow-hidden rounded-4xl border border-transparent px-2 py-0.5 text-xs font-medium whitespace-nowrap transition-all focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 has-data-[icon=inline-end]:pr-1.5 has-data-[icon=inline-start]:pl-1.5 aria-invalid:border-destructive aria-invalid:ring-destructive/20 dark:aria-invalid:ring-destructive/40 [&>svg]:pointer-events-none [&>svg]:size-3!",
+  `group/badge relative top-(--mark-offset) inline-flex w-fit shrink-0 items-center justify-center gap-1 overflow-hidden rounded-sm border border-transparent align-top font-medium whitespace-nowrap transition-all *:[--mark-offset:0.93px] has-data-[icon=inline-end]:pr-1 has-data-[icon=inline-start]:pl-1 [&>svg]:pointer-events-none [&>svg]:relative [&>svg]:top-(--mark-offset) [&>svg]:size-3! focus-visible:border-border-active ${focusRing}`,
   {
     variants: {
       variant: {
-        default: "bg-primary text-primary-foreground [a]:hover:bg-primary/80",
-        secondary:
-          "bg-secondary text-secondary-foreground [a]:hover:bg-secondary/80",
-        neutral:
-          `${compactBadge} border-zinc-700/60 bg-zinc-800 text-zinc-300`,
-        accent:
-          `${compactBadge} border-primary-300/40 bg-primary-500/10 text-primary-300`,
-        destructive:
-          "bg-destructive/10 text-destructive focus-visible:ring-destructive/20 dark:bg-destructive/20 dark:focus-visible:ring-destructive/40 [a]:hover:bg-destructive/20",
-        outline:
-          "border-border text-foreground [a]:hover:bg-muted [a]:hover:text-muted-foreground",
-        ghost:
-          "hover:bg-muted hover:text-muted-foreground dark:hover:bg-muted/50",
-        link: "text-primary underline-offset-4 hover:underline",
+        outline: "border-border text-foreground-secondary",
+        dashed: "border-dashed border-neutral-600 text-foreground-muted",
+        "zinc-subtle": "bg-neutral-800 text-neutral-200",
+        "red-subtle": "bg-destructive-900 text-destructive-400",
+      },
+      size: {
+        sm: "h-5 px-1.5 text-xs",
+        // Recorded values such as source names can be long; they wrap instead of being cut.
+        wrap: "h-auto min-h-5 items-start px-1.5 py-px text-xs whitespace-normal wrap-anywhere",
       },
     },
     defaultVariants: {
-      variant: "default",
+      variant: "outline",
+      size: "sm",
     },
   }
 )
 
 function Badge({
   className,
-  variant = "default",
+  variant = "outline",
+  size = "sm",
   asChild = false,
   ...props
 }: React.ComponentProps<"span"> &
@@ -49,11 +65,10 @@ function Badge({
     <Comp
       data-slot="badge"
       data-variant={variant}
-      className={cn(badgeVariants({ variant }), className)}
+      className={cn(badgeVariants({ variant, size }), className)}
       {...props}
     />
   )
 }
 
-// eslint-disable-next-line react-refresh/only-export-components
-export { Badge, badgeVariants }
+export { Badge }

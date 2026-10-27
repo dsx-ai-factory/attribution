@@ -51,9 +51,9 @@ Only HTTPS document URLs without credentials are accepted, without checking whet
 page exists. Incorrect destination paths must be fixed by the reference API owner.
 
 Doc appears beside each symptom name in the Symptoms table and beside the
-selected symptom in the graph's Step details panel. Graph selection updates the
-link using that step's own symptom; neither location borrows the root symptom's
-`catalog_id`. No rule documentation is inferred.
+selected step's symptom in the graph's selected-step panel. Graph selection
+updates the link using that step's own symptom; neither location borrows the
+root symptom's `catalog_id`. No rule documentation is inferred.
 The reference response is shared through SWR, with focus refresh and automatic
 error retries disabled; requests time out after ten seconds.
 
@@ -66,4 +66,4 @@ numbers. The frontend uses ordinary JSON parsing without a custom reviver.
 
 ## Tech
 
-Vite 8 · React 19 · TypeScript · Tailwind v4 · shadcn/ui · ECharts · Monaco · react-router 7.
+Vite 8 · React 19 · TypeScript · Tailwind v4 · shadcn/ui · ECharts · react-router 7.

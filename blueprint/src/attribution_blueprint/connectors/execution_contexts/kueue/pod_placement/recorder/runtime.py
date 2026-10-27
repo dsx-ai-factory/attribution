@@ -1,12 +1,5 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-# SPDX-License-Identifier: LicenseRef-NvidiaProprietary
-#
-# NVIDIA CORPORATION, its affiliates and licensors retain all intellectual
-# property and proprietary rights in and to this material, related
-# documentation and any modifications thereto. Any use, reproduction,
-# disclosure or distribution of this material and related documentation
-# without an express license agreement from NVIDIA CORPORATION or
-# its affiliates is strictly prohibited.
+# SPDX-License-Identifier: Apache-2.0
 
 from __future__ import annotations
 
@@ -18,13 +11,13 @@ from datetime import datetime
 
 from loguru import logger
 
+from attribution_blueprint.connectors.execution_contexts.kubernetes_helpers import pod_node_failure_reason
 from attribution_blueprint.connectors.execution_contexts.kueue.helpers import (
     WORKLOAD_ANNOTATION,
     OwnerIdentity,
     controller_owner,
     identities_from,
     pod_container_exit_reason,
-    pod_node_failure_reason,
 )
 from attribution_blueprint.connectors.execution_contexts.kueue.pod_placement.models import PlacementRecord
 from attribution_blueprint.connectors.execution_contexts.kueue.pod_placement.recorder.health import HealthState

@@ -1,12 +1,5 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-# SPDX-License-Identifier: LicenseRef-NvidiaProprietary
-#
-# NVIDIA CORPORATION, its affiliates and licensors retain all intellectual
-# property and proprietary rights in and to this material, related
-# documentation and any modifications thereto. Any use, reproduction,
-# disclosure or distribution of this material and related documentation
-# without an express license agreement from NVIDIA CORPORATION or
-# its affiliates is strictly prohibited.
+# SPDX-License-Identifier: Apache-2.0
 
 import re
 from typing import Optional
@@ -17,10 +10,10 @@ from attribution_lib.sources import SymptomSet
 
 def clean_bad_nodes_of_cascaded_symptoms(my_bad_nodes: JobNodeAttributions, symptoms_to_keep: list[str]):
     """Given a symptom_to_keep, we believe all other symptoms are cascaded, so discard anything but this symptom"""
-    for k in my_bad_nodes:
-        for symptom in my_bad_nodes[k].symptoms():
+    for _node, group in my_bad_nodes.symptom_groups():
+        for symptom in list(group.symptoms()):
             if symptom not in symptoms_to_keep:
-                my_bad_nodes[k].discard(symptom)
+                group.discard(symptom)
 
 
 def remove_cascaded_network_symptoms(symptoms: SymptomSet[str], my_bad_nodes: JobNodeAttributions):
@@ -33,7 +26,7 @@ def remove_cascaded_network_symptoms(symptoms: SymptomSet[str], my_bad_nodes: Jo
     ]
     for symptom in to_discard:
         symptoms.discard(symptom)
-    for _node, errors in my_bad_nodes.items():
+    for _node, errors in my_bad_nodes.symptom_groups():
         for symptom in to_discard:
             errors.discard(symptom)
 
@@ -50,6 +43,8 @@ NON_NODE_ATTRIBUTABLE_SYMPTOM_MARKERS = (
     "PyTorch NCCL watchdog",
     "pushrecv",
     "NVRx detected failure",
+    "NVRx step section timeout",
+    "NVRx no progress across restarts",
 )
 
 _NON_NODE_ATTRIBUTABLE_RE = re.compile("|".join(re.escape(m) for m in NON_NODE_ATTRIBUTABLE_SYMPTOM_MARKERS))

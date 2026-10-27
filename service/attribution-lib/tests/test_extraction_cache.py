@@ -1,12 +1,5 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-# SPDX-License-Identifier: LicenseRef-NvidiaProprietary
-#
-# NVIDIA CORPORATION, its affiliates and licensors retain all intellectual
-# property and proprietary rights in and to this material, related
-# documentation and any modifications thereto. Any use, reproduction,
-# disclosure or distribution of this material and related documentation
-# without an express license agreement from NVIDIA CORPORATION or
-# its affiliates is strictly prohibited.
+# SPDX-License-Identifier: Apache-2.0
 
 from datetime import datetime
 
@@ -289,7 +282,7 @@ class TestExtractionCacheMetadata:
 
 class TestMemoryCheckpointBackend:
     @pytest.mark.parametrize("load_path", ["simple", "fingerprints"])
-    @pytest.mark.parametrize("stored_version", ["1", "2", "invalid"])
+    @pytest.mark.parametrize("stored_version", ["2", "3", "invalid"])
     def test_snapshot_schema_recovery(self, tmp_path, dummy_ctx, monkeypatch, load_path, stored_version):
         """Recompute incompatible snapshots without hiding corrupt versions.
 
@@ -325,14 +318,14 @@ class TestMemoryCheckpointBackend:
             return
 
         result = loader()
-        if stored_version == "1":
+        if stored_version == "2":
             if load_path == "simple":
                 assert result is None
             else:
                 assert result.needs_full_reextraction is True
                 assert result.event_manager is None
                 assert result.metadata.job_id == "job_42"
-            assert (tmp_path / EventManager._SCHEMA_VERSION_FILE).read_text() == "1"
+            assert (tmp_path / EventManager._SCHEMA_VERSION_FILE).read_text() == "2"
         else:
             restored = result[0] if load_path == "simple" else result.event_manager
             assert restored._conn.execute("SELECT COUNT(*) FROM events").fetchone() == (4,)

@@ -1,6 +1,6 @@
 # Support for NVIDIA Attribution
 
-This document describes support for NVIDIA Attribution beginning with its general availability (GA) release. It covers the Attribution Service, Attribution Blueprint, and Attribution Library. Support under an NVIDIA commercial agreement is governed by that agreement.
+This document describes support for NVIDIA Attribution as a public open-source project. It covers the Attribution Service, Attribution Blueprint, and Attribution Library. Support under an NVIDIA commercial agreement is governed by that agreement.
 
 ## Support channels
 
@@ -29,7 +29,7 @@ For an **attribution decision** that appears incorrect, also include:
 For a **Service or Blueprint defect**, also include:
 
 - The affected API call or workflow, relevant configuration, exact command or request, and full error output.
-- The connectors involved and the versions of external systems they use, such as Slurm, Kubernetes, KAI, Kueue, JobSet, or telemetry backends, as applicable.
+- The connectors involved and the versions of external systems they use, such as Slurm, Kubernetes, Kueue, JobSet, or telemetry backends, as applicable. KAI support is pending: the Service accepts `kai` as a scheduler value, but attribution for it is not implemented yet.
 
 Remove credentials, tokens, customer data, tenant and cluster identifiers, and private hostnames before posting logs or configuration publicly. Use your commercial support channel if the issue cannot be described without confidential information.
 

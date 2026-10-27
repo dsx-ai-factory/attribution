@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// SPDX-License-Identifier: Apache-2.0
+
 import { useEffect } from 'react'
 import { BrowserRouter, Routes, Route, useLocation } from 'react-router-dom'
 import { TopBar } from '@/components/top-bar'
@@ -28,17 +31,20 @@ function Shell() {
     window.scrollTo({ top: 0, behavior: 'instant' })
   }, [pathname])
 
+  // Full width on one rail: the bar and every page share the page gutter, and a
+  // page starts the page-top spacing under the bar (the page-* values in
+  // globals.css).
   return (
-    <div className="min-h-screen bg-background">
-      <div className="mx-auto max-w-screen-2xl px-7 pt-5 pb-20">
-        <TopBar name={name} database={meta?.database ?? null} />
+    <>
+      <TopBar meta={meta} />
+      <main className="px-page-x pt-page-top pb-page-bottom">
         <Routes>
           <Route path="/" element={<FleetView />} />
           <Route path="/verdict/:id" element={<VerdictView />} />
           <Route path="/node/:id" element={<NodeView />} />
         </Routes>
-      </div>
-    </div>
+      </main>
+    </>
   )
 }
 

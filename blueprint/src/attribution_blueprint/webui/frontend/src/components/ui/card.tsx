@@ -1,18 +1,36 @@
+// SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// SPDX-License-Identifier: Apache-2.0
+
 import * as React from "react"
+import { Slot } from "radix-ui"
 
 import { cn } from "@/lib/utils"
 
+// The house Card with the padding moved from the card onto its slots: a flush
+// table or divided panes must reach the card's edges, which the house
+// card-level py plus slot gap cannot do (house framed shells override it with
+// py-0 gap-0). The spacing is the page's (the card-* values in globals.css):
+// the header is one line of the card-header height, its divider included (the
+// 13px title at 500, whatever sits beside it, and actions up to the 28px
+// control height at its right end, which the height leaves room above and
+// below for their focus ring), on the card-x inset, so a header with a control
+// is as tall as one without. A header too long for its line wraps, and its 4px
+// block padding keeps each wrapped line's text and controls, focus rings
+// included, off its edges. Content sits card-x from the sides and card-y from
+// the top and bottom; a footer is a line like the header. There is no
+// description slot: a card explains itself in a hint beside its title, never
+// in a second header line.
 function Card({
   className,
-  size = "default",
+  asChild = false,
   ...props
-}: React.ComponentProps<"div"> & { size?: "default" | "sm" }) {
+}: React.ComponentProps<"div"> & { asChild?: boolean }) {
+  const Comp = asChild ? Slot.Root : "div"
   return (
-    <div
+    <Comp
       data-slot="card"
-      data-size={size}
       className={cn(
-        "group/card flex flex-col gap-4 overflow-hidden rounded-xl bg-card py-4 text-sm text-card-foreground ring-1 ring-foreground/10 has-data-[slot=card-footer]:pb-0 has-[>img:first-child]:pt-0 data-[size=sm]:gap-3 data-[size=sm]:py-3 data-[size=sm]:has-data-[slot=card-footer]:pb-0 *:[img:first-child]:rounded-t-xl *:[img:last-child]:rounded-b-xl",
+        "group/card flex flex-col overflow-hidden rounded-md border border-border bg-background text-sm text-foreground",
         className
       )}
       {...props}
@@ -25,7 +43,7 @@ function CardHeader({ className, ...props }: React.ComponentProps<"div">) {
     <div
       data-slot="card-header"
       className={cn(
-        "group/card-header @container/card-header grid auto-rows-min items-start gap-1 rounded-t-xl px-4 group-data-[size=sm]/card:px-3 has-data-[slot=card-action]:grid-cols-[1fr_auto] has-data-[slot=card-description]:grid-rows-[auto_auto] [.border-b]:pb-4 group-data-[size=sm]/card:[.border-b]:pb-3",
+        "flex min-h-card-header flex-wrap items-center gap-x-2 gap-y-1 px-card-x py-1",
         className
       )}
       {...props}
@@ -33,35 +51,31 @@ function CardHeader({ className, ...props }: React.ComponentProps<"div">) {
   )
 }
 
-function CardTitle({ className, ...props }: React.ComponentProps<"div">) {
+function CardTitle({
+  className,
+  asChild = false,
+  ...props
+}: React.ComponentProps<"div"> & { asChild?: boolean }) {
+  // asChild lets a section render its title as the heading element.
+  const Comp = asChild ? Slot.Root : "div"
   return (
-    <div
+    <Comp
       data-slot="card-title"
-      className={cn(
-        "text-base leading-snug font-medium group-data-[size=sm]/card:text-sm",
-        className
-      )}
+      className={cn("text-sm font-medium", className)}
       {...props}
     />
   )
 }
 
-function CardDescription({ className, ...props }: React.ComponentProps<"div">) {
-  return (
-    <div
-      data-slot="card-description"
-      className={cn("text-sm text-muted-foreground", className)}
-      {...props}
-    />
-  )
-}
-
+// A header's actions end its line, and never widen the card: on a narrow
+// screen they take a line of their own and shrink to it, their contents
+// wrapping.
 function CardAction({ className, ...props }: React.ComponentProps<"div">) {
   return (
     <div
       data-slot="card-action"
       className={cn(
-        "col-start-2 row-span-2 row-start-1 self-start justify-self-end",
+        "ml-auto flex min-w-0 items-center",
         className
       )}
       {...props}
@@ -69,11 +83,18 @@ function CardAction({ className, ...props }: React.ComponentProps<"div">) {
   )
 }
 
-function CardContent({ className, ...props }: React.ComponentProps<"div">) {
+function CardContent({
+  className,
+  flush = false,
+  ...props
+}: React.ComponentProps<"div"> & {
+  /** Drops the padding so a table or list reaches the card edges and insets its own rows. */
+  flush?: boolean
+}) {
   return (
     <div
       data-slot="card-content"
-      className={cn("px-4 group-data-[size=sm]/card:px-3", className)}
+      className={cn(flush ? "p-0" : "px-card-x py-card-y", className)}
       {...props}
     />
   )
@@ -84,7 +105,7 @@ function CardFooter({ className, ...props }: React.ComponentProps<"div">) {
     <div
       data-slot="card-footer"
       className={cn(
-        "flex items-center rounded-b-xl border-t bg-muted/50 p-4 group-data-[size=sm]/card:p-3",
+        "flex min-h-card-header flex-wrap items-center gap-x-2 gap-y-1 px-card-x py-1",
         className
       )}
       {...props}
@@ -98,6 +119,5 @@ export {
   CardFooter,
   CardTitle,
   CardAction,
-  CardDescription,
   CardContent,
 }

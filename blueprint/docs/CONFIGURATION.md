@@ -61,6 +61,7 @@ uv run --project blueprint --frozen nvidia-attribution-blueprint \
 | `--config PATH`           | Yes        | TOML config file. When neither `--config` nor `--configs` is given, `./attribution-blueprint.toml` is used if it exists.                                                                                                                       |
 | `--configs DIR`           | Yes        | Directory of TOML configs. Runs every top-level `*.toml` file in sorted order, one attribution pass per file. Fails if the directory contains no top-level `.toml` files.                                                                      |
 | `--dump-observations DIR` | No         | Write collected observations to `DIR/<ctx-id>.<source>.json` before service-specific adaptation and submission. Multiple observations with the same context ID and source use the same path, so the last one replaces earlier dumps.           |
+| `--strict`                | No         | Exit 1 when any verdict has an `evidence_status` other than `complete`, including runs that collected zero observations. Conflicted contexts are not counted. Without it, the exit code ignores `evidence_status`.                             |
 
 
 Notes:
@@ -161,9 +162,13 @@ the Service.
 
 ### `[eca.kueue]`
 
-Use the Kueue adapter for Kubernetes batch workloads managed by Kueue. It shells
-out to `kubectl`, reads Kueue Workload objects, follows owner references to Job
-or JobSet pods, and normalizes the result into execution contexts.
+Use the Kueue adapter for Kubernetes batch workloads managed by Kueue. It uses
+the Kubernetes Python API client, reads Kueue Workload objects, follows owner
+references to Job or JobSet pods, and normalizes the result into execution
+contexts.
+
+Kueue no longer accepts `kubectl_path`. Remove that key from existing
+`[eca.kueue]` configuration; it remains valid only for `kubectl_logs`.
 
 Example:
 
@@ -172,7 +177,6 @@ Example:
 component = "kueue"
 
 [eca.kueue]
-kubectl_path = "kubectl"
 kubeconfig = "/path/to/kubeconfig"
 context = "prod-batch"
 namespace = "team-a"
@@ -199,11 +203,11 @@ uv run --project blueprint --frozen nvidia-attribution-blueprint --config ./attr
 | `start_time`             | Per run  | none            | ISO-8601 time for time-range mode.                                                                                |
 | `end_time`               | Per run  | none            | ISO-8601 time for time-range mode. Required with `start_time`.                                                    |
 | `nodelist`               | Per run  | none            | Optional comma-separated Kubernetes node names for time-range mode.                                               |
-| `kubectl_path`           | No       | `kubectl`       | Path to the `kubectl` binary.                                                                                     |
-| `kubeconfig`             | No       | kubectl default | Optional kubeconfig path.                                                                                         |
+| `kubeconfig`             | No       | client default  | Optional kubeconfig path. Without an explicit `kubeconfig` or `context`, uses `KUBECONFIG` or `~/.kube/config`, otherwise falls back to in-cluster credentials. |
 | `context`                | No       | current context | Optional kubeconfig context name.                                                                                 |
 | `namespace`              | No       | all namespaces  | Optional namespace scope. Also allows bare workload names in `ids` mode. Required when `placement_records_enabled` is set. |
-| `timeout_seconds`        | No       | `60`            | Timeout for each `kubectl` command.                                                                               |
+| `timeout_seconds`        | No       | `60`            | Timeout for each Kubernetes API request.                                                                          |
+| `workload_api_version`   | No       | `kueue.x-k8s.io/v1beta1` | Kueue Workload CRD `<group>/<version>` to read. Set this if the cluster serves a different Workload API version. |
 | `placement_records_enabled` | No    | `false`         | Reads retained placement from the configured recorder; discovery fails if the recorder cannot be read. Requires `namespace`, matching the one namespace the recorder watches. |
 
 
@@ -491,9 +495,11 @@ as `FAILED`, `UNKNOWN`, or an unrecognized scheduler-specific state fall back
 to `job failed`. Use the scheduler's real state, and do not use `state` to
 preselect the desired attribution outcome.
 
-`workload_type` identifies the workload manager to the service. The Kueue
-adapter sends `kueue` and also records `scheduler = "kueue"` internally for
-SQLite output. Service v2 accepts open string values.
+`workload_type` is the legacy free-form workload token sent as `workload.type`.
+Scheduler identity comes from the execution context's `scheduler` value, which
+Blueprint sends as `workload.scheduler` when it is a supported scheduler
+(`slurm` or `kueue`). Other values, such as `static`, are omitted and the service
+treats the scheduler as unknown.
 
 ### `[workload]`
 
@@ -577,13 +583,17 @@ The supported log sources are:
 - `applog`, application logs
 - `syslog`, system logs
 
+Every log connector sends one `entry_timeseries` entry per line. The entry
+shape and the per-source rules for a missing timestamp or node are in
+[Observation entry format](../../service/service-app/docs/api/observation-format.md).
+
 The supported log components are:
 
 - `local_file`, read files visible on the blueprint host
 - `loki`, query Loki over HTTP
 - `kubectl_logs`, collect Kubernetes pod logs for Kueue workloads
 
-
+Prefer [pre-shaped entries](#pre-shaped-entries) for `local_file`: a path ending in `.jsonl` is read as observation entries, one JSON object per line, each carrying its own timestamp and node. Raw log files are also accepted, as the per-source sections below describe.
 
 ### Evidence Coverage
 
@@ -599,6 +609,26 @@ The supported log components are:
 If logs are available for only some workload nodes, attribution has reduced
 evidence coverage for the missing nodes and may be unable to assign node
 responsibility accurately.
+
+### Pre-shaped Entries
+
+The most explicit way to feed `local_file`. Each line is one entry in the [Observation entry format](../../service/service-app/docs/api/observation-format.md), so the connector does not parse timestamps or infer nodes, and no per-node directories are needed. Works the same for `[log.applog.local_file]` and `[log.syslog.local_file]`:
+
+```toml
+[log.syslog.local_file]
+paths = ["/data/{job_id}/syslog.jsonl"]
+```
+
+```json
+{"ts": 1781135403000000000, "resources": [{"kind": "node", "hostname": "node-a"}], "body": "kernel: NVRM: Xid (PCI:0000:0f:00): 79, GPU has fallen off the bus."}
+```
+
+- Entries are forwarded as-is, with no timestamp or node rewriting and no time filtering
+- Blank lines are ignored
+- A file with a line that is not valid JSON is skipped, with a warning naming the file and line
+- The service validates the entry shape and rejects the observation if an entry is malformed; per-source rules for `ts` and `resources` are in [Observation entry format](../../service/service-app/docs/api/observation-format.md)
+- For `applog`, a `.jsonl` file inside a configured directory is read the same way; for `syslog`, the `.jsonl` file must be the configured path itself, and one found inside a node directory is skipped with a warning
+- `max_bytes` and the path placeholders below apply as for raw files
 
 ### Local File APPLOG
 
@@ -657,6 +687,8 @@ paths = ["/path/to/syslog"]
 ```
 
 For an execution context whose `nodes` are `["node-a", "node-b"]`, the connector reads regular files directly under `/path/to/syslog/node-a/` and `/path/to/syslog/node-b/`. Missing per-node directories are logged at debug level; the connector warns when no node directory is found under any configured base path. `max_bytes` behaves as for APPLOG (default `2GB`). Each emitted syslog observation uses `entry_timeseries`: one entry per line, dated from the line's own timestamp and tagged with the directory's node. Lines without a recognizable timestamp are dropped; see [Manually Collected Syslogs](use-cases/manually-collected-syslogs.md#syslog-file-format) for the accepted forms.
+
+A path ending in `.jsonl` is read as [pre-shaped entries](#pre-shaped-entries) instead, with no per-node directories.
 
 ### Loki SYSLOG Or APPLOG
 
@@ -777,8 +809,9 @@ for local file log collection.
 
 The Kueue adapter and `kubectl_logs` connector are configured independently.
 Settings under `[eca.kueue]` are not inherited by
-`[log.<source>.kubectl_logs]`. Repeat `kubectl_path`, `kubeconfig`, and
-`context` when both components must use the same non-default values.
+`[log.<source>.kubectl_logs]`. Repeat `kubeconfig` and `context` when both
+components must use the same non-default values; `kubectl_path` applies only to
+the log connector.
 
 Omitting `max_bytes_per_pod` keeps the default 16 MiB cap. It does not disable
 truncation. The current TOML configuration surface supports changing the cap,

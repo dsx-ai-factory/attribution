@@ -1,0 +1,66 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+# Workflow 1 of 2 for Fern doc previews.
+#
+# Collects the docs/ sources and PR metadata from the PR branch and uploads them
+# as an artifact. No secrets are used here.
+#
+# Only pull requests from branches in this repository are collected. The
+# companion workflow (fern-docs-preview-comment.yml) builds the preview with
+# FERN_TOKEN and Fern pages can read files outside docs/, so it must not build
+# content written by a fork. Skipping fork pull requests here avoids uploading an
+# artifact that the companion workflow would reject.
+#
+# The companion workflow treats the artifact as untrusted: it runs against fern/
+# from the default branch and copies in only this artifact's docs/. The rest of
+# the uploaded fern/ is ignored there.
+
+name: "Preview Fern Docs: Build"
+
+on:
+  pull_request:
+    paths:
+      - 'docs/**'
+      # The walkthrough is a separate Pages site, not part of the Fern docs.
+      - '!docs/attribution-tour/**'
+      - 'fern/**'
+      - '.github/workflows/fern-docs-preview-build.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  collect:
+    if: ${{ github.event.pull_request.head.repo.full_name == github.repository }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout PR
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Save PR metadata
+        env:
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          mkdir -p preview-metadata
+          echo "$PR_NUMBER" > preview-metadata/pr_number
+          git diff --name-only "origin/${BASE_REF}...HEAD" -- '*.md' > preview-metadata/changed_md_files 2>/dev/null || true
+
+      - name: Upload fern sources and metadata
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: fern-preview
+          path: |
+            fern/
+            docs/
+            preview-metadata/
+          retention-days: 1

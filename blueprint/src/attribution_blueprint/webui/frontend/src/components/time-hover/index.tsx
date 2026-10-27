@@ -1,77 +1,87 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-// SPDX-License-Identifier: LicenseRef-NvidiaProprietary
+// SPDX-License-Identifier: Apache-2.0
 
-import { useId, type ReactNode } from 'react'
+import { useId } from 'react'
 import dayjs from 'dayjs'
 import utc from 'dayjs/plugin/utc'
 import timezone from 'dayjs/plugin/timezone'
 import { HoverCard, HoverCardContent, HoverCardTrigger } from '@/components/ui/hover-card'
-import { cn } from '@/lib/utils'
+import { NoValue } from '@/components/field'
+import { parseUtc, STAMP_FORMAT } from '@/lib/time'
+import { cn, focusRing } from '@/lib/utils'
 
 dayjs.extend(utc)
 dayjs.extend(timezone)
 
-const DEFAULT_FORMAT = 'YYYY-MM-DD HH:mm:ss'
-
-/**
- * Hover- and focus-driven local↔UTC time popover. Renders UTC inline with a
- * small muted "UTC" suffix; the panel shows UTC + local with IANA zone.
- * Pass omitSuffix when the surrounding text already carries (UTC) once.
- */
+// The house DateParser: a timestamp whose hover card gives it in UTC and in
+// the reader's own zone, its columns 12px and its rows 6px apart at the
+// compact density, sized by its content, inset 12px as every hover card is;
+// under 640px each zone stands over its reading, so a long zone name
+// ("America/Los_Angeles") never outruns a narrow window's card.
+// Tuned: every time the app shows is this one stamp, whatever holds it (a
+// page fact, a table cell, a log line), as the evidence it copies writes it
+// (lib/evidence): the full 24-hour ISO-style date and time in UTC with its
+// muted " UTC" mark, where the house DateParser shortens by age and reads in
+// the local zone. So no caller picks a format or drops the mark, and no two
+// times on a page read differently. The trigger is a <time> carrying the
+// recorded string, focusable so the card opens from the keyboard too, except
+// in a list of lines (a log), where each line's time would be one more stop
+// and the list's own scrolling is its stop, as the house DateParser's trigger
+// is never one; a help cursor and a brighter hover color instead of the house
+// pointer and dashed hover underline, since the time is not a link; the stamp
+// itself is a number (mono, tabular) while its mark is muted text. The local
+// reading is the trigger's description through aria-describedby, so it does
+// not depend on hovering, save for a log line's time, which is no stop of its
+// own: there, as on the house DateParser, the card alone gives it. Its source
+// is hidden, not sr-only, as InfoHint's
+// definition is: sr-only text is still page text, so it was read once in place
+// and again as the description, while aria-describedby reads hidden text all
+// the same.
+// A recorded time without a zone is UTC, as the server reads it (parseUtc).
+// A time that does not parse is said to be unavailable by the empty-value
+// rule of its slot: the word in a key-value row, the shared muted dash (read
+// as "Unavailable") in a table cell, as every empty cell is.
 export function TimeHover({
   date,
-  format = DEFAULT_FORMAT,
-  children,
-  omitSuffix = false,
-  className,
+  cell = false,
+  focusable = true,
 }: {
-  date: string | number | Date
-  format?: string
-  children?: ReactNode
-  omitSuffix?: boolean
-  className?: string
+  /** The time as recorded; kept verbatim in dateTime. */
+  date: string
+  /** The time fills a table cell. */
+  cell?: boolean
+  /** False for a line's time in a list of lines, which takes no tab stop of its own. */
+  focusable?: boolean
 }) {
   const descriptionId = useId()
-  const instant = dayjs(date)
+  const instant = parseUtc(date)
   if (!instant.isValid()) {
-    return <span className={cn('text-foreground-muted', className)}>Unavailable</span>
+    return cell ? <NoValue label="Unavailable" /> : <span className="text-foreground-muted">Unavailable</span>
   }
 
-  const utcText = instant.utc().format(format)
-  const localText = instant.format(format)
-  const localTz = dayjs.tz.guess()
+  const utcDetail = instant.format(STAMP_FORMAT)
+  const localDetail = instant.local().format(STAMP_FORMAT)
+  const localZone = dayjs.tz.guess()
 
   return (
-    <HoverCard openDelay={150} closeDelay={75}>
+    <HoverCard openDelay={150} closeDelay={100}>
       <HoverCardTrigger asChild>
-        <span tabIndex={0} aria-describedby={descriptionId} className={cn('underline decoration-dotted decoration-foreground-muted underline-offset-2 hover:decoration-primary focus-visible:outline-1 focus-visible:outline-offset-2 focus-visible:outline-foreground-muted', className)}>
-          {children ?? (
-            <>
-              {utcText}
-              {!omitSuffix && (
-                <span className="text-foreground-muted text-[10px] ml-0.5 tracking-wide">
-                  UTC
-                </span>
-              )}
-            </>
-          )}
-        </span>
+        <time
+          dateTime={date}
+          tabIndex={focusable ? 0 : undefined}
+          aria-describedby={descriptionId}
+          className={cn('cursor-help rounded-xs text-nowrap transition-colors hover:text-foreground', focusRing)}
+        >
+          <span className="num">{utcDetail}</span> <span className="text-foreground-muted">UTC</span>
+        </time>
       </HoverCardTrigger>
-      <span id={descriptionId} className="sr-only">Local time: {localText} ({localTz})</span>
-      <HoverCardContent
-        align="start"
-        sideOffset={6}
-        className="w-auto p-2 bg-background-secondary border-border ring-0"
-      >
-        <div className="grid grid-flow-col auto-cols-auto gap-4 font-mono text-xs text-foreground whitespace-nowrap">
-          <div className="flex flex-col gap-1 text-foreground-muted">
-            <span>UTC</span>
-            <span>{localTz}</span>
-          </div>
-          <div className="flex flex-col gap-1 text-foreground">
-            <span>{utcText}</span>
-            <span>{localText}</span>
-          </div>
+      <span id={descriptionId} hidden>Local time: {localDetail} ({localZone})</span>
+      <HoverCardContent size="auto">
+        <div className="grid grid-cols-1 gap-x-3 sm:grid-cols-[auto_auto] sm:gap-y-1.5">
+          <span className="text-foreground-muted">UTC</span>
+          <span className="num text-nowrap text-foreground">{utcDetail}</span>
+          <span className="mt-1.5 wrap-anywhere text-foreground-muted sm:mt-0">{localZone}</span>
+          <span className="num text-nowrap text-foreground">{localDetail}</span>
         </div>
       </HoverCardContent>
     </HoverCard>

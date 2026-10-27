@@ -1,18 +1,11 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-# SPDX-License-Identifier: LicenseRef-NvidiaProprietary
-#
-# NVIDIA CORPORATION, its affiliates and licensors retain all intellectual
-# property and proprietary rights in and to this material, related
-# documentation and any modifications thereto. Any use, reproduction,
-# disclosure or distribution of this material and related documentation
-# without an express license agreement from NVIDIA CORPORATION or
-# its affiliates is strictly prohibited.
+# SPDX-License-Identifier: Apache-2.0
 
 [project]
 name = "attribution-lib"
-version = "0.4.1.dev140"
+dynamic = ["version"]
 description = "NVIDIA Attribution Library"
-license = "LicenseRef-NvidiaProprietary"
+license = "Apache-2.0"
 license-files = ["LICENSE"]
 readme = "README.md"
 requires-python = ">=3.11"
@@ -29,29 +22,19 @@ dependencies = [
 ]
 
 [build-system]
-requires = ["setuptools>=41", "wheel", "packaging>=24"]
-build-backend = "setuptools.build_meta"
+requires = ["hatchling>=1.27"]
+build-backend = "hatchling.build"
 
+[tool.hatch.version]
+source = "code"
+path = "src/_build_version.py"
+expression = "build_version()"
 
-[tool.setuptools]
-py-modules = ["_attribution_lib_version"]
+[tool.hatch.build.targets.sdist]
+only-include = ["src", "LICENSE", "README.md"]
 
-[tool.setuptools.packages.find]
-where = ["src"]
-
-[tool.setuptools.package-data]
-attribution_lib = [
-    "rules/*.csv",
-    "rules/*.json",
-    "bundled_rules/*.py",
-    "bundled_rules/*.toml",
-    "bundled_rules/*.json",
-    "bundled_rules/*.csv",
-    "bundled_rules/common/*.py",
-    "py.typed",
-]
-"attribution_lib.regex_accelerator" = ["py.typed"]
-"attribution_lib.xid_analyzer" = ["*.json"]
+[tool.hatch.build.targets.wheel]
+packages = ["src/attribution_lib"]
 
 [dependency-groups]
 dev = [

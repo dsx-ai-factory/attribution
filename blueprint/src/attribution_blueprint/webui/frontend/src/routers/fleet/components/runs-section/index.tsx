@@ -1,207 +1,131 @@
-import { Fragment, useMemo, useState } from 'react'
-import { ChevronLeft, ChevronRight } from 'lucide-react'
+// SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// SPDX-License-Identifier: Apache-2.0
+
+import { Fragment, useId, useMemo, useState } from 'react'
+import { ChevronDown } from 'lucide-react'
 import type { OutcomeKey, RunSummary } from '@/interfaces/attribution'
 import type { FleetFilter } from '@/interfaces/filter'
 import type { PageByOutcome, RunsTableGroup } from '@/hooks/use-runs-table'
+import { OUTCOMES, OUTCOME_ORDER } from '@/lib/attribution-data'
+import { counted } from '@/lib/format'
 import { Badge } from '@/components/ui/badge'
-import { Button } from '@/components/ui/button'
-import { ScrollArea, ScrollBar } from '@/components/ui/scroll-area'
+import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from '@/components/ui/empty'
+import { Skeleton } from '@/components/ui/skeleton'
 import {
   Table,
   TableBody,
   TableCell,
   TableHead,
   TableHeader,
+  TableMessage,
   TableRow,
 } from '@/components/ui/table'
-import { OutcomeChip } from '@/components/chip'
-import { RunsToolbar } from '@/routers/fleet/components/runs-toolbar'
-import { DefHover } from '@/components/def-hover'
-import { JobHoverCard } from '@/components/job-hover-card'
+import { RouterLink } from '@/components/ui/router-link'
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
+import { OutcomeDot } from '@/components/outcome'
+import { Identifier, NoValue } from '@/components/field'
+import { InfoHint } from '@/components/info-hint'
 import { NodeHoverCard } from '@/components/node-hover-card'
+import { SectionCard } from '@/components/section-card'
+import { TablePagination } from '@/components/table-pagination'
 import { TimeHover } from '@/components/time-hover'
+import { ActiveFilters, RunsToolbar } from '@/routers/fleet/components/runs-toolbar'
 import { attemptGpuHours } from '@/lib/metric'
 import { isWindowed } from '@/lib/date-window'
+import { focusRing } from '@/lib/utils'
 import { useNav } from '@/hooks/use-nav'
+import { shouldActivateRow } from '@/lib/row-activation'
+import { navigateService } from '@/services/navigate.service'
 import { DecisionGraphAction } from '@/routers/verdict/components/decision-graph/dialog'
 
-const OUTCOME_ORDER: { key: OutcomeKey; label: string; dot: string }[] = [
-  { key: 'hardware', label: 'Hardware Fault',        dot: 'bg-red-400' },
-  { key: 'software', label: 'System Software Fault', dot: 'bg-blue-400' },
-  { key: 'multi',    label: 'Ambiguous Fault',       dot: 'bg-zinc-400' },
-  { key: 'user',     label: 'Application Fault',     dot: 'bg-yellow-400' },
-  { key: 'undetermined', label: 'Unattributed',    dot: 'bg-purple-500' },
-  { key: 'pass',     label: 'Pass',                  dot: 'bg-primary' },
-]
-
-const COL_COUNT = 10
-const PAGE_SIZE_OPTIONS = [10, 25, 50]
+const COL_COUNT = 8
+const PAGE_SIZE_OPTIONS = [10, 25, 50] as const
 const RESPONSIBLE_NODE_INLINE_LIMIT = 3
 
-function RunColumnHeaders({ className = '' }: { className?: string }) {
+// Up to three responsible nodes as links, the rest behind a +N button. A node
+// is a recorded identifier of any length (a cloud node name runs to 40
+// characters): its link wraps after its separators, the list onto further
+// lines, so neither widens the table.
+function ResponsibleNodes({ nodes }: { nodes: string[] }) {
+  if (nodes.length === 0) return <NoValue />
+  const inline = nodes.slice(0, RESPONSIBLE_NODE_INLINE_LIMIT)
+  const rest = nodes.slice(RESPONSIBLE_NODE_INLINE_LIMIT)
   return (
-    <TableRow className={className}>
-      <TableHead className="w-36">
-        <DefHover term="end-time-utc">End time (UTC)</DefHover>
-      </TableHead>
-      <TableHead>Execution Context</TableHead>
-      <TableHead className="w-14">Att</TableHead>
-      <TableHead>User</TableHead>
-      <TableHead className="w-28">
-        <DefHover term="outcome">Outcome</DefHover>
-      </TableHead>
-      <TableHead className="w-14 text-right">GPUs</TableHead>
-      <TableHead className="w-24 text-right">
-        <DefHover term="gpu-hours">GPU-hours</DefHover>
-      </TableHead>
-      <TableHead>
-        <DefHover term="root-symptom">Root symptom</DefHover>
-      </TableHead>
-      <TableHead>
-        <DefHover term="responsible-nodes">Responsible nodes</DefHover>
-      </TableHead>
-      <TableHead className="w-16 text-center font-sans">Actions</TableHead>
-    </TableRow>
+    <ul className="flex flex-wrap items-start gap-x-1.5 gap-y-1">
+      {inline.map((node, index) => (
+        <li key={node} className="min-w-0">
+          <NodeHoverCard nodeId={node}>
+            <RouterLink to={navigateService.getPath('node', { id: node })}><Identifier>{node}</Identifier></RouterLink>
+          </NodeHoverCard>
+          {(index < inline.length - 1 || rest.length > 0) && <span aria-hidden="true">,</span>}
+        </li>
+      ))}
+      {rest.length > 0 && (
+        <li>
+          {/* A button, so it takes focus and carries its name as a control; it only opens the list. */}
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Badge asChild variant="zinc-subtle">
+                <button
+                  type="button"
+                  aria-label={`${counted(rest.length, 'more responsible node', 'more responsible nodes')}: ${rest.join(', ')}`}
+                >
+                  {`+${rest.length}`}
+                </button>
+              </Badge>
+            </TooltipTrigger>
+            <TooltipContent>
+              <ul className="flex flex-col gap-1">
+                {rest.map((node) => <li key={node}>{node}</li>)}
+              </ul>
+            </TooltipContent>
+          </Tooltip>
+        </li>
+      )}
+    </ul>
   )
 }
 
 function RunRow({ r }: { r: RunSummary }) {
   const nav = useNav()
-  const visibleResponsibleNodes = r.responsibleNodes.slice(0, RESPONSIBLE_NODE_INLINE_LIMIT)
-  const hasMoreResponsibleNodes = r.responsibleNodes.length > visibleResponsibleNodes.length
   return (
     <TableRow
       onClick={(event) => {
-        // Portaled dialogs and tooltips are not part of the clickable row.
-        if (event.currentTarget.contains(event.target as Node)) nav('verdict', { id: r.id })
+        if (shouldActivateRow(event)) nav('verdict', { id: r.id })
       }}
-      className="cursor-pointer group"
+      className="cursor-pointer"
     >
-      <TableCell className="font-mono text-xs text-foreground">
-        <TimeHover date={r.endTime} />
-      </TableCell>
-      <TableCell className="font-mono text-xs text-foreground group-hover:text-primary">
-        <JobHoverCard run={r} linkable>
-          <span>{r.jobId}</span>
-        </JobHoverCard>
-      </TableCell>
-      <TableCell className="font-mono text-xs">
-        <span className="text-foreground-secondary">{r.attempt}</span>
-      </TableCell>
-      <TableCell className="text-foreground-secondary">{r.user}</TableCell>
       <TableCell>
-        <div className="flex items-center">
-          <OutcomeChip outcome={r.outcome} />
-        </div>
+        <TimeHover date={r.endTime} cell />
       </TableCell>
-      <TableCell className="font-mono text-foreground text-right">{r.gpuCount}</TableCell>
-      <TableCell className="font-mono text-foreground text-right">
-        {attemptGpuHours(r).toFixed(2)}
+      {/* The execution context, user, root symptom and responsible nodes are
+          recorded identifiers of any length: they wrap in their columns (the
+          context and the nodes as inline links) so the table fits its card
+          instead of running past it. */}
+      <TableCell wrap>
+        <RouterLink to={navigateService.getPath('verdict', { id: r.id })}><Identifier>{r.jobId}</Identifier></RouterLink>
       </TableCell>
-      <TableCell className="font-mono text-xs text-foreground">
-        {r.rootSymptom.symptom}
+      <TableCell wrap>{r.user ? <Identifier>{r.user}</Identifier> : <NoValue />}</TableCell>
+      <TableCell className="num text-right">{r.gpuCount}</TableCell>
+      <TableCell className="num text-right">{attemptGpuHours(r).toFixed(2)}</TableCell>
+      <TableCell wrap>{r.rootSymptom.symptom ? <Identifier>{r.rootSymptom.symptom}</Identifier> : <NoValue />}</TableCell>
+      <TableCell wrap>
+        <ResponsibleNodes nodes={r.responsibleNodes} />
       </TableCell>
-      <TableCell className="font-mono text-xs">
-        {r.responsibleNodes.length > 0 ? (
-          <span className="inline-flex flex-wrap gap-x-1.5" title={r.responsibleNodes.join(', ')}>
-            {visibleResponsibleNodes.map((n, i) => (
-              <NodeHoverCard key={n} nodeId={n}>
-                <a
-                  onClick={(e) => {
-                    e.stopPropagation()
-                    nav('node', { id: n })
-                  }}
-                  className="text-foreground hover:text-primary"
-                >
-                  {n}
-                  {i < visibleResponsibleNodes.length - 1 || hasMoreResponsibleNodes ? ',' : ''}
-                </a>
-              </NodeHoverCard>
-            ))}
-            {hasMoreResponsibleNodes && <span className="text-foreground-muted">...</span>}
-          </span>
-        ) : (
-          <span aria-label="no responsible nodes" className="text-zinc-700 select-none">·</span>
-        )}
-      </TableCell>
-      <TableCell className="py-1">
-        <div className="flex justify-center">
-          <DecisionGraphAction run={r} compact />
-        </div>
+      <TableCell>
+        <DecisionGraphAction run={r} compact />
       </TableCell>
     </TableRow>
   )
 }
 
-function PaginationRow({
-  label,
-  page,
-  pageSize,
-  total,
-  onPageChange,
-  onPageSizeChange,
-}: {
-  label: string
-  page: number
-  pageSize: number
-  total: number
-  onPageChange: (page: number) => void
-  onPageSizeChange: (pageSize: number) => void
-}) {
-  const pageCount = Math.ceil(total / pageSize)
-  const start = page * pageSize
-  const end = Math.min(start + pageSize, total)
-
-  return (
-    <TableRow className="bg-background-secondary hover:bg-background-secondary">
-      <TableCell colSpan={COL_COUNT} className="py-2">
-        <div className="flex items-center justify-end gap-3 font-mono text-xs text-foreground-secondary">
-          <label className="flex items-center gap-1.5">
-            <span>Records per page:</span>
-            <select
-              value={pageSize}
-              onChange={(event) => onPageSizeChange(Number(event.target.value))}
-              className="bg-card border border-border rounded-sm px-1.5 py-0.5 text-foreground focus:outline-none focus:border-zinc-700"
-              aria-label={`${label} records per page`}
-            >
-              {PAGE_SIZE_OPTIONS.map((option) => (
-                <option key={option} value={option}>
-                  {option}
-                </option>
-              ))}
-            </select>
-          </label>
-          <span>
-            {total === 0 ? '0-0' : `${start + 1}-${end}`} of {total}
-          </span>
-          <div className="flex items-center gap-1">
-            <Button
-              type="button"
-              variant="ghost"
-              size="icon-xs"
-              disabled={page === 0}
-              aria-label={`Previous ${label} page`}
-              onClick={() => onPageChange(page - 1)}
-            >
-              <ChevronLeft className="size-3" />
-            </Button>
-            <Button
-              type="button"
-              variant="ghost"
-              size="icon-xs"
-              disabled={page >= pageCount - 1}
-              aria-label={`Next ${label} page`}
-              onClick={() => onPageChange(page + 1)}
-            >
-              <ChevronRight className="size-3" />
-            </Button>
-          </div>
-        </div>
-      </TableCell>
-    </TableRow>
-  )
-}
-
+// While rows load, the groups already known for this filter (their headers,
+// totals and pagination, which do not depend on the page shown) stay mounted,
+// so a page or page-size control keeps focus, and only the rows wait. With no
+// known group (a new filter, or the first load), placeholder rows stand in for
+// the whole list. The section's count, like the page's, waits for the rows. A
+// fetch that failed with no runs to show states no count and says it failed,
+// so it never reads as a view with no runs.
 export function RunsSection({
   groups,
   matchingRuns,
@@ -213,6 +137,7 @@ export function RunsSection({
   setPageSize,
   setGroupPage,
   loading = false,
+  failed = false,
   databaseEmpty = false,
 }: {
   groups: RunsTableGroup[]
@@ -225,16 +150,19 @@ export function RunsSection({
   setPageSize: (next: number) => void
   setGroupPage: (outcome: OutcomeKey, page: number) => void
   loading?: boolean
+  /** The runs could not be fetched and none are shown. */
+  failed?: boolean
   databaseEmpty?: boolean
 }) {
   const [collapsed, setCollapsed] = useState<Set<OutcomeKey>>(new Set())
+  const groupIdPrefix = useId()
 
   const displayGroups = useMemo(
     () =>
-      OUTCOME_ORDER.flatMap((g) => {
-        const group = groups.find((candidate) => candidate.outcome === g.key)
+      OUTCOME_ORDER.flatMap((key) => {
+        const group = groups.find((candidate) => candidate.outcome === key)
         if (!group) return []
-        return [{ ...g, ...group, rows: group.runs }]
+        return [{ key, label: OUTCOMES[key].label, ...group }]
       }),
     [groups],
   )
@@ -242,7 +170,7 @@ export function RunsSection({
   const windowed = isWindowed(filter)
   const hints = databaseEmpty ? [] : [
     filter.outcome || filter.symptom || filter.node || filter.rule || filter.user || filter.q
-      ? 'clear the active filter chips above'
+      ? 'clear the active filters above'
       : null,
     filter.status === 'failed' ? 'uncheck "Hide passing runs"' : null,
     windowed ? 'widen the date range' : null,
@@ -258,96 +186,140 @@ export function RunsSection({
   }
 
   return (
-    <div>
-      <RunsToolbar runs={matchingRuns} filteredRuns={visibleRuns} filter={filter} setFilter={setFilter} />
-
-      <ScrollArea className="border border-border rounded-md bg-card">
-        <Table>
-          <TableHeader>
-            <RunColumnHeaders />
-          </TableHeader>
-          <TableBody>
-            {loading ? (
-              Array.from({ length: 6 }).map((_, i) => (
-                <TableRow key={`sk-${i}`}>
-                  <TableCell colSpan={COL_COUNT} className="py-2.5">
-                    <div className="h-3 w-full bg-background-muted rounded-sm animate-pulse" />
-                  </TableCell>
-                </TableRow>
-              ))
-            ) : matchingRuns === 0 ? (
-              <TableRow>
-                <TableCell
-                  colSpan={COL_COUNT}
-                  className="text-foreground-muted text-center py-8"
-                >
-                  <div className="font-mono text-sm text-foreground mb-1">
-                    {databaseEmpty ? 'No runs in this database' : 'No runs in this view'}
-                  </div>
-                  {hints.length > 0 && <div className="text-xs">Try to {hints.join(', or ')}.</div>}
+    <SectionCard
+      id="runs-section"
+      tabIndex={-1}
+      title="Runs"
+      count={loading || failed ? undefined : matchingRuns.toLocaleString()}
+      action={<RunsToolbar filteredRuns={visibleRuns} filter={filter} setFilter={setFilter} />}
+      flush
+    >
+      <ActiveFilters filter={filter} setFilter={setFilter} />
+      <Table>
+        <TableHeader>
+          <TableRow>
+            <TableHead>End time</TableHead>
+            <TableHead>Execution context</TableHead>
+            <TableHead>User</TableHead>
+            <TableHead className="text-right">GPUs</TableHead>
+            <TableHead className="text-right">
+              GPU-hours <InfoHint term="gpu-hours" />
+            </TableHead>
+            <TableHead>Root symptom</TableHead>
+            <TableHead>Responsible nodes</TableHead>
+            <TableHead>
+              <span className="sr-only">Attribution logic</span>
+            </TableHead>
+          </TableRow>
+        </TableHeader>
+        {loading && displayGroups.length === 0 ? (
+          <TableBody aria-busy="true">
+            {Array.from({ length: 6 }, (_, i) => (
+              <TableRow key={i}>
+                <TableCell colSpan={COL_COUNT}>
+                  <Skeleton height="5" />
                 </TableCell>
               </TableRow>
-            ) : (
-              displayGroups.map((g) => {
-                const isCollapsed = collapsed.has(g.key)
-                const shouldPaginate = g.total > pageSize
-                const pageCount = Math.ceil(g.total / pageSize)
-                const page = shouldPaginate
-                  ? Math.min(
-                      Math.max(pageByOutcome[g.key] ?? 0, 0),
-                      pageCount - 1,
-                    )
-                  : 0
-                return (
-                  <Fragment key={g.key}>
-                    <TableRow
-                      onClick={() => toggleCollapse(g.key)}
-                      className="cursor-pointer bg-background-secondary hover:bg-background-muted"
-                    >
-                      <TableCell
-                        colSpan={COL_COUNT}
-                        className="font-mono text-xs uppercase tracking-widest text-foreground py-2"
+            ))}
+          </TableBody>
+        ) : failed || matchingRuns === 0 ? (
+          <TableBody>
+            <TableMessage colSpan={COL_COUNT}>
+              <Empty size="sm">
+                <EmptyHeader>
+                  {failed ? (
+                    <>
+                      <EmptyTitle>Runs could not be loaded</EmptyTitle>
+                      <EmptyDescription>Refresh to try again.</EmptyDescription>
+                    </>
+                  ) : (
+                    <>
+                      <EmptyTitle>{databaseEmpty ? 'No runs in this database' : 'No runs in this view'}</EmptyTitle>
+                      {databaseEmpty ? (
+                        <EmptyDescription>Nothing has been attributed yet.</EmptyDescription>
+                      ) : hints.length > 0 && (
+                        <EmptyDescription>{`Try to ${hints.join(', or ')}.`}</EmptyDescription>
+                      )}
+                    </>
+                  )}
+                </EmptyHeader>
+              </Empty>
+            </TableMessage>
+          </TableBody>
+        ) : (
+          displayGroups.map((g) => {
+            const isCollapsed = collapsed.has(g.key)
+            const rowsId = `${groupIdPrefix}-${g.key}`
+            const pageCount = Math.ceil(g.total / pageSize)
+            const page = Math.min(Math.max(pageByOutcome[g.key] ?? 0, 0), pageCount - 1)
+            const rowsOnPage = Math.min(pageSize, g.total - page * pageSize)
+            return (
+              <Fragment key={g.key}>
+                {/* The group header: one full-width disclosure button per outcome, on the
+                    top of the cell's line, since its leading chevron gives it no text baseline. */}
+                <TableBody>
+                  <TableRow
+                    onClick={(event) => {
+                      if (shouldActivateRow(event)) toggleCollapse(g.key)
+                    }}
+                    className="cursor-pointer bg-background-secondary"
+                  >
+                    <TableCell colSpan={COL_COUNT}>
+                      <button
+                        type="button"
+                        aria-expanded={!isCollapsed}
+                        aria-controls={rowsId}
+                        onClick={() => toggleCollapse(g.key)}
+                        className={`inline-flex cursor-pointer items-center gap-2 rounded-sm align-top font-medium text-foreground ${focusRing}`}
                       >
-                        <span className="inline-flex items-center gap-2">
-                          <ChevronRight
-                            className={`size-3 transition-transform ${
-                              isCollapsed ? '' : 'rotate-90'
-                            } text-foreground-muted`}
-                          />
-                          <span className={`inline-block size-2 rounded-sm ${g.dot}`} />
-                            {g.label}
-                          <Badge
-                            variant="outline"
-                            className="font-mono text-foreground-secondary ml-1"
-                          >
-                            {g.total}
-                          </Badge>
-                        </span>
+                        <ChevronDown
+                          aria-hidden="true"
+                          className={`size-3.5 text-foreground-muted transition-transform motion-reduce:transition-none ${isCollapsed ? '-rotate-90' : ''}`}
+                        />
+                        <OutcomeDot outcome={g.key} />
+                        {g.label}{' '}
+                        <span className="font-normal text-foreground-muted tabular-nums">{g.total.toLocaleString()}</span>
+                      </button>
+                    </TableCell>
+                  </TableRow>
+                </TableBody>
+                <TableBody id={rowsId} hidden={isCollapsed} aria-busy={loading || undefined}>
+                  {loading
+                    ? Array.from({ length: rowsOnPage }, (_, i) => (
+                        <TableRow key={i}>
+                          <TableCell colSpan={COL_COUNT}>
+                            <Skeleton height="5" />
+                          </TableCell>
+                        </TableRow>
+                      ))
+                    : g.runs.map((r) => <RunRow key={r.id} r={r} />)}
+                  {/* The pager stays for any group the smallest page size would
+                      page, so choosing a size that fits the whole group keeps
+                      the select, and the keyboard focus on it, in place. */}
+                  {g.total > PAGE_SIZE_OPTIONS[0] && (
+                    <TableRow className="hover:bg-transparent">
+                      <TableCell colSpan={COL_COUNT}>
+                        <TablePagination
+                          aria-label={`${g.label} pages`}
+                          label={g.label}
+                          itemLabel="runs"
+                          controlsId={rowsId}
+                          page={page}
+                          pageSize={pageSize}
+                          total={g.total}
+                          onPageChange={(nextPage) => setGroupPage(g.key, nextPage)}
+                          pageSizeOptions={PAGE_SIZE_OPTIONS}
+                          onPageSizeChange={setPageSize}
+                        />
                       </TableCell>
                     </TableRow>
-                    {!isCollapsed && (
-                      <RunColumnHeaders className="bg-card hover:bg-card [&>th]:h-8 [&>th]:text-[11px] [&>th]:text-foreground-muted" />
-                    )}
-                    {!isCollapsed &&
-                      g.rows.map((r) => <RunRow key={r.id} r={r} />)}
-                    {!isCollapsed && shouldPaginate && (
-                      <PaginationRow
-                        label={g.label}
-                        page={page}
-                        pageSize={pageSize}
-                        total={g.total}
-                        onPageChange={(nextPage) => setGroupPage(g.key, nextPage)}
-                        onPageSizeChange={setPageSize}
-                      />
-                    )}
-                  </Fragment>
-                )
-              })
-            )}
-          </TableBody>
-        </Table>
-        <ScrollBar orientation="horizontal" />
-      </ScrollArea>
-    </div>
+                  )}
+                </TableBody>
+              </Fragment>
+            )
+          })
+        )}
+      </Table>
+    </SectionCard>
   )
 }

@@ -1,12 +1,5 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-# SPDX-License-Identifier: LicenseRef-NvidiaProprietary
-#
-# NVIDIA CORPORATION, its affiliates and licensors retain all intellectual
-# property and proprietary rights in and to this material, related
-# documentation and any modifications thereto. Any use, reproduction,
-# disclosure or distribution of this material and related documentation
-# without an express license agreement from NVIDIA CORPORATION or
-# its affiliates is strictly prohibited.
+# SPDX-License-Identifier: Apache-2.0
 
 from datetime import datetime, timedelta
 from unittest.mock import Mock
@@ -15,6 +8,7 @@ from zoneinfo import ZoneInfo
 import pytest
 
 from attribution_lib.exceptions import (
+    InvalidTimeIntervalError,
     UnknownObservationFormatError,
     UnknownObservationSourceError,
     UnknownResourceError,
@@ -58,19 +52,16 @@ LINE_NAMING_JOB_NODE = (
 
 
 @pytest.fixture
-def applog_context(time_interval, job_resources, timezone):
+def applog_context(time_interval, timezone):
     """Standard APPLOG context fixture."""
-    return InboundContext(
-        time_interval, job_resources, ObservationSource.APPLOG, ObservationFormat.ENTRY_TIMESERIES, timezone
-    )
+    return InboundContext(time_interval, ObservationSource.APPLOG, ObservationFormat.ENTRY_TIMESERIES, timezone)
 
 
 @pytest.fixture
-def timeseries_context(job_resources, timezone):
+def timeseries_context(timezone):
     """The format declares its own window, so these tests pin it open and let each entry carry its own ts."""
     return InboundContext(
         TimeInterval(None, None),
-        job_resources,
         ObservationSource.SYSLOG,
         ObservationFormat.ENTRY_TIMESERIES,
         timezone,
@@ -133,13 +124,21 @@ class TestTimeInterval:
         interval2 = TimeInterval(time_interval.start, time_interval.end)
         assert hash(time_interval) == hash(interval2)
 
+    def test_start_after_end_rejected(self, time_interval):
+        with pytest.raises(InvalidTimeIntervalError):
+            TimeInterval(time_interval.end, time_interval.start)
+
+    def test_equal_or_null_bounds_accepted(self, time_interval):
+        TimeInterval(time_interval.start, time_interval.start)
+        TimeInterval(None, time_interval.end)
+        TimeInterval(time_interval.start, None)
+
 
 class TestInboundContext:
     def test_equality(self, applog_context):
         context1 = applog_context
         context2 = InboundContext(
             applog_context.time_interval,
-            applog_context.resources,
             applog_context.source,
             applog_context.format,
             applog_context.timezone,
@@ -148,7 +147,6 @@ class TestInboundContext:
 
         different_context = InboundContext(
             applog_context.time_interval,
-            applog_context.resources,
             ObservationSource.SYSLOG,  # Different source
             applog_context.format,
             applog_context.timezone,
@@ -159,7 +157,6 @@ class TestInboundContext:
         context1 = applog_context
         context2 = InboundContext(
             applog_context.time_interval,
-            applog_context.resources,
             applog_context.source,
             applog_context.format,
             applog_context.timezone,
@@ -191,15 +188,13 @@ class TestObservation:
         observation2 = Observation.from_inbound(applog_context, ["line1"])
         assert observation1.context.id == observation2.context.id
 
-    def test_hash_with_undefined_format(self, time_interval, job_resources, timezone):
+    def test_hash_with_undefined_format(self, time_interval, timezone):
         """Test hashing observation with undefined format raises exception"""
-        context = InboundContext(
-            time_interval, job_resources, ObservationSource.APPLOG, ObservationFormat.UNDEFINED, timezone
-        )
+        context = InboundContext(time_interval, ObservationSource.APPLOG, ObservationFormat.UNDEFINED, timezone)
         with pytest.raises(UnknownObservationSourceError):
             _ = Observation.from_inbound(context, ["line1"])
 
-    def test_make_source_unknown_formats(self, time_interval, job_resources, timezone):
+    def test_make_source_unknown_formats(self, time_interval, timezone):
         """Test make_source with unknown formats"""
         formats: list[str] = [
             "INVALID_FORMAT",
@@ -207,7 +202,7 @@ class TestObservation:
 
         for format in formats:
             typed_format: ObservationFormat = format  # type: ignore
-            context = InboundContext(time_interval, job_resources, ObservationSource.APPLOG, typed_format, timezone)
+            context = InboundContext(time_interval, ObservationSource.APPLOG, typed_format, timezone)
             observation = Observation.from_inbound(context, ["line1"])
 
             with pytest.raises(UnknownObservationFormatError):

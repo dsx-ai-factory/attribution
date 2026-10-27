@@ -1,12 +1,5 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-# SPDX-License-Identifier: LicenseRef-NvidiaProprietary
-#
-# NVIDIA CORPORATION, its affiliates and licensors retain all intellectual
-# property and proprietary rights in and to this material, related
-# documentation and any modifications thereto. Any use, reproduction,
-# disclosure or distribution of this material and related documentation
-# without an express license agreement from NVIDIA CORPORATION or
-# its affiliates is strictly prohibited.
+# SPDX-License-Identifier: Apache-2.0
 
 import http
 import json
@@ -70,11 +63,12 @@ def _fake_v2_observation(source: ObservationSource, body: str) -> ObservationV2:
     )
 
 
-def test_v1_accepts_kueue_workload_type(client):
+@pytest.mark.parametrize("workload_type", ["kueue", "kai"])
+def test_v1_accepts_queue_scheduler_workload_type(client, workload_type):
     """v1's `type` is the `WorkloadTypeEnum`, which gates accepted values -
     unlike v2's plain `str`. Post to v1 so this actually exercises the enum
     change, not just the always-permissive v2 field."""
-    info = make_up_attributor_info("v1", type="kueue")
+    info = make_up_attributor_info("v1", type=workload_type)
 
     response = client.post("/v1/attributor", content=info.model_dump_json())
 
@@ -218,6 +212,8 @@ class TestEndpoints:
         response = client.post(f"/{version}/attributor/{att_id}/observation", content=obs.model_dump_json())
 
         assert response.status_code == 201
+        if version == "v2":
+            assert response.json()["ingest"] == {"accepted": 2, "dropped": {}}
 
     def test_post_observation_duplicate_rejected(self, client, version):
         att_id = post_attributor(client, make_up_attributor_info(version))
@@ -239,6 +235,36 @@ class TestEndpoints:
         response = client.post(f"/v1/attributor/{att_id}/observation", content=obs.model_dump_json())
 
         assert response.status_code == 422
+
+    @pytest.mark.parametrize(
+        ("source", "format", "body"),
+        [
+            (ObservationSource.APPLOG, ObservationFormat.ENTRY_TIMESERIES, json.dumps([{"body": "line"}])),
+            (ObservationSource.JOB_KEYWORDS, ObservationFormat.STRING_LIST, "line"),
+        ],
+    )
+    def test_post_observation_inverted_declared_interval_rejected(self, client, source, format, body):
+        att_id = post_attributor(client, make_up_attributor_info("v1"))
+        obs = json.loads(fake_applog_observation("line").model_dump_json())
+        obs["context"].update(
+            source=source.value,
+            format=format.value,
+            time_interval={"start": END.isoformat(), "end": START.isoformat()},
+        )
+        obs["body"] = body
+
+        response = client.post(f"/v1/attributor/{att_id}/observation", json=obs)
+
+        assert response.status_code == 422
+
+    def test_post_observation_inverted_legacy_interval_accepted(self, client):
+        att_id = post_attributor(client, make_up_attributor_info("v1"))
+        obs = json.loads(fake_applog_observation("line").model_dump_json())
+        obs["context"]["time_interval"] = {"start": END.isoformat(), "end": START.isoformat()}
+
+        response = client.post(f"/v1/attributor/{att_id}/observation", json=obs)
+
+        assert response.status_code == 201
 
     @pytest.mark.parametrize(
         ("source", "format"),
@@ -466,12 +492,13 @@ class TestSchedulerIdentityTranslation:
     V2 carries the explicit field and never derives it from `type`; V1 has no
     wire change, so its conversion maps the legacy `type` to a scheduler."""
 
-    def test_v2_explicit_scheduler_is_set_on_job_info(self):
-        info = make_up_attributor_info("v2", type="anything", scheduler="kueue")
+    @pytest.mark.parametrize("scheduler", ["kueue", "kai"])
+    def test_v2_explicit_scheduler_is_set_on_job_info(self, scheduler):
+        info = make_up_attributor_info("v2", type="anything", scheduler=scheduler)
 
         job_info = info.to_lib_jobinfo()
 
-        assert job_info.scheduler == "kueue"
+        assert job_info.scheduler == scheduler
         assert job_info.type == "anything"  # type is preserved verbatim regardless
 
     def test_v2_missing_scheduler_is_unknown_even_when_type_names_one(self):
@@ -487,6 +514,7 @@ class TestSchedulerIdentityTranslation:
         [
             (WorkloadTypeEnum.SLURM, "slurm"),
             (WorkloadTypeEnum.KUEUE, "kueue"),
+            (WorkloadTypeEnum.KAI, "kai"),
             (WorkloadTypeEnum.RUNAI, ""),  # no supported scheduler yet
             (WorkloadTypeEnum.UNDEFINED, ""),
         ],

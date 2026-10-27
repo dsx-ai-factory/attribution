@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// SPDX-License-Identifier: Apache-2.0
+
 import type {
   DailyBreakdown,
   DailyBucket,
@@ -70,6 +73,20 @@ export interface DashboardPayload {
     user: UserLedgerEntry[]
     rule: RuleLedgerEntry[]
     outcome: OutcomeLedgerEntry[]
+  }
+  /** How many categories each concentration ledger has in all; a ledger holds only those the fleet view ranks. */
+  categoryCounts: {
+    symptom: number
+    node: number
+    user: number
+    rule: number
+  }
+  /** How many categories tie for largest in each concentration ledger, by count and by GPU-hours, the uncut ledger's. */
+  largestTies: {
+    symptom: { count: number; nodeHours: number }
+    node: { count: number; nodeHours: number }
+    user: { count: number; nodeHours: number }
+    rule: { count: number; nodeHours: number }
   }
   movers: SymptomMover[]
 }

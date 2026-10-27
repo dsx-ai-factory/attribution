@@ -1,15 +1,22 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
 [build-system]
-requires = ["hatchling"]
+requires = ["hatchling>=1.27"]
 build-backend = "hatchling.build"
 
 [project]
 name = "nvidia-attribution-blueprint"
-version = "0.1.0"
+dynamic = ["version"]
+license = "Apache-2.0"
+license-files = ["LICENSE"]
 requires-python = ">=3.11"
 dependencies = [
     "nvidia-attribution-client",
     "requests>=2.31",
     "loguru>=0.7",
+    "kubernetes>36.0.0",  # 36.0.0 drops the Authorization header for token-based auth
+    "pyyaml>=6.0",  # KAI adapter parses the kai.scheduler/top-owner-metadata annotation
 ]
 
 [project.optional-dependencies]
@@ -25,17 +32,30 @@ web = [
     "uvicorn>=0.27",
     "pyyaml>=6.0",
 ]
-pod-placement-recorder = [
-    "kubernetes>=34.1",
-]
+pod-placement-recorder = []
+kubernetes-daemon = []
 
 [project.scripts]
 nvidia-attribution-blueprint = "attribution_blueprint.cli:main"
 nvidia-attribution-blueprint-web = "attribution_blueprint.webui.cli:main"
 pod-placement-recorder = "attribution_blueprint.connectors.execution_contexts.kueue.pod_placement.recorder.cli:main"
+kubernetes-daemon = "attribution_blueprint.kubernetes.daemon.cli:main"
 
 [tool.uv.sources]
 nvidia-attribution-client = { path = "../service/service-app/nvidia_attribution_client", editable = false }
+
+[tool.hatch.version]
+source = "code"
+path = "src/_build_version.py"
+expression = "build_version()"
+
+[tool.hatch.build.targets.sdist]
+include = [
+    "src/attribution_blueprint/**/*.py",
+    "src/attribution_blueprint/webui/static/**",
+    "src/attribution_blueprint/data/*.yml",
+    "src/_build_version.py",
+]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/attribution_blueprint"]

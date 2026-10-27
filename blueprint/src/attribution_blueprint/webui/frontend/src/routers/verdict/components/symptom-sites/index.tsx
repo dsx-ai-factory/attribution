@@ -1,13 +1,28 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-// SPDX-License-Identifier: LicenseRef-NvidiaProprietary
+// SPDX-License-Identifier: Apache-2.0
 
-import { useId, useState, type MouseEvent, type ReactNode } from 'react'
-import { ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight, FileText, Server } from 'lucide-react'
+import { useId, useState } from 'react'
+import { ChevronRight, FileText, Server } from 'lucide-react'
 import type { RunDetail, SymptomSite } from '@/interfaces/attribution'
-import { TimeHover } from '@/components/time-hover'
+import { SITE_STATUS_LABELS } from '@/lib/attribution-data'
+import { counted } from '@/lib/format'
+import { shouldActivateRow } from '@/lib/row-activation'
+import { cellInset, cn, focusRing, focusRingInset, markInText } from '@/lib/utils'
+import { Field, Identifier, NoValue, NotRecorded } from '@/components/field'
+import { SectionCard } from '@/components/section-card'
+import { SiteStatusBadge } from '@/components/site-status-badge'
 import { SymptomDocumentationLink } from '@/components/symptom-documentation'
+import { TablePagination } from '@/components/table-pagination'
+import { TimeHover } from '@/components/time-hover'
 import { Badge } from '@/components/ui/badge'
-import { Button } from '@/components/ui/button'
+import {
+  CodeBlock,
+  CodeBlockActions,
+  CodeBlockBody,
+  CodeBlockCopyButton,
+  CodeBlockHeader,
+  CodeBlockTitle,
+} from '@/components/ui/code-block'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 
 const unavailableMessage = {
@@ -17,54 +32,35 @@ const unavailableMessage = {
   empty: 'No symptom sites were recorded for this run.',
 }
 
-const SITE_STATUS_LABELS: Record<SymptomSite['status'], string> = {
-  bad: 'Responsible',
-  interesting: 'Supporting evidence',
-}
-
-function EvidenceField({ label, children }: { label: string; children: ReactNode }) {
-  return (
-    <div className="min-w-0">
-      <dt className="mb-1 text-xs leading-[18px] text-foreground-muted">{label}</dt>
-      <dd className="m-0 min-w-0 break-words text-[13px] leading-5 text-foreground-secondary">{children}</dd>
-    </div>
-  )
-}
-
-function SiteStatus({ status, count }: { status: SymptomSite['status']; count?: number }) {
-  return (
-    <Badge variant={status === 'bad' ? 'accent' : 'neutral'}>
-      {count !== undefined && <><span className="font-mono tabular-nums">{count}</span>{' '}</>}
-      {SITE_STATUS_LABELS[status]}
-    </Badge>
-  )
-}
-
 function SiteContext({ site }: { site: SymptomSite }) {
   const isNode = site.type === 'NodeSource'
   const Icon = isNode ? Server : FileText
   return (
-    <div className="mb-3 flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1.5 text-[13px] text-foreground-secondary">
-      <span className="inline-flex min-w-0 items-center gap-1.5">
-        <Icon aria-hidden="true" className="size-3.5 shrink-0 text-foreground-muted" />
-        <span className="min-w-0 break-words">{isNode ? site.node || 'Node not recorded' : 'Job-level evidence'}</span>
+    <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1 text-foreground-secondary">
+      {/* The icon is a mark beside a name that may wrap, so it keeps to the first line. */}
+      <span className="inline-flex min-w-0 items-start gap-1.5">
+        <span><Icon aria-hidden="true" className={cn('inline size-3.5 text-foreground-muted', markInText)} /></span>
+        <span className="min-w-0 break-words">{isNode ? (site.node ? <Identifier>{site.node}</Identifier> : 'Node not recorded') : 'Job-level evidence'}</span>
       </span>
-      <span className="min-w-0 break-words text-foreground-muted">
+      <span className="min-w-0">
         <span className="sr-only">Source: </span>
-        <Badge variant="neutral">{site.source.source || 'Source not recorded'}</Badge>
+        <Badge variant="zinc-subtle" size="wrap">{site.source.source ? <Identifier>{site.source.source}</Identifier> : 'Source not recorded'}</Badge>
       </span>
-      {site.status === 'bad' && <SiteStatus status="bad" />}
+      {site.status === 'bad' && <SiteStatusBadge status="bad" />}
     </div>
   )
 }
 
 function ScopeSummary({ sites }: { sites: SymptomSite[] }) {
-  if (sites.length === 0) return <>—</>
-  if (sites.length === 1) return <>{sites[0].type === 'NodeSource' ? sites[0].node || 'Node not recorded' : 'Job-level evidence'}</>
+  if (sites.length === 0) return <NoValue />
+  if (sites.length === 1) {
+    if (sites[0].type !== 'NodeSource') return 'Job-level evidence'
+    return sites[0].node ? <Identifier>{sites[0].node}</Identifier> : 'Node not recorded'
+  }
   const nodes = new Set(sites.flatMap((site) => site.type === 'NodeSource' && site.node ? [site.node] : []))
   return (
-    <div className="space-y-1">
-      {nodes.size > 0 && <div><span className="font-mono tabular-nums">{nodes.size}</span> {nodes.size === 1 ? 'node' : 'nodes'}</div>}
+    <div className="flex flex-col gap-1">
+      {nodes.size > 0 && <div className="tabular-nums">{counted(nodes.size, 'node', 'nodes')}</div>}
       {sites.some((site) => site.type === 'ResourcelessSource') && <div>Job-level evidence</div>}
       {sites.some((site) => site.type === 'NodeSource' && !site.node) && <div>Node not recorded</div>}
     </div>
@@ -72,42 +68,52 @@ function ScopeSummary({ sites }: { sites: SymptomSite[] }) {
 }
 
 function SourceSummary({ sites }: { sites: SymptomSite[] }) {
-  if (sites.length === 0) return <>—</>
+  if (sites.length === 0) return <NoValue />
   const sources = new Set(sites.map((site) => site.source.source))
-  if (sources.size === 1) return <>{sites[0].source.source || 'Source not recorded'}</>
+  if (sources.size === 1) return sites[0].source.source ? <Identifier>{sites[0].source.source}</Identifier> : 'Source not recorded'
   const hasMissingSource = sources.delete('')
   return (
-    <div className="space-y-1">
-      <div><span className="font-mono tabular-nums">{sources.size}</span> {sources.size === 1 ? 'source' : 'sources'}</div>
+    <div className="flex flex-col gap-1">
+      <div className="tabular-nums">{counted(sources.size, 'source', 'sources')}</div>
       {hasMissingSource && <div>Source not recorded</div>}
     </div>
   )
 }
 
 function StatusSummary({ sites }: { sites: SymptomSite[] }) {
-  if (sites.length === 0) return <>—</>
+  if (sites.length === 0) return <NoValue />
   const responsibleCount = sites.filter((site) => site.status === 'bad').length
   return (
-    <div className="flex flex-wrap gap-x-3 gap-y-1">
-      {responsibleCount > 0 && <SiteStatus status="bad" count={responsibleCount} />}
-      {responsibleCount < sites.length && <SiteStatus status="interesting" count={sites.length - responsibleCount} />}
+    <div className="flex flex-wrap gap-x-2 gap-y-1">
+      {responsibleCount > 0 && <SiteStatusBadge status="bad" count={responsibleCount} />}
+      {responsibleCount < sites.length && <SiteStatusBadge status="interesting" count={sites.length - responsibleCount} />}
     </div>
   )
 }
 
-function SourceLog({ line }: { line: string | null }) {
+// The recorded line itself, as machine output: mono, wrapped so it is never
+// cut at the right edge, and copyable without selecting it.
+function SourceEvidence({ line }: { line: string | null }) {
   const titleId = useId()
+  if (line === null || line === '') {
+    return (
+      <dl>
+        <Field label="Source evidence">
+          <span className="text-foreground-muted">{line === null ? 'No source line recorded.' : 'Source line is empty.'}</span>
+        </Field>
+      </dl>
+    )
+  }
   return (
-    <div className="mt-3 min-w-0">
-      <div id={titleId} className="mb-1.5 text-xs leading-[18px] text-foreground-muted">Source evidence</div>
-      {line === null || line === '' ? (
-        <p className="m-0 text-[13px] leading-5 text-foreground-muted">{line === null ? 'No source line recorded.' : 'Source line is empty.'}</p>
-      ) : (
-        <div role="region" aria-labelledby={titleId} tabIndex={0} className="max-h-48 overflow-auto rounded-sm border border-border bg-background-secondary py-1.5 focus-visible:outline-1 focus-visible:outline-offset-2 focus-visible:outline-foreground-muted">
-          <pre className="m-0 min-h-[22px] min-w-0 whitespace-pre-wrap break-words px-3 font-sans text-[13px] leading-[22px] text-foreground-secondary">{line}</pre>
-        </div>
-      )}
-    </div>
+    <CodeBlock code={line}>
+      <CodeBlockHeader>
+        <CodeBlockTitle id={titleId}>Source evidence</CodeBlockTitle>
+        <CodeBlockActions>
+          <CodeBlockCopyButton label="Copy source evidence" />
+        </CodeBlockActions>
+      </CodeBlockHeader>
+      <CodeBlockBody labelledBy={titleId} wrap className="max-h-48" />
+    </CodeBlock>
   )
 }
 
@@ -116,24 +122,35 @@ function SiteEvidence({ site, showContext }: { site: SymptomSite; showContext: b
   const label = site.type === 'NodeSource' ? site.node || 'Node not recorded' : 'Job-level evidence'
   const status = SITE_STATUS_LABELS[site.status]
   return (
-    <article aria-label={`${label}: ${status}`} className="min-w-0 py-3.5 first:pt-0 last:pb-0">
+    <article aria-label={`${label}: ${status}`} className="flex min-w-0 flex-col gap-2 py-card-y first:pt-0 last:pb-0">
       {showContext && <SiteContext site={site} />}
-      <dl className="m-0 grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)_minmax(0,.65fr)_minmax(0,1fr)] gap-5">
-        <EvidenceField label="Rule">{source.rule || 'Not recorded'}</EvidenceField>
-        <EvidenceField label="Observation"><span className="font-mono">{source.observation_id}</span></EvidenceField>
-        <EvidenceField label="Source position">
-          {source.pos === null ? 'Not recorded' : <span className="font-mono">{source.pos}</span>}
-        </EvidenceField>
-        <EvidenceField label="Recorded time">
-          {source.time ? <time dateTime={source.time} className="font-mono"><TimeHover date={source.time} className="no-underline cursor-default" /></time> : 'Not recorded'}
-        </EvidenceField>
+      {/* The four facts stand on the table's own columns: the grid spans the
+          row's full width with the table's column widths (SYMPTOM_COLUMNS;
+          the last fact takes the Status and Sites columns), each fact with
+          the table's own cell inset, so Rule, Observation, Source position
+          and Recorded time start where Symptom, Scope, Source and Status do. */}
+      <dl className="-mx-card-x grid grid-cols-[var(--col-symptom)_var(--col-scope)_var(--col-source)_minmax(0,1fr)]">
+        <Field label="Rule" className={cellInset}>{source.rule ? <Identifier>{source.rule}</Identifier> : <NotRecorded />}</Field>
+        <Field label="Observation" className={cellInset}><span className="num">{source.observation_id}</span></Field>
+        <Field label="Source position" className={cellInset}>
+          {source.pos === null ? <NotRecorded /> : <span className="num">{source.pos}</span>}
+        </Field>
+        <Field label="Recorded time" className={cellInset}>
+          {source.time ? <TimeHover date={source.time} /> : <NotRecorded />}
+        </Field>
       </dl>
-      <SourceLog line={source.line} />
+      <SourceEvidence line={source.line} />
     </article>
   )
 }
 
 const EVIDENCE_PAGE_SIZE = 10
+
+// The Symptoms table's column widths, as shares of the table's width, set once
+// on the table: its colgroup takes all five, and an expanded site's facts
+// (inside the table) the first three, so the two always agree. The Sites
+// share holds its header and the card inset at the table's 880px least width.
+const SYMPTOM_COLUMNS = '[--col-symptom:38%] [--col-scope:19%] [--col-source:13%] [--col-status:23%] [--col-sites:7%]'
 
 function EvidenceSites({ symptom, sites }: { symptom: string; sites: SymptomSite[] }) {
   const scrollId = useId()
@@ -143,69 +160,81 @@ function EvidenceSites({ symptom, sites }: { symptom: string; sites: SymptomSite
   if (page !== requestedPage) setPage(page)
   const start = page * EVIDENCE_PAGE_SIZE
   const end = Math.min(start + EVIDENCE_PAGE_SIZE, sites.length)
+  const name = symptom || 'Unnamed symptom'
 
   return (
-    <>
+    <div className="flex flex-col gap-2">
+      {/* The region spans the row's full width, its content kept on the
+          cell's inset, so a site's facts can reach the table's column edges
+          without scrolling sideways. */}
       <div
         key={page}
         id={scrollId}
         role="region"
-        aria-label={`${symptom || 'Unnamed symptom'} evidence`}
+        aria-label={`${name} evidence`}
         tabIndex={0}
-        className="max-h-[min(60vh,28rem)] min-w-0 overflow-auto rounded-sm focus-visible:outline-1 focus-visible:outline-offset-[-1px] focus-visible:outline-foreground-muted"
+        className={cn('-mx-card-x max-h-[min(60vh,28rem)] min-w-0 overflow-auto rounded-sm px-card-x', focusRingInset)}
       >
         <div className="divide-y divide-border">
           {sites.slice(start, end).map((site, index) => <SiteEvidence key={start + index} site={site} showContext={sites.length > 1} />)}
         </div>
       </div>
       {sites.length > EVIDENCE_PAGE_SIZE && (
-        <div role="group" aria-label={`${symptom || 'Unnamed symptom'} evidence pages`} className="mt-3 flex items-center justify-between gap-3 border-t border-border pt-2.5 text-xs text-foreground-muted">
-          <span aria-live="polite" aria-atomic="true">
-            <span className="font-mono tabular-nums">{start + 1}–{end}</span> of <span className="font-mono tabular-nums">{sites.length}</span> sites
-          </span>
-          <div className="flex items-center gap-1">
-            <Button type="button" variant="ghost" size="icon-sm" disabled={page === 0} aria-label="First evidence page" aria-controls={scrollId} onClick={() => setPage(0)}><ChevronsLeft aria-hidden="true" className="size-3.5" /></Button>
-            <Button type="button" variant="ghost" size="icon-sm" disabled={page === 0} aria-label="Previous evidence page" aria-controls={scrollId} onClick={() => setPage(page - 1)}><ChevronLeft aria-hidden="true" className="size-3.5" /></Button>
-            <Button type="button" variant="ghost" size="icon-sm" disabled={page === lastPage} aria-label="Next evidence page" aria-controls={scrollId} onClick={() => setPage(page + 1)}><ChevronRight aria-hidden="true" className="size-3.5" /></Button>
-            <Button type="button" variant="ghost" size="icon-sm" disabled={page === lastPage} aria-label="Last evidence page" aria-controls={scrollId} onClick={() => setPage(lastPage)}><ChevronsRight aria-hidden="true" className="size-3.5" /></Button>
-          </div>
-        </div>
+        <TablePagination
+          page={page}
+          pageSize={EVIDENCE_PAGE_SIZE}
+          total={sites.length}
+          onPageChange={setPage}
+          label="evidence"
+          itemLabel="sites"
+          controlsId={scrollId}
+          aria-label={`${name} evidence pages`}
+        />
       )}
-    </>
+    </div>
   )
 }
 
 function SymptomRows({ symptom, sites }: { symptom: string; sites: SymptomSite[] }) {
   const detailId = useId()
   const [open, setOpen] = useState(false)
-  const onRowClick = (event: MouseEvent<HTMLTableRowElement>) => {
-    if (!(event.target instanceof Element) || event.target.closest('button, a')) return
-    const selection = window.getSelection()
-    if (selection?.toString() && (event.currentTarget.contains(selection.anchorNode) || event.currentTarget.contains(selection.focusNode))) return
-    setOpen((value) => !value)
-  }
+  const name = symptom || 'Unnamed symptom'
   return (
     <>
-      <TableRow onClick={onRowClick} className="cursor-pointer border-t border-b-0 border-border hover:bg-background-active focus-within:bg-background-active has-aria-expanded:bg-transparent has-aria-expanded:hover:bg-background-active has-aria-expanded:focus-within:bg-background-active [&>td]:px-3.5 [&>td]:py-2.5 [&>td]:align-middle [&>td]:whitespace-normal [&>td]:break-words">
-        <TableCell>
-          <div className="flex min-w-0 items-center gap-1.5">
-            <button type="button" aria-label={`${symptom || 'Unnamed symptom'} ${sites.length} ${sites.length === 1 ? 'site' : 'sites'}`} aria-expanded={open} aria-controls={detailId} onClick={() => setOpen((value) => !value)} className="inline-flex min-w-0 cursor-pointer items-center gap-1.5 rounded-sm py-1 text-left font-medium text-foreground-secondary hover:text-foreground focus-visible:outline-1 focus-visible:outline-offset-2 focus-visible:outline-foreground-muted">
-              <ChevronRight aria-hidden="true" className={`size-3 shrink-0 text-foreground-muted transition-transform ${open ? 'rotate-90' : ''}`} />
-              <span className="min-w-0 break-words">{symptom || 'Unnamed symptom'}</span>
+      <TableRow
+        onClick={(event) => { if (shouldActivateRow(event)) setOpen((value) => !value) }}
+        className="cursor-pointer border-t border-b-0"
+      >
+        <TableCell wrap>
+          {/* A name that wraps keeps its toggle's chevron, centered in the
+              control, and its documentation link on its first line. */}
+          <div className="flex min-w-0 items-start gap-1.5">
+            <button
+              type="button"
+              aria-label={`${name} ${counted(sites.length, 'site', 'sites')}`}
+              aria-expanded={open}
+              aria-controls={detailId}
+              onClick={() => setOpen((value) => !value)}
+              className={cn('inline-flex min-w-0 cursor-pointer items-start gap-1.5 rounded-xs text-left text-foreground', focusRing)}
+            >
+              <span className="flex h-5 shrink-0 items-center">
+                <ChevronRight aria-hidden="true" className={cn('size-3.5 text-foreground-muted transition-transform', open && 'rotate-90')} />
+              </span>
+              <span className="min-w-0 break-words">{symptom ? <Identifier>{symptom}</Identifier> : name}</span>
             </button>
             <SymptomDocumentationLink symptomId={symptom} />
           </div>
         </TableCell>
-        <TableCell><ScopeSummary sites={sites} /></TableCell>
-        <TableCell className="text-foreground-muted"><SourceSummary sites={sites} /></TableCell>
-        <TableCell><StatusSummary sites={sites} /></TableCell>
-        <TableCell className="text-right font-mono tabular-nums text-foreground-muted">{sites.length}</TableCell>
+        <TableCell wrap><ScopeSummary sites={sites} /></TableCell>
+        <TableCell wrap><SourceSummary sites={sites} /></TableCell>
+        <TableCell wrap><StatusSummary sites={sites} /></TableCell>
+        <TableCell className="num text-right">{sites.length}</TableCell>
       </TableRow>
-      <TableRow id={detailId} hidden={!open} className="border-t border-b-0 border-border bg-background-active/30 transition-none hover:bg-background-active/30">
-        <TableCell colSpan={5} className="px-4 py-3.5 whitespace-normal">
+      <TableRow id={detailId} hidden={!open} className="border-t border-b-0 bg-background-secondary hover:bg-background-secondary">
+        <TableCell colSpan={5} wrap className="py-card-y">
           {open && (sites.length > 0 ? (
             <EvidenceSites symptom={symptom} sites={sites} />
-          ) : <p className="m-0 text-[13px] leading-5 text-foreground-muted">No sites recorded for this symptom.</p>)}
+          ) : <p className="text-foreground-muted">No sites recorded for this symptom.</p>)}
         </TableCell>
       </TableRow>
     </>
@@ -213,42 +242,54 @@ function SymptomRows({ symptom, sites }: { symptom: string; sites: SymptomSite[]
 }
 
 export function SymptomsSection({ run }: { run: RunDetail }) {
-  const titleId = useId()
   const section = run.attribution.symptomSites
   const symptoms = section.state === 'available' ? Object.entries(section.data) : []
   const symptomCount = section.state === 'available' ? symptoms.length : run.symptoms.length
+  // The table is named by the section title itself, so the two never drift apart.
+  const titleId = useId()
+  // Without sites or a recorded summary the section has nothing to show; beside
+  // a summary, why its sites are missing is a note below it. The summary's rows
+  // are flush 28px rows on the card's inset, as the table's are, so a symptom
+  // row is as tall on every verdict whichever form it takes.
+  const nothingToShow = section.state !== 'available' && run.symptoms.length === 0
 
   return (
-    <section aria-labelledby={titleId} className="min-w-0 overflow-hidden rounded-sm border border-border bg-card">
-      <div className="flex items-baseline gap-3 border-b border-border px-3.5 py-3">
-        <h2 id={titleId} className="m-0 text-xs font-semibold uppercase tracking-wide">Symptoms</h2>
-        <span className="text-[11px] text-foreground-muted"><span className="font-mono tabular-nums">{symptomCount}</span> distinct</span>
-      </div>
+    <SectionCard
+      title="Symptoms"
+      titleId={titleId}
+      count={`${symptomCount} distinct`}
+      flush
+      empty={nothingToShow ? { title: 'No symptoms to show', description: unavailableMessage[section.state] } : undefined}
+    >
       {section.state !== 'available' ? (
-        <div className="px-3.5 py-3">
-          {run.symptoms.length > 0 && (
-            <ul aria-label="Recorded symptom summary" className="mb-3 mt-0 list-none divide-y divide-border p-0">
-              {run.symptoms.map((symptom) => (
-                <li key={symptom.name} className="flex min-h-10 min-w-0 items-center gap-2 py-2 text-[13px] text-foreground-secondary">
-                  <FileText aria-hidden="true" className="size-3.5 shrink-0 text-foreground-muted" />
-                  <span className="min-w-0 break-words">{symptom.name || 'Unnamed symptom'}</span>
-                  <span className="ml-auto shrink-0 text-xs text-foreground-muted"><span className="font-mono tabular-nums">{symptom.sites}</span> {symptom.sites === 1 ? 'site' : 'sites'}</span>
-                </li>
-              ))}
-            </ul>
-          )}
-          <p className="m-0 text-[13px] leading-5 text-foreground-muted">{unavailableMessage[section.state]}</p>
-        </div>
+        <>
+          <ul aria-label="Recorded symptom summary" className="divide-y divide-border">
+            {run.symptoms.map((symptom) => (
+              <li key={symptom.name} className="grid grid-cols-[auto_minmax(0,1fr)_auto] items-start gap-2 px-card-x py-1">
+                <span><FileText aria-hidden="true" className={cn('inline size-3.5 text-foreground-muted', markInText)} /></span>
+                <span className="break-words text-foreground-secondary">{symptom.name ? <Identifier>{symptom.name}</Identifier> : 'Unnamed symptom'}</span>
+                <span className="text-foreground-muted tabular-nums">{counted(symptom.sites, 'site', 'sites')}</span>
+              </li>
+            ))}
+          </ul>
+          <p className="border-t px-card-x py-card-y text-foreground-muted">{unavailableMessage[section.state]}</p>
+        </>
       ) : (
-        <Table aria-labelledby={titleId} className="min-w-[880px] table-fixed border-collapse text-[13px] text-foreground-secondary">
-          <colgroup><col className="w-[39%]" /><col className="w-[19%]" /><col className="w-[13%]" /><col className="w-[23%]" /><col className="w-[6%]" /></colgroup>
-          <TableHeader className="bg-background-active/30 text-xs text-foreground-muted [&_tr]:border-b-0">
-            <TableRow className="border-0 transition-none hover:bg-transparent [&>th]:px-3.5 [&>th]:py-2">
-              <TableHead scope="col" className="h-auto whitespace-normal text-foreground-muted">Symptom</TableHead>
-              <TableHead scope="col" className="h-auto whitespace-normal text-foreground-muted">Scope</TableHead>
-              <TableHead scope="col" className="h-auto whitespace-normal text-foreground-muted">Source</TableHead>
-              <TableHead scope="col" className="h-auto whitespace-normal text-foreground-muted">Status</TableHead>
-              <TableHead scope="col" className="h-auto whitespace-normal text-right text-foreground-muted">Sites</TableHead>
+        <Table aria-labelledby={titleId} layout="fixed" className={cn('min-w-[880px]', SYMPTOM_COLUMNS)}>
+          <colgroup>
+            <col className="w-(--col-symptom)" />
+            <col className="w-(--col-scope)" />
+            <col className="w-(--col-source)" />
+            <col className="w-(--col-status)" />
+            <col className="w-(--col-sites)" />
+          </colgroup>
+          <TableHeader>
+            <TableRow>
+              <TableHead scope="col">Symptom</TableHead>
+              <TableHead scope="col">Scope</TableHead>
+              <TableHead scope="col">Source</TableHead>
+              <TableHead scope="col">Status</TableHead>
+              <TableHead scope="col" className="text-right">Sites</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody key={run.id} className="[&_tr:last-child]:border-t">
@@ -256,6 +297,6 @@ export function SymptomsSection({ run }: { run: RunDetail }) {
           </TableBody>
         </Table>
       )}
-    </section>
+    </SectionCard>
   )
 }

@@ -1,12 +1,5 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-# SPDX-License-Identifier: LicenseRef-NvidiaProprietary
-#
-# NVIDIA CORPORATION, its affiliates and licensors retain all intellectual
-# property and proprietary rights in and to this material, related
-# documentation and any modifications thereto. Any use, reproduction,
-# disclosure or distribution of this material and related documentation
-# without an express license agreement from NVIDIA CORPORATION or
-# its affiliates is strictly prohibited.
+# SPDX-License-Identifier: Apache-2.0
 
 import datetime
 from zoneinfo import ZoneInfo
@@ -76,7 +69,7 @@ def job_info_2(ufm_timezone):
         )
         .interest_start_time(datetime.datetime(2025, 6, 19, 17, 47, 0, tzinfo=ufm_timezone))
         .interest_end_time(datetime.datetime(2025, 6, 19, 17, 48, 0, tzinfo=ufm_timezone))
-        .job_end_time(datetime.datetime(2025, 6, 18, 17, 49, 0, tzinfo=ufm_timezone))
+        .job_end_time(datetime.datetime(2025, 6, 19, 17, 49, 0, tzinfo=ufm_timezone))
         .time_limit(6000)
         .last_tflops_time(datetime.datetime(2025, 6, 18, 17, 47, 0, tzinfo=ufm_timezone))
         .exit_code_signal(0)

@@ -1,12 +1,5 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-# SPDX-License-Identifier: LicenseRef-NvidiaProprietary
-#
-# NVIDIA CORPORATION, its affiliates and licensors retain all intellectual
-# property and proprietary rights in and to this material, related
-# documentation and any modifications thereto. Any use, reproduction,
-# disclosure or distribution of this material and related documentation
-# without an express license agreement from NVIDIA CORPORATION or
-# its affiliates is strictly prohibited.
+# SPDX-License-Identifier: Apache-2.0
 
 """Declarative symptom defaults.
 
@@ -49,6 +42,7 @@ XID_FAMILY_SCHEMA = SymptomFamily(
         "port_down_reason_code": int,
         "port_down_reason": str,
         "error_status": int,
+        "poison_victim": str,
     },
 )
 
@@ -61,6 +55,7 @@ def _xid_member(
     port_down_reason_code: int | None = None,
     port_down_reason: str | None = None,
     error_status: int | None = None,
+    poison_victim: str | None = None,
 ) -> SymptomFamily:
     """Build an XID family member from explicitly decoded identity fields.
 
@@ -71,6 +66,7 @@ def _xid_member(
         port_down_reason_code: Optional numeric NVLink port-down reason.
         port_down_reason: Optional symbolic NVLink port-down reason.
         error_status: Optional decoded NVLink error status.
+        poison_victim: Optional XID 94 poison-victim component.
 
     Returns:
         Structured XID family identity containing the supplied fields.
@@ -82,6 +78,7 @@ def _xid_member(
         ("port_down_reason_code", port_down_reason_code),
         ("port_down_reason", port_down_reason),
         ("error_status", error_status),
+        ("poison_victim", poison_victim),
     ):
         if value is not None:
             properties[name] = value
@@ -875,7 +872,7 @@ outcome_symptom(
     family=XID_FAMILY_SCHEMA,
     outcome="Fail InfraHW",
     priority=OutcomePriority.MEDIUM_BROAD,
-    doc="xid",
+    doc=None,
     hw_cause="Known HW Cause - Node",
     fallback_prefix=True,
     cascade_discards=(
@@ -927,12 +924,18 @@ outcome_symptom(
     hw_cause="Driver bug",
 )
 
+# The driver returns this after a prior GPU fault left the GPU awaiting reset, so
+# later NVLink queries against that GPU fail as a consequence. Fallback prefix so
+# file-suffixed variants (e.g. "NV_ERR_RESET_REQUIRED p2p_api.c") resolve here for cascades.
+# Own tier so other NV_ERR_* codes from the same GPU cannot win the sorted tie in MEDIUM_SW.
 outcome_symptom(
     "NV_ERR_RESET_REQUIRED",
-    outcome="Fail InfraSW",
-    priority=OutcomePriority.MEDIUM_SW,
+    outcome="Fail InfraHW",
+    priority=OutcomePriority.MEDIUM_RESET_REQUIRED,
     doc="gpu-reset-required",
-    hw_cause="Driver bug",
+    hw_cause="Known HW Cause - Node",
+    cascade_discards=("Failed to collect nvlink status info", "Failed to update Rx Detect Link mask!"),
+    fallback_prefix=True,
 )
 
 outcome_symptom(
@@ -1002,7 +1005,7 @@ outcome_symptom(
 outcome_symptom(
     "kernel invalid memory access",
     outcome="Fail InfraSW",
-    priority=OutcomePriority.MEDIUM_SW,
+    priority=OutcomePriority.HIGH_KERNEL_PANIC,
     doc="kernel-invalid-memory-access",
     # Same crash also prints the generic "Internal error: Oops"; keep this specific symptom.
     cascade_discards=(*NODE_FAILURE_CASCADE_TARGETS, "kernel oops"),
@@ -1011,7 +1014,7 @@ outcome_symptom(
 outcome_symptom(
     "kernel oops",
     outcome="Fail InfraSW",
-    priority=OutcomePriority.MEDIUM_SW,
+    priority=OutcomePriority.HIGH_KERNEL_PANIC,
     doc="kernel-oops",
     hw_cause="Kernel oops",
     cascade_discards=NODE_FAILURE_CASCADE_TARGETS,
@@ -1020,7 +1023,7 @@ outcome_symptom(
 outcome_symptom(
     "kernel soft lockup",
     outcome="Fail InfraSW",
-    priority=OutcomePriority.MEDIUM_SW,
+    priority=OutcomePriority.HIGH_KERNEL_PANIC,
     doc="kernel-soft-lockup",
     hw_cause="Kernel soft lockup",
     cascade_discards=NODE_FAILURE_CASCADE_TARGETS,
@@ -1029,9 +1032,20 @@ outcome_symptom(
 outcome_symptom(
     "kernel panic",
     outcome="Fail InfraSW",
-    priority=OutcomePriority.MEDIUM_SW,
+    priority=OutcomePriority.HIGH_KERNEL_PANIC,
     doc="kernel-panic",
     hw_cause="Kernel panic",
+    cascade_discards=NODE_FAILURE_CASCADE_TARGETS,
+)
+
+# Corrupted node-local files surface in the application as unrelated errors
+# (e.g. JIT compilation failing on a truncated header); the kernel line is the root cause.
+outcome_symptom(
+    "ext4 filesystem corruption",
+    outcome="Fail InfraSW",
+    priority=OutcomePriority.MEDIUM_SW,
+    doc="ext4-filesystem-corruption",
+    hw_cause="ext4 filesystem corruption",
     cascade_discards=NODE_FAILURE_CASCADE_TARGETS,
 )
 
@@ -1427,6 +1441,27 @@ outcome_symptom(
     doc="megatron-core-dist-checkpointing-core-checkpointingexception",
 )
 
+# A concrete Megatron configuration error outranks generic NVRx failure context.
+# Keep configuration values in source evidence, not in the symptom label.
+outcome_symptom(
+    "Python Exception: AssertionError: batch size not divisible",
+    outcome="Fail User",
+    priority=OutcomePriority.LOW,
+    doc="python-exception",
+)
+
+# The compiler failure is specific evidence, but does not establish whether
+# application code, the toolchain, or node-local files caused it.
+# Prefer it over a peer closure attributed to the same node.
+outcome_symptom(
+    "Triton/Inductor JIT C-compilation failure",
+    outcome="Fail MultiCategory",
+    priority=OutcomePriority.LOW,
+    doc="jit-c-compilation-failure",
+    hw_cause="Underlying cause of JIT C-compilation failure is undetermined.",
+    cascade_discards=("Connection closed",),
+)
+
 outcome_symptom(
     "Missing key in checkpoint",
     outcome="Fail User",
@@ -1529,7 +1564,7 @@ outcome_symptom(
     "NV_ERR_",
     outcome="Fail Undetermined",
     priority=OutcomePriority.LOW_GENERIC,
-    doc="nv-err",
+    doc=None,
     hw_cause="Driver bug",
     fallback_prefix=True,
 )
@@ -1597,7 +1632,7 @@ outcome_symptom(
     "cudaError",
     outcome="Fail User",
     priority=OutcomePriority.LOW_GENERIC,
-    doc="cudaerror",
+    doc=None,
     fallback_prefix=True,
 )
 
@@ -1661,7 +1696,7 @@ outcome_symptom(
     "IB Error-",
     outcome="Fail InfraSW",
     priority=OutcomePriority.LOW_GENERIC,
-    doc="ib-error",
+    doc=None,
     fallback_prefix=True,
 )
 
@@ -1669,7 +1704,7 @@ outcome_symptom(
     "EFA Error-",
     outcome="Fail MultiCategory",
     priority=OutcomePriority.LOW_GENERIC,
-    doc="efa-error",
+    doc=None,
     fallback_prefix=True,
 )
 
@@ -1703,9 +1738,10 @@ outcome_symptom(
 
 outcome_symptom(
     "NVRx detected failure",
-    outcome="Fail Undetermined",
+    outcome="Fail MultiCategory",
     priority=OutcomePriority.LOW_GENERIC,
     doc="nvrx-detected-failure",
+    hw_cause="Underlying failure reason unavailable from the collected evidence.",
 )
 
 outcome_symptom(
@@ -1713,6 +1749,38 @@ outcome_symptom(
     outcome="Fail MultiCategory",
     priority=OutcomePriority.LOW_GENERIC,
     doc="nvrx-unhealthy-node",
+)
+
+# The check or action name follows these two prefixes, e.g.
+# "NVRx node health check failed: example_check".
+outcome_symptom(
+    "NVRx node health check failed",
+    outcome="Fail MultiCategory",
+    priority=OutcomePriority.LOW_GENERIC,
+    doc=None,
+    fallback_prefix=True,
+)
+
+outcome_symptom(
+    "NVRx GPU recovery action",
+    outcome="Fail MultiCategory",
+    priority=OutcomePriority.LOW_GENERIC,
+    doc=None,
+    fallback_prefix=True,
+)
+
+outcome_symptom(
+    "NVRx step section timeout",
+    outcome="Fail MultiCategory",
+    priority=OutcomePriority.LOW_GENERIC,
+    doc="nvrx-step-section-timeout",
+)
+
+outcome_symptom(
+    "NVRx no progress across restarts",
+    outcome="Fail MultiCategory",
+    priority=OutcomePriority.LOW_GENERIC,
+    doc="nvrx-no-progress-across-restarts",
 )
 
 outcome_symptom(
@@ -2574,8 +2642,6 @@ known_symptom("IB firmware outdated")
 
 known_symptom("NV_ERR_INVALID_STATE nv_gpu_ops.c")
 
-known_symptom("NVRx step section timeout")
-
 known_symptom("NVRx GPU memory reclamation timeout")
 
 known_symptom("OOM kill (other)")
@@ -2696,6 +2762,21 @@ known_symptom("XID-92-EXCESSIVE_SBE_INTERRUPTS", family=_xid_member(92, mnemonic
 
 known_symptom("XID-94-CONTAINED_ERROR", family=_xid_member(94, mnemonic="CONTAINED_ERROR"))
 
+known_symptom(
+    "XID-94-CONTAINED_ERROR-CE",
+    family=_xid_member(94, mnemonic="CONTAINED_ERROR", poison_victim="CE"),
+)
+
+known_symptom(
+    "XID-94-CONTAINED_ERROR-SM",
+    family=_xid_member(94, mnemonic="CONTAINED_ERROR", poison_victim="SM"),
+)
+
+known_symptom(
+    "XID-94-CONTAINED_ERROR-GSP",
+    family=_xid_member(94, mnemonic="CONTAINED_ERROR", poison_victim="GSP"),
+)
+
 known_symptom("XID-95-UNCONTAINED_ERROR", family=_xid_member(95, mnemonic="UNCONTAINED_ERROR"))
 
 known_symptom("alias else")
@@ -2755,3 +2836,27 @@ known_symptom("plr_tx_bw_loss_high_1m_5pct")
 known_symptom("plr_tx_bw_loss_high_5m_1pct")
 
 known_symptom("pyxis: cancelled by SIGTERM")
+
+known_symptom("mlx5 firmware in initialization state")
+known_symptom("mlx5 device initialization failed")
+
+outcome_symptom(
+    "detected bad NIC state",
+    outcome="Fail InfraSW",
+    # Independent MEDIUM_SW faults retain precedence. Outcome selection
+    # handles the QP and device-open failures superseded by this symptom.
+    priority=OutcomePriority.LOW,
+    doc="detected-bad-nic-state",
+    hw_cause="NIC firmware initialization failure",
+)
+
+
+outcome_symptom(
+    "irisc not responding",
+    outcome="Fail InfraSW",
+    # Independent MEDIUM_SW faults retain precedence; outcome selection
+    # supersedes only the QP and device-open mappings for this diagnosis.
+    priority=OutcomePriority.LOW,
+    doc="irisc-not-responding",
+    hw_cause="irisc not responding",
+)

@@ -1,12 +1,5 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-# SPDX-License-Identifier: LicenseRef-NvidiaProprietary
-#
-# NVIDIA CORPORATION, its affiliates and licensors retain all intellectual
-# property and proprietary rights in and to this material, related
-# documentation and any modifications thereto. Any use, reproduction,
-# disclosure or distribution of this material and related documentation
-# without an express license agreement from NVIDIA CORPORATION or
-# its affiliates is strictly prohibited.
+# SPDX-License-Identifier: Apache-2.0
 
 """V1 observation wire model. Accepts every legacy `Format`; kept as-is for existing V1 consumers."""
 
@@ -20,7 +13,6 @@ from attribution_lib.observation.inbound import (
     Source as ObservationSource,
     TimeInterval as LibTimeInterval,
 )
-from attribution_lib.resources import AllJobResources
 from pydantic import model_validator
 
 from app.entry_timeseries import decode_timeseries_entries
@@ -37,7 +29,7 @@ class ObservationContextV1(HashableModel):
     """Describes the scope of an observation."""
 
     time_interval: TimeInterval
-    resources: str = "AllJobResources"
+    resources: str = "AllJobResources"  # Accepted for wire compatibility; the lib context has no resources.
     source: ObservationSource
     format: ObservationFormat
     is_prefiltered: bool = False
@@ -52,6 +44,18 @@ class ObservationContextV1(HashableModel):
             raise ValueError(f"a null time_interval bound is only accepted for {ObservationFormat.ENTRY_TIMESERIES}")
         return self
 
+    @model_validator(mode="after")
+    def _start_must_not_follow_end(self) -> "ObservationContextV1":
+        # Legacy formats are re-windowed by `legacy_window` and never use the declared interval.
+        if (
+            self.format in (ObservationFormat.ENTRY_TIMESERIES, ObservationFormat.STRING_LIST)
+            and self.time_interval.start is not None
+            and self.time_interval.end is not None
+            and self.time_interval.start > self.time_interval.end
+        ):
+            raise ValueError("time_interval.start must not be later than time_interval.end")
+        return self
+
     def to_lib_context(self, timezone: ZoneInfo) -> InboundContext:
         """Convert the observation context to a lib context."""
         return self._lib_context(
@@ -63,7 +67,6 @@ class ObservationContextV1(HashableModel):
     def _lib_context(self, time_interval: LibTimeInterval, format: LibFormat, timezone: ZoneInfo) -> InboundContext:
         return InboundContext(
             time_interval,
-            AllJobResources,
             self.source,
             format,
             timezone,
@@ -88,7 +91,9 @@ class ObservationV1(HashableModel):
             case ObservationFormat.ENTRY_TIMESERIES:
                 return LibObservation(context.to_lib_context(job_info.timezone), decode_timeseries_entries(self.body))
             case _:
-                entries = to_entry_timeseries(context.source, context.format, self.body, job_info)
+                entries = to_entry_timeseries(
+                    context.source, context.format, self.body, job_info, context.time_interval.end
+                )
                 lib_context = context._lib_context(
                     legacy_window(context.source, job_info), LibFormat.ENTRY_TIMESERIES, job_info.timezone
                 )

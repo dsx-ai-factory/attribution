@@ -1,6 +1,10 @@
+// SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// SPDX-License-Identifier: Apache-2.0
+
 import Decimal from 'decimal.js'
 import type { RunDetail, RunSummary } from '@/interfaces/attribution'
 import { attemptGpuHours, nodeGpuHours } from './metric'
+import { summarizeNode } from './node-summary'
 
 /** Per-run elapsed hours, rounded to 4dp at the export boundary for clean output. */
 function exportElapsed(run: RunSummary): number {
@@ -11,8 +15,8 @@ function exportAttemptGpuHours(run: RunSummary): number {
   return attemptGpuHours(run).toDecimalPlaces(4).toNumber()
 }
 
-function exportNodeGpuHours(run: RunSummary): number {
-  return nodeGpuHours(run).toDecimalPlaces(4).toNumber()
+function exportNodeGpuHours(run: RunSummary, nodeId: string): number {
+  return nodeGpuHours(run, nodeId).toDecimalPlaces(4).toNumber()
 }
 
 export function downloadBlob(filename: string, content: string, mime: string) {
@@ -107,6 +111,14 @@ export function verdictExportData(run: RunSummary) {
     outcome: run.outcome,
     verdict_label: run.verdictLabel,
     detail: run.detail,
+    // Export only the tenant fields shown in the UI, never the full catalog card
+    // or legacy operator guidance. Null means no tenant guidance is available.
+    tenant_guidance: run.diagnose?.hasPersona === true ? {
+      summary: run.diagnose.summary,
+      impact: run.diagnose.impact,
+      action: run.diagnose.action,
+      support_details: [...run.diagnose.supportDetails],
+    } : null,
     window: {
       start_utc: run.startTime,
       end_utc: run.endTime,
@@ -143,23 +155,17 @@ export function logToText(run: RunDetail): string {
     .join('\n')
 }
 
+// The node's page's own summary of its runs (summarizeNode), for machines:
+// symptoms most attributed first, as the page lists them.
 export function nodeExportData(nodeId: string, attempts: RunSummary[]) {
-  const impacted = attempts.filter((r) => r.responsibleNodes.includes(nodeId))
-  const symptomCounts: Record<string, number> = {}
-  impacted.forEach((r) => {
-    const s = r.rootSymptom.symptom
-    symptomCounts[s] = (symptomCounts[s] || 0) + 1
-  })
+  const { responsible, symptoms, gpuHours } = summarizeNode(attempts, nodeId)
   return {
     node_id: nodeId,
-    attempts_impacted: impacted.length,
-    distinct_symptoms: Object.keys(symptomCounts).length,
-    gpu_hours_observed: attempts
-      .reduce((acc, r) => acc.plus(nodeGpuHours(r)), new Decimal(0))
-      .toDecimalPlaces(2)
-      .toNumber(),
-    symptoms: Object.entries(symptomCounts).map(([name, count]) => ({ name, count })),
-    attempts: impacted.map((r) => ({
+    attempts_impacted: responsible.length,
+    distinct_symptoms: symptoms.length,
+    gpu_hours_observed: gpuHours.toDecimalPlaces(2).toNumber(),
+    symptoms: symptoms.map(([name, count]) => ({ name, count })),
+    attempts: responsible.map((r) => ({
       attempt_uid: r.attemptUid,
       execution_context: r.jobId,
       attempt: r.attempt,
@@ -167,7 +173,7 @@ export function nodeExportData(nodeId: string, attempts: RunSummary[]) {
       outcome: r.outcome,
       end_time_utc: r.endTime,
       elapsed_hours: exportElapsed(r),
-      gpu_hours_observed: exportNodeGpuHours(r),
+      gpu_hours_observed: exportNodeGpuHours(r, nodeId),
       root_symptom: r.rootSymptom.symptom,
       rule: r.rootSymptom.rule,
     })),

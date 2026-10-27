@@ -1,17 +1,17 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-# SPDX-License-Identifier: LicenseRef-NvidiaProprietary
-#
-# NVIDIA CORPORATION, its affiliates and licensors retain all intellectual
-# property and proprietary rights in and to this material, related
-# documentation and any modifications thereto. Any use, reproduction,
-# disclosure or distribution of this material and related documentation
-# without an express license agreement from NVIDIA CORPORATION or
-# its affiliates is strictly prohibited.
+# SPDX-License-Identifier: Apache-2.0
 
 from datetime import datetime, timedelta
 
 import pytest
+from pydantic import ValidationError
 
+from attribution_lib.cluster_context import (
+    ClusterIncidentCandidate,
+    ClusterIncidentContext,
+    ClusterIncidentScope,
+    ClusterIncidentSignature,
+)
 from attribution_lib.exceptions import (
     InvalidRankError,
     JobInfoDuplicateFieldError,
@@ -26,6 +26,7 @@ from attribution_lib.job_info import (
     UnknownNodeError,
     _coerce_optional_int,
     _coerce_tags,
+    _qualified_nodes_by_short_name,
     normalize_scheduler_identity,
 )
 
@@ -63,6 +64,37 @@ class TestJobInfo:
 
         with pytest.raises(UnknownNodeError):
             job_info.verify_node("node-Name02")
+
+    def test_verify_node_matches_short_name_to_fully_qualified_allocation(self, simple_job_factory):
+        """A short log hostname maps to the fully qualified name in the allocation."""
+        job_info = simple_job_factory(nodes=["gpu-01.example.internal", "gpu-02.example.internal"])
+        line = "Oct  5 20:22:00 gpu-02 kernel: NVRM: Xid (PCI:0000:01:00): 79, pid=1234, name=python"
+
+        assert job_info.verify_node("GPU-01") == "gpu-01.example.internal"
+        assert job_info.syslog_extract_node(line) == "gpu-02.example.internal"
+
+    def test_verify_node_rejects_fully_qualified_name_in_another_domain(self, simple_job_factory):
+        """A log FQDN never maps to an allocation entry in a different domain."""
+        job_info = simple_job_factory(nodes=["gpu-01.cluster.local"])
+
+        with pytest.raises(UnknownNodeError):
+            job_info.verify_node("gpu-01.example.internal")
+
+    def test_verify_node_reuses_short_name_index_per_allocation(self, simple_job_factory):
+        """The short-name lookup is built once per allocation, not on every call."""
+        job_info = simple_job_factory(nodes=["gpu-01.example.internal", "gpu-02.example.internal"])
+        _qualified_nodes_by_short_name.cache_clear()
+
+        assert job_info.verify_node("gpu-01") == "gpu-01.example.internal"
+        assert job_info.verify_node("gpu-02") == "gpu-02.example.internal"
+        assert _qualified_nodes_by_short_name.cache_info().misses == 1
+
+    def test_verify_node_raises_for_ambiguous_short_name(self, simple_job_factory):
+        """A short name shared by two allocated FQDNs is not guessed."""
+        job_info = simple_job_factory(nodes=["gpu-01.rack-a.example", "gpu-01.rack-b.example"])
+
+        with pytest.raises(UnknownNodeError):
+            job_info.verify_node("gpu-01")
 
     def test_applog_extract_node_prefers_nccl_hostname_over_out_of_range_rank(self, simple_job_factory):
         """NCCL hostname in this job wins even when the srun rank is out of range."""
@@ -298,6 +330,108 @@ class TestNodeToRanksLookup:
         assert job_info.verify_node("node-b") == "node-b"
 
 
+class TestJobInfoClusterIncidentContext:
+    """Validated cluster context available to attribution refiners."""
+
+    def test_defaults_to_none(self, simple_job_factory):
+        assert simple_job_factory().cluster_incident_context is None
+
+    def test_builder_preserves_explicit_none(self, timezone):
+        builder = _builder(timezone, node_to_ranks={})
+        builder.job_end_time(datetime.fromtimestamp(1700001000, tz=timezone))
+
+        assert builder.cluster_incident_context(None).build().cluster_incident_context is None
+
+    def test_builder_accepts_empty_context(self, timezone):
+        builder = _builder(timezone, node_to_ranks={})
+        builder.job_end_time(datetime.fromtimestamp(1700001000, tz=timezone))
+
+        assert (
+            builder.cluster_incident_context(ClusterIncidentContext()).build().cluster_incident_context
+            == ClusterIncidentContext()
+        )
+
+    def test_builder_preserves_cluster_incident_context(self, timezone):
+        context = ClusterIncidentContext(
+            candidates=(
+                ClusterIncidentCandidate(
+                    incident_scope=ClusterIncidentScope.CLUSTER,
+                    signature_class=ClusterIncidentSignature.STORAGE_FAULT,
+                    non_job_nodes_affected=4,
+                    non_job_domains_affected=2,
+                    total_non_job_events=6,
+                    failure_episode_id="storage_fault:2026-10-20T12:00:00",
+                    cluster_incident_id="test-cluster:storage_fault:2026-10-20T12:00:00",
+                    incident_start_settled=True,
+                ),
+            )
+        )
+        builder = _builder(timezone, node_to_ranks={})
+        builder.job_end_time(datetime.fromtimestamp(1700001000, tz=timezone))
+
+        job_info = builder.cluster_incident_context(context).build()
+
+        assert job_info.cluster_incident_context is context
+
+    def test_candidate_keeps_unsupplied_metrics_unknown(self):
+        candidate = ClusterIncidentCandidate(
+            incident_scope=ClusterIncidentScope.NODE,
+            signature_class=ClusterIncidentSignature.OTHER,
+        )
+
+        assert candidate.non_job_nodes_affected is None
+        assert candidate.non_job_domains_affected is None
+        assert candidate.total_non_job_events is None
+        assert candidate.incident_start_settled is None
+
+    def test_candidate_preserves_zero_counts(self):
+        candidate = ClusterIncidentCandidate(
+            incident_scope=ClusterIncidentScope.NODE,
+            signature_class=ClusterIncidentSignature.OTHER,
+            non_job_nodes_affected=0,
+            non_job_domains_affected=0,
+            total_non_job_events=0,
+        )
+
+        assert candidate.non_job_nodes_affected == 0
+        assert candidate.non_job_domains_affected == 0
+        assert candidate.total_non_job_events == 0
+
+    @pytest.mark.parametrize(
+        "candidate",
+        [
+            {"incident_scope": "rack", "signature_class": "storage_fault"},
+            {"incident_scope": "cluster", "signature_class": "unknown_fault"},
+            {"incident_scope": "cluster", "signature_class": "storage_fault", "non_job_nodes_affected": -1},
+            {"incident_scope": "cluster", "signature_class": "storage_fault", "non_job_nodes_affected": True},
+            {"incident_scope": "cluster", "signature_class": "storage_fault", "non_job_domains_affected": True},
+            {"incident_scope": "cluster", "signature_class": "storage_fault", "total_non_job_events": True},
+            {"incident_scope": "cluster", "signature_class": "storage_fault", "producer_only_field": "rejected"},
+        ],
+    )
+    def test_candidate_rejects_invalid_fields(self, candidate):
+        with pytest.raises(ValidationError):
+            ClusterIncidentCandidate.model_validate(candidate)
+
+    def test_context_rejects_unknown_fields(self):
+        with pytest.raises(ValidationError):
+            ClusterIncidentContext.model_validate({"producer_only_field": "rejected"})
+
+    def test_builder_rejects_unvalidated_mapping(self, timezone):
+        builder = _builder(timezone, node_to_ranks={})
+        builder.job_end_time(datetime.fromtimestamp(1700001000, tz=timezone))
+
+        with pytest.raises(TypeError, match="cluster_incident_context must be a ClusterIncidentContext"):
+            builder.cluster_incident_context({"candidates": []})  # type: ignore[arg-type]
+
+    def test_builder_rejects_second_context_after_explicit_none(self, timezone):
+        builder = _builder(timezone, node_to_ranks={})
+        builder.cluster_incident_context(None)
+
+        with pytest.raises(JobInfoDuplicateFieldError):
+            builder.cluster_incident_context(ClusterIncidentContext())
+
+
 class TestJobInfoTags:
     """SlurmDB tag coercion and the builder duplicate-field guard."""
 
@@ -346,6 +480,7 @@ class TestNormalizeSchedulerIdentity:
         [
             pytest.param("slurm", Scheduler.SLURM, id="slurm"),
             pytest.param("kueue", Scheduler.KUEUE, id="kueue"),
+            pytest.param("kai", Scheduler.KAI, id="kai"),
             pytest.param("SLURM", Scheduler.SLURM, id="case-insensitive"),
             pytest.param(" kueue ", Scheduler.KUEUE, id="trims surrounding whitespace"),
             pytest.param("", Scheduler.UNKNOWN, id="empty is unknown"),
@@ -385,7 +520,7 @@ class TestJobInfoBuilderScheduler:
         assert job_info.scheduler is Scheduler.KUEUE
         assert job_info.type == "anything"  # `type` is preserved verbatim regardless
 
-    @pytest.mark.parametrize("type_", ["slurm", "kueue", "training", ""])
+    @pytest.mark.parametrize("type_", ["slurm", "kueue", "kai", "training", ""])
     def test_unset_scheduler_is_unknown_regardless_of_type(self, timezone, type_):
         builder = _builder(timezone, node_to_ranks={}, type=type_)
         job_info = builder.job_end_time(_end_time(timezone)).build()

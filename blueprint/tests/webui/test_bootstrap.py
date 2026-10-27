@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
 import json
 import os
 from datetime import datetime, timezone
@@ -92,7 +95,7 @@ def test_run_to_react_core_fields(tmp_path):
     assert any(entry["level"] == "symptom" and "Xid 79" in entry["text"] for entry in r["log"])
     # diagnose card present (camelCase keys)
     assert set(["hasPersona", "title", "summary", "impact", "action", "supportDetails"]) <= set(r["diagnose"])
-    assert set(["hasPersona", "title", "summary", "impact", "action", "supportDetails"]) <= set(r["operatorDiagnose"])
+    assert "operatorDiagnose" not in r
 
 
 def test_run_to_react_includes_bad_pairs(tmp_path):
@@ -135,10 +138,29 @@ def test_run_to_react_falls_back_when_catalog_is_empty(tmp_path, monkeypatch):
     assert r["diagnose"]["title"] == "GpuFell"
     assert r["diagnose"]["summary"] == "GPU off bus"
     assert r["diagnose"]["catalogId"] is None
-    assert r["operatorDiagnose"]["hasPersona"] is False
-    assert r["operatorDiagnose"]["title"] == "GpuFell"
-    assert r["operatorDiagnose"]["summary"] == "GPU off bus"
-    assert r["operatorDiagnose"]["catalogId"] is None
+    assert "operatorDiagnose" not in r
+
+
+def test_generic_nvrx_failure_reports_unavailable_reason(tmp_path):
+    """Keep the unavailable reason in the report and tenant diagnosis without operator guidance."""
+    detail = "Underlying failure reason unavailable from the collected evidence."
+    run = _seed_one(
+        tmp_path,
+        catalog_id="nvrx-detected-failure",
+        symptom="NVRx detected failure",
+        rule="NVRXFailureDetected",
+        line="Cycle: 1 Event: failure_detected Node: node-a Rank: 0",
+        detail=detail,
+    )
+    run.raw_result["verdict"]["attribution_outcome"] = "Fail Undetermined"
+
+    result = bootstrap.run_to_react(run)
+
+    assert result["verdictLabel"] == "Unattributed"
+    assert result["detail"] == detail
+    assert result["rootSymptom"]["symptom"] == "NVRx detected failure"
+    assert result["diagnose"]["summary"] == detail
+    assert "operatorDiagnose" not in result
 
 
 def test_symptom_text_without_catalog_id_yields_no_persona_card(tmp_path):
@@ -149,9 +171,7 @@ def test_symptom_text_without_catalog_id_yields_no_persona_card(tmp_path):
     assert r["diagnose"]["hasPersona"] is False
     assert r["diagnose"]["catalogId"] is None
     assert r["diagnose"]["title"] == "GpuFell"
-    assert r["operatorDiagnose"]["hasPersona"] is False
-    assert r["operatorDiagnose"]["catalogId"] is None
-    assert r["operatorDiagnose"]["title"] == "GpuFell"
+    assert "operatorDiagnose" not in r
 
 
 def test_run_to_react_parses_unsquashfs_timestamp_with_empty_catalog(tmp_path, monkeypatch):
@@ -167,10 +187,97 @@ def test_run_to_react_parses_unsquashfs_timestamp_with_empty_catalog(tmp_path, m
     r = bootstrap.run_to_react(run)
     assert r["rootSymptom"]["time"] == "2026-05-01T00:30:00.123456+00:00"
     assert [line["level"] for line in r["log"]] == ["symptom"]
-    assert r["operatorDiagnose"]["hasPersona"] is False
-    assert r["operatorDiagnose"]["catalogId"] is None
-    assert r["operatorDiagnose"]["title"] == "unsquashfs: write failed (system path)"
-    assert r["operatorDiagnose"]["summary"] == "Not Applicable"
+    assert r["diagnose"]["title"] == "unsquashfs: write failed (system path)"
+    assert r["diagnose"]["summary"] == "Not Applicable"
+    assert "operatorDiagnose" not in r
+
+
+def test_packaged_catalog_tenant_guidance_reaches_payload(tmp_path):
+    """Every packaged tenant entry retains its actions and evidence instructions."""
+    from attribution_blueprint.webui.diagnose import _load_catalog
+
+    catalog = _load_catalog()
+    assert "xid-79" in catalog
+    run = _seed_one(tmp_path, catalog_id="xid-79")
+    checked = 0
+    for entry_id, entry in catalog.items():
+        tenant = entry.get("personas", {}).get("tenant_sre")
+        if tenant is None:
+            continue
+        run.raw_result["verdict"]["root_symptom"]["catalog_id"] = entry_id
+        card = bootstrap.run_to_react(run)["diagnose"]
+        assert card["hasPersona"] is True, entry_id
+        assert card["action"] == tenant.get("action", ""), entry_id
+        support = tenant.get("support_details", "")
+        expected = [support.strip()] if isinstance(support, str) and support.strip() else support or []
+        assert card["supportDetails"] == expected, entry_id
+        assert card["catalogId"] == entry_id
+        checked += 1
+    assert checked > 0
+
+
+@pytest.mark.parametrize(
+    ("support", "expected"),
+    [
+        (
+            "Include the diagnosis (verdict, symptom chain); ask for help even with incomplete evidence.",
+            ["Include the diagnosis (verdict, symptom chain); ask for help even with incomplete evidence."],
+        ),
+        ("1. Include the job ID.\n2. Include available logs.", ["1. Include the job ID.\n2. Include available logs."]),
+        ([" Job ID ", "Available logs", "", None, {}], ["Job ID", "Available logs"]),
+        (None, []),
+        ("", []),
+        (" \n ", []),
+    ],
+)
+def test_tenant_support_is_not_split_or_replaced_by_private_guidance(tmp_path, monkeypatch, support, expected):
+    from attribution_blueprint.webui import diagnose
+
+    entry = {
+        "id": "test-symptom",
+        "title": "Test symptom",
+        "personas": {
+            "tenant_sre": {"action": "Retry only your own workload.", "support_details": support},
+            "cloud_operator": {
+                "summary": "PRIVATE_OPERATOR_SUMMARY",
+                "action": "PRIVATE_OPERATOR_ACTION",
+                "support_details": "PRIVATE_OPERATOR_EVIDENCE",
+            },
+        },
+        "internal_notes": {"action": "PRIVATE_INTERNAL_NOTES"},
+    }
+    monkeypatch.setattr(diagnose, "_load_catalog", lambda: {entry["id"]: entry})
+    run = _seed_one(tmp_path, catalog_id=entry["id"])
+    for build in (bootstrap.run_summary_to_react, bootstrap.run_to_react):
+        payload = build(run)
+        assert payload["diagnose"]["action"] == "Retry only your own workload."
+        assert payload["diagnose"]["supportDetails"] == expected
+        assert "operatorDiagnose" not in payload
+        assert "PRIVATE_" not in json.dumps(payload)
+
+
+def test_missing_tenant_persona_does_not_use_operator_guidance(tmp_path, monkeypatch):
+    from attribution_blueprint.webui import diagnose
+
+    monkeypatch.setattr(
+        diagnose,
+        "_load_catalog",
+        lambda: {
+            "operator-only": {
+                "id": "operator-only",
+                "title": "Test symptom",
+                "personas": {
+                    "cloud_operator": {"action": "PRIVATE_OPERATOR_ACTION", "support_details": "PRIVATE_EVIDENCE"}
+                },
+                "internal_notes": "PRIVATE_INTERNAL_NOTES",
+            }
+        },
+    )
+    payload = bootstrap.run_to_react(_seed_one(tmp_path, catalog_id="operator-only"))
+    assert payload["diagnose"]["hasPersona"] is False
+    assert payload["diagnose"]["action"] == ""
+    assert payload["diagnose"]["supportDetails"] == []
+    assert "PRIVATE_" not in json.dumps(payload)
 
 
 def test_run_to_react_defaults_gpus_per_node_for_historical_rows(tmp_path):
@@ -343,3 +450,69 @@ def test_inject_escapes_script_breakout():
     end = out.index("</script>", start)
     restored = json.loads(out[start:end].replace("\\u003c", "<").replace("\\u003e", ">").replace("\\u0026", "&"))
     assert restored["runs"][0]["log"][0]["text"] == "</script><img src=x onerror=alert(1)>"
+
+
+def test_run_to_react_passes_compound_outcome_fields(tmp_path):
+    p = tmp_path / "m.db"
+    out = SQLiteOutput(str(p))
+    ctx = {
+        "id": "s1",
+        "sluid": "s1",
+        "attempt_id": "s1",
+        "workload_type": "slurm",
+        "scheduler": "slurm",
+        "job_id": "job-1",
+        "nodes": ["node-a"],
+        "start_time": datetime(2026, 5, 1, 0, tzinfo=timezone.utc),
+        "end_time": datetime(2026, 5, 1, 1, tzinfo=timezone.utc),
+        "state": "FAILED",
+        "user_name": "alice",
+        "gpus_per_node": 8,
+    }
+    out.write(
+        ctx,
+        {
+            "verdict": {
+                "attribution_outcome": "Fail InfraHW",
+                "detail": "",
+                "root_symptom": {"symptom": "GpuFell", "source": {"rule": "r", "line": "l", "time": "2026-05-01T00:30:00+00:00"}},
+                "terminal_states": ["Fail"],
+                "failure_domains": ["InfraHW"],
+                "cancellation_actors": [],
+                "uncertainty_type": None,
+            },
+            "model_type": "AttributionResponseV2",
+            "connector_reports": [{"connector": "c", "source": "syslog", "status": "ok", "reason": "", "observation_count": 1}],
+            "ingestion_reports": [{"connector": "c", "source": "syslog", "status": "error", "attempted": 1, "failed": 1, "reason": "HTTP 500"}],
+            "evidence_status": "partial",
+        },
+    )
+    out.close()
+    run = dbmod.get_run(str(p), dbmod.list_runs(str(p))[0].run_id)
+    r = bootstrap.run_to_react(run)
+
+    assert r["terminalStates"] == ["Fail"]
+    assert r["failureDomains"] == ["InfraHW"]
+    assert r["cancellationActors"] == []
+    assert r["uncertaintyType"] is None
+    assert r["evidenceStatus"] == "partial"
+    assert r["ingestionReports"] == {
+        "connector_reports": [{"connector": "c", "source": "syslog", "status": "ok", "reason": "", "observation_count": 1}],
+        "ingestion_reports": [{"connector": "c", "source": "syslog", "status": "error", "attempted": 1, "failed": 1, "reason": "HTTP 500"}],
+    }
+
+
+def test_run_to_react_defaults_compound_fields_when_absent(tmp_path):
+    run = _seed_one(tmp_path)
+    # Rows saved before ingestion reports were recorded still carry connector_reports.
+    run.raw_result["connector_reports"] = [
+        {"connector": "c", "source": "syslog", "status": "ok", "reason": "", "observation_count": 1}
+    ]
+    r = bootstrap.run_to_react(run)
+
+    assert r["terminalStates"] == []
+    assert r["failureDomains"] == []
+    assert r["cancellationActors"] == []
+    assert r["uncertaintyType"] is None
+    assert r["evidenceStatus"] is None
+    assert r["ingestionReports"] is None

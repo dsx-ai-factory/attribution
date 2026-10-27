@@ -1,9 +1,8 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-// SPDX-License-Identifier: LicenseRef-NvidiaProprietary
+// SPDX-License-Identifier: Apache-2.0
 
-import { BaseEdge, EdgeLabelRenderer, getSmoothStepPath, type Edge, type EdgeProps } from '@xyflow/react'
-import { cn } from '@/lib/utils'
-import { EDGE_LABEL_HEIGHT, type TraceEdgeData } from './layout'
+import { BaseEdge, EdgeLabelRenderer, type Edge, type EdgeProps } from '@xyflow/react'
+import { EDGE_LABEL_HEIGHT, type TracePathData } from './layout'
 
 function roundedPath(points: { x: number; y: number }[]) {
   let path = `M ${points[0].x} ${points[0].y}`
@@ -18,38 +17,42 @@ function roundedPath(points: { x: number; y: number }[]) {
       path += ` L ${point.x} ${point.y}`
       continue
     }
-    // Measured handles have subpixel offsets. Unit vectors keep each tangent
-    // on its segment instead of amplifying those offsets into a full radius.
+    // Unit vectors keep each tangent on its segment, a radius from the
+    // corner and never past the segment's middle.
     path += ` L ${point.x - (point.x - previous.x) / incomingLength * radius} ${point.y - (point.y - previous.y) / incomingLength * radius}`
     path += ` Q ${point.x} ${point.y} ${point.x + (next.x - point.x) / outgoingLength * radius} ${point.y + (next.y - point.y) / outgoingLength * radius}`
   }
   return `${path} L ${points.at(-1)!.x} ${points.at(-1)!.y}`
 }
 
-export function TraceEdge({ id, sourceX, sourceY, targetX, targetY, sourcePosition, targetPosition, markerEnd, style, label, data, animated }: EdgeProps<Edge<TraceEdgeData>>) {
-  const [defaultPath, defaultLabelX, defaultLabelY] = getSmoothStepPath({
-    sourceX, sourceY, targetX, targetY, sourcePosition, targetPosition, borderRadius: 12,
-  })
-  const path = data ? roundedPath([
-    { x: sourceX, y: sourceY },
-    ...data.points,
-    { x: targetX, y: targetY },
-  ]) : defaultPath
-  const labelX = data?.labelX ?? defaultLabelX
-  const labelY = data?.labelY ?? defaultLabelY
+// A piece of a route (TracePathData), through its own corners from end to
+// end, with the labels on it. Its ends at steps are the layout's points on
+// the steps' borders, not where React Flow measures their handles on screen:
+// that measurement puts an end 3px off the border (a handle's outer edge) and
+// scales with any transform around the canvas as it mounts (a dialog zooming
+// in drew every end 95% of the way). A label names relationships on the
+// traced chain only (the view passes no other), so it wears the trace color.
+// The 20px layout box holds one 16px line between 1px borders and 1px
+// padding. Like the piece, a label is part of the picture: assistive
+// technology reads each relationship by its name.
+export function TraceEdge({ id, markerEnd, style, data }: EdgeProps<Edge<TracePathData>>) {
+  const path = roundedPath(data!.points)
   return (
     <>
       <BaseEdge id={id} path={path} markerEnd={markerEnd} style={style} />
-      {label != null && (
+      {data!.labels.length > 0 && (
         <EdgeLabelRenderer>
-          <div
-            data-slot="decision-edge-label"
-            className={cn('pointer-events-none absolute box-border overflow-hidden rounded-sm border bg-background-secondary px-2 py-0.5 text-center font-sans text-[10px] leading-[14px] text-ellipsis whitespace-nowrap shadow-sm', animated ? 'border-primary-300/50 text-primary-300' : 'border-border text-foreground-secondary')}
-            title={data?.edgeType}
-            style={{ opacity: style?.opacity, width: data?.labelWidth, height: EDGE_LABEL_HEIGHT, transform: `translate(-50%, -50%) translate(${labelX}px, ${labelY}px)` }}
-          >
-            {label}
-          </div>
+          {data!.labels.map((label) => (
+            <div
+              key={`${label.x} ${label.y}`}
+              data-slot="decision-edge-label"
+              aria-hidden="true"
+              className="pointer-events-none absolute box-border overflow-hidden rounded-sm border border-graph-trace/50 bg-background-secondary px-2 py-px text-center text-xs leading-4 text-ellipsis whitespace-nowrap text-graph-trace"
+              style={{ width: label.width, height: EDGE_LABEL_HEIGHT, transform: `translate(-50%, -50%) translate(${label.x}px, ${label.y}px)` }}
+            >
+              {label.text}
+            </div>
+          ))}
         </EdgeLabelRenderer>
       )}
     </>

@@ -1,12 +1,5 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-# SPDX-License-Identifier: LicenseRef-NvidiaProprietary
-#
-# NVIDIA CORPORATION, its affiliates and licensors retain all intellectual
-# property and proprietary rights in and to this material, related
-# documentation and any modifications thereto. Any use, reproduction,
-# disclosure or distribution of this material and related documentation
-# without an express license agreement from NVIDIA CORPORATION or
-# its affiliates is strictly prohibited.
+# SPDX-License-Identifier: Apache-2.0
 
 """FastAPI app for browsing the attribution SQLite database."""
 
@@ -20,6 +13,7 @@ from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 
+from attribution_blueprint import __version__
 from attribution_blueprint.webui import db
 
 
@@ -52,7 +46,7 @@ def create_app(db_path: str) -> FastAPI:
             "`scripts/webui.sh --db PATH`, build the frontend assets, or install a built wheel."
         )
 
-    app = FastAPI(title="Attribution Blueprint Dashboard")
+    app = FastAPI(title="Attribution Blueprint Dashboard", version=__version__)
     app.mount("/assets", StaticFiles(directory=str(_STATIC / "assets")), name="assets")
 
     @app.get("/api/v1/meta")
@@ -60,11 +54,13 @@ def create_app(db_path: str) -> FastAPI:
         summary = db.db_summary(str(backend))
         lo, hi = db.date_range_bounds(str(backend))
         n_runs = summary.get("n_runs", 0)
+        newest = db.list_runs(str(backend), limit=1)
         return {
             "versions": {
                 "schema": summary.get("schema_version"),
-                "pipeline": None,
-                "service": None,
+                "pipeline": newest[0].pipeline_version if newest else None,
+                # The service response's model type (e.g. "AttributionResponseV2"), not the service build version.
+                "service": newest[0].service_api_version if newest else None,
             },
             "dateBounds": {"min": lo[:10] if lo is not None else None, "max": hi[:10] if hi is not None else None},
             "windowedRuns": n_runs,

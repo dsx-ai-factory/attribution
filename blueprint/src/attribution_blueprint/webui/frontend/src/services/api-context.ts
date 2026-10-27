@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// SPDX-License-Identifier: Apache-2.0
+
 // src/services/api-context.ts
 // Context + accessor hook live here (no component export) so the provider file
 // can stay component-only for react-refresh.

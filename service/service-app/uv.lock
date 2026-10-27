@@ -46,7 +46,6 @@ wheels = [
 
 [[package]]
 name = "attribution-lib"
-version = "0.4.1.dev140"
 source = { editable = "../attribution-lib" }
 dependencies = [
     { name = "duckdb" },

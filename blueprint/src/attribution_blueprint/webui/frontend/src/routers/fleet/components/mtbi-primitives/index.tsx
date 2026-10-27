@@ -1,47 +1,54 @@
+// SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// SPDX-License-Identifier: Apache-2.0
+
 import type { OutcomeKey } from '@/interfaces/attribution'
 import type { FleetFilter } from '@/interfaces/filter'
+import { OUTCOMES } from '@/lib/attribution-data'
 import { withDimension } from '@/lib/filter-state'
-import { Badge } from '@/components/ui/badge'
+import { Toggle } from '@/components/ui/toggle'
+import { OutcomeDot } from '@/components/outcome'
 
-/**
- * Scrolls the Runs table into view. Caller is responsible for first
- * applying any filter change so the smooth-scroll lands on filtered rows.
- */
-// eslint-disable-next-line react-refresh/only-export-components
-export function scrollToRuns() {
-  const el = document.getElementById('runs-section')
-  if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' })
+/** How a filter change asks the page to show its result. */
+export interface FilterChangeOptions {
+  /** Bring the run list into view once it lists the new filter's runs. */
+  revealRuns?: boolean
 }
 
+// The trend's drawing box. The line stretches to whatever box its caller
+// gives it (preserveAspectRatio none, at a constant stroke), so this only sets
+// its proportions and its 3px inset from top and bottom.
+const SPARKLINE_WIDTH = 60
+const SPARKLINE_HEIGHT = 20
+
+// A neutral trend line; given an outcome it takes that outcome's tone instead.
+// A trend needs two points: one day alone draws nothing rather than a stray dot.
 export function MtbiSparkline({
   values,
-  color = 'var(--color-primary)',
-  width = 60,
-  height = 20,
+  outcome,
   showDot = true,
 }: {
   values: number[]
-  color?: string
-  width?: number
-  height?: number
+  outcome?: OutcomeKey
   showDot?: boolean
 }) {
-  if (!values || values.length === 0) return null
+  if (values.length < 2) return null
   const min = Math.min(...values)
   const max = Math.max(...values)
   const range = max - min || 1
-  const stepX = width / Math.max(1, values.length - 1)
+  const stepX = SPARKLINE_WIDTH / (values.length - 1)
   const pts = values.map<[number, number]>((v, i) => [
     i * stepX,
-    height - ((v - min) / range) * (height - 6) - 3,
+    SPARKLINE_HEIGHT - ((v - min) / range) * (SPARKLINE_HEIGHT - 6) - 3,
   ])
   const path = pts
     .map((p, i) => `${i === 0 ? 'M' : 'L'}${p[0].toFixed(1)},${p[1].toFixed(1)}`)
     .join(' ')
   const last = pts[pts.length - 1]
+  const color = outcome ? 'var(--tone)' : 'var(--foreground-secondary)'
   return (
     <svg
-      viewBox={`0 0 ${width} ${height}`}
+      data-outcome={outcome}
+      viewBox={`0 0 ${SPARKLINE_WIDTH} ${SPARKLINE_HEIGHT}`}
       preserveAspectRatio="none"
       className="block w-full h-full"
     >
@@ -57,66 +64,42 @@ export function MtbiSparkline({
   )
 }
 
-export function DeltaPill({
-  now,
-  prior,
-  higherIsBetter = true,
-}: {
-  now: number
-  prior: number
-  higherIsBetter?: boolean
-}) {
-  const delta = now - prior
-  const pct = prior === 0 ? 0 : (delta / prior) * 100
-  const isUp = delta >= 0
-  const isGood = higherIsBetter ? isUp : !isUp
-  return (
-    <Badge
-      variant={isGood ? 'default' : 'outline'}
-      className={`font-mono ${
-        isGood ? 'bg-primary/15 text-primary border-transparent' : 'text-foreground border-zinc-700'
-      }`}
-    >
-      {isUp ? '▲' : '▼'} {Math.abs(pct).toFixed(0)}%
-    </Badge>
-  )
-}
-
 /**
- * Clickable failure counter: applies an outcome filter and scrolls to Runs.
- * Spreads <a> props so Radix's asChild Slot can forward to it.
+ * One outcome's failure count as a filter toggle: pressing it sets that
+ * outcome, whose runs are all failed ones, and brings them into view; pressing
+ * it again drops the outcome and nothing else. Its name says what pressing
+ * does and keeps the visible count and full outcome label. While the count
+ * loads, or when it could not be loaded (undefined), the toggle stays, named
+ * by its outcome alone.
  */
-export function FailureLink({
+export function FailureFilterButton({
   outcome,
+  count,
   filter,
   setFilter,
-  children,
-  className,
-  onClick,
-  ...props
 }: {
   outcome: OutcomeKey
+  count?: number
   filter: FleetFilter
-  setFilter: (next: FleetFilter) => void
-  children?: React.ReactNode
-} & Omit<React.ComponentProps<'a'>, 'children'>) {
+  setFilter: (next: FleetFilter, options?: FilterChangeOptions) => void
+}) {
+  const { label } = OUTCOMES[outcome]
   return (
-    <a
-      {...props}
-      onClick={(e) => {
-        e.stopPropagation()
-        onClick?.(e)
-        setFilter(withDimension({ ...filter, status: 'failed' }, 'outcome', outcome))
-        scrollToRuns()
+    <Toggle
+      pressed={filter.outcome === outcome}
+      aria-label={count === undefined ? `Filter runs: ${label}` : `Filter runs: ${count} ${label}`}
+      onPressedChange={(pressed) => {
+        if (!pressed) {
+          setFilter(withDimension(filter, 'outcome', undefined))
+          return
+        }
+        setFilter(withDimension(filter, 'outcome', outcome), { revealRuns: true })
       }}
-      className={[
-        'cursor-pointer underline decoration-foreground-muted underline-offset-2 hover:decoration-primary hover:text-primary',
-        className,
-      ]
-        .filter(Boolean)
-        .join(' ')}
+      className="justify-start gap-2"
     >
-      {children}
-    </a>
+      <OutcomeDot outcome={outcome} />
+      {count !== undefined && <span className="num">{count}</span>}
+      {label}
+    </Toggle>
   )
 }

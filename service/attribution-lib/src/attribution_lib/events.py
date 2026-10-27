@@ -1,12 +1,5 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-# SPDX-License-Identifier: LicenseRef-NvidiaProprietary
-#
-# NVIDIA CORPORATION, its affiliates and licensors retain all intellectual
-# property and proprietary rights in and to this material, related
-# documentation and any modifications thereto. Any use, reproduction,
-# disclosure or distribution of this material and related documentation
-# without an express license agreement from NVIDIA CORPORATION or
-# its affiliates is strictly prohibited.
+# SPDX-License-Identifier: Apache-2.0
 import atexit
 import contextlib
 import json
@@ -22,9 +15,11 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Optional, TypeAlias
 
 import duckdb
+from loguru import logger
 
 from attribution_lib.exceptions import (
     EventStorageOutOfMemoryError,
+    InvalidEventStorageSizeError,
     InvalidSnapshotError,
     SnapshotSchemaVersionError,
     StableIdCollisionError,
@@ -390,8 +385,9 @@ def _build_shared_lookup_db(rules_engine: "RuleEngine") -> tuple[Path, _LookupPy
         global _shared_lookup_counter
         _shared_lookup_counter += 1
         path = Path(_get_shared_lookup_tmpdir()) / f"lookup_{_shared_lookup_counter}.duckdb"
-        conn = duckdb.connect(str(path))
+        conn = None
         try:
+            conn = duckdb.connect(str(path))
             conn.execute(_SHARED_LOOKUP_SCHEMA)
             id_by_name_per_table = {
                 "obs_sources": _bulk_insert_names(conn, "obs_sources", {m.value for m in ObsSource if m.value}),
@@ -399,18 +395,25 @@ def _build_shared_lookup_db(rules_engine: "RuleEngine") -> tuple[Path, _LookupPy
                 "rules": _bulk_insert_names(conn, "rules", set(rules_engine.all_rule_names)),
                 "event_types": _bulk_insert_names(conn, "event_types", set(rules_engine.all_event_types)),
             }
-        finally:
-            # Release the write lock so other connections can ATTACH ... READ_ONLY.
+            # Release the write lock before publishing for ATTACH ... READ_ONLY.
             conn.close()
-
-        python_cache: _LookupPythonCache = {
-            table: (id_by_name, {id_val: name for name, id_val in id_by_name.items()})
-            for table, id_by_name in id_by_name_per_table.items()
-        }
-
-        result = (path, python_cache)
-        _shared_lookup_cache[rules_engine] = result
-        return result
+            python_cache: _LookupPythonCache = {
+                table: (id_by_name, {id_val: name for name, id_val in id_by_name.items()})
+                for table, id_by_name in id_by_name_per_table.items()
+            }
+            result = (path, python_cache)
+            _shared_lookup_cache[rules_engine] = result
+            return result
+        except BaseException:
+            try:
+                if conn is not None:
+                    conn.close()
+                path.unlink(missing_ok=True)
+                Path(f"{path}.wal").unlink(missing_ok=True)
+            except Exception:
+                # The process-owned temp directory remains covered by atexit.
+                logger.exception("Failed to remove incomplete lookup database {}", path)
+            raise
 
 
 class EventStream:
@@ -774,6 +777,8 @@ class EventManager:
         threads: Optional[int] = None,
         memory_limit: Optional[str] = None,
         allow_disk_spill: bool = True,
+        temp_root: Optional[str] = None,
+        max_temp_directory_size: Optional[str] = None,
     ):
         """
         Args:
@@ -788,7 +793,10 @@ class EventManager:
                 Defaults to DuckDB's own default (~80% of system RAM) when
                 omitted.
             allow_disk_spill: whether DuckDB may spill data exceeding
-                memory_limit to a local `.tmp` directory instead of raising.
+                memory_limit to disk instead of raising. Spill files go in a
+                directory private to this instance (DuckDB's default `.tmp`
+                uses fixed file names, so instances sharing it corrupt each
+                other), removed on close.
                 Defaults to True, matching DuckDB's own default. Suitable
                 for deployments where local disk can be assumed (e.g. bare
                 metal). Set to False for deployments with no writable disk
@@ -798,60 +806,131 @@ class EventManager:
                 memory_limit (its host-RAM-based default if none is given
                 here), so this can matter even without setting memory_limit
                 explicitly.
+            temp_root: directory to create the private spill directory in.
+                Defaults to the system temp directory (`tempfile`, which
+                honors TMPDIR). Ignored when allow_disk_spill is False.
+            max_temp_directory_size: Maximum spill storage per instance as a
+                DuckDB size string (e.g. "1GB"). None preserves DuckDB's
+                default. Ignored when allow_disk_spill is False.
         """
-        self._conn = duckdb.connect(":memory:")
-        if threads is not None:
-            self._conn.execute("SET threads = ?", [threads])
-        if memory_limit is not None:
-            self._conn.execute("SET memory_limit = ?", [memory_limit])
-        if not allow_disk_spill:
-            self._conn.execute("SET temp_directory = ''")
-        self._conn.execute(SCHEMA)
+        self._initialize_ownership()
+        self.initialize(
+            rules_engine,
+            threads=threads,
+            memory_limit=memory_limit,
+            allow_disk_spill=allow_disk_spill,
+            temp_root=temp_root,
+            max_temp_directory_size=max_temp_directory_size,
+        )
+
+    @classmethod
+    def unopened(cls) -> "EventManager":
+        """Create a resource-free owner before attempting initialization.
+
+        Retain this object, then call initialize(). If initialization fails,
+        close(flush=False) releases partial state and can be retried on failure.
+        """
+        instance = cls.__new__(cls)
+        instance._initialize_ownership()
+        return instance
+
+    def _initialize_ownership(self) -> None:
+        self._initialization_started = False
         self._streams: dict[str, EventStream] = {}
-        self._closed = False  # Track if already closed to prevent double-logging
+        self._closed = True
+        self._spill_dir: Optional[str] = None
+        self._owned_lookup_path: Optional[Path] = None
+        self._lookup_detached = True
 
-        lookup_path, shared_lookup_python_cache = _build_shared_lookup_db(rules_engine)
-        # Path is generated internally (tempfile), but escape defensively
-        # in case a caller's platform ever produces a path with a quote.
-        self._conn.execute(f"ATTACH {_sql_string_literal(lookup_path)} AS lookup (READ_ONLY)")
-        self._conn.execute(_LOCAL_OVERLAY_SCHEMA)
+    def initialize(
+        self,
+        rules_engine: "RuleEngine",
+        *,
+        threads: Optional[int] = None,
+        memory_limit: Optional[str] = None,
+        allow_disk_spill: bool = True,
+        temp_root: Optional[str] = None,
+        max_temp_directory_size: Optional[str] = None,
+    ) -> None:
+        """Open an owned instance once, using the constructor's settings.
 
-        # `_SnapshotRuleNames` builds its own one-off shared lookup db per
-        # `from_snapshot()` call (see its docstring), keyed in
-        # `_shared_lookup_cache` by an object nothing else keeps alive once
-        # `from_snapshot()` returns. Nothing else ever unlinks that file, so
-        # this instance -- the only thing that will ever ATTACH it -- owns
-        # cleaning it up in close(). A real rules_engine's lookup db is
-        # shared by every EventManager constructed with it, so it must never
-        # be deleted here.
-        self._owned_lookup_path: Optional[Path] = lookup_path if isinstance(rules_engine, _SnapshotRuleNames) else None
-        self._lookup_detached = False
+        Failure always attempts close(flush=False). The owner retains this
+        instance to retry if cleanup also fails. Never reinitialize partial or
+        closed state: it may still own files whose removal needs retrying.
+        """
+        if self._initialization_started:
+            raise RuntimeError("EventManager initialization has already been attempted")
+        self._initialization_started = True
+        with contextlib.ExitStack() as cleanup:
+            cleanup.callback(self._close_after_error)
+            self._conn = duckdb.connect(":memory:")
+            self._closed = False
+            if threads is not None:
+                self._conn.execute("SET threads = ?", [threads])
+            if memory_limit is not None:
+                self._set_size("memory_limit", memory_limit)
+            self._conn.execute(SCHEMA)
 
-        # Provide convenient lookup helpers. Each shares the same Python-level
-        # id/str dicts for its table's shared tier (built once by
-        # _build_shared_lookup_db, immutable from here on) instead of copying
-        # them into a private per-instance cache.
-        event_types_shared_id, event_types_shared_str = shared_lookup_python_cache["event_types"]
-        self._types = _ReadOnlyLookup(
-            self._conn,
-            "event_types",
-            "local_event_types",
-            event_types_shared_id,
-            event_types_shared_str,
-            error_type=UndeclaredEventTypeError,
-        )
-        rules_shared_id, rules_shared_str = shared_lookup_python_cache["rules"]
-        self._rules = _ReadOnlyLookup(
-            self._conn, "rules", "local_rules", rules_shared_id, rules_shared_str, error_type=UndeclaredRuleError
-        )
-        obs_sources_shared_id, obs_sources_shared_str = shared_lookup_python_cache["obs_sources"]
-        self._obs_sources = _ReadOnlyLookup(
-            self._conn, "obs_sources", "local_obs_sources", obs_sources_shared_id, obs_sources_shared_str
-        )
-        obs_formats_shared_id, obs_formats_shared_str = shared_lookup_python_cache["obs_formats"]
-        self._obs_formats = _ReadOnlyLookup(
-            self._conn, "obs_formats", "local_obs_formats", obs_formats_shared_id, obs_formats_shared_str
-        )
+            lookup_path, shared_lookup_python_cache = _build_shared_lookup_db(rules_engine)
+            # `_SnapshotRuleNames` builds its own one-off shared lookup db per
+            # `from_snapshot()` call (see its docstring), keyed in
+            # `_shared_lookup_cache` by an object nothing else keeps alive once
+            # `from_snapshot()` returns. Nothing else ever unlinks that file, so
+            # this instance -- the only thing that will ever ATTACH it -- owns
+            # cleaning it up in close(). A real rules_engine's lookup db is
+            # shared by every EventManager constructed with it, so it must never
+            # be deleted here.
+
+            self._owned_lookup_path = lookup_path if isinstance(rules_engine, _SnapshotRuleNames) else None
+            # Path is generated internally (tempfile), but escape defensively
+            # in case a caller's platform ever produces a path with a quote.
+            self._conn.execute(f"ATTACH {_sql_string_literal(lookup_path)} AS lookup (READ_ONLY)")
+            self._lookup_detached = False
+            self._conn.execute(_LOCAL_OVERLAY_SCHEMA)
+
+            # Provide convenient lookup helpers. Each shares the same Python-level
+            # id/str dicts for its table's shared tier (built once by
+            # _build_shared_lookup_db, immutable from here on) instead of copying
+            # them into a private per-instance cache.
+            event_types_shared_id, event_types_shared_str = shared_lookup_python_cache["event_types"]
+            self._types = _ReadOnlyLookup(
+                self._conn,
+                "event_types",
+                "local_event_types",
+                event_types_shared_id,
+                event_types_shared_str,
+                error_type=UndeclaredEventTypeError,
+            )
+            rules_shared_id, rules_shared_str = shared_lookup_python_cache["rules"]
+            self._rules = _ReadOnlyLookup(
+                self._conn, "rules", "local_rules", rules_shared_id, rules_shared_str, error_type=UndeclaredRuleError
+            )
+            obs_sources_shared_id, obs_sources_shared_str = shared_lookup_python_cache["obs_sources"]
+            self._obs_sources = _ReadOnlyLookup(
+                self._conn, "obs_sources", "local_obs_sources", obs_sources_shared_id, obs_sources_shared_str
+            )
+            obs_formats_shared_id, obs_formats_shared_str = shared_lookup_python_cache["obs_formats"]
+            self._obs_formats = _ReadOnlyLookup(
+                self._conn, "obs_formats", "local_obs_formats", obs_formats_shared_id, obs_formats_shared_str
+            )
+
+            # Last, so a setup failure above leaves no spill directory behind.
+            # abspath: before Python 3.12, mkdtemp returns a relative path for a relative temp_root.
+            self._spill_dir = (
+                os.path.abspath(tempfile.mkdtemp(prefix="attribution_lib_spill_", dir=temp_root))
+                if allow_disk_spill
+                else None
+            )
+            self._conn.execute("SET temp_directory = ?", [self._spill_dir or ""])
+            if allow_disk_spill and max_temp_directory_size is not None:
+                self._set_size("max_temp_directory_size", max_temp_directory_size)
+            cleanup.pop_all()
+
+    def _set_size(self, setting: str, value: str) -> None:
+        try:
+            self._conn.execute(f"SET {setting} = ?", [value])
+        except (duckdb.ParserException, duckdb.InvalidInputException) as error:
+            raise InvalidEventStorageSizeError(setting, value) from error
 
     def preload_rule_names(self, names: set[str]) -> None:
         """Pre-populate the rules lookup table and warm caches.
@@ -896,12 +975,20 @@ class EventManager:
         self.close()
         return False  # Don't suppress exceptions
 
+    def _close_after_error(self) -> None:
+        """Unwind without replacing the initialization/import exception."""
+        try:
+            self.close(flush=False)
+        except Exception:
+            logger.exception("EventManager cleanup failed while handling another error")
+
     def __del__(self):
-        """Destructor - fallback cleanup if close() not explicitly called."""
-        if not self._closed:
-            # Try to close gracefully, but don't fail if there are issues
+        """Fallback cleanup discards buffered events; explicit close() flushes by default."""
+        if not getattr(self, "_closed", True):  # unset when __init__ failed early
+            # No caller can use this data now. Do not let an unflushable buffer
+            # prevent the last opportunity to release connection and spill files.
             try:
-                self.close()
+                self.close(flush=False)
             except Exception:
                 # Suppress exceptions in destructor since we can't propagate them
                 pass
@@ -914,7 +1001,11 @@ class EventManager:
     # version-1 snapshot's ids for those tables are arbitrary and have no
     # relationship to _stable_id(name), so importing one under version-2 code
     # would silently mix unrelated ids -- reject it instead.
-    _SNAPSHOT_SCHEMA_VERSION = 2
+    # 2 -> 3: legacy observation formats were removed from `Format`. A
+    # version-2 `obs_formats` table can carry a retired name that the overlay
+    # restore keeps and `Format(obs_format_str)` in event_helpers.py then
+    # rejects, so treat such snapshots as a cache miss.
+    _SNAPSHOT_SCHEMA_VERSION = 3
     _SCHEMA_VERSION_FILE = "schema_version"
 
     # All DuckDB tables in dependency-safe import order.
@@ -1016,7 +1107,14 @@ class EventManager:
         # aren't rules_engine-derived and so still need one).
         mgr = cls(_SnapshotRuleNames(rules_engine, extra_rule_names, extra_event_types))
 
-        for table in cls._SNAPSHOT_TABLES:
+        with contextlib.ExitStack() as cleanup:
+            cleanup.callback(mgr._close_after_error)
+            mgr._restore_snapshot(snapshot_dir)
+            cleanup.pop_all()
+        return mgr
+
+    def _restore_snapshot(self, snapshot_dir: Path) -> None:
+        for table in self._SNAPSHOT_TABLES:
             if table in ("rules", "event_types"):
                 continue  # already fully seeded above, via the shared lookup db itself
             src = snapshot_dir / f"{table}.parquet"
@@ -1037,16 +1135,16 @@ class EventManager:
                     # (The schema-version bump to 2 is what guarantees every
                     # snapshot reaching this point already used
                     # content-addressed ids, see `_SNAPSHOT_SCHEMA_VERSION`.)
-                    mgr._conn.execute(f"DELETE FROM {local_table}")
-                    mgr._conn.execute(
+                    self._conn.execute(f"DELETE FROM {local_table}")
+                    self._conn.execute(
                         f"""INSERT INTO {local_table}
                             SELECT * FROM read_parquet({_sql_string_literal(src)})
                             WHERE name NOT IN (SELECT name FROM {table})"""
                     )
-                    _assert_no_id_collision(mgr._conn, table)
+                    _assert_no_id_collision(self._conn, table)
                 else:
-                    mgr._conn.execute(f"DELETE FROM {table}")
-                    mgr._conn.execute(f"INSERT INTO {table} SELECT * FROM read_parquet({_sql_string_literal(src)})")
+                    self._conn.execute(f"DELETE FROM {table}")
+                    self._conn.execute(f"INSERT INTO {table} SELECT * FROM read_parquet({_sql_string_literal(src)})")
             except (PermissionError, OSError) as e:
                 raise PermissionError(f"Cannot read snapshot file {src}: {e}") from e
             except duckdb.IOException as e:
@@ -1054,7 +1152,7 @@ class EventManager:
             except duckdb.Error as e:
                 raise RuntimeError(f"DuckDB error importing '{table}' from {src}: {e}") from e
 
-        _validate_snapshot_lookup_references(mgr._conn)
+        _validate_snapshot_lookup_references(self._conn)
 
         # Advance sequences past imported IDs so new inserts don't collide.
         # DuckDB lacks setval(), so we consume nextval() until we're past max(id).
@@ -1063,28 +1161,26 @@ class EventManager:
         # they need no advancement, and the loop below skips them
         # automatically (no matching sequence to find). observation_contexts
         # uses an externally-supplied ID, no sequence either.
-        for table in cls._SNAPSHOT_TABLES:
+        for table in self._SNAPSHOT_TABLES:
             seq_name = f"{table}_seq"
-            if not mgr._conn.execute("SELECT 1 FROM duckdb_sequences() WHERE sequence_name=?", [seq_name]).fetchone():
+            if not self._conn.execute("SELECT 1 FROM duckdb_sequences() WHERE sequence_name=?", [seq_name]).fetchone():
                 continue
-            row = mgr._conn.execute(f"SELECT COALESCE(MAX(id), 0) FROM {table}").fetchone()
+            row = self._conn.execute(f"SELECT COALESCE(MAX(id), 0) FROM {table}").fetchone()
             max_id = row[0] if row else 0
             if max_id > 0:
                 cur = 0
                 while cur <= max_id:
-                    next_row = mgr._conn.execute(f"SELECT nextval('{seq_name}')").fetchone()
+                    next_row = self._conn.execute(f"SELECT nextval('{seq_name}')").fetchone()
                     assert next_row is not None, f"nextval('{seq_name}') returned no row"
                     cur = next_row[0]
 
-        # mgr._types/mgr._rules need no resync here: their shared cache was
+        # self._types/self._rules need no resync here: their shared cache was
         # already built from _SnapshotRuleNames's rules_engine-union-snapshot
         # names at construction. Only obs_sources/obs_formats have a local
         # overlay actually written above (via raw SQL, not preload()), so
         # only their local caches need catching up.
-        mgr._obs_sources._reload_local_overlay()
-        mgr._obs_formats._reload_local_overlay()
-
-        return mgr
+        self._obs_sources._reload_local_overlay()
+        self._obs_formats._reload_local_overlay()
 
     def checkpoint(self, name: str) -> None:
         """Snapshot the events table to a shadow table within the same connection.
@@ -1112,20 +1208,24 @@ class EventManager:
         """Remove the shadow table for a checkpoint."""
         self._conn.execute(f'DROP TABLE IF EXISTS "_ckpt_{name}"')
 
-    def close(self):
-        """Close the event manager, flushing all streams and logging statistics.
+    def close(self, *, flush: bool = True):
+        """Release owned resources; retain unfinished steps for a later retry.
 
-        This method is idempotent - it's safe to call multiple times. If a
-        flush or the connection close itself fails, the manager is left
-        unmarked so a caller can retry rather than have the idempotency
-        guard silently skip the rest of cleanup on the next call.
+        Ordinary callers flush buffered events first. A retiring service wrapper
+        uses flush=False: its data is being discarded, and an OOM during flush
+        must not prevent releasing the connection and spill files.
+
+        Close DuckDB before removing files. Clear ownership only after removal
+        succeeds (or the path is already absent), and mark closed last. Thus a
+        failed removal can be retried without losing the path or deleting another
+        instance's resources. The spill root and shared lookup DB are never owned.
         """
         if self._closed:
             return
 
-        # Flush all streams before closing
-        for stream in self._streams.values():
-            stream.flush()
+        if flush:
+            for stream in self._streams.values():
+                stream.flush()
         self._streams.clear()
 
         if self._owned_lookup_path is not None and not self._lookup_detached:
@@ -1136,5 +1236,10 @@ class EventManager:
         if self._owned_lookup_path is not None:
             self._owned_lookup_path.unlink(missing_ok=True)
             self._owned_lookup_path = None
+
+        if self._spill_dir is not None:
+            with contextlib.suppress(FileNotFoundError):
+                shutil.rmtree(self._spill_dir)
+            self._spill_dir = None
 
         self._closed = True

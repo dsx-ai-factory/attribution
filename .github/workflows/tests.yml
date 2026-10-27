@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
 name: Tests
 
 on:
@@ -64,6 +67,7 @@ jobs:
           - attribution-lib
           - service-app
           - service-app-client-drift
+          - license-compliance
           - blueprint
     env:
       COVERAGE: "true"
@@ -102,6 +106,14 @@ jobs:
           corepack prepare pnpm@10.11.0 --activate
       - name: Run frontend tests with coverage
         run: bash .ci/run-tests.sh frontend
+      - uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7.6.0
+        with:
+          version: "0.12.3"
+          enable-cache: true
+      - name: Install Python
+        run: uv python install "$UV_PYTHON"
+      - name: Build and validate published artifacts
+        run: bash .ci/build-and-check-license-artifacts.sh
 
   end-to-end:
     name: end-to-end

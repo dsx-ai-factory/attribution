@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
 """Seed a v1-schema demo SQLite DB so the webui has data to render.
 
 Mirrors the schema in src/attribution_blueprint/connectors/outputs/sqlite/__init__.py
@@ -53,7 +56,22 @@ SCHEMA = [
 ]
 
 
+_COMPOUND_FIELDS: dict[str, dict] = {
+    "Fail InfraHW":                  {"terminal_states": ["Fail"], "failure_domains": ["InfraHW"],             "cancellation_actors": [], "uncertainty_type": None},
+    "Fail InfraSW":                  {"terminal_states": ["Fail"], "failure_domains": ["InfraSW"],             "cancellation_actors": [], "uncertainty_type": None},
+    "Fail User":                     {"terminal_states": ["Fail"], "failure_domains": ["User"],                "cancellation_actors": [], "uncertainty_type": None},
+    "Fail MultiCategory":            {"terminal_states": ["Fail"], "failure_domains": ["User","InfraHW","InfraSW"], "cancellation_actors": [], "uncertainty_type": "Aleatoric"},
+    "Fail Undetermined":             {"terminal_states": ["Fail"], "failure_domains": ["User","InfraHW","InfraSW"], "cancellation_actors": [], "uncertainty_type": "Epistemic"},
+    "Pass":                          {"terminal_states": ["Pass"], "failure_domains": [],                      "cancellation_actors": [], "uncertainty_type": None},
+    "Artificial":                    {"terminal_states": ["ExpectedFail"], "failure_domains": [],              "cancellation_actors": [], "uncertainty_type": None},
+    "Cancelled by User":             {"terminal_states": ["Cancelled"], "failure_domains": [],                 "cancellation_actors": ["User"], "uncertainty_type": None},
+    "Cancelled by cluster operators":{"terminal_states": ["Cancelled"], "failure_domains": [],                 "cancellation_actors": ["Operator"], "uncertainty_type": None},
+    "Incomplete Info":               {"terminal_states": ["Pass","Fail","ExpectedFail","Cancelled"], "failure_domains": [], "cancellation_actors": [], "uncertainty_type": "Aleatoric"},
+}
+
+
 def _verdict(symptom, source, node, line, rule, outcome, detail):
+    compound = _COMPOUND_FIELDS.get(outcome, {"terminal_states": ["Fail"], "failure_domains": ["User","InfraHW","InfraSW"], "cancellation_actors": [], "uncertainty_type": "Epistemic"})
     return {
         "verdict": {
             "root_symptom": {
@@ -69,6 +87,7 @@ def _verdict(symptom, source, node, line, rule, outcome, detail):
             },
             "attribution_outcome": outcome,
             "detail": detail,
+            **compound,
         },
         "symptoms": {
             symptom: [
@@ -248,6 +267,10 @@ SCENARIOS = [
                 },
                 "attribution_outcome": "Fail InfraHW",
                 "detail": "NVLink RLW cascade on example-slurm-gpu-018: XID 145 NVLINK_RLW_ERROR triggered NCCL collective failure across 3 nodes (XID 145 -> NCCL error 12 -> scheduler FAILED).",
+                "terminal_states": ["Fail"],
+                "failure_domains": ["InfraHW"],
+                "cancellation_actors": [],
+                "uncertainty_type": None,
             },
             "symptoms": {
                 "NvlinkRlw": [

@@ -1,11 +1,21 @@
+// SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// SPDX-License-Identifier: Apache-2.0
+
 import { useEffect, useRef } from 'react'
 import * as echarts from 'echarts'
 import type { ECharts, EChartsOption } from 'echarts'
+import { chartTheme } from '@/lib/tokens'
 
-export const ECHART_COMMON = {
-  textStyle: {
-    fontFamily: 'JetBrains Mono Variable, ui-monospace, monospace',
-  },
+// Chart chrome (fonts, axis and tooltip colors) comes from the token theme,
+// registered once before the first chart as house charts register theirs, so
+// an option carries only its data, layout and series colors.
+const THEME = 'attribution'
+let themeRegistered = false
+
+function registerThemeOnce() {
+  if (themeRegistered) return
+  echarts.registerTheme(THEME, chartTheme())
+  themeRegistered = true
 }
 
 export function useECharts(
@@ -26,7 +36,8 @@ export function useECharts(
 
   useEffect(() => {
     if (!ref.current) return
-    const chart = echarts.init(ref.current)
+    registerThemeOnce()
+    const chart = echarts.init(ref.current, THEME)
     chartRef.current = chart
     const resize = () => chart.resize()
     window.addEventListener('resize', resize)
@@ -50,8 +61,12 @@ export function useECharts(
     }
   }, [ref])
 
+  // Each option is the whole chart, so it replaces the last one instead of
+  // merging into it: a merge keeps series the new data no longer has and adds
+  // new ones after the old, out of the option's (and a stack's) order. Series
+  // keep their views by name, so their changes still animate.
   useEffect(() => {
-    chartRef.current?.setOption(option, { notMerge: false })
+    chartRef.current?.setOption(option, { notMerge: true })
   }, [option])
 
   return chartRef

@@ -1,12 +1,5 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-# SPDX-License-Identifier: LicenseRef-NvidiaProprietary
-#
-# NVIDIA CORPORATION, its affiliates and licensors retain all intellectual
-# property and proprietary rights in and to this material, related
-# documentation and any modifications thereto. Any use, reproduction,
-# disclosure or distribution of this material and related documentation
-# without an express license agreement from NVIDIA CORPORATION or
-# its affiliates is strictly prohibited.
+# SPDX-License-Identifier: Apache-2.0
 
 from dataclasses import dataclass
 from datetime import datetime
@@ -24,6 +17,21 @@ from attribution_lib.sources import (
 
 
 class TestSource:
+    def test_declared_node_survives_derivation_and_roundtrip(self, full_context, timezone):
+        src = Source(full_context, 1, "line", datetime.now(tz=timezone), AllJobResources, None, "host-a")
+        derived = src.derived(rule="completion")
+        assert derived.declared_node == "host-a"
+        data = derived.to_dict()
+        data["source_context"]["timezone"] = str(timezone)
+        assert Source.from_dict(data) == derived
+
+    def test_legacy_source_without_declared_node_roundtrips(self, full_context, timezone):
+        src = Source(full_context, 1, "line", datetime.now(tz=timezone), AllJobResources, None)
+        assert "declared_node" not in src.to_dict()
+        data = src.to_dict()
+        data["source_context"]["timezone"] = str(timezone)
+        assert Source.from_dict(data) == src
+
     def test_creation_and_json(self, full_context, timezone):
         now = datetime.now(tz=timezone)
         src = Source(full_context, 1, "test_datum", now, AllJobResources, "test_rule")

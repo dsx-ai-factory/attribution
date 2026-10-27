@@ -1,21 +1,17 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-# SPDX-License-Identifier: LicenseRef-NvidiaProprietary
-#
-# NVIDIA CORPORATION, its affiliates and licensors retain all intellectual
-# property and proprietary rights in and to this material, related
-# documentation and any modifications thereto. Any use, reproduction,
-# disclosure or distribution of this material and related documentation
-# without an express license agreement from NVIDIA CORPORATION or
-# its affiliates is strictly prohibited.
+# SPDX-License-Identifier: Apache-2.0
 
 from datetime import datetime, timedelta
+from pathlib import Path
 from zoneinfo import ZoneInfo
 
+import duckdb
 import pytest
 from pydantic import AwareDatetime, BaseModel
 
 from attribution_lib.event_helpers import query_events_with_source
 from attribution_lib.events import EventManager, _stable_id
+from attribution_lib.exceptions import InvalidEventStorageSizeError
 from attribution_lib.observation import Context as ObservationContext
 from attribution_lib.observation.inbound import (
     Format as ObsFormat,
@@ -96,9 +92,7 @@ class TestContentAddressedLookupIds:
         env = {k: v for k, v in os.environ.items() if k != "PYTHONHASHSEED"}
         outputs = set()
         for _ in range(3):
-            result = subprocess.run(
-                [sys.executable, "-c", script], capture_output=True, text=True, check=True, env=env
-            )
+            result = subprocess.run([sys.executable, "-c", script], capture_output=True, text=True, check=True, env=env)
             outputs.add(result.stdout.strip())
         assert len(outputs) == 1, f"id assignment differed across process runs: {outputs}"
 
@@ -285,6 +279,295 @@ class TestConnectionTuning:
         (temp_dir,) = mgr._conn.execute("SELECT current_setting('temp_directory')").fetchone()
         assert temp_dir == ""
         mgr.close()
+
+    @pytest.mark.parametrize(
+        ("size", "expected"),
+        [
+            ("64MB", "61.0 MiB"),
+            ("64 mb", "61.0 MiB"),
+            ("64MiB", "64.0 MiB"),
+            ("0.0625 GiB", "64.0 MiB"),
+            ("-1", "16383.9 PiB"),
+        ],
+    )
+    def test_duckdb_size_settings(self, tmp_path, size, expected):
+        with EventManager(
+            RuleLoader().build(), threads=1, memory_limit=size, max_temp_directory_size=size, temp_root=str(tmp_path)
+        ) as mgr:
+            for setting in ("memory_limit", "max_temp_directory_size"):
+                assert mgr._conn.execute("SELECT current_setting(?)", [setting]).fetchone() == (expected,)
+        assert not list(tmp_path.iterdir())
+
+
+class TestPrivateSpillDirectories:
+    """DuckDB's default temp_directory is a cwd-relative `.tmp` with fixed file
+    names, so two EventManagers in one process that spill at once overwrite
+    each other's spill file (short reads, then a segfault). Each one must spill
+    into its own directory and remove it on close."""
+
+    def test_concurrent_spills_use_private_dirs_under_a_shared_root(self, tmp_path, monkeypatch):
+        import tempfile
+        import threading
+        from pathlib import Path
+
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setattr(tempfile, "tempdir", str(tmp_path))  # shared default root
+        mgrs = [EventManager(RuleLoader().build(), threads=1, memory_limit="16MB") for _ in range(2)]
+        dirs = [m._conn.execute("SELECT current_setting('temp_directory')").fetchone()[0] for m in mgrs]
+        assert dirs[0] != dirs[1], f"spill directories are shared: {dirs}"
+        assert all(Path(d).parent == tmp_path for d in dirs), dirs
+
+        errors = []
+
+        def spill(conn):
+            try:
+                conn.execute("CREATE TABLE big AS SELECT i, repeat(md5(i::VARCHAR), 12) AS s FROM range(200000) t(i)")
+                for _ in range(3):
+                    (total,) = conn.execute("SELECT sum(length(s)) FROM big WHERE s LIKE '%a%'").fetchone()
+                    assert total == 67_175_424  # 174,936 rows x 384 chars; a corrupt spill read changes it
+                (spilled,) = conn.execute("SELECT count(*) FROM duckdb_temporary_files()").fetchone()
+                assert spilled > 0, "workload did not spill"
+            except Exception as e:  # collect: an assert in a thread would be lost
+                errors.append(repr(e))
+
+        threads = [threading.Thread(target=spill, args=(m._conn,)) for m in mgrs]
+        [t.start() for t in threads]
+        [t.join() for t in threads]
+        for m in mgrs:
+            m.close()
+        assert errors == []
+        assert not any(Path(d).exists() for d in dirs), "spill directories left behind after close"
+
+    def test_failed_construction_leaves_no_spill_dir(self, tmp_path):
+        with pytest.raises(Exception, match="memory"):
+            EventManager(RuleLoader().build(), memory_limit="not-a-size", temp_root=str(tmp_path))
+        assert list(tmp_path.iterdir()) == []
+
+    @pytest.mark.parametrize("failure", ["memory", "lookup", "directory", "capacity"])
+    def test_constructor_failure_closes_connection_without_gc(self, monkeypatch, tmp_path, failure):
+        import attribution_lib.events as events
+
+        engine = RuleLoader().build()
+        connections = []
+        real_connect = duckdb.connect
+
+        def connect(*args, **kwargs):
+            conn = real_connect(*args, **kwargs)
+            connections.append(conn)
+            return conn
+
+        monkeypatch.setattr(duckdb, "connect", connect)
+        options = {"temp_root": str(tmp_path)}
+        if failure == "memory":
+            options["memory_limit"] = "bad-size"
+        elif failure == "capacity":
+            options["max_temp_directory_size"] = "bad-size"
+        elif failure == "lookup":
+
+            def fail_lookup(*args):
+                raise RuntimeError("lookup failure")
+
+            monkeypatch.setattr(events, "_build_shared_lookup_db", fail_lookup)
+        else:
+            options["temp_root"] = str(tmp_path / "missing")
+        with pytest.raises(Exception) as error:
+            EventManager(engine, **options)
+        assert error.value is not None  # Keep traceback and failed instance alive.
+        with pytest.raises(duckdb.ConnectionException):
+            connections[0].execute("SELECT 1")
+        assert list(tmp_path.iterdir()) == []
+
+    @pytest.mark.parametrize("state", ["active", "closed", "failed"])
+    def test_owned_manager_cannot_be_reinitialized(self, tmp_path, state):
+        engine = RuleLoader().build()
+        manager = EventManager.unopened()
+        assert manager._closed and manager._spill_dir is None
+        assert not hasattr(manager, "_conn")
+        if state == "failed":
+            with pytest.raises(InvalidEventStorageSizeError):
+                manager.initialize(engine, temp_root=str(tmp_path), max_temp_directory_size="invalid-size")
+            assert manager._closed
+            assert list(tmp_path.iterdir()) == []
+        else:
+            manager.initialize(engine, temp_root=str(tmp_path))
+            if state == "closed":
+                manager.close()
+        directory = manager._spill_dir
+        try:
+            with pytest.raises(RuntimeError, match="already been attempted"):
+                manager.initialize(engine, temp_root=str(tmp_path))
+            assert manager._spill_dir == directory
+            if state == "active":
+                assert manager._conn.execute("SELECT 1").fetchone() == (1,)
+                assert list(tmp_path.iterdir()) == [Path(directory)]
+        finally:
+            manager.close(flush=False)
+        assert list(tmp_path.iterdir()) == []
+
+    def test_spill_capacity_is_enforced(self, tmp_path):
+        from attribution_lib.exceptions import EventStorageOutOfMemoryError
+
+        mgr = EventManager(
+            RuleLoader().build(),
+            threads=1,
+            memory_limit="16MB",
+            temp_root=str(tmp_path),
+            max_temp_directory_size="0B",
+        )
+        try:
+            with pytest.raises(EventStorageOutOfMemoryError, match="max_temp_directory_size"):
+                mgr.create_stream("capacity").execute("CREATE TABLE big AS SELECT repeat('x', 1000000) FROM range(50)")
+        finally:
+            mgr.close()
+        assert list(tmp_path.iterdir()) == []
+
+    def test_spill_cleanup_failure_can_be_retried(self, tmp_path, monkeypatch):
+        import shutil
+
+        mgr = EventManager(RuleLoader().build(), temp_root=str(tmp_path))
+        directory = mgr._spill_dir
+        original = shutil.rmtree
+
+        def fail_cleanup(path):
+            raise PermissionError("synthetic cleanup failure")
+
+        monkeypatch.setattr(shutil, "rmtree", fail_cleanup)
+        with pytest.raises(PermissionError, match="synthetic"):
+            mgr.close()
+        assert not mgr._closed
+        assert mgr._spill_dir == directory
+        monkeypatch.setattr(shutil, "rmtree", original)
+        mgr.close()
+        assert not Path(directory).exists()
+        assert mgr._spill_dir is None
+        mgr.close()
+
+    def test_failed_connection_close_preserves_files_until_retry(self, tmp_path):
+        mgr = EventManager(RuleLoader().build(), temp_root=str(tmp_path))
+        directory = Path(mgr._spill_dir)
+        real_conn = mgr._conn
+
+        class FailingClose:
+            def close(self):
+                raise RuntimeError("connection close failed")
+
+        mgr._conn = FailingClose()
+        try:
+            with pytest.raises(RuntimeError, match="connection close failed"):
+                mgr.close(flush=False)
+            assert directory.is_dir()
+            assert not mgr._closed
+            assert real_conn.execute("SELECT 1").fetchone() == (1,)
+        finally:
+            mgr._conn = real_conn
+            mgr.close(flush=False)
+        assert not directory.exists()
+
+    def test_close_tolerates_already_removed_spill_directory(self, tmp_path):
+        mgr = EventManager(RuleLoader().build(), temp_root=str(tmp_path))
+        Path(mgr._spill_dir).rmdir()
+        mgr.close()
+        mgr.close()
+        assert mgr._closed
+        assert mgr._spill_dir is None
+
+    def test_relative_spill_root_survives_working_directory_change(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / "spill").mkdir()
+        mgr = EventManager(RuleLoader().build(), temp_root="spill")
+        directory = Path(mgr._spill_dir)
+        assert directory.is_absolute()
+        elsewhere = tmp_path / "elsewhere"
+        elsewhere.mkdir()
+        monkeypatch.chdir(elsewhere)
+        mgr.close()
+        assert not directory.exists()
+        assert (tmp_path / "spill").is_dir()
+
+    def test_garbage_collection_removes_private_spill_directory(self, tmp_path):
+        import gc
+        import weakref
+
+        mgr = EventManager(RuleLoader().build(), temp_root=str(tmp_path))
+
+        def unflushable():
+            raise RuntimeError("abandoned buffer cannot flush")
+
+        mgr.create_stream("cycle").flush = unflushable
+        directory = Path(mgr._spill_dir)
+        reference = weakref.ref(mgr)
+        del mgr
+        gc.collect()
+        assert reference() is None
+        assert not directory.exists()
+
+    def test_default_spill_directory_is_isolated_across_processes(self):
+        import json
+        import subprocess
+        import sys
+        from pathlib import Path
+
+        mgr = EventManager(RuleLoader().build(), threads=1, memory_limit="16MB")
+        (directory,) = mgr._conn.execute("SELECT current_setting('temp_directory')").fetchone()
+        try:
+            mgr._conn.execute("CREATE TABLE big AS SELECT repeat('a', 1000000) AS s FROM range(50)")
+            assert list(Path(directory).iterdir())
+            script = """
+import json
+from pathlib import Path
+from attribution_lib.events import EventManager
+from attribution_lib.rules_engine import RuleLoader
+mgr = EventManager(RuleLoader().build(), threads=1, memory_limit="16MB")
+directory = mgr._conn.execute("SELECT current_setting('temp_directory')").fetchone()[0]
+try:
+    mgr._conn.execute("CREATE TABLE big AS SELECT repeat('b', 1000000) AS s FROM range(50)")
+    assert list(Path(directory).iterdir())
+    mgr._conn.execute("SET memory_limit='128MB'")
+    assert mgr._conn.execute("SELECT min(s) = repeat('b', 1000000) AND max(s) = repeat('b', 1000000) FROM big").fetchone()[0]
+finally:
+    mgr.close()
+assert not Path(directory).exists()
+print(json.dumps(directory))
+"""
+            child = subprocess.run(
+                [sys.executable, "-c", script], capture_output=True, text=True, check=True, timeout=60
+            )
+            assert json.loads(child.stdout) != directory
+            # Closing the child must not remove or overwrite the parent's spill.
+            assert list(Path(directory).iterdir())
+            mgr._conn.execute("SET memory_limit='128MB'")
+            assert mgr._conn.execute(
+                "SELECT min(s) = repeat('a', 1000000) AND max(s) = repeat('a', 1000000) FROM big"
+            ).fetchone()[0]
+        finally:
+            mgr.close()
+        assert not Path(directory).exists()
+
+
+@pytest.mark.parametrize("snapshot_names", [False, True])
+@pytest.mark.parametrize("cleanup_fails", [False, True])
+def test_failed_lookup_build_removes_partial_files(tmp_path, monkeypatch, snapshot_names, cleanup_fails):
+    from unittest.mock import patch
+
+    import attribution_lib.events as events
+
+    engine = RuleLoader().build()
+    if snapshot_names:
+        engine = events._SnapshotRuleNames(engine, {"snapshot-rule"}, {"snapshot-event"})
+    monkeypatch.setattr(events, "_get_shared_lookup_tmpdir", lambda: str(tmp_path))
+    original = RuntimeError("lookup insert failed")
+    from contextlib import nullcontext
+
+    removal_failure = patch.object(Path, "unlink", side_effect=PermissionError("unlink failed"))
+    with (
+        patch.object(events, "_bulk_insert_names", side_effect=original),
+        removal_failure if cleanup_fails else nullcontext(),
+    ):
+        with pytest.raises(RuntimeError) as caught:
+            events._build_shared_lookup_db(engine)
+    assert caught.value is original
+    assert engine not in events._shared_lookup_cache
+    assert bool(list(tmp_path.iterdir())) == cleanup_fails
 
 
 class TestOutOfMemoryHandling:
@@ -610,7 +893,6 @@ class TestEventRule:
         # Create a valid observation context
         context = ObservationContext(
             time_interval=TimeInterval(datetime.now() - timedelta(minutes=15), datetime.now()),
-            resources=resources,
             source=ObsSource.APPLOG,
             format=ObsFormat.ENTRY_TIMESERIES,
             timezone=ZoneInfo("UTC"),
@@ -682,7 +964,6 @@ class TestTimestampAndTimezoneFlow:
         resources = ResourceSet(nodes)
         context = ObservationContext(
             time_interval=TimeInterval(datetime(2025, 1, 17, 10, 0, 0), datetime(2025, 1, 17, 18, 0, 0)),
-            resources=resources,
             source=ObsSource.SYSLOG,
             format=ObsFormat.ENTRY_TIMESERIES,
             timezone=est,
@@ -759,7 +1040,6 @@ class TestTimestampAndTimezoneFlow:
         for tz, time_val in [(est, time_est), (utc, time_utc), (pst, time_pst)]:
             context = ObservationContext(
                 time_interval=TimeInterval(datetime(2025, 1, 17, 10, 0, 0), datetime(2025, 1, 17, 18, 0, 0)),
-                resources=resources,
                 source=ObsSource.SYSLOG,
                 format=ObsFormat.ENTRY_TIMESERIES,
                 timezone=tz,
@@ -812,7 +1092,6 @@ class TestTimestampAndTimezoneFlow:
         resources = ResourceSet(nodes)
         context = ObservationContext(
             time_interval=TimeInterval(datetime(2025, 1, 17, 10, 0, 0), datetime(2025, 1, 17, 18, 0, 0)),
-            resources=resources,
             source=ObsSource.SYSLOG,
             format=ObsFormat.ENTRY_TIMESERIES,
             timezone=est,

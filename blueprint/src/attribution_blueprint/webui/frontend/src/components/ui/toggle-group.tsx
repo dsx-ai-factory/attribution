@@ -1,86 +1,56 @@
+// SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// SPDX-License-Identifier: Apache-2.0
+
 import * as React from "react"
-import { type VariantProps } from "class-variance-authority"
 import { ToggleGroup as ToggleGroupPrimitive } from "radix-ui"
 
 import { cn } from "@/lib/utils"
 import { toggleVariants } from "@/components/ui/toggle"
 
-const ToggleGroupContext = React.createContext<
-  VariantProps<typeof toggleVariants> & {
-    spacing?: number
-    orientation?: "horizontal" | "vertical"
-  }
->({
-  size: "default",
-  variant: "default",
-  spacing: 0,
-  orientation: "horizontal",
-})
-
+// The house ToggleGroup as its one use here: a horizontal segmented control of
+// outline segments at the toggle's default 28px size, its items joined edge to
+// edge (the house's spacing 0). Tuned: under 640px the segments take the
+// house's spaced form (its spacing 1: 4px apart, each with its own border and
+// corners) and wrap within the room they are given, as joined segments cannot
+// break across lines, so no choice is ever cut off a narrow screen. The
+// spacing option gives way to that breakpoint, and the orientation option is
+// dropped, as nothing here uses it; so are the variant and size every group
+// here sets alike, with the context that handed them to the items.
 function ToggleGroup({
   className,
-  variant,
-  size,
-  spacing = 0,
-  orientation = "horizontal",
-  children,
   ...props
-}: React.ComponentProps<typeof ToggleGroupPrimitive.Root> &
-  VariantProps<typeof toggleVariants> & {
-    spacing?: number
-    orientation?: "horizontal" | "vertical"
-  }) {
+}: React.ComponentProps<typeof ToggleGroupPrimitive.Root>) {
   return (
     <ToggleGroupPrimitive.Root
       data-slot="toggle-group"
-      data-variant={variant}
-      data-size={size}
-      data-spacing={spacing}
-      data-orientation={orientation}
-      style={{ "--gap": spacing } as React.CSSProperties}
-      className={cn(
-        "rounded-md group/toggle-group flex w-fit flex-row items-center gap-[--spacing(var(--gap))] data-[orientation=vertical]:flex-col data-[orientation=vertical]:items-stretch",
-        className,
-      )}
+      className={cn("flex w-fit max-w-full min-w-0 flex-row flex-wrap items-center gap-1 rounded-md sm:flex-nowrap sm:gap-0", className)}
       {...props}
-    >
-      <ToggleGroupContext.Provider
-        value={{ variant, size, spacing, orientation }}
-      >
-        {children}
-      </ToggleGroupContext.Provider>
-    </ToggleGroupPrimitive.Root>
+    />
   )
 }
 
+// A single-choice item is a radio (aria-checked, data-state=on), so its
+// selected state comes from data-state. A segment is a control, not content,
+// so the selected one takes the shared primary-selected recipe (globals.css):
+// the fill of the green default Button with a 1px inset primary-600 ring,
+// where the house fill is neutral. Joined, from 640px, segments are
+// square-cornered but for the group's two ends, and share their inner borders;
+// these come after the toggle's own classes, so they replace its rounding and
+// inline padding.
 function ToggleGroupItem({
   className,
-  children,
-  variant = "default",
-  size = "default",
   ...props
-}: React.ComponentProps<typeof ToggleGroupPrimitive.Item> &
-  VariantProps<typeof toggleVariants>) {
-  const context = React.useContext(ToggleGroupContext)
-
+}: React.ComponentProps<typeof ToggleGroupPrimitive.Item>) {
   return (
     <ToggleGroupPrimitive.Item
       data-slot="toggle-group-item"
-      data-variant={context.variant || variant}
-      data-size={context.size || size}
-      data-spacing={context.spacing}
       className={cn(
-        "data-[state=on]:bg-primary-700/60 data-[state=on]:text-white data-[state=on]:ring-1 data-[state=on]:ring-primary-600 data-[state=on]:border-transparent data-[state=on]:z-10 group-data-[spacing=0]/toggle-group:rounded-none group-data-[spacing=0]/toggle-group:px-2 group-data-[spacing=0]/toggle-group:shadow-none group-data-horizontal/toggle-group:data-[spacing=0]:first:rounded-l-md group-data-vertical/toggle-group:data-[spacing=0]:first:rounded-t-md group-data-horizontal/toggle-group:data-[spacing=0]:last:rounded-r-md group-data-vertical/toggle-group:data-[spacing=0]:last:rounded-b-md shrink-0 focus:z-10 focus-visible:z-10 group-data-horizontal/toggle-group:data-[spacing=0]:data-[variant=outline]:border-l-0 group-data-vertical/toggle-group:data-[spacing=0]:data-[variant=outline]:border-t-0 group-data-horizontal/toggle-group:data-[spacing=0]:data-[variant=outline]:first:border-l group-data-vertical/toggle-group:data-[spacing=0]:data-[variant=outline]:first:border-t",
-        toggleVariants({
-          variant: context.variant || variant,
-          size: context.size || size,
-        }),
-        className,
+        toggleVariants({ variant: "outline" }),
+        "shrink-0 px-2 shadow-none focus:z-10 focus-visible:z-10 data-[state=on]:primary-selected sm:rounded-none sm:border-l-0 sm:first:rounded-l-md sm:first:border-l sm:last:rounded-r-md",
+        className
       )}
       {...props}
-    >
-      {children}
-    </ToggleGroupPrimitive.Item>
+    />
   )
 }
 

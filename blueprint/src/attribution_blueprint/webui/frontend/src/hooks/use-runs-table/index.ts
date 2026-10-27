@@ -1,4 +1,7 @@
-import useSWR from 'swr'
+// SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// SPDX-License-Identifier: Apache-2.0
+
+import useSWR, { type KeyedMutator } from 'swr'
 import type { OutcomeKey, RunSummary } from '@/interfaces/attribution'
 import type { FleetFilter } from '@/interfaces/filter'
 import type { RunsPagePayload } from '@/interfaces/meta'
@@ -28,8 +31,11 @@ export function useRunsTable({
   groups: RunsTableGroup[]
   total: number
   visibleRuns: RunSummary[]
+  /** Whether this view's group pages are still on their way. */
   isLoading: boolean
   error: Error | null
+  /** Re-fetches every group page of this view. */
+  mutate: KeyedMutator<RunsTableGroup[]>
 } {
   const key = [
     'runs-table',
@@ -46,7 +52,7 @@ export function useRunsTable({
     outcomes.join(','),
     JSON.stringify(pageByOutcome),
   ]
-  const { data, isLoading, error } = useSWR<RunsTableGroup[], Error>(key, async () => {
+  const { data, isLoading, error, mutate } = useSWR<RunsTableGroup[], Error>(key, async () => {
     const pages = await Promise.all(
       outcomes.map(async (outcome) => {
         const page = pageByOutcome[outcome] ?? 0
@@ -78,5 +84,5 @@ export function useRunsTable({
   const groups = data ?? []
   const visibleRuns = groups.flatMap((group) => group.runs)
   const total = groups.reduce((sum, group) => sum + group.total, 0)
-  return { groups, total, visibleRuns, isLoading, error: error ?? null }
+  return { groups, total, visibleRuns, isLoading, error: error ?? null, mutate }
 }

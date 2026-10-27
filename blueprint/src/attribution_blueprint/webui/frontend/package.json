@@ -2,6 +2,7 @@
   "name": "attribution-web",
   "private": true,
   "version": "0.0.0",
+  "license": "Apache-2.0",
   "type": "module",
   "packageManager": "pnpm@10.11.0",
   "scripts": {
@@ -14,9 +15,7 @@
   },
   "dependencies": {
     "@dagrejs/dagre": "^3.1.1",
-    "@fontsource-variable/inter": "^5.2.8",
     "@fontsource-variable/jetbrains-mono": "^5.2.8",
-    "@monaco-editor/react": "^4.7.0",
     "@tailwindcss/vite": "^4.3.0",
     "@xyflow/react": "^12.11.6",
     "class-variance-authority": "^0.7.1",
@@ -25,7 +24,6 @@
     "decimal.js": "^10.6.0",
     "echarts": "^6.1.0",
     "lucide-react": "^1.16.0",
-    "monaco-editor": "^0.55.1",
     "radix-ui": "^1.4.3",
     "react": "^19.2.6",
     "react-day-picker": "^10.0.1",
@@ -57,7 +55,6 @@
   "pnpm": {
     "overrides": {
       "brace-expansion": "5.0.12",
-      "dompurify": "3.4.16",
       "undici": "7.30.0"
     }
   }

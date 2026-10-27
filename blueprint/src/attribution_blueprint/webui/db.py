@@ -1,12 +1,5 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-# SPDX-License-Identifier: LicenseRef-NvidiaProprietary
-#
-# NVIDIA CORPORATION, its affiliates and licensors retain all intellectual
-# property and proprietary rights in and to this material, related
-# documentation and any modifications thereto. Any use, reproduction,
-# disclosure or distribution of this material and related documentation
-# without an express license agreement from NVIDIA CORPORATION or
-# its affiliates is strictly prohibited.
+# SPDX-License-Identifier: Apache-2.0
 
 """Read-only SQLite access for the web dashboard.
 
@@ -39,7 +32,11 @@ COMBINED_FAILURE_OUTCOMES = ("Fail InfraHW", "Fail InfraSW")
 PAGE_SIZE_MIN = 1
 PAGE_SIZE_MAX = 100
 PARETO_LEDGER_LIMIT = 10
-NODE_LEDGER_LIMIT = PARETO_LEDGER_LIMIT
+# The places the concentration ledgers keep GPU-hours to: a millionth of a
+# GPU-hour, 3.6 GPU-milliseconds. Past it a float sum's last digits depend only
+# on the order it added its terms in, so a category's sum and its outcome's sum
+# of the same attempts could differ there, and equal values not compare equal.
+LEDGER_HOURS_DIGITS = 6
 
 
 class DatabaseSchemaError(RuntimeError):
@@ -958,16 +955,14 @@ def _rollup_symptom_ledger_conn(
     since: str | None,
     until: str | None,
     outcome: str | None = None,
-    limit: int = PARETO_LEDGER_LIMIT,
 ) -> list[dict[str, Any]]:
-    """Return failure symptom ledger entries from the rollup table.
+    """Return every failure symptom's ledger entry from the rollup table, largest first.
 
     Args:
         conn: SQLite connection.
         since: Inclusive lower date bound.
         until: Inclusive upper date bound.
         outcome: Optional frontend outcome key or raw NVIDIA Attribution outcome.
-        limit: Maximum number of symptoms to return.
 
     Returns:
         Symptom ledger entries keyed for React.
@@ -1006,7 +1001,7 @@ def _rollup_symptom_ledger_conn(
         entry["count"] += n
         entry["nodeHours"] += float(row["gpu_hours"] if row["gpu_hours"] is not None else 0.0)
         entry["outcomes"][outcome_key] = entry["outcomes"].get(outcome_key, 0) + n
-    return sorted(by_symptom.values(), key=lambda item: (-item["count"], item["symptom"]))[:limit]
+    return sorted(by_symptom.values(), key=lambda item: (-item["count"], item["symptom"]))
 
 
 def _rollup_rule_ledger_conn(
@@ -1016,9 +1011,8 @@ def _rollup_rule_ledger_conn(
     until: str | None,
     outcome: str | None = None,
     rollup_columns: set[str] | None = None,
-    limit: int = PARETO_LEDGER_LIMIT,
 ) -> list[dict[str, Any]]:
-    """Return the top root-rule ledger entries from the rollup table.
+    """Return every root rule's ledger entry from the rollup table, largest first.
 
     Args:
         conn: SQLite connection.
@@ -1026,7 +1020,6 @@ def _rollup_rule_ledger_conn(
         until: Inclusive upper date bound.
         outcome: Optional frontend outcome key or raw NVIDIA Attribution outcome.
         rollup_columns: Columns present on ``webui_run_fact``.
-        limit: Maximum number of rules to return.
 
     Returns:
         Rule ledger entries keyed for React.
@@ -1080,7 +1073,7 @@ def _rollup_rule_ledger_conn(
         entry["count"] += n
         entry["nodeHours"] += float(row["gpu_hours"] if row["gpu_hours"] is not None else 0.0)
         entry["outcomes"][outcome_key] = entry["outcomes"].get(outcome_key, 0) + n
-    return sorted(by_rule.values(), key=lambda item: (-item["count"], item["rule"]))[:limit]
+    return sorted(by_rule.values(), key=lambda item: (-item["count"], item["rule"]))
 
 
 def _rollup_user_ledger_conn(
@@ -1090,9 +1083,8 @@ def _rollup_user_ledger_conn(
     until: str | None,
     outcome: str | None = None,
     rollup_columns: set[str] | None = None,
-    limit: int = PARETO_LEDGER_LIMIT,
 ) -> list[dict[str, Any]]:
-    """Return the top user ledger entries from the rollup table.
+    """Return every user's ledger entry from the rollup table, largest first.
 
     Args:
         conn: SQLite connection.
@@ -1100,7 +1092,6 @@ def _rollup_user_ledger_conn(
         until: Inclusive upper date bound.
         outcome: Optional frontend outcome key or raw NVIDIA Attribution outcome.
         rollup_columns: Columns present on ``webui_run_fact``.
-        limit: Maximum number of users to return.
 
     Returns:
         User ledger entries keyed for React.
@@ -1156,7 +1147,7 @@ def _rollup_user_ledger_conn(
         entry["count"] += n
         entry["nodeHours"] += float(row["gpu_hours"] if row["gpu_hours"] is not None else 0.0)
         entry["outcomes"][outcome_key] = entry["outcomes"].get(outcome_key, 0) + n
-    return sorted(by_user.values(), key=lambda item: (-item["count"], item["user"]))[:limit]
+    return sorted(by_user.values(), key=lambda item: (-item["count"], item["user"]))
 
 
 def _rollup_outcome_ledger_conn(
@@ -1195,10 +1186,37 @@ def _rollup_outcome_ledger_conn(
             {
                 "outcome": outcome_key,
                 "count": int(row["n"]),
-                "nodeHours": float(row["gpu_hours"] if row["gpu_hours"] is not None else 0.0),
+                "nodeHours": round(
+                    float(row["gpu_hours"] if row["gpu_hours"] is not None else 0.0), LEDGER_HOURS_DIGITS
+                ),
             }
         )
     return sorted(out, key=lambda item: (-item["count"], item["outcome"]))
+
+
+def _blamed_shares(responsible_nodes: list[Any], gpu_hours: float | None) -> dict[str, float]:
+    """Return each responsible node's share of one failed attempt's GPU-hours.
+
+    A failure's GPU-hours are its cost, which the rankings by symptom, user and
+    rule give whole to the failure's category; ranked by node, the cost is
+    split evenly among the nodes the failure names (the writer records each
+    once), so the nodes' shares add up to the failures' cost. A node's
+    GPU-hours on its own page are another measure: its slice of the attempts
+    that ran on it.
+
+    Args:
+        responsible_nodes: The attempt's recorded responsible nodes.
+        gpu_hours: The attempt's GPU-hours.
+
+    Returns:
+        Each named node's share; empty when the attempt names none.
+    """
+
+    named = [node for node in responsible_nodes if isinstance(node, str) and node != ""]
+    if len(named) == 0:
+        return {}
+    share = float(gpu_hours if gpu_hours is not None else 0.0) / len(named)
+    return {node: share for node in named}
 
 
 def _rollup_node_ledger_conn(
@@ -1207,16 +1225,14 @@ def _rollup_node_ledger_conn(
     since: str | None,
     until: str | None,
     outcome: str | None = None,
-    limit: int = NODE_LEDGER_LIMIT,
 ) -> list[dict[str, Any]]:
-    """Return the top responsible-node ledger entries from the rollup table.
+    """Return every responsible node's ledger entry from the rollup table, largest first.
 
     Args:
         conn: SQLite connection.
         since: Inclusive lower date bound.
         until: Inclusive upper date bound.
         outcome: Optional frontend outcome key or raw NVIDIA Attribution outcome.
-        limit: Maximum number of nodes to return.
 
     Returns:
         Node ledger entries keyed for React.
@@ -1234,10 +1250,9 @@ def _rollup_node_ledger_conn(
     where_sql = " WHERE " + " AND ".join(clauses)
     sql = (
         f"SELECT {responsible_nodes_column} AS responsible_nodes_json, "
-        "c.nodes_json, f.outcome, f.root_symptom, f.gpu_hours "
+        "f.outcome, f.root_symptom, f.gpu_hours "
         "FROM webui_run_fact f "
-        "JOIN attribution_run r ON r.id = f.run_id "
-        "JOIN execution_context c ON c.id = r.execution_context_id " + where_sql
+        "JOIN attribution_run r ON r.id = f.run_id" + where_sql
     )
     rows = conn.execute(sql, tuple(params)).fetchall()
     by_node: dict[str, dict[str, Any]] = {}
@@ -1252,24 +1267,12 @@ def _rollup_node_ledger_conn(
             responsible_nodes = []
         if not isinstance(responsible_nodes, list):
             continue
-        try:
-            allocated_nodes = json.loads(row["nodes_json"] or "[]")
-        except json.JSONDecodeError:
-            allocated_nodes = []
-        if isinstance(allocated_nodes, list) and len(allocated_nodes) > 0:
-            node_count = len(allocated_nodes)
-        else:
-            node_count = 1
         raw_symptom = row["root_symptom"]
         if isinstance(raw_symptom, str) and raw_symptom != "":
             symptom = raw_symptom
         else:
             symptom = "(unnamed)"
-        node_hours = float(row["gpu_hours"] if row["gpu_hours"] is not None else 0.0) / node_count
-        for raw_node in responsible_nodes:
-            node = raw_node if isinstance(raw_node, str) else ""
-            if node == "":
-                continue
+        for node, share in _blamed_shares(responsible_nodes, row["gpu_hours"]).items():
             entry = by_node.setdefault(
                 node,
                 {
@@ -1281,10 +1284,10 @@ def _rollup_node_ledger_conn(
                 },
             )
             entry["count"] += 1
-            entry["nodeHours"] += node_hours
+            entry["nodeHours"] += share
             entry["outcomes"][outcome_key] = entry["outcomes"].get(outcome_key, 0) + 1
             entry["symptoms"][symptom] = entry["symptoms"].get(symptom, 0) + 1
-    return sorted(by_node.values(), key=lambda item: (-item["count"], item["node"]))[:limit]
+    return sorted(by_node.values(), key=lambda item: (-item["count"], item["node"]))
 
 
 def _schema_meta_conn(conn: sqlite3.Connection) -> dict[str, Any]:
@@ -1340,6 +1343,82 @@ def _db_date_bounds_conn(conn: sqlite3.Connection) -> tuple[str | None, str | No
     lo = row["lo"][:10] if row["lo"] is not None else None
     hi = row["hi"][:10] if row["hi"] is not None else None
     return lo, hi
+
+
+def _pareto_ledger(entries: list[dict[str, Any]], name: str) -> list[dict[str, Any]]:
+    """Return the categories a concentration view can rank by either measure.
+
+    The fleet view ranks a ledger by failed-attempt count or by GPU-hours and
+    shows the first PARETO_LEDGER_LIMIT, so the ledger keeps the top of each
+    (their union), largest count first as every ledger is ordered; the view
+    measures shares against the window's failures, not against this cut.
+
+    Args:
+        entries: Every category's ledger entry, largest count first.
+        name: The key naming an entry's category.
+
+    Returns:
+        The entries in the top PARETO_LEDGER_LIMIT by count or by GPU-hours.
+    """
+
+    by_hours = sorted(entries, key=lambda item: (-item["nodeHours"], item[name]))
+    kept = {item[name] for item in entries[:PARETO_LEDGER_LIMIT]} | {
+        item[name] for item in by_hours[:PARETO_LEDGER_LIMIT]
+    }
+    return [item for item in entries if item[name] in kept]
+
+
+def _largest_ties(entries: list[dict[str, Any]]) -> dict[str, int]:
+    """Return how many categories share the largest value in each measure.
+
+    The fleet view names the largest category and how many more tie with it,
+    which can run past the categories its ledger keeps.
+
+    Args:
+        entries: Every category's ledger entry, GPU-hours kept to LEDGER_HOURS_DIGITS.
+
+    Returns:
+        The number of categories tied for largest by count and by GPU-hours; 0 without any.
+    """
+
+    if len(entries) == 0:
+        return {"count": 0, "nodeHours": 0}
+    top_count = max(item["count"] for item in entries)
+    top_hours = max(item["nodeHours"] for item in entries)
+    return {
+        "count": sum(1 for item in entries if item["count"] == top_count),
+        "nodeHours": sum(1 for item in entries if item["nodeHours"] == top_hours),
+    }
+
+
+def _pareto_payload(
+    symptom: list[dict[str, Any]],
+    node: list[dict[str, Any]],
+    user: list[dict[str, Any]],
+    rule: list[dict[str, Any]],
+) -> tuple[dict[str, list[dict[str, Any]]], dict[str, int], dict[str, dict[str, int]]]:
+    """Return the concentration ledgers as the fleet view takes them, with each one's size and ties.
+
+    Args:
+        symptom: Every root symptom's ledger entry, largest count first.
+        node: Every responsible node's ledger entry, largest count first.
+        user: Every user's ledger entry, largest count first.
+        rule: Every root rule's ledger entry, largest count first.
+
+    Returns:
+        The ledgers cut to what the view ranks, GPU-hours kept to LEDGER_HOURS_DIGITS; how many
+        categories each has in all; and how many tie for largest in each measure.
+    """
+
+    full = {
+        axis: [{**item, "nodeHours": round(item["nodeHours"], LEDGER_HOURS_DIGITS)} for item in entries]
+        for axis, entries in {"symptom": symptom, "node": node, "user": user, "rule": rule}.items()
+    }
+    return (
+        {axis: _pareto_ledger(entries, axis) for axis, entries in full.items()},
+        {axis: len(entries) for axis, entries in full.items()},
+        {axis: _largest_ties(entries) for axis, entries in full.items()},
+    )
 
 
 def _dashboard_data_from_rollup_conn(
@@ -1421,6 +1500,9 @@ def _dashboard_data_from_rollup_conn(
         conn, since=since, until=until, outcome=ledger_outcome, rollup_columns=rollup_columns
     )
     outcome_ledger = _rollup_outcome_ledger_conn(conn, since=since, until=until)
+    pareto_ledgers, category_counts, largest_ties = _pareto_payload(
+        symptom_ledger, node_ledger, user_ledger, rule_ledger
+    )
 
     by_day = {row["day"]: row for row in daily_rows}
     daily: list[dict[str, Any]] = []
@@ -1474,13 +1556,9 @@ def _dashboard_data_from_rollup_conn(
         "daily": daily,
         "hwBreakdown": hw_breakdown,
         "swBreakdown": sw_breakdown,
-        "ledgers": {
-            "symptom": symptom_ledger,
-            "node": node_ledger,
-            "user": user_ledger,
-            "rule": rule_ledger,
-            "outcome": outcome_ledger,
-        },
+        "ledgers": {**pareto_ledgers, "outcome": outcome_ledger},
+        "categoryCounts": category_counts,
+        "largestTies": largest_ties,
         "movers": [],
     }
 
@@ -1514,7 +1592,7 @@ def _outcome_ledger_conn(conn: sqlite3.Connection, clauses: list[str], params: l
             {
                 "outcome": outcome_key,
                 "count": row["n"],
-                "nodeHours": float(row["gpu_hours"] or 0.0),
+                "nodeHours": round(float(row["gpu_hours"] or 0.0), LEDGER_HOURS_DIGITS),
             }
         )
     return out
@@ -1526,16 +1604,14 @@ def _normalized_symptom_ledger_conn(
     since: str | None,
     until: str | None,
     outcome: str | None = None,
-    limit: int = PARETO_LEDGER_LIMIT,
 ) -> list[dict[str, Any]]:
-    """Return top root-symptom ledgers from normalized schema tables.
+    """Return every root symptom's ledger entry from normalized schema tables, largest first.
 
     Args:
         conn: SQLite connection.
         since: Inclusive lower date bound.
         until: Inclusive upper date bound.
         outcome: Optional frontend outcome key or raw NVIDIA Attribution outcome.
-        limit: Maximum number of entries to return.
 
     Returns:
         Symptom ledger entries keyed for React.
@@ -1572,7 +1648,7 @@ def _normalized_symptom_ledger_conn(
         entry["count"] += n
         entry["nodeHours"] += float(row["gpu_hours"] if row["gpu_hours"] is not None else 0.0)
         entry["outcomes"][outcome_key] = entry["outcomes"].get(outcome_key, 0) + n
-    return sorted(by_symptom.values(), key=lambda item: (-item["count"], item["symptom"]))[:limit]
+    return sorted(by_symptom.values(), key=lambda item: (-item["count"], item["symptom"]))
 
 
 def _normalized_rule_ledger_conn(
@@ -1581,16 +1657,14 @@ def _normalized_rule_ledger_conn(
     since: str | None,
     until: str | None,
     outcome: str | None = None,
-    limit: int = PARETO_LEDGER_LIMIT,
 ) -> list[dict[str, Any]]:
-    """Return top root-rule ledgers from normalized schema tables.
+    """Return every root rule's ledger entry from normalized schema tables, largest first.
 
     Args:
         conn: SQLite connection.
         since: Inclusive lower date bound.
         until: Inclusive upper date bound.
         outcome: Optional frontend outcome key or raw NVIDIA Attribution outcome.
-        limit: Maximum number of entries to return.
 
     Returns:
         Rule ledger entries keyed for React.
@@ -1627,7 +1701,7 @@ def _normalized_rule_ledger_conn(
         entry["count"] += n
         entry["nodeHours"] += float(row["gpu_hours"] if row["gpu_hours"] is not None else 0.0)
         entry["outcomes"][outcome_key] = entry["outcomes"].get(outcome_key, 0) + n
-    return sorted(by_rule.values(), key=lambda item: (-item["count"], item["rule"]))[:limit]
+    return sorted(by_rule.values(), key=lambda item: (-item["count"], item["rule"]))
 
 
 def _normalized_user_ledger_conn(
@@ -1636,16 +1710,14 @@ def _normalized_user_ledger_conn(
     since: str | None,
     until: str | None,
     outcome: str | None = None,
-    limit: int = PARETO_LEDGER_LIMIT,
 ) -> list[dict[str, Any]]:
-    """Return top user ledgers from normalized schema tables.
+    """Return every user's ledger entry from normalized schema tables, largest first.
 
     Args:
         conn: SQLite connection.
         since: Inclusive lower date bound.
         until: Inclusive upper date bound.
         outcome: Optional frontend outcome key or raw NVIDIA Attribution outcome.
-        limit: Maximum number of entries to return.
 
     Returns:
         User ledger entries keyed for React.
@@ -1682,7 +1754,7 @@ def _normalized_user_ledger_conn(
         entry["count"] += n
         entry["nodeHours"] += float(row["gpu_hours"] if row["gpu_hours"] is not None else 0.0)
         entry["outcomes"][outcome_key] = entry["outcomes"].get(outcome_key, 0) + n
-    return sorted(by_user.values(), key=lambda item: (-item["count"], item["user"]))[:limit]
+    return sorted(by_user.values(), key=lambda item: (-item["count"], item["user"]))
 
 
 def _normalized_node_ledger_conn(
@@ -1691,16 +1763,14 @@ def _normalized_node_ledger_conn(
     since: str | None,
     until: str | None,
     outcome: str | None = None,
-    limit: int = NODE_LEDGER_LIMIT,
 ) -> list[dict[str, Any]]:
-    """Return top responsible-node ledgers from normalized schema tables.
+    """Return every responsible node's ledger entry from normalized schema tables, largest first.
 
     Args:
         conn: SQLite connection.
         since: Inclusive lower date bound.
         until: Inclusive upper date bound.
         outcome: Optional frontend outcome key or raw NVIDIA Attribution outcome.
-        limit: Maximum number of entries to return.
 
     Returns:
         Node ledger entries keyed for React.
@@ -1720,7 +1790,7 @@ def _normalized_node_ledger_conn(
     clauses.append(f"{responsible_nodes_column} != ?")
     params.append("")
     sql = _append_where(
-        f"SELECT {responsible_nodes_column} AS responsible_nodes_json, c.nodes_json, "
+        f"SELECT {responsible_nodes_column} AS responsible_nodes_json, "
         "r.outcome AS outcome, "
         "json_extract(r.raw_result_json, '$.verdict.root_symptom.symptom') AS root_symptom, "
         "(" + gpu_expr + ") AS gpu_hours "
@@ -1740,18 +1810,9 @@ def _normalized_node_ledger_conn(
             responsible_nodes = []
         if not isinstance(responsible_nodes, list):
             continue
-        try:
-            allocated_nodes = json.loads(row["nodes_json"] or "[]")
-        except json.JSONDecodeError:
-            allocated_nodes = []
-        node_count = len(allocated_nodes) if isinstance(allocated_nodes, list) and len(allocated_nodes) > 0 else 1
         raw_symptom = row["root_symptom"]
         symptom = raw_symptom if isinstance(raw_symptom, str) and raw_symptom != "" else "(unnamed)"
-        node_hours = float(row["gpu_hours"] if row["gpu_hours"] is not None else 0.0) / node_count
-        for raw_node in responsible_nodes:
-            node = raw_node if isinstance(raw_node, str) else ""
-            if node == "":
-                continue
+        for node, share in _blamed_shares(responsible_nodes, row["gpu_hours"]).items():
             entry = by_node.setdefault(
                 node,
                 {
@@ -1763,10 +1824,10 @@ def _normalized_node_ledger_conn(
                 },
             )
             entry["count"] += 1
-            entry["nodeHours"] += node_hours
+            entry["nodeHours"] += share
             entry["outcomes"][outcome_key] = entry["outcomes"].get(outcome_key, 0) + 1
             entry["symptoms"][symptom] = entry["symptoms"].get(symptom, 0) + 1
-    return sorted(by_node.values(), key=lambda item: (-item["count"], item["node"]))[:limit]
+    return sorted(by_node.values(), key=lambda item: (-item["count"], item["node"]))
 
 
 def dashboard_data(
@@ -1838,6 +1899,9 @@ def dashboard_data(
         user_ledger = _normalized_user_ledger_conn(conn, since=since, until=until, outcome=ledger_outcome)
         rule_ledger = _normalized_rule_ledger_conn(conn, since=since, until=until, outcome=ledger_outcome)
         outcome_ledger = _outcome_ledger_conn(conn, clauses + ["r.outcome != ?"], [*params, "Pass"])
+    pareto_ledgers, category_counts, largest_ties = _pareto_payload(
+        symptom_ledger, node_ledger, user_ledger, rule_ledger
+    )
 
     by_day = {row["day"]: row for row in daily_rows}
     daily: list[dict[str, Any]] = []
@@ -1895,12 +1959,8 @@ def dashboard_data(
         "daily": daily,
         "hwBreakdown": hw_breakdown,
         "swBreakdown": sw_breakdown,
-        "ledgers": {
-            "symptom": symptom_ledger,
-            "node": node_ledger,
-            "user": user_ledger,
-            "rule": rule_ledger,
-            "outcome": outcome_ledger,
-        },
+        "ledgers": {**pareto_ledgers, "outcome": outcome_ledger},
+        "categoryCounts": category_counts,
+        "largestTies": largest_ties,
         "movers": [],
     }

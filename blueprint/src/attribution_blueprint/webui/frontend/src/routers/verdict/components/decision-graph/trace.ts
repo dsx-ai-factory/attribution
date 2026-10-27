@@ -1,5 +1,5 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-// SPDX-License-Identifier: LicenseRef-NvidiaProprietary
+// SPDX-License-Identifier: Apache-2.0
 
 import type { DecisionGraph } from '@/interfaces/attribution'
 
@@ -34,4 +34,10 @@ export function traceRelationships(edges: DecisionGraph['edges'], selectedId: st
     }
   }
   return { nodeIds, edgeIndexes }
+}
+
+// A drawn piece of a route (TracePathData) is on the trace wherever a traced
+// relationship runs along it: a stretch several share for any of them.
+export function onTrace(members: readonly number[], traced: ReadonlySet<number>): boolean {
+  return members.some((index) => traced.has(index))
 }

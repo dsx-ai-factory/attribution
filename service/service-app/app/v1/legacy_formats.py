@@ -1,12 +1,5 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-# SPDX-License-Identifier: LicenseRef-NvidiaProprietary
-#
-# NVIDIA CORPORATION, its affiliates and licensors retain all intellectual
-# property and proprietary rights in and to this material, related
-# documentation and any modifications thereto. Any use, reproduction,
-# disclosure or distribution of this material and related documentation
-# without an express license agreement from NVIDIA CORPORATION or
-# its affiliates is strictly prohibited.
+# SPDX-License-Identifier: Apache-2.0
 
 """Legacy `/v1` observation bodies, decoded into `entry_timeseries`.
 
@@ -275,10 +268,16 @@ _FORMATS_BY_SOURCE: dict[Source, frozenset[Format]] = {
 }
 
 
+_EPILOG_TAIL = timedelta(minutes=10)
+
+
 def _epilog_time_start(job_info: JobInfo) -> datetime:
     time_start = job_info.interest_start_time
-    if job_info.last_tflops_time and job_info.last_tflops_time > time_start:
-        time_start = job_info.last_tflops_time
+    last_tflops = job_info.last_tflops_time
+    # Shared logs can contain progress from a later workload. Only narrow this
+    # window with progress inside it; otherwise retain the health-check evidence.
+    if last_tflops is not None and time_start < last_tflops <= job_info.interest_end_time + _EPILOG_TAIL:
+        time_start = last_tflops
     return time_start
 
 
@@ -286,7 +285,7 @@ _WindowBound = Callable[[JobInfo], Optional[datetime]]
 
 # Legacy bodies are filtered on these per-source windows; their declared `time_interval` is ignored.
 _WINDOWS: dict[Source, tuple[_WindowBound, _WindowBound]] = {
-    Source.HEALTH_CHECK: (_epilog_time_start, lambda ji: ji.interest_end_time + timedelta(minutes=10)),
+    Source.HEALTH_CHECK: (_epilog_time_start, lambda ji: ji.interest_end_time + _EPILOG_TAIL),
     Source.SYSLOG: (lambda ji: ji.interest_start_time, lambda ji: ji.interest_end_time),
     Source.UFMLOG: (lambda ji: ji.job_start_time, lambda ji: ji.job_end_time),
     Source.NODE_METRICS: (lambda ji: ji.job_start_time, lambda ji: ji.job_end_time),
@@ -441,11 +440,11 @@ def _loki_resources(node: Optional[str], replica: Optional[str] = None) -> Optio
     return resources or None
 
 
-def _raw_log_entries(lines: list[str], job_info: JobInfo) -> list[dict[str, Any]]:
+def _raw_log_entries(lines: list[str], job_info: JobInfo, declared_end: Optional[datetime]) -> list[dict[str, Any]]:
     entries = []
     for line in lines:
-        # Year-less timestamps take their year from the job end, as the library's `raw_log` path did.
-        moment = _extract_timestamp_from_log_line(line, timezone=job_info.timezone, job_end_time=job_info.job_end_time)
+        # Year-less timestamps take their year from the declared interval end, as the library's `raw_log` path did.
+        moment = _extract_timestamp_from_log_line(line, timezone=job_info.timezone, job_end_time=declared_end)
         entries.append(_entry(line, _datetime_ns(moment) if moment is not None else None))
     return entries
 
@@ -508,14 +507,17 @@ def _decode_json(format: Format, body: str) -> Any:
         raise InvalidObservationBodyError.new(format.value).to_http_exception() from e
 
 
-def to_entry_timeseries(source: Source, format: Format, body: str, job_info: JobInfo) -> list[dict[str, Any]]:
+def to_entry_timeseries(
+    source: Source, format: Format, body: str, job_info: JobInfo, declared_end: Optional[datetime]
+) -> list[dict[str, Any]]:
     """Decode a legacy body into the `entry_timeseries` entries the library receives.
 
     Args:
         source: The declared observation source.
         format: The legacy format `body` is in; not `string_list`, `entry_timeseries` or `undefined`.
         body: The body as posted.
-        job_info: The job the observation belongs to; year-less `raw_log` timestamps take their year from its end.
+        job_info: The job the observation belongs to.
+        declared_end: The declared `time_interval.end`; year-less `raw_log` timestamps take their year from it.
 
     Returns:
         The entries; empty for a source the library rejects regardless of format.
@@ -535,7 +537,7 @@ def to_entry_timeseries(source: Source, format: Format, body: str, job_info: Job
 
     match format:
         case Format.RAW_LOG_LINES:
-            return _raw_log_entries(decoded, job_info)
+            return _raw_log_entries(decoded, job_info, declared_end)
         case Format.LOKI_DICT_LIST:
             return _loki_dict_entries(source, decoded)
         case Format.RAW_LOKI_STREAMS:

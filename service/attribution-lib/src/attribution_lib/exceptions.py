@@ -1,24 +1,28 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-# SPDX-License-Identifier: LicenseRef-NvidiaProprietary
-#
-# NVIDIA CORPORATION, its affiliates and licensors retain all intellectual
-# property and proprietary rights in and to this material, related
-# documentation and any modifications thereto. Any use, reproduction,
-# disclosure or distribution of this material and related documentation
-# without an express license agreement from NVIDIA CORPORATION or
-# its affiliates is strictly prohibited.
+# SPDX-License-Identifier: Apache-2.0
 
 """Exception hierarchy for the attribution library."""
 
-from typing import Any, Optional
+from typing import TYPE_CHECKING, Any, Optional
 
 from pydantic import ValidationError
+
+if TYPE_CHECKING:
+    from attribution_lib.observation.inbound import TimeInterval
 
 
 class AttributionError(Exception):
     """Base class for all attribution library exceptions."""
 
     pass
+
+
+class InvalidEventStorageSizeError(AttributionError, ValueError):
+    """DuckDB rejected a size setting during event-storage initialization."""
+
+    def __init__(self, setting: str, value: str):
+        self.setting = setting
+        super().__init__(f"Invalid DuckDB {setting}: {value!r}")
 
 
 class SnapshotSchemaVersionError(AttributionError, ValueError):
@@ -99,6 +103,14 @@ class InvalidTimestampSourceError(ObservationError):
     """Raised when timestamp source is invalid."""
 
     pass
+
+
+class InvalidTimeIntervalError(ObservationError):
+    """Raised when an observation's `time_interval` starts after it ends."""
+
+    def __init__(self, time_interval: "TimeInterval") -> None:
+        self.time_interval = time_interval
+        super().__init__(f"time_interval start is after end: {time_interval}")
 
 
 class ProcessingError(ObservationError):

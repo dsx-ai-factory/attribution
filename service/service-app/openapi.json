@@ -7,7 +7,7 @@
     "contact": {
       "name": "NVIDIA Corporation"
     },
-    "version": "0.1.0"
+    "version": "2.0.0"
   },
   "paths": {
     "/v1/healthz": {
@@ -1820,6 +1820,19 @@
         "title": "DecisionNodeType",
         "description": "Attribution pipeline stage a decision node was produced by."
       },
+      "DropReason": {
+        "type": "string",
+        "enum": [
+          "outside_window",
+          "no_timestamp",
+          "no_node",
+          "unknown_node",
+          "source_skipped_no_job_nodes",
+          "pre_filtered"
+        ],
+        "title": "DropReason",
+        "description": "Why an entry was discarded before the extraction rules."
+      },
       "DuplicateAttributorError": {
         "properties": {
           "model_type": {
@@ -1980,6 +1993,33 @@
           "format"
         ],
         "title": "IncompatibleObservationSourceFormatError"
+      },
+      "IngestSummaryV2": {
+        "properties": {
+          "accepted": {
+            "type": "integer",
+            "title": "Accepted",
+            "description": "Entries read and passed to the extraction rules."
+          },
+          "dropped": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "propertyNames": {
+              "$ref": "#/components/schemas/DropReason"
+            },
+            "type": "object",
+            "title": "Dropped",
+            "description": "Entries discarded before the extraction rules, counted by reason."
+          }
+        },
+        "type": "object",
+        "required": [
+          "accepted",
+          "dropped"
+        ],
+        "title": "IngestSummaryV2",
+        "description": "How many entries of an observation were read, and how many were dropped and why."
       },
       "InvalidObservationBodyError": {
         "properties": {
@@ -2215,6 +2255,10 @@
             "type": "integer",
             "title": "Observation Id"
           },
+          "ingest": {
+            "$ref": "#/components/schemas/IngestSummaryV2",
+            "description": "Entry counts for this observation."
+          },
           "model_type": {
             "type": "string",
             "const": "ObservationResponseV2",
@@ -2224,6 +2268,7 @@
         "type": "object",
         "required": [
           "observation_id",
+          "ingest",
           "model_type"
         ],
         "title": "ObservationResponseV2",
@@ -2334,7 +2379,8 @@
         "enum": [
           "",
           "slurm",
-          "kueue"
+          "kueue",
+          "kai"
         ],
         "title": "Scheduler",
         "description": "Recognized values for `JobInfo.scheduler`.\n\nUnlike `JobInfo.type`, which is a free-form legacy wire token, every\n`JobInfo.scheduler` value is one of these members. `UNKNOWN` means \"no\nrecognized scheduler identity\": callers must not use it to build a\nrendered ID and should fall back to generic wording. Existing Slurm\nsymptom strings are unchanged."
@@ -2880,6 +2926,7 @@
           "",
           "slurm",
           "kueue",
+          "kai",
           "runai"
         ],
         "title": "WorkloadTypeEnum",

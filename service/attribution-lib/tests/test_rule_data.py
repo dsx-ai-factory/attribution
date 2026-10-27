@@ -1,12 +1,5 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-# SPDX-License-Identifier: LicenseRef-NvidiaProprietary
-#
-# NVIDIA CORPORATION, its affiliates and licensors retain all intellectual
-# property and proprietary rights in and to this material, related
-# documentation and any modifications thereto. Any use, reproduction,
-# disclosure or distribution of this material and related documentation
-# without an express license agreement from NVIDIA CORPORATION or
-# its affiliates is strictly prohibited.
+# SPDX-License-Identifier: Apache-2.0
 
 import json
 import warnings
@@ -402,6 +395,8 @@ def _build_applog_jobinfo(timezone, *, tflops_start: bool, variant: str = "defau
         "peer_localhost": ["host-9ad02e1b", "localhost"],
         "named_hosts": ["host-9ad02e1b", "localhost", "testnode0-001", "testnode0-002", "testnode0-003"],
         "pushrecv_pair": ["host-9ad02e1b", "host-a222193a"],
+        # Fully qualified node whose own address maps to its short name (127.0.0.1 -> localhost).
+        "fqdn_self": ["localhost.cluster.local"],
     }
     try:
         nodes = nodes_by_variant[variant]

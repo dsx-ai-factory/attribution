@@ -1,11 +1,12 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-# SPDX-License-Identifier: LicenseRef-NvidiaProprietary
+# SPDX-License-Identifier: Apache-2.0
 
 """End-to-end coverage for Slurm timeout XID-145 cascade handling."""
 
 from datetime import UTC, datetime, timedelta
 
 from attribution_lib.attributor import Attributor
+from attribution_lib.job_info import Scheduler
 from attribution_lib.observation.inbound import (
     Context as InboundContext,
     Format as ObservationFormat,
@@ -34,7 +35,8 @@ def test_terminal_rxpipe_after_raw_slurm_timeout_finishes_as_pass(
         nodes=["node01"],
         time_limit=60,
         exit_code_signal=0,
-    )._replace(type="slurm")
+        scheduler=Scheduler.SLURM,
+    )
     timeout_time = job_end - timedelta(seconds=97)
     xid_time = job_end - timedelta(seconds=34)
     xid_timestamp_ns = int(xid_time.timestamp() * 1_000_000_000)
@@ -44,7 +46,6 @@ def test_terminal_rxpipe_after_raw_slurm_timeout_finishes_as_pass(
     syslog = InboundObservation(
         context=InboundContext(
             time_interval=interval,
-            resources=AllJobResources,
             source=ObservationSource.SYSLOG,
             format=ObservationFormat.ENTRY_TIMESERIES,
             timezone=timezone,
@@ -62,7 +63,6 @@ def test_terminal_rxpipe_after_raw_slurm_timeout_finishes_as_pass(
     applog = InboundObservation(
         context=InboundContext(
             time_interval=interval,
-            resources=AllJobResources,
             source=ObservationSource.APPLOG,
             format=ObservationFormat.ENTRY_TIMESERIES,
             timezone=timezone,
@@ -110,13 +110,13 @@ def test_timeout_cascades_and_unused_xid_leave_only_timeout_failure(
         nodes=["test-node-alpha", "test-node-bravo"],
         time_limit=None,
         exit_code_signal=0,
-    )._replace(type="slurm")
+        scheduler=Scheduler.SLURM,
+    )
     interval = TimeInterval(job_info.job_start_time, job_info.job_end_time)
 
     syslog = InboundObservation(
         context=InboundContext(
             time_interval=interval,
-            resources=AllJobResources,
             source=ObservationSource.SYSLOG,
             format=ObservationFormat.ENTRY_TIMESERIES,
             timezone=timezone,
@@ -157,7 +157,6 @@ def test_timeout_cascades_and_unused_xid_leave_only_timeout_failure(
     applog = InboundObservation(
         context=InboundContext(
             time_interval=interval,
-            resources=AllJobResources,
             source=ObservationSource.APPLOG,
             format=ObservationFormat.ENTRY_TIMESERIES,
             timezone=timezone,
@@ -191,7 +190,7 @@ def test_timeout_cascades_and_unused_xid_leave_only_timeout_failure(
         "XID-145-RLW_RXPIPE-8",
         "XID-145-MultiCategory",
         "XID-137-NVLINK_PRIV_ERR",
-        "XID-94-CONTAINED_ERROR",
+        "XID-94-CONTAINED_ERROR-SM",
     ):
         assert not result.symptoms._data[symptom].has_bad()
         assert result.symptoms._data[symptom].has_interesting()
@@ -204,7 +203,7 @@ def test_timeout_cascades_and_unused_xid_leave_only_timeout_failure(
         "XID-145-RLW_RXPIPE-8",
         "XID-145-MultiCategory",
         "XID-137-NVLINK_PRIV_ERR",
-        "XID-94-CONTAINED_ERROR",
+        "XID-94-CONTAINED_ERROR-SM",
     ):
         assert symptom not in cascade_node
         assert cascade_node._data[symptom].has_interesting()

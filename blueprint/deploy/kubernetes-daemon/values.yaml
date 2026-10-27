@@ -1,0 +1,31 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+image:
+  repository: kubernetes-daemon
+  tag: local
+  pullPolicy: IfNotPresent
+
+queueSize: 1000
+workers: 2
+watchTimeoutSeconds: 60
+jobsetVersion: v1alpha2
+retentionDays: 30
+
+storage:
+  sqlite:
+    path: /data/placements.db
+    size: 1Gi
+    accessModes:
+      - ReadWriteOnce
+    storageClassName: ""
+
+nodeSelector: {}
+tolerations: []
+
+resources:
+  requests:
+    cpu: 50m
+    memory: 64Mi
+  limits:
+    memory: 256Mi

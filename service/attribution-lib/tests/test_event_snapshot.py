@@ -1,12 +1,5 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-# SPDX-License-Identifier: LicenseRef-NvidiaProprietary
-#
-# NVIDIA CORPORATION, its affiliates and licensors retain all intellectual
-# property and proprietary rights in and to this material, related
-# documentation and any modifications thereto. Any use, reproduction,
-# disclosure or distribution of this material and related documentation
-# without an express license agreement from NVIDIA CORPORATION or
-# its affiliates is strictly prohibited.
+# SPDX-License-Identifier: Apache-2.0
 
 from datetime import datetime
 from pathlib import Path
@@ -502,3 +495,55 @@ class TestSnapshotErrors:
 
         with pytest.raises(StableIdCollisionError):
             EventManager.from_snapshot(snapshot_dir, attribution_lib.get_rules_engine())
+
+
+@pytest.mark.parametrize("failure", ["missing", "parquet", "validation", "interrupt"])
+@pytest.mark.parametrize("cleanup_fails", [False, True])
+def test_failed_restore_releases_resources_and_preserves_error(tmp_path, monkeypatch, failure, cleanup_fails):
+    from unittest.mock import patch
+
+    import duckdb
+
+    import attribution_lib.events as events
+
+    engine = attribution_lib.get_rules_engine()
+    snapshot = tmp_path / "snapshot"
+    with EventManager(engine) as source:
+        source.export_snapshot(snapshot)
+    if failure == "missing":
+        (snapshot / "events.parquet").unlink()
+    elif failure == "parquet":
+        (snapshot / "events.parquet").write_text("invalid parquet")
+    else:
+        error = KeyboardInterrupt("interrupted") if failure == "interrupt" else ValueError("invalid references")
+
+        def fail_validation(conn):
+            raise error
+
+        monkeypatch.setattr(events, "_validate_snapshot_lookup_references", fail_validation)
+    resources = []
+    real_close = EventManager.close
+
+    def close(manager, **kwargs):
+        resources.append((manager, manager._spill_dir, manager._owned_lookup_path))
+        if cleanup_fails:
+            raise PermissionError("cleanup failed")
+        return real_close(manager, **kwargs)
+
+    expected = {
+        "missing": FileNotFoundError,
+        "parquet": RuntimeError,
+        "validation": ValueError,
+        "interrupt": KeyboardInterrupt,
+    }[failure]
+    with patch.object(EventManager, "close", close), pytest.raises(expected) as caught:
+        EventManager.from_snapshot(snapshot, engine)
+    manager, spill, lookup = resources[0]
+    assert "cleanup failed" not in str(caught.value)
+    if not cleanup_fails:
+        assert manager._closed
+        assert not Path(spill).exists() and not lookup.exists()
+        with pytest.raises(duckdb.ConnectionException):
+            manager._conn.execute("SELECT 1")
+    else:
+        real_close(manager, flush=False)

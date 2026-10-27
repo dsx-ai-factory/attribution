@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
 """Declarative TOML extractor-rule loader.
 
 Turns a `.toml` rule file into ExtractorRules registered on the engine.

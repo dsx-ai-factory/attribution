@@ -1,6 +1,6 @@
 /*
  * SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
- * SPDX-License-Identifier: LicenseRef-NvidiaProprietary
+ * SPDX-License-Identifier: Apache-2.0
  */
 
 .decision-canvas .react-flow {
@@ -8,16 +8,46 @@
   --xy-controls-button-background-color: var(--background);
   --xy-controls-button-background-color-hover: var(--background-active);
   --xy-controls-button-color: var(--foreground-secondary);
+  --xy-controls-button-color-hover: var(--foreground);
   --xy-controls-button-border-color: var(--border);
 }
 
+/* The shared focusRing (3px border-active at 80%), on a step and on the
+   React Flow link; forced colors drop box-shadow, so a transparent outline
+   stands in (the block after these rules, so its outline wins). */
 .decision-canvas .react-flow__node:focus-visible {
-  outline: 2px solid var(--primary);
-  outline-offset: 4px;
+  outline: none;
+  border-radius: var(--radius);
+  box-shadow: 0 0 0 3px color-mix(in oklab, var(--border-active) 80%, transparent);
+}
+
+.decision-canvas .react-flow__attribution a:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3px color-mix(in oklab, var(--border-active) 80%, transparent);
+}
+
+/* Inset, as the focusRingInset form: the control group clips its buttons. */
+.decision-canvas .react-flow__controls-button:focus-visible {
+  outline: none;
+  box-shadow: inset 0 0 0 3px color-mix(in oklab, var(--border-active) 80%, transparent);
+}
+
+@media (forced-colors: active) {
+  .decision-canvas .react-flow__node:focus-visible,
+  .decision-canvas .react-flow__attribution a:focus-visible {
+    outline: 2px solid transparent;
+    outline-offset: 2px;
+  }
+
+  /* Inside the button, as its ring is. */
+  .decision-canvas .react-flow__controls-button:focus-visible {
+    outline: 2px solid transparent;
+    outline-offset: -2px;
+  }
 }
 
 .decision-canvas .decision-node-related .decision-step {
-  border-color: color-mix(in srgb, var(--color-primary-300) 50%, var(--border));
+  border-color: color-mix(in srgb, var(--graph-trace) 50%, var(--border));
 }
 
 .decision-canvas .decision-node-muted {
@@ -58,7 +88,9 @@
   }
 }
 
+/* The zoom buttons as a house outline icon-sm pair (24px), 16px in from the canvas corner. */
 .decision-canvas .react-flow__controls {
+  margin: 16px;
   overflow: hidden;
   border: 1px solid var(--border);
   border-radius: var(--radius);
@@ -66,15 +98,23 @@
 }
 
 .decision-canvas .react-flow__controls-button {
-  width: 32px;
-  height: 32px;
+  width: 24px;
+  height: 24px;
 }
 
+/* The attribution sits 4px in from the canvas corner (React Flow sets it
+   flush), so the canvas never cuts the shared 3px focus ring of its link. */
 .decision-canvas .react-flow__attribution {
+  margin: 4px;
+  padding: 0 4px;
+  border-radius: var(--radius-xs);
   background: var(--background-secondary);
+  font-size: var(--text-xs);
+  line-height: var(--text-xs--line-height);
 }
 
 .decision-canvas .react-flow__attribution a {
+  border-radius: var(--radius-xs);
   color: var(--foreground-muted);
 }
 

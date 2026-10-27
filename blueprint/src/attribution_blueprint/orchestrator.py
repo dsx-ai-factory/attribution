@@ -1,12 +1,5 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-# SPDX-License-Identifier: LicenseRef-NvidiaProprietary
-#
-# NVIDIA CORPORATION, its affiliates and licensors retain all intellectual
-# property and proprietary rights in and to this material, related
-# documentation and any modifications thereto. Any use, reproduction,
-# disclosure or distribution of this material and related documentation
-# without an express license agreement from NVIDIA CORPORATION or
-# its affiliates is strictly prohibited.
+# SPDX-License-Identifier: Apache-2.0
 
 import json
 from datetime import datetime
@@ -16,17 +9,24 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from loguru import logger
 from nvidia_attribution_client import AttributorInfoV2, ObservationV2, Scheduler
 
-from attribution_blueprint.connectors.attribution import AttributionConnector
+from attribution_blueprint.connectors.attribution import (
+    AttributionConnector,
+    AttributorConflictError,
+    ObservationConflictError,
+)
 from attribution_blueprint.connectors.execution_contexts import ExecutionContextAdapter
 from attribution_blueprint.connectors.logs import LogConnector
 from attribution_blueprint.connectors.metrics import MetricsConnector
 from attribution_blueprint.connectors.outputs import OutputConnector
-from attribution_blueprint.result import ConnectorReport, enrich_attribution_result, service_outcome
+from attribution_blueprint.result import ConnectorReport, IngestionReport, enrich_attribution_result, service_outcome
 from attribution_blueprint.taxonomy import taxonomy_for_service_value
 
 # Scheduler identities the service accepts on `workload.scheduler`, taken from
 # the generated client so the values are not retyped here.
 _SUPPORTED_WORKLOAD_SCHEDULERS = frozenset(s.value for s in Scheduler if s is not Scheduler.EMPTY)
+
+# Bounds persisted ingestion reasons; non-HTTP errors such as validation failures can be long.
+_MAX_REASON_CHARS = 500
 
 
 def _service_timezone_name(start: datetime, end: datetime, configured: str | None = None) -> str:
@@ -108,8 +108,9 @@ class AttributionOrchestrator:
         self.gpus_per_node = gpus_per_node
         # Per-run counters surfaced via `last_run_stats` so callers can decide
         # whether to exit non-zero. `succeeded` counts contexts whose verdict
-        # reached at least one output sink.
-        self.last_run_stats: dict[str, int] = {"attempted": 0, "succeeded": 0}
+        # reached at least one output sink. `conflicted` counts contexts rejected
+        # because another session already exists, without producing a verdict.
+        self.last_run_stats: dict[str, int] = {"attempted": 0, "succeeded": 0, "conflicted": 0}
         self.last_run_summaries: list[dict[str, str]] = []
 
     def analyze(
@@ -135,12 +136,22 @@ class AttributionOrchestrator:
         # Each context is processed in a single try/except so any failure —
         # including in attributor creation or info building — keeps the batch
         # moving.
-        self.last_run_stats = {"attempted": len(contexts), "succeeded": 0}
+        self.last_run_stats = {"attempted": len(contexts), "succeeded": 0, "conflicted": 0}
         self.last_run_summaries = []
         try:
             for ctx in contexts:
                 try:
                     processed = self._process_one(ctx, collectors)
+                except AttributorConflictError as e:
+                    summary = {
+                        **_summarize_context(ctx),
+                        "status": "conflicted",
+                        "attributor_id": e.attributor_id,
+                    }
+                    self.last_run_stats["conflicted"] += 1
+                    self.last_run_summaries.append(summary)
+                    logger.warning(f"attribution conflict for ctx {summary['context_id']}: {e}")
+                    continue
                 except Exception as e:
                     logger.warning(f"processing failed for ctx {ctx.get('id', '?')}: {e}")
                     continue
@@ -157,33 +168,69 @@ class AttributionOrchestrator:
         return results
 
     def _process_one(self, ctx: dict, collectors: list) -> tuple[dict, bool] | None:
-        observations: list[dict] = []
+        # Collect before opening a session so collection/dump failures cannot
+        # strand a newly created handle. A duplicate may still do this work.
         connector_reports: list[ConnectorReport] = []
+        batches: list[tuple[ConnectorReport, list[dict]]] = []
         for collector in collectors:
             try:
                 collected = collector.collect(ctx)
             except Exception as e:
                 logger.warning(f"collector {getattr(collector, 'source', '?')} failed for ctx {ctx['id']}: {e}")
                 connector_reports.append(_connector_report(collector, "error", str(e), 0))
+                batches.append((connector_reports[-1], []))
                 continue
-            observations.extend(collected)
             connector_reports.append(_connector_report(collector, "ok", "", len(collected)))
+            batches.append((connector_reports[-1], collected))
+        observations = [obs for _, collected in batches for obs in collected]
 
         if self.dump_observations_dir is not None:
             self._dump_observations(ctx, observations)
 
         info = self._build_attributor_info(ctx)
-        attributor_id = self.attribution.create_or_replace_attributor(info)
+        # Only a successful create gives this run a session to ingest into and
+        # clean up. A duplicate belongs to another caller and must be preserved.
+        attributor_id = self.attribution.create_attributor(info)
 
-        for obs in observations:
-            try:
-                service_obs = ObservationV2.model_validate(obs)
-                self.attribution.ingest_observation(attributor_id, service_obs)
-            except Exception as e:
-                obs_source = obs.get("context", {}).get("source", "?")
-                obs_source_value = obs_source.value if hasattr(obs_source, "value") else obs_source
-                logger.warning(f"ingest_observation failed for ctx {ctx['id']} source={obs_source_value}: {e}")
-                continue
+        ingestion_reports: list[IngestionReport] = []
+        for report, collected in batches:
+            failed = 0
+            empty = 0
+            accepted = 0
+            dropped: dict[str, int] = {}
+            first_reason = ""
+            for obs in collected:
+                try:
+                    service_obs = ObservationV2.model_validate(obs)
+                    response = self.attribution.ingest_observation(attributor_id, service_obs)
+                except ObservationConflictError:
+                    # The identical observation already reached the service, so this one is delivered, not failed.
+                    continue
+                except Exception as e:
+                    logger.warning(
+                        f"ingest_observation failed for ctx {ctx['id']} source={_observation_source(obs)}: {e}"
+                    )
+                    if failed == 0:
+                        first_reason = str(e) or type(e).__name__
+                    failed += 1
+                    continue
+                ingest = response.ingest
+                accepted += ingest.accepted
+                for drop_reason, count in ingest.dropped.items():
+                    dropped[drop_reason] = dropped.get(drop_reason, 0) + count
+                if ingest.accepted == 0:
+                    empty += 1
+            ingestion_reports.append(
+                _ingestion_report(
+                    report,
+                    attempted=len(collected),
+                    failed=failed,
+                    empty=empty,
+                    accepted=accepted,
+                    dropped=dropped,
+                    reason=first_reason,
+                )
+            )
 
         # Get the verdict, then ALWAYS clean up via a finally so we don't
         # leave attributors behind on the service even when get_attribution
@@ -203,7 +250,7 @@ class AttributionOrchestrator:
         if result is None:
             return None
 
-        result = enrich_attribution_result(result, connector_reports)
+        result = enrich_attribution_result(result, connector_reports, ingestion_reports)
 
         # Per-sink try/except: a broken sqlite write must not skip the
         # other sinks for the same ctx.
@@ -229,8 +276,11 @@ class AttributionOrchestrator:
         """Write each observation body to disk as `<ctx_id>.<source>.json` for review."""
         self.dump_observations_dir.mkdir(parents=True, exist_ok=True)
         for obs in observations:
-            source = obs["context"]["source"]
-            source_value = source.value if hasattr(source, "value") else source
+            source_value = _observation_source(obs)
+            obs_context = obs.get("context")
+            time_interval = obs_context.get("time_interval") if isinstance(obs_context, dict) else None
+            if not isinstance(time_interval, dict):
+                time_interval = {}
             path = self.dump_observations_dir / f"{ctx['id']}.{source_value}.json"
             # Bundled connector bodies are JSON-encoded (`entry_timeseries`); a
             # third-party connector may still send plain text. Preserve a
@@ -246,8 +296,8 @@ class AttributionOrchestrator:
                 "context": {
                     "source": source_value,
                     "time_interval": {
-                        "start": _isoformat_or_none(obs["context"]["time_interval"]["start"]),
-                        "end": _isoformat_or_none(obs["context"]["time_interval"]["end"]),
+                        "start": _isoformat_or_none(time_interval.get("start")),
+                        "end": _isoformat_or_none(time_interval.get("end")),
                     },
                 },
                 **body_field,
@@ -334,6 +384,15 @@ def _isoformat_or_none(value: datetime | None) -> str | None:
     return value.isoformat() if value is not None else None
 
 
+def _observation_source(obs: dict) -> str:
+    """Return the observation's source value, or "unknown" when its context lacks one."""
+    obs_context = obs.get("context")
+    source = obs_context.get("source") if isinstance(obs_context, dict) else None
+    if source is None:
+        return "unknown"
+    return str(source.value if hasattr(source, "value") else source)
+
+
 def _context_with_workload_gpu_defaults(ctx: dict, gpus_per_node: int | None) -> dict:
     """Add workload GPU metadata to the output context when available.
 
@@ -376,6 +435,55 @@ def _connector_report(
     }
 
 
+def _ingestion_report(
+    report: ConnectorReport,
+    attempted: int,
+    failed: int,
+    empty: int,
+    accepted: int,
+    dropped: dict[str, int],
+    reason: str,
+) -> IngestionReport:
+    if failed == 0 and empty == 0 and accepted > 0:
+        status = "ok"
+    elif accepted > 0:
+        status = "partial"
+    elif failed > 0:
+        # A failed POST outranks empty deliveries: that evidence never reached the service at all.
+        status = "error"
+    else:
+        status = "empty"
+
+    if status == "empty":
+        reason = "service accepted 0 entries"
+
+    return {
+        "connector": report["connector"],
+        "source": report["source"],
+        "status": status,
+        "attempted": attempted,
+        "failed": failed,
+        "empty": empty,
+        "accepted": accepted,
+        "dropped": dropped,
+        "reason": reason[:_MAX_REASON_CHARS],
+    }
+
+
+def _summarize_context(ctx: dict) -> dict[str, str]:
+    """Identify a context consistently in verdict and conflict summaries."""
+    context_id = ctx.get("id")
+    job_id = ctx.get("job_id")
+    if job_id is None:
+        job_id = context_id
+    attempt_id = ctx.get("attempt_id")
+    return {
+        "context_id": str(context_id if context_id is not None else "?"),
+        "job_id": str(job_id if job_id is not None else "?"),
+        "attempt_id": str(attempt_id if attempt_id is not None else ""),
+    }
+
+
 def _summarize_result(ctx: dict, result: dict) -> dict[str, str]:
     """Return the stable fields the CLI prints after a run completes."""
     verdict = result.get("verdict")
@@ -385,18 +493,13 @@ def _summarize_result(ctx: dict, result: dict) -> dict[str, str]:
     root_symptom = root.get("symptom", "") if isinstance(root, dict) else ""
     symptoms = result.get("symptoms")
     symptom_names = ", ".join(sorted(str(name) for name in symptoms)) if isinstance(symptoms, dict) else ""
-    context_id = ctx.get("id")
-    job_id = ctx.get("job_id")
-    if job_id is None:
-        job_id = context_id
-    attempt_id = ctx.get("attempt_id")
     taxonomy = taxonomy_for_service_value(service_outcome(result))
     return {
-        "context_id": str(context_id if context_id is not None else "?"),
-        "job_id": str(job_id if job_id is not None else "?"),
-        "attempt_id": str(attempt_id if attempt_id is not None else ""),
+        **_summarize_context(ctx),
+        "status": "attributed",
         "terminal_state": taxonomy.terminal_state,
         "sub_domain": taxonomy.sub_domain,
         "root_symptom": root_symptom if root_symptom != "" else "none",
         "symptoms": symptom_names if symptom_names != "" else "none",
+        "evidence_status": result["evidence_status"],
     }

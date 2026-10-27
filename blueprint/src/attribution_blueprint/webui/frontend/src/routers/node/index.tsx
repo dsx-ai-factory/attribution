@@ -1,316 +1,280 @@
-import { useState } from 'react'
+// SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// SPDX-License-Identifier: Apache-2.0
+
 import { useParams } from 'react-router-dom'
-import { CircleAlert } from 'lucide-react'
-import Decimal from 'decimal.js'
-import { OUTCOMES } from '@/lib/attribution-data'
+import { TriangleAlert } from 'lucide-react'
+import type { RunSummary } from '@/interfaces/attribution'
+import { counted } from '@/lib/format'
 import { nodeGpuHours } from '@/lib/metric'
-import { useNodeRuns } from '@/hooks/use-node-runs'
+import { summarizeNode } from '@/lib/node-summary'
 import { buildNodeMarkdown } from '@/lib/evidence'
 import { downloadBlob, nodeExportData, slug, toYaml, utcDateStamp } from '@/lib/export'
+import { shouldActivateRow } from '@/lib/row-activation'
+import { useNodeRuns } from '@/hooks/use-node-runs'
+import { useNav } from '@/hooks/use-nav'
+import { useDocumentTitle } from '@/hooks/use-document-title'
+import { navigateService } from '@/services/navigate.service'
+import { CopyButton } from '@/components/copy-button'
 import { ExportMenu } from '@/components/export-menu'
-import { Button } from '@/components/ui/button'
-import { Badge } from '@/components/ui/badge'
+import { Identifier, NoValue } from '@/components/field'
+import { InfoHint } from '@/components/info-hint'
+import { OutcomeBadge } from '@/components/outcome'
+import { PageHeader } from '@/components/page-header'
+import { SectionCard } from '@/components/section-card'
+import { SiteStatusBadge } from '@/components/site-status-badge'
+import { TimeHover } from '@/components/time-hover'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
-import {
-  Breadcrumb,
-  BreadcrumbItem,
-  BreadcrumbLink,
-  BreadcrumbList,
-  BreadcrumbPage,
-  BreadcrumbSeparator,
-} from '@/components/ui/breadcrumb'
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
-import { ScrollArea, ScrollBar } from '@/components/ui/scroll-area'
+import { Copyable } from '@/components/ui/copyable'
+import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from '@/components/ui/empty'
+import { RouterLink } from '@/components/ui/router-link'
+import { Skeleton } from '@/components/ui/skeleton'
 import {
   Table,
   TableBody,
   TableCell,
   TableHead,
   TableHeader,
+  TableMessage,
   TableRow,
 } from '@/components/ui/table'
-import { VerdictPill } from '@/components/chip'
-import { DefHover } from '@/components/def-hover'
-import { JobHoverCard } from '@/components/job-hover-card'
-import { TimeHover } from '@/components/time-hover'
-import { useNav } from '@/hooks/use-nav'
 
-const SECTION_LABEL =
-  'font-mono text-xs font-semibold tracking-widest uppercase text-foreground-muted my-5 mb-2.5 flex items-center gap-2.5'
+// Every fact on the page is derived from the node's runs, so none is stated
+// before they arrive or when they could not be fetched: a pending or failed
+// fetch must not read as a node with no attempts.
+type RunsState = 'loading' | 'failed' | 'ready'
 
-function CardHead({ title, sub }: { title: string; sub?: React.ReactNode }) {
-  return (
-    <CardHeader className="flex flex-row items-baseline gap-3">
-      <CardTitle className="text-xs font-semibold font-mono tracking-wide uppercase">
-        {title}
-      </CardTitle>
-      {sub && <span className="text-foreground-muted text-xs">{sub}</span>}
-    </CardHeader>
-  )
-}
+const PLACEHOLDER_ROWS = 3
 
-async function writeClipboard(text: string) {
-  try {
-    await navigator.clipboard.writeText(text)
-  } catch {
-    const ta = document.createElement('textarea')
-    ta.value = text
-    ta.style.position = 'fixed'
-    ta.style.opacity = '0'
-    document.body.appendChild(ta)
-    ta.select()
-    try { document.execCommand('copy') } catch { /* swallow */ }
-    document.body.removeChild(ta)
+// What a table body shows in place of its rows: pulsing rows while the runs
+// load, otherwise one row saying why there are none.
+function PlaceholderRows({
+  state,
+  columns,
+  emptyTitle,
+  emptyDescription,
+}: {
+  state: RunsState
+  columns: number
+  emptyTitle: string
+  emptyDescription: string
+}) {
+  if (state === 'loading') {
+    return Array.from({ length: PLACEHOLDER_ROWS }, (_, row) => (
+      <TableRow key={row}>
+        {Array.from({ length: columns }, (_, column) => (
+          <TableCell key={column}>
+            <Skeleton height="5" />
+          </TableCell>
+        ))}
+      </TableRow>
+    ))
   }
+  return (
+    <TableMessage colSpan={columns}>
+      <Empty size="sm">
+        <EmptyHeader>
+          {state === 'failed' ? (
+            <EmptyTitle>Runs for this node could not be loaded</EmptyTitle>
+          ) : (
+            <>
+              <EmptyTitle>{emptyTitle}</EmptyTitle>
+              <EmptyDescription>{emptyDescription}</EmptyDescription>
+            </>
+          )}
+        </EmptyHeader>
+      </Empty>
+    </TableMessage>
+  )
 }
 
 export function NodeView() {
   const { id: nodeId = '' } = useParams<{ id: string }>()
   const nav = useNav()
-  const { runs, isLoading } = useNodeRuns(nodeId)
-  const [copied, setCopied] = useState('')
-  const flash = (label: string) => {
-    setCopied(label)
-    window.setTimeout(() => setCopied(''), 1200)
-  }
+  const { runs, isLoading, error } = useNodeRuns(nodeId)
+  useDocumentTitle('Node', nodeId)
+  // A failed revalidation keeps showing the runs already fetched.
+  const state: RunsState = isLoading ? 'loading' : error !== null && runs.length === 0 ? 'failed' : 'ready'
+  const ready = state === 'ready'
 
-  const attempts = runs.filter((r) => r.nodeIds.includes(nodeId) || r.responsibleNodes.includes(nodeId))
-  const symptomMap: Record<string, number> = {}
-  attempts.forEach((r) => {
-    if (r.responsibleNodes.includes(nodeId)) {
-      const s = r.rootSymptom.symptom
-      symptomMap[s] = (symptomMap[s] || 0) + 1
-    }
-  })
-  const symptoms = Object.entries(symptomMap).map(([name, n]) => ({ name, n }))
-  const distinct = symptoms.length
-  const impacted = attempts.filter((r) => r.responsibleNodes.includes(nodeId)).length
-  const observedGpuHours = attempts.reduce(
-    (acc, r) => acc.plus(nodeGpuHours(r)),
-    new Decimal(0),
-  )
+  const isResponsible = (run: RunSummary) => run.responsibleNodes.includes(nodeId)
+  // The notice names the node's symptom only when one stands out
+  // (summarizeNode); at a tie it counts them instead.
+  const { attempts, responsible: responsibleAttempts, symptoms, leading, gpuHours: gpuHoursOnNode } = summarizeNode(runs, nodeId)
 
-  const copyNodeId = async () => {
-    await writeClipboard(nodeId)
-    flash('node')
-  }
-  const exportEvidence = async () => {
-    await writeClipboard(buildNodeMarkdown(nodeId, attempts))
-    flash('evidence')
-  }
+  const download = (extension: string, text: string, type: string) =>
+    downloadBlob(`node-${slug(nodeId)}-${utcDateStamp()}.${extension}`, text, type)
 
+  // Loading, the head is already as tall as it will be, so it keeps its
+  // height when the runs arrive: the actions' places hold 28px blocks and the
+  // facts keep their labels over placeholders. A failed fetch drops both.
   return (
-    <div>
-      <Breadcrumb className="mb-3.5 font-mono">
-        <BreadcrumbList>
-          <BreadcrumbItem>
-            <BreadcrumbLink
-              onClick={() => nav('fleet')}
-              className="text-primary cursor-pointer"
-            >
-              Attribution
-            </BreadcrumbLink>
-          </BreadcrumbItem>
-          <BreadcrumbSeparator />
-          <BreadcrumbItem>node</BreadcrumbItem>
-          <BreadcrumbSeparator />
-          <BreadcrumbItem>
-            <BreadcrumbPage className="inline-block text-foreground font-medium border-b-2 border-foreground-secondary pb-0.5">{nodeId}</BreadcrumbPage>
-          </BreadcrumbItem>
-        </BreadcrumbList>
-      </Breadcrumb>
+    <div className="flex flex-col gap-page-gap">
+      <PageHeader
+        breadcrumb={[{ label: 'Fleet', to: navigateService.getPath('fleet') }, { label: 'Node' }]}
+        title={<Identifier>{nodeId}</Identifier>}
+        titleAddon={
+          <>
+            <Copyable text={nodeId} label="Copy node ID" iconOnly />
+            {responsibleAttempts.length > 0 && <SiteStatusBadge status="bad" />}
+          </>
+        }
+        actions={
+          state === 'loading' ? (
+            <>
+              <Skeleton height="7" className="w-32" />
+              <Skeleton height="7" className="w-24" />
+            </>
+          ) : ready ? (
+            <>
+              <CopyButton
+                label="Copy evidence"
+                tooltip="Copies a Markdown summary"
+                getText={() => buildNodeMarkdown(nodeId, attempts)}
+              />
+              <ExportMenu
+                triggerLabel="Export"
+                items={[
+                  {
+                    label: 'Download as JSON',
+                    onSelect: () =>
+                      download('json', JSON.stringify(nodeExportData(nodeId, attempts), null, 2), 'application/json'),
+                  },
+                  {
+                    label: 'Download as YAML',
+                    onSelect: () => download('yaml', toYaml(nodeExportData(nodeId, attempts)), 'application/yaml'),
+                  },
+                  {
+                    label: 'Download as Markdown',
+                    onSelect: () => download('md', buildNodeMarkdown(nodeId, attempts), 'text/markdown'),
+                  },
+                ]}
+              />
+            </>
+          ) : undefined
+        }
+        meta={
+          state === 'failed'
+            ? undefined
+            : [
+                { key: 'attempts', label: 'Attempts', value: <span className="num">{attempts.length}</span> },
+                {
+                  key: 'responsible-in',
+                  label: <>Responsible in <InfoHint term="responsible-in" /></>,
+                  value: <span className="num">{responsibleAttempts.length}</span>,
+                },
+                {
+                  key: 'distinct-symptoms',
+                  label: <>Distinct symptoms <InfoHint term="distinct-symptoms" /></>,
+                  value: <span className="num">{symptoms.length}</span>,
+                },
+                {
+                  key: 'gpu-hours-on-node',
+                  label: <>GPU-hours on node <InfoHint term="gpu-hours-on-node" /></>,
+                  value: <span className="num">{gpuHoursOnNode.toFixed(2)}</span>,
+                },
+              ]
+        }
+        metaLoading={state === 'loading'}
+      />
 
-      <div className="flex items-start gap-4 my-1.5 mb-2">
-        <h1 className="text-3xl font-bold m-0 tracking-tight">
-          <span className="font-mono text-foreground">{nodeId}</span>
-        </h1>
-      </div>
-      <div className="flex flex-wrap gap-3.5 font-mono text-xs text-foreground-muted mb-1">
-        <span>
-          <DefHover term="attempts-impacted">Attempts impacted</DefHover>{' '}
-          <b className="text-foreground-secondary font-medium">{impacted}</b>
-        </span>
-        <span>
-          <DefHover term="distinct-symptoms">Distinct symptoms</DefHover>{' '}
-          <b className="text-foreground-secondary font-medium">{distinct}</b>
-        </span>
-        <span>
-          <DefHover term="gpu-hours-observed">GPU-hours observed</DefHover>{' '}
-          <b className="text-foreground-secondary font-medium">
-            {observedGpuHours.toFixed(2)}h
-          </b>
-        </span>
-      </div>
-
-      {impacted >= 1 && (
-        <Alert className="mt-3.5 mb-3.5 flex flex-wrap items-center gap-x-4 gap-y-2">
-          <CircleAlert className="text-primary" />
-          <div className="flex flex-col gap-1 min-w-0 flex-1">
-            <AlertTitle className="font-mono text-xs tracking-widest uppercase">
-              Responsible node
-            </AlertTitle>
-            <AlertDescription className="font-mono text-xs">
-              Recurring{' '}
-              <b className="text-foreground font-medium">{symptoms[0]?.name || 'failure'}</b>{' '}
-              attributed to this node within the window. Consider escalating to cloud operator with
-              evidence.
+      <div className="flex flex-col gap-card-gap">
+        {responsibleAttempts.length > 0 && (
+          <Alert variant="destructive">
+            <TriangleAlert />
+            <AlertTitle>Responsible node</AlertTitle>
+            <AlertDescription>
+              {leading ? (
+                <>
+                  {leading[1] > 1 && 'Recurring '}
+                  <span className="text-foreground"><Identifier>{leading[0]}</Identifier></span> attributed to this node.{' '}
+                </>
+              ) : symptoms.length > 1 && `${counted(symptoms.length, 'symptom', 'symptoms')} attributed to this node. `}
+              Consider escalating to the cloud operator with the evidence.
             </AlertDescription>
-          </div>
-          <Button variant="outline" size="sm" onClick={copyNodeId} className="min-w-[8rem] justify-center">
-            {copied === 'node' ? 'Copied ID ✓' : 'Copy node ID'}
-          </Button>
-          <Button variant="outline" size="sm" onClick={exportEvidence} className="min-w-[12rem] justify-center">
-            {copied === 'evidence' ? 'Copied evidence ✓' : 'Copy evidence (markdown)'}
-          </Button>
-          <ExportMenu
-            triggerLabel="Download"
-            items={[
-              {
-                label: 'Node evidence (JSON)',
-                hint: 'machine-parseable',
-                onSelect: () => {
-                  const stamp = `node-${slug(nodeId)}-${utcDateStamp()}`
-                  downloadBlob(
-                    `${stamp}.json`,
-                    JSON.stringify(nodeExportData(nodeId, attempts), null, 2),
-                    'application/json',
-                  )
-                },
-              },
-              {
-                label: 'Node evidence (YAML)',
-                hint: 'drop into a ticket',
-                onSelect: () => {
-                  const stamp = `node-${slug(nodeId)}-${utcDateStamp()}`
-                  downloadBlob(
-                    `${stamp}.yaml`,
-                    toYaml(nodeExportData(nodeId, attempts)),
-                    'application/yaml',
-                  )
-                },
-              },
-              {
-                label: 'Node evidence (markdown)',
-                hint: 'same as Copy evidence',
-                onSelect: () => {
-                  const stamp = `node-${slug(nodeId)}-${utcDateStamp()}`
-                  downloadBlob(
-                    `${stamp}.md`,
-                    buildNodeMarkdown(nodeId, attempts),
-                    'text/markdown',
-                  )
-                },
-              },
-            ]}
-          />
-        </Alert>
-      )}
+          </Alert>
+        )}
 
-      <div className="mb-5">
-        <Card size="sm">
-          <CardHead title="Symptoms on this node" />
-          <CardContent className="px-0">
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Symptom</TableHead>
-                  <TableHead className="text-right w-24">Attempts</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {isLoading && attempts.length === 0 ? (
-                  <TableRow>
-                    <TableCell colSpan={2} className="text-foreground-muted">
-                      Loading attributed symptoms...
-                    </TableCell>
-                  </TableRow>
-                ) : symptoms.length === 0 ? (
-                  <TableRow>
-                    <TableCell colSpan={2} className="text-foreground-muted">
-                      No attributed symptoms in window.
-                    </TableCell>
-                  </TableRow>
-                ) : (
-                  symptoms.map((s, i) => (
-                    <TableRow key={i}>
-                      <TableCell className="font-mono text-xs text-foreground">
-                        <b className="font-semibold">{s.name}</b>
-                      </TableCell>
-                      <TableCell className="font-mono text-foreground text-right">{s.n}</TableCell>
-                    </TableRow>
-                  ))
-                )}
-              </TableBody>
-            </Table>
-          </CardContent>
-        </Card>
-      </div>
-
-      <div className={SECTION_LABEL}>
-        Attempts impacted
-        <span className="bg-background-muted border border-border rounded-sm px-1.5 py-0.5 text-foreground-secondary font-medium">
-          {impacted}
-        </span>
-        <span className="flex-1 h-px bg-border" />
-      </div>
-      <ScrollArea className="border border-border rounded-md bg-card">
-        <Table>
-          <TableHeader>
-            <TableRow>
-              <TableHead className="w-40">
-                <DefHover term="end-time-utc">End time (UTC)</DefHover>
-              </TableHead>
-              <TableHead>Execution Context</TableHead>
-              <TableHead className="w-16">Att</TableHead>
-              <TableHead>User</TableHead>
-              <TableHead className="w-28">Outcome</TableHead>
-              <TableHead className="w-24 text-right">
-                <DefHover term="gpu-hours">GPU-hours</DefHover>
-              </TableHead>
-              <TableHead>Symptoms on this node</TableHead>
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {attempts.map((r) => (
-              <TableRow
-                key={r.id}
-                onClick={() => nav('verdict', { id: r.id })}
-                className="cursor-pointer group"
-              >
-                <TableCell className="font-mono text-xs text-foreground">
-                  <TimeHover date={r.endTime} />
-                </TableCell>
-                <TableCell className="font-mono text-xs text-foreground group-hover:text-primary">
-                  <JobHoverCard run={r} linkable>
-                    <span>{r.jobId}</span>
-                  </JobHoverCard>
-                </TableCell>
-                <TableCell className="font-mono text-xs">
-                  <span className="text-foreground-secondary">{r.attempt}</span>
-                </TableCell>
-                <TableCell className="text-foreground-secondary">{r.user}</TableCell>
-                <TableCell>
-                  <VerdictPill outcome={r.outcome} label={OUTCOMES[r.outcome].label} />
-                </TableCell>
-                <TableCell className="font-mono text-foreground text-right">
-                  {nodeGpuHours(r).toFixed(2)}
-                </TableCell>
-                <TableCell className="font-mono text-xs">
-                  {r.responsibleNodes.includes(nodeId) ? (
-                    <Badge variant="outline" className="font-mono">
-                      {r.rootSymptom.symptom}{' '}
-                      <span className="text-foreground-muted ml-1">1</span>
-                    </Badge>
-                  ) : (
-                    <span aria-label="no symptom for this attempt" className="text-zinc-700 select-none">·</span>
-                  )}
-                </TableCell>
+        <SectionCard title="Symptoms on this node" count={ready ? symptoms.length : undefined} flush>
+          <Table aria-busy={state === 'loading' || undefined}>
+            <TableHeader>
+              <TableRow>
+                <TableHead>Symptom</TableHead>
+                <TableHead className="text-right">Attempts</TableHead>
               </TableRow>
-            ))}
-          </TableBody>
-        </Table>
-        <ScrollBar orientation="horizontal" />
-      </ScrollArea>
+            </TableHeader>
+            <TableBody>
+              {ready && symptoms.length > 0 ? (
+                symptoms.map(([name, count]) => (
+                  <TableRow key={name}>
+                    <TableCell wrap>{name === '' ? <NoValue /> : <Identifier>{name}</Identifier>}</TableCell>
+                    <TableCell className="num text-right">{count}</TableCell>
+                  </TableRow>
+                ))
+              ) : (
+                <PlaceholderRows
+                  state={state}
+                  columns={2}
+                  emptyTitle="No attributed symptoms"
+                  emptyDescription="No recorded attempt lists this node as responsible."
+                />
+              )}
+            </TableBody>
+          </Table>
+        </SectionCard>
+
+        <SectionCard title="Attempts" count={ready ? attempts.length : undefined} flush>
+          <Table aria-busy={state === 'loading' || undefined}>
+            <TableHeader>
+              <TableRow>
+                <TableHead>End time</TableHead>
+                <TableHead>Execution context</TableHead>
+                <TableHead>User</TableHead>
+                <TableHead>Outcome</TableHead>
+                <TableHead>Responsible</TableHead>
+                <TableHead className="text-right">
+                  GPU-hours on node <InfoHint term="gpu-hours-on-node" />
+                </TableHead>
+                <TableHead>Root symptom</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {ready && attempts.length > 0 ? (
+                attempts.map((r) => (
+                  <TableRow
+                    key={r.id}
+                    className="cursor-pointer"
+                    onClick={(event) => {
+                      if (shouldActivateRow(event)) nav('verdict', { id: r.id })
+                    }}
+                  >
+                    <TableCell>
+                      <TimeHover date={r.endTime} cell />
+                    </TableCell>
+                    {/* A recorded identifier of any length: it wraps in its column as an inline link, as on Fleet. */}
+                    <TableCell wrap>
+                      <RouterLink to={navigateService.getPath('verdict', { id: r.id })}><Identifier>{r.jobId}</Identifier></RouterLink>
+                    </TableCell>
+                    <TableCell wrap>{r.user ? <Identifier>{r.user}</Identifier> : <NoValue />}</TableCell>
+                    <TableCell>
+                      <OutcomeBadge outcome={r.outcome} />
+                    </TableCell>
+                    <TableCell>{isResponsible(r) ? <SiteStatusBadge status="bad" /> : <NoValue />}</TableCell>
+                    <TableCell className="num text-right">{nodeGpuHours(r, nodeId).toFixed(2)}</TableCell>
+                    <TableCell wrap>{r.rootSymptom.symptom === '' ? <NoValue /> : <Identifier>{r.rootSymptom.symptom}</Identifier>}</TableCell>
+                  </TableRow>
+                ))
+              ) : (
+                <PlaceholderRows
+                  state={state}
+                  columns={7}
+                  emptyTitle="No recorded attempts"
+                  emptyDescription="No recorded run lists this node."
+                />
+              )}
+            </TableBody>
+          </Table>
+        </SectionCard>
+      </div>
     </div>
   )
 }

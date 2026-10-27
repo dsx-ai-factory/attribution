@@ -1,12 +1,5 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-# SPDX-License-Identifier: LicenseRef-NvidiaProprietary
-#
-# NVIDIA CORPORATION, its affiliates and licensors retain all intellectual
-# property and proprietary rights in and to this material, related
-# documentation and any modifications thereto. Any use, reproduction,
-# disclosure or distribution of this material and related documentation
-# without an express license agreement from NVIDIA CORPORATION or
-# its affiliates is strictly prohibited.
+# SPDX-License-Identifier: Apache-2.0
 
 from __future__ import annotations
 
@@ -23,7 +16,7 @@ if TYPE_CHECKING:
 class OutcomePriority(IntEnum):
     """Outcome selection priority tiers.
 
-    Lower values win. The 16 values map 1:1 to the ordered outcome tiers that the
+    Lower values win. The values map 1:1 to the ordered outcome tiers that the
     generated registry consumes for outcome selection.
     """
 
@@ -32,10 +25,12 @@ class OutcomePriority(IntEnum):
     CSP = 200
     HIGH = 300
     HIGH_HW = 400
+    HIGH_KERNEL_PANIC = 450
     HIGH_XID145 = 500
     MEDIUM = 600
     MEDIUM_XID = 700
     MEDIUM_BROAD = 800
+    MEDIUM_RESET_REQUIRED = 850
     MEDIUM_SW = 900
     LOW = 1000
     LOW_GENERIC = 1100

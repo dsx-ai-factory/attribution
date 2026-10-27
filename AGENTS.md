@@ -1,13 +1,6 @@
 <!--
 SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-SPDX-License-Identifier: LicenseRef-NvidiaProprietary
-
-NVIDIA CORPORATION, its affiliates and licensors retain all intellectual
-property and proprietary rights in and to this material, related
-documentation and any modifications thereto. Any use, reproduction,
-disclosure or distribution of this material and related documentation
-without an express license agreement from NVIDIA CORPORATION or
-its affiliates is strictly prohibited.
+SPDX-License-Identifier: Apache-2.0
 -->
 
 # Repository agent instructions
@@ -71,26 +64,13 @@ If required work is outside these limits, stop and ask the human owner.
 
 ## Build and test commands
 
-Run commands from the repository root unless a command says otherwise. The
-full test gate requires `uv`, Node.js 22, pnpm 10.11, and Docker:
+Follow [Run the test gate in CONTRIBUTING.md](CONTRIBUTING.md#run-the-test-gate)
+for prerequisites, tool and runtime setup, staged-source requirements, and
+full and focused test commands. Maintain those shared requirements in
+`CONTRIBUTING.md`.
 
-```bash
-bash .ci/run-tests.sh all
-```
-
-Use one of these exact suite commands for a focused check:
-
-```bash
-bash .ci/run-tests.sh attribution-lib
-bash .ci/run-tests.sh service-app
-bash .ci/run-tests.sh service-app-client-drift
-bash .ci/run-tests.sh blueprint
-bash .ci/run-tests.sh frontend
-bash .ci/run-tests.sh end-to-end
-```
-
-The `frontend` suite installs locked dependencies, runs the frontend tests,
-and builds the frontend. Build the documented bundle image with:
+Run commands from the repository root unless a command says otherwise. Build
+the documented bundle image with:
 
 ```bash
 export ATTRIBUTION_IMAGE="attribution-blueprint-web:local"
@@ -110,6 +90,24 @@ corepack pnpm build
 Run the narrowest applicable suite during development. Before handoff, run the
 full gate when the environment has its required tools. Report each command's
 actual result and any check that you could not run.
+
+## Commit and PR titles
+
+Pull requests are squash-merged, so the PR title becomes the commit subject on
+`main`. Write it as a [Conventional Commit](https://www.conventionalcommits.org/):
+`type(scope)!: summary`. CI checks the format and type; the rest is guidance.
+
+- Types: `feat`, `fix`, `build`, `chore`, `ci`, `docs`, `perf`, `refactor`,
+  `revert`, `style`, `test`.
+- Scope is optional. Common scopes are `attribution-lib`, `service-app`,
+  `blueprint`, `frontend`, `docs`, and `ci`.
+- Write the summary in the imperative mood with no trailing period.
+- Mark a removed or incompatible public API with `!` and add a brief
+  `BREAKING CHANGE:` footer to the PR body that says what callers must change.
+- The type signals the version bump for the next release of each touched
+  component: `!` is major, `feat` is minor, `fix` is patch, and other types do
+  not bump. A component still at `0.y.z` shifts each bump down one place:
+  `!` is minor, and `feat` and `fix` are patch.
 
 ## Secret handling
 
@@ -139,10 +137,10 @@ actual result and any check that you could not run.
 - Do not commit build outputs, caches, local databases, virtual environments,
   or `node_modules/`.
 
-## Early Access license boundary
+## License boundaries
 
-This repository is Early Access, pre-1.0 software. Read and preserve the
-closest applicable `LICENSE` and its notices before you edit, copy, move, or
+NVIDIA Attribution project code is licensed under Apache-2.0. Read and preserve
+the closest applicable `LICENSE` and its notices before you edit, copy, move, or
 distribute a file. The root `LICENSE` applies only when no closer nested
 `LICENSE` applies. Do not assume that the root `LICENSE` alone governs all
 files.
@@ -160,8 +158,9 @@ For files under `blueprint/`, read `blueprint/LICENSE`. For files under
 `service/`, read the closest applicable service license and preserve its
 license notices.
 
-Do not remove or alter a license notice, change the license, state that this
-repository is open source, or distribute material beyond the applicable
-license. Do not publish a package, image, release, or source bundle without
+Preserve third-party licenses and the exceptions described in
+`THIRD_PARTY_NOTICES.md`. Changes to license terms and notices require
+explicit human approval. Distribute material only under its applicable license.
+Do not publish a package, image, release, or source bundle without
 explicit human approval and the required NVIDIA authorization. Human approval
 does not override the license.
