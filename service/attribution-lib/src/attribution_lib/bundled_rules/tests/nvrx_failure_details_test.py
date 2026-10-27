@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Recognize Megatron batch-size assertions using normal outcome priorities."""
+"""Recognize specific application errors that explain an NVRx detected failure."""
 
 import pytest
 
@@ -87,7 +87,7 @@ def test_assertion_survives_nvrx_and_teardown(attribute_cycle, job_options, expe
 
     assert result.outcome_attr.value().outcome == expected_outcome
     assert _SYMPTOM in result.symptoms
-    assert "NVRx detected failure" in result.symptoms
+    assert "NVRx detected failure" not in result.symptoms
     assert "Python Exception" not in result.symptoms
     source = result.symptoms[_SYMPTOM].one_source()
     assert source.rule == "BatchSizeAssertion"
@@ -193,7 +193,9 @@ def test_assertion_priority_and_decision_graph(attribute_cycle, nvrx_line):
     assert result.outcome_attr.value().root_cause_symptom == _SYMPTOM
     assert result.outcome_attr.value().hw_cause != _UNAVAILABLE_REASON
     assert result.outcome_attr.one_source().datum == line
-    if nvrx_line is not None:
+    if nvrx_line == _NVRX:
+        assert "NVRx detected failure" not in result.symptoms
+    elif nvrx_line is not None:
         assert any(s.startswith("NVRx ") for s in result.symptoms.symptoms())
     winner = next(n for n in graph.nodes if n.node_type == NodeType.OUTCOME)
     assert winner.rule_name == "symptom_to_outcome"
@@ -240,7 +242,8 @@ def test_watchdog_teardown_does_not_explain_nvrx_failure(
 
     assert result.outcome_attr.value().outcome == ("Fail User" if has_assertion else fallback_outcome)
     assert result.outcome_attr.value().root_cause_symptom == (_SYMPTOM if has_assertion else fallback_symptom)
-    assert fallback_symptom in result.symptoms
+    dropped = has_assertion and fallback_symptom == "NVRx detected failure"
+    assert (fallback_symptom in result.symptoms) is not dropped
 
 
 def test_batch_sizes_share_a_label_and_preserve_each_source(attribute_cycle):
@@ -293,7 +296,8 @@ def test_multiple_nvrx_messages_do_not_mask_specific_error(attribute_cycle):
 
     assert result.outcome_attr.value().outcome == "Fail User"
     assert result.outcome_attr.value().root_cause_symptom == _SYMPTOM
-    assert {_SYMPTOM, "NVRx detected failure", "NVRx no progress across restarts", "NVRx step section timeout"} <= set(
+    assert "NVRx detected failure" not in result.symptoms
+    assert {_SYMPTOM, "NVRx no progress across restarts", "NVRx step section timeout"} <= set(
         result.symptoms.symptoms()
     )
 
@@ -322,3 +326,81 @@ def test_assertion_does_not_override_higher_priority_verdicts(
 
     assert result.outcome_attr.value().outcome == expected_outcome
     assert result.outcome_attr.value().root_cause_symptom == expected_symptom
+
+
+# Application errors seen in NVRx cycle logs. Paths and values are synthetic.
+_USER_FAILURES = [
+    (
+        "1: pretrain_gpt.py: error: unrecognized arguments: --unknown-schedule 0:0.5,1000:1.0",
+        "Python Exception: argparse unrecognized arguments",
+        "ArgparseUnrecognizedArguments",
+    ),
+    (
+        "1: ValueError: The non-colocated module grids must cover every torchrun rank exactly once; covered=[0, 1, 2]",
+        "Python Exception: ValueError: module grids do not cover every rank",
+        "ModuleGridRankCoverage",
+    ),
+    (
+        "1: ValueError: --num-experts (64) must be divisible by --expert-model-parallel-size (6)",
+        "Python Exception: ValueError: num-experts not divisible",
+        "NumExpertsNotDivisible",
+    ),
+    (
+        "[rank1]: RuntimeError: Pinned activation buffer budget exceeded: request=10 bytes, capacity=100 bytes, "
+        "live=95 bytes, unused_tail=5 bytes. Increase fine_grained_offloading_buffer_size_gib or reduce "
+        "offloaded activations.",
+        "Python Exception: RuntimeError: pinned activation buffer budget exceeded",
+        "PinnedActivationBufferExceeded",
+    ),
+    (
+        "[rank1]: FileNotFoundError: [Errno 2] No such file or directory: '/data/run/checkpoints/iter_0001000'",
+        "Python Exception: FileNotFoundError: checkpoint iteration not found",
+        "MissingCheckpointIteration",
+    ),
+    (
+        "[rank1]: AssertionError: current global batch size (100) is not divisible by micro_batch_size (1) * "
+        "data_parallel_size (64)",
+        _SYMPTOM,
+        "BatchSizeAssertion",
+    ),
+    (
+        "[rank1]: RuntimeError: Rank 1, node node02, device 1, iteration 100: Unexpected result inf "
+        "(message='found Inf in local grad norm for bucket #0 in backward pass before data-parallel "
+        "communication collective')",
+        "Bad Token",
+        None,
+    ),
+]
+
+
+@pytest.mark.parametrize("line, symptom, rule", _USER_FAILURES)
+def test_user_failure_replaces_generic_nvrx_failure(attribute_cycle, line, symptom, rule):
+    """A specific application error explains the NVRx restart as a user failure."""
+    result, _ = attribute_cycle(line_entries([line, _NVRX]))
+
+    outcome = result.outcome_attr.value()
+    assert outcome.outcome == "Fail User"
+    assert outcome.root_cause_symptom == symptom
+    assert "NVRx detected failure" not in result.symptoms
+    assert not any(
+        "NVRx detected failure" in errors for _node, errors in result.bad_nodes_attr.my_bad_nodes.symptom_groups()
+    )
+    if rule is not None:
+        assert result.symptoms[symptom].one_source().rule == rule
+        assert result.symptoms[symptom].one_source().datum == line
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        "1: handled ValueError: --num-experts (64) must be divisible by --expert-model-parallel-size (6)",
+        "1: usage: pretrain_gpt.py [-h] [--unknown-schedule UNKNOWN_SCHEDULE]",
+        "1: RuntimeError: Pinned memory allocation failed",
+        "1: FileNotFoundError: [Errno 2] No such file or directory: '/data/run/checkpoints/latest.txt'",
+    ],
+)
+def test_similar_lines_keep_generic_nvrx_failure(attribute_cycle, line):
+    result, _ = attribute_cycle(line_entries([line, _NVRX]))
+
+    assert result.outcome_attr.value().root_cause_symptom == "NVRx detected failure"
+    assert "NVRx detected failure" in result.symptoms

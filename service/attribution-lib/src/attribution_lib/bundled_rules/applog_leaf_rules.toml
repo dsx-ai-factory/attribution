@@ -57,11 +57,15 @@ symptom = "Python Exception"
 # Keep the full assertion and batch sizes in the source evidence.
 [[extractor]]
 name     = "BatchSizeAssertion"
-match_re = '^\s*(?:\d+:\s*)?(?:\[rank\s*:?\s*\d+\]:\s*)?AssertionError: (?:eval_)?global_batch_size \(\d+\) must be divisible by [^\r\n]+\s*$'
+match_re = '^\s*(?:\d+:\s*)?(?:\[rank\s*:?\s*\d+\]:\s*)?AssertionError: (?:(?:eval_)?global_batch_size \(\d+\) must be divisible by|current global batch size \(\d+\) is not divisible by) [^\r\n]+\s*$'
 emit     = { type = "bad_node", symptom = "Python Exception: AssertionError: batch size not divisible" }
 [[extractor.cases]]
 expect  = "bad"
 line    = "AssertionError: global_batch_size (12) must be divisible by micro_batch_size (4) * data_parallel_size (8)"
+symptom = "Python Exception: AssertionError: batch size not divisible"
+[[extractor.cases]]
+expect  = "bad"
+line    = "[rank47]: AssertionError: current global batch size (100) is not divisible by micro_batch_size (1) * data_parallel_size (64)"
 symptom = "Python Exception: AssertionError: batch size not divisible"
 [[extractor.cases]]
 expect  = "bad"
@@ -97,6 +101,76 @@ line   = '[rank: 3]: print("AssertionError: global_batch_size (12) must be divis
 [[extractor.cases]]
 expect = "none"
 line   = "3: global_batch_size (12) must be divisible by micro_batch_size (4)"
+
+# Recognize application configuration errors that stop every rank at startup.
+# Keep the arguments and values in the source evidence, not in the symptom label.
+[[extractor]]
+name     = "ArgparseUnrecognizedArguments"
+match_re = '^\s*(?:\d+:\s*)?(?:\[rank\s*:?\s*\d+\]:\s*)?[\w.-]+\.py: error: unrecognized arguments: \S[^\r\n]*$'
+emit     = { type = "bad_node", symptom = "Python Exception: argparse unrecognized arguments" }
+[[extractor.cases]]
+expect  = "bad"
+line    = "  80: pretrain_gpt.py: error: unrecognized arguments: --unknown-schedule 0:0.5,1000:1.0"
+symptom = "Python Exception: argparse unrecognized arguments"
+[[extractor.cases]]
+expect = "none"
+line   = "80: usage: pretrain_gpt.py [-h] [--unknown-schedule UNKNOWN_SCHEDULE]"
+[[extractor.cases]]
+expect = "none"
+line   = '80: print("pretrain_gpt.py: error: unrecognized arguments: --foo")'
+
+[[extractor]]
+name     = "ModuleGridRankCoverage"
+match_re = '^\s*(?:\d+:\s*)?(?:\[rank\s*:?\s*\d+\]:\s*)?ValueError: The non-colocated module grids must cover every torchrun rank exactly once\b'
+emit     = { type = "bad_node", symptom = "Python Exception: ValueError: module grids do not cover every rank" }
+[[extractor.cases]]
+expect  = "bad"
+line    = "1472: ValueError: The non-colocated module grids must cover every torchrun rank exactly once; covered=[0, 1, 2, 3]"
+symptom = "Python Exception: ValueError: module grids do not cover every rank"
+[[extractor.cases]]
+expect = "none"
+line   = "1472: handled ValueError: The non-colocated module grids must cover every torchrun rank exactly once"
+
+[[extractor]]
+name     = "NumExpertsNotDivisible"
+match_re = '^\s*(?:\d+:\s*)?(?:\[rank\s*:?\s*\d+\]:\s*)?ValueError: --num-experts \(\d+\) must be divisible by --[\w-]+ \(\d+\)\s*$'
+emit     = { type = "bad_node", symptom = "Python Exception: ValueError: num-experts not divisible" }
+[[extractor.cases]]
+expect  = "bad"
+line    = "3560: ValueError: --num-experts (64) must be divisible by --expert-model-parallel-size (6)"
+symptom = "Python Exception: ValueError: num-experts not divisible"
+[[extractor.cases]]
+expect = "none"
+line   = "3560: handled ValueError: --num-experts (64) must be divisible by --expert-model-parallel-size (6)"
+
+[[extractor]]
+name     = "PinnedActivationBufferExceeded"
+match_re = '^\s*(?:\d+:\s*)?(?:\[rank\s*:?\s*\d+\]:\s*)?RuntimeError: Pinned activation buffer budget exceeded:'
+emit     = { type = "bad_node", symptom = "Python Exception: RuntimeError: pinned activation buffer budget exceeded" }
+[[extractor.cases]]
+expect  = "bad"
+line    = " 136: [rank136]: RuntimeError: Pinned activation buffer budget exceeded: request=10 bytes, capacity=100 bytes, live=95 bytes, unused_tail=5 bytes. Increase fine_grained_offloading_buffer_size_gib or reduce offloaded activations."
+symptom = "Python Exception: RuntimeError: pinned activation buffer budget exceeded"
+[[extractor.cases]]
+expect = "none"
+line   = "136: [rank136]: RuntimeError: Pinned memory allocation failed"
+
+# A Megatron checkpoint iteration directory that does not exist. Other missing
+# files keep the generic "No such file or directory" symptom.
+[[extractor]]
+name     = "MissingCheckpointIteration"
+match_re = '''^\s*(?:\d+:\s*)?(?:\[rank\s*:?\s*\d+\]:\s*)?FileNotFoundError: \[Errno 2\] No such file or directory: '[^'\r\n]*/iter_\d+/?'\s*$'''
+emit     = { type = "bad_node", symptom = "Python Exception: FileNotFoundError: checkpoint iteration not found" }
+[[extractor.cases]]
+expect  = "bad"
+line    = "2556: [rank2556]: FileNotFoundError: [Errno 2] No such file or directory: '/data/run/checkpoints/iter_0001000'"
+symptom = "Python Exception: FileNotFoundError: checkpoint iteration not found"
+[[extractor.cases]]
+expect = "none"
+line   = "2556: [rank2556]: FileNotFoundError: [Errno 2] No such file or directory: '/data/run/checkpoints/latest.txt'"
+[[extractor.cases]]
+expect = "none"
+line   = "2556: [rank2556]: FileNotFoundError: [Errno 2] No such file or directory: '/data/run/checkpoints/iter_0001000/common.pt'"
 
 # Require a failed C compiler invocation and explicit Inductor or Triton context.
 # A bare CalledProcessError may come from an unrelated subprocess.
