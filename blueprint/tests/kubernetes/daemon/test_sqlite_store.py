@@ -653,6 +653,7 @@ def test_old_active_workload_history_is_retained(tmp_path):
     )
 
     _capture(store, workload)
+    store.prune_expired()
 
     assert store.list_observations_for_uid(
         "cluster-a",
@@ -1035,7 +1036,8 @@ def test_history_pruning_advances_coverage_boundary(tmp_path):
         gap_id=None,
     )
 
-    store.get_by_pod_uid("missing")
+    # Pruning is now periodic, not a side effect of ordinary reads/writes.
+    store.prune_expired()
 
     coverage = store.get_watch_coverage("cluster-a", "team-a", "pods")
     assert coverage is not None
