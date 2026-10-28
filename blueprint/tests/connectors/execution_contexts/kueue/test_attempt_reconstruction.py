@@ -12,11 +12,13 @@ import pytest
 
 from attribution_blueprint.connectors.execution_contexts.kueue.attempts import (
     WorkloadAttempt,
+    attempts_from_live_resources,
     attempts_from_workload_history,
-    live_attempt_identity,
 )
 from attribution_blueprint.connectors.execution_contexts.kueue.connector import (
     KueueExecutionContextAdapter,
+    _AttemptEvidence,
+    _context_from_attempt_evidence,
     _parse_workload,
 )
 from attribution_blueprint.connectors.outputs.sqlite import SQLiteOutput
@@ -57,11 +59,7 @@ def test_attempt_id_preserves_existing_canonical_hash():
 
 def _owner(kind: str, name: str, uid: str) -> OwnerReference:
     return OwnerReference(
-        api_version=(
-            "jobset.x-k8s.io/v1alpha2"
-            if kind == "JobSet"
-            else "batch/v1"
-        ),
+        api_version=("jobset.x-k8s.io/v1alpha2" if kind == "JobSet" else "batch/v1"),
         kind=kind,
         name=name,
         uid=uid,
@@ -81,11 +79,7 @@ def _observation(
     restart_attempt: str | None = None,
     event_type: str = "MODIFIED",
 ) -> ResourceObservation:
-    selected_metadata = (
-        {"labels": {_RESTART_LABEL: restart_attempt}}
-        if restart_attempt is not None
-        else None
-    )
+    selected_metadata = {"labels": {_RESTART_LABEL: restart_attempt}} if restart_attempt is not None else None
     return ResourceObservation(
         cluster_id="cluster-a",
         api_version={
@@ -151,11 +145,7 @@ def _seed_jobset_retry_history(store: SQLitePlacementStore) -> None:
             resource_version="2",
             observed_at="2026-10-14T10:00:00Z",
             owners=(jobset_owner,),
-            status={
-                "conditions": [
-                    _condition("Admitted", "2026-10-14T10:00:00Z")
-                ]
-            },
+            status={"conditions": [_condition("Admitted", "2026-10-14T10:00:00Z")]},
         ),
         _observation(
             kind="Job",
@@ -213,9 +203,7 @@ def _seed_jobset_retry_history(store: SQLitePlacementStore) -> None:
             restart_attempt="1",
             status={
                 "startTime": "2026-10-14T10:31:00Z",
-                "conditions": [
-                    _condition("Complete", "2026-10-14T11:00:00Z")
-                ],
+                "conditions": [_condition("Complete", "2026-10-14T11:00:00Z")],
             },
         ),
         _observation(
@@ -301,9 +289,7 @@ def test_retained_jobset_retries_flow_as_distinct_execution_contexts(
         cluster_id="cluster-a",
     )
     try:
-        client = KubernetesDaemonClient(
-            f"http://127.0.0.1:{server.server_port}"
-        )
+        client = KubernetesDaemonClient(f"http://127.0.0.1:{server.server_port}")
         adapter = KueueExecutionContextAdapter(
             namespace="team-a",
             placement_records_enabled=True,
@@ -353,26 +339,13 @@ def test_retained_jobset_retries_flow_as_distinct_execution_contexts(
         server.server_close()
 
     assert len(contexts) == 2
-    assert [context["attempt_id"] for context in ranged] == [
-        context["attempt_id"]
-        for context in contexts
-    ]
-    assert [context["attempt_id"] for context in node_a_only] == [
-        contexts[0]["attempt_id"]
-    ]
+    assert [context["attempt_id"] for context in ranged] == [context["attempt_id"] for context in contexts]
+    assert [context["attempt_id"] for context in node_a_only] == [contexts[0]["attempt_id"]]
     assert outside == []
-    assert [context["attempt_id"] for context in replayed] == [
-        context["attempt_id"]
-        for context in contexts
-    ]
-    assert [attempt.attempt_id for attempt in late_reconstruction] == [
-        context["attempt_id"]
-        for context in contexts
-    ]
+    assert [context["attempt_id"] for context in replayed] == [context["attempt_id"] for context in contexts]
+    assert [attempt.attempt_id for attempt in late_reconstruction] == [context["attempt_id"] for context in contexts]
     assert contexts[0]["workload_uid"] == "workload-uid"
-    assert contexts[0]["attempt_id"].startswith(
-        "kueue:v1:workload-uid:"
-    )
+    assert contexts[0]["attempt_id"].startswith("kueue:v1:workload-uid:")
     assert contexts[0]["start_time"] == datetime(
         2026,
         10,
@@ -412,12 +385,8 @@ def test_retained_jobset_retries_flow_as_distinct_execution_contexts(
     assert all(context["history_complete"] is False for context in contexts)
 
     attribution = MagicMock()
-    attribution.create_attributor.side_effect = (
-        lambda info: f"attr-{info.workload.id}"
-    )
-    attribution.get_attribution.return_value = {
-        "verdict": {"attribution_outcome": "Fail User"}
-    }
+    attribution.create_attributor.side_effect = lambda info: f"attr-{info.workload.id}"
+    attribution.get_attribution.return_value = {"verdict": {"attribution_outcome": "Fail User"}}
     attribution.delete_attributor.return_value = None
     output = MagicMock()
     output.close.return_value = None
@@ -569,12 +538,10 @@ def test_scheduler_readmission_creates_a_new_attempt():
         "gaps": [],
         "disabledWatches": {},
     }
-    complete_context = (
-        KueueExecutionContextAdapter._context_from_history_attempt(
-            attempts[0],
-            [],
-            coverage,
-        )
+    complete_context = KueueExecutionContextAdapter._context_from_history_attempt(
+        attempts[0],
+        [],
+        coverage,
     )
     assert complete_context["history_complete"] is True
 
@@ -585,12 +552,10 @@ def test_scheduler_readmission_creates_a_new_attempt():
             "recoveredAt": "2026-10-14T10:20:00Z",
         }
     ]
-    partial_context = (
-        KueueExecutionContextAdapter._context_from_history_attempt(
-            attempts[0],
-            [],
-            coverage,
-        )
+    partial_context = KueueExecutionContextAdapter._context_from_history_attempt(
+        attempts[0],
+        [],
+        coverage,
     )
     assert partial_context["history_complete"] is False
 
@@ -687,10 +652,7 @@ def test_jobset_restart_generation_carries_across_readmission():
         now=datetime(2026, 10, 14, 12, 0, tzinfo=timezone.utc),
         workload_name="training-workload",
     )
-    by_identity = {
-        (attempt.admission_key, attempt.restart_attempt): attempt
-        for attempt in attempts
-    }
+    by_identity = {(attempt.admission_key, attempt.restart_attempt): attempt for attempt in attempts}
 
     assert len({attempt.attempt_id for attempt in attempts}) == len(attempts)
     assert set(by_identity) == {
@@ -698,15 +660,9 @@ def test_jobset_restart_generation_carries_across_readmission():
         ("2026-10-14T10:00:00Z", "1"),
         ("2026-10-14T11:00:00Z", "1"),
     }
-    assert by_identity[
-        ("2026-10-14T10:00:00Z", "0")
-    ].pod_uids == frozenset({"restart-zero-pod"})
-    assert by_identity[
-        ("2026-10-14T10:00:00Z", "1")
-    ].pod_uids == frozenset({"old-pod"})
-    assert by_identity[
-        ("2026-10-14T11:00:00Z", "1")
-    ].pod_uids == frozenset({"new-pod"})
+    assert by_identity[("2026-10-14T10:00:00Z", "0")].pod_uids == frozenset({"restart-zero-pod"})
+    assert by_identity[("2026-10-14T10:00:00Z", "1")].pod_uids == frozenset({"old-pod"})
+    assert by_identity[("2026-10-14T11:00:00Z", "1")].pod_uids == frozenset({"new-pod"})
 
 
 def test_recreated_workloads_bound_pods_and_owner_terminal_by_incarnation():
@@ -736,11 +692,7 @@ def test_recreated_workloads_bound_pods_and_owner_terminal_by_incarnation():
                 },
                 "eventType": "ADDED",
                 "observedAt": "2026-10-14T10:00:00Z",
-                "status": {
-                    "conditions": [
-                        _condition("Admitted", "2026-10-14T10:00:00Z")
-                    ]
-                },
+                "status": {"conditions": [_condition("Admitted", "2026-10-14T10:00:00Z")]},
             },
             {
                 "kind": "Pod",
@@ -763,9 +715,7 @@ def test_recreated_workloads_bound_pods_and_owner_terminal_by_incarnation():
                 "eventType": "DELETED",
                 "observedAt": "2026-10-14T10:15:00Z",
                 "sourceTimestamp": "2026-10-14T10:00:00Z",
-                "selectedMetadata": {
-                    "deletionTimestamp": "2026-10-14T10:15:00Z"
-                },
+                "selectedMetadata": {"deletionTimestamp": "2026-10-14T10:15:00Z"},
                 "status": {},
             },
             {
@@ -778,11 +728,7 @@ def test_recreated_workloads_bound_pods_and_owner_terminal_by_incarnation():
                 },
                 "eventType": "ADDED",
                 "observedAt": "2026-10-14T10:16:00Z",
-                "status": {
-                    "conditions": [
-                        _condition("Admitted", "2026-10-14T10:10:00Z")
-                    ]
-                },
+                "status": {"conditions": [_condition("Admitted", "2026-10-14T10:10:00Z")]},
             },
             {
                 "kind": "Job",
@@ -812,11 +758,7 @@ def test_recreated_workloads_bound_pods_and_owner_terminal_by_incarnation():
                 "metadata": {"uid": "job-uid"},
                 "eventType": "MODIFIED",
                 "observedAt": "2026-10-14T12:00:00Z",
-                "status": {
-                    "conditions": [
-                        _condition("Complete", "2026-10-14T12:00:00Z")
-                    ]
-                },
+                "status": {"conditions": [_condition("Complete", "2026-10-14T12:00:00Z")]},
             },
         ]
     }
@@ -855,11 +797,7 @@ def test_deletion_request_timestamp_does_not_reuse_generic_source_timestamp():
                 },
                 "eventType": "ADDED",
                 "observedAt": "2026-10-14T12:00:00Z",
-                "status": {
-                    "conditions": [
-                        _condition("Admitted", "2026-10-14T12:00:00Z")
-                    ]
-                },
+                "status": {"conditions": [_condition("Admitted", "2026-10-14T12:00:00Z")]},
             },
             {
                 "kind": "Pod",
@@ -880,9 +818,7 @@ def test_deletion_request_timestamp_does_not_reuse_generic_source_timestamp():
                 # Generic sourceTimestamp can point at an earlier status
                 # transition; only explicit deletionTimestamp is authoritative.
                 "sourceTimestamp": "2026-10-14T12:00:00Z",
-                "selectedMetadata": {
-                    "deletionTimestamp": "2026-10-14T12:10:00Z"
-                },
+                "selectedMetadata": {"deletionTimestamp": "2026-10-14T12:10:00Z"},
                 "status": {},
             },
         ]
@@ -894,9 +830,7 @@ def test_deletion_request_timestamp_does_not_reuse_generic_source_timestamp():
         workload_name="training-workload",
     )
 
-    assert attempt.end_time == datetime(
-        2026, 10, 14, 12, 10, tzinfo=timezone.utc
-    )
+    assert attempt.end_time == datetime(2026, 10, 14, 12, 10, tzinfo=timezone.utc)
     assert attempt.pod_uids == frozenset({"pod-uid"})
 
 
@@ -921,11 +855,7 @@ def test_replacement_without_source_boundary_preserves_uncertainty():
                 },
                 "eventType": "ADDED",
                 "observedAt": "2026-10-14T10:00:00Z",
-                "status": {
-                    "conditions": [
-                        _condition("Admitted", "2026-10-14T10:00:00Z")
-                    ]
-                },
+                "status": {"conditions": [_condition("Admitted", "2026-10-14T10:00:00Z")]},
             },
             {
                 "kind": "Workload",
@@ -950,11 +880,7 @@ def test_replacement_without_source_boundary_preserves_uncertainty():
                 "metadata": {"uid": "job-uid"},
                 "eventType": "MODIFIED",
                 "observedAt": "2026-10-14T10:20:00Z",
-                "status": {
-                    "conditions": [
-                        _condition("Complete", "2026-10-14T10:20:00Z")
-                    ]
-                },
+                "status": {"conditions": [_condition("Complete", "2026-10-14T10:20:00Z")]},
             },
         ]
     }
@@ -1052,21 +978,13 @@ def test_child_job_completion_does_not_finish_jobset_attempt():
                     ],
                 },
                 "observedAt": "2026-10-14T10:00:00Z",
-                "status": {
-                    "conditions": [
-                        _condition("Admitted", "2026-10-14T10:00:00Z")
-                    ]
-                },
+                "status": {"conditions": [_condition("Admitted", "2026-10-14T10:00:00Z")]},
             },
             {
                 "kind": "Job",
                 "metadata": {"uid": "child-job-uid"},
                 "observedAt": "2026-10-14T10:10:00Z",
-                "status": {
-                    "conditions": [
-                        _condition("Complete", "2026-10-14T10:10:00Z")
-                    ]
-                },
+                "status": {"conditions": [_condition("Complete", "2026-10-14T10:10:00Z")]},
             },
             {
                 "kind": "Workload",
@@ -1122,101 +1040,14 @@ def test_never_admitted_history_does_not_invent_running_attempt():
         ]
     }
 
-    assert attempts_from_workload_history(
-        history,
-        now=datetime(2026, 10, 14, 12, 0, tzinfo=timezone.utc),
-        workload_name="pending-workload",
-    ) == []
-
-
-def test_live_attempt_without_admission_boundary_uses_explicit_pre_execution_identity():
-    workload = {
-        "metadata": {
-            "name": "pending-workload",
-            "namespace": "team-a",
-            "uid": "workload-uid",
-            "creationTimestamp": "2026-10-14T10:00:00Z",
-        },
-        "status": {"conditions": []},
-    }
-
-    identity = live_attempt_identity(workload, [])
-
-    assert identity is not None
-    assert identity.attempt_id == "kueue:pre:v1:workload-uid"
-    assert identity.boundary_resolved is False
-
-
-def test_live_jobset_attempt_without_restart_resources_does_not_invent_zero():
-    admitted = "2026-10-14T10:00:00Z"
-    owner = {
-        "apiVersion": "jobset.x-k8s.io/v1alpha2",
-        "kind": "JobSet",
-        "name": "training",
-        "uid": "jobset-uid",
-        "controller": True,
-    }
-    workload = {
-        "metadata": {
-            "name": "training-workload",
-            "namespace": "team-a",
-            "uid": "workload-uid",
-            "creationTimestamp": "2026-10-14T09:59:00Z",
-            "ownerReferences": [owner],
-        },
-        "status": {
-            "conditions": [
-                _condition("Admitted", admitted),
-            ]
-        },
-    }
-    history = {
-        "observations": [
-            {
-                "kind": "Workload",
-                "metadata": workload["metadata"],
-                "observedAt": admitted,
-                "status": workload["status"],
-            },
-            {
-                "kind": "Job",
-                "metadata": {
-                    "uid": "job-uid-1",
-                    "ownerReferences": [owner],
-                },
-                "selectedMetadata": {
-                    "labels": {_RESTART_LABEL: "1"},
-                },
-                "observedAt": "2026-10-14T10:30:00Z",
-                "status": {"startTime": "2026-10-14T10:30:00Z"},
-            },
-        ]
-    }
-
-    live_with_resources = live_attempt_identity(
-        workload,
-        [
-            {
-                "metadata": {
-                    "labels": {_RESTART_LABEL: "1"},
-                },
-                "status": {"startTime": "2026-10-14T10:30:00Z"},
-            }
-        ],
-    )
-    assert live_with_resources is not None
-    assert live_attempt_identity(workload, []) is None
-    retained = next(
-        attempt
-        for attempt in attempts_from_workload_history(
+    assert (
+        attempts_from_workload_history(
             history,
-            workload_name="training-workload",
             now=datetime(2026, 10, 14, 12, 0, tzinfo=timezone.utc),
+            workload_name="pending-workload",
         )
-        if attempt.restart_attempt == "1"
+        == []
     )
-    assert retained.restart_attempt == "1"
-    assert live_with_resources.attempt_id == retained.attempt_id
 
 
 def test_live_then_retained_discovery_writes_one_execution_context(tmp_path):
@@ -1297,12 +1128,8 @@ def test_live_then_retained_discovery_writes_one_execution_context(tmp_path):
     retained_output.close()
 
     with sqlite3.connect(db) as connection:
-        context_count = connection.execute(
-            "SELECT COUNT(*) FROM execution_context"
-        ).fetchone()[0]
-        run_count = connection.execute(
-            "SELECT COUNT(*) FROM attribution_run"
-        ).fetchone()[0]
+        context_count = connection.execute("SELECT COUNT(*) FROM execution_context").fetchone()[0]
+        run_count = connection.execute("SELECT COUNT(*) FROM attribution_run").fetchone()[0]
 
     assert context_count == 1
     assert run_count == 2
@@ -1352,43 +1179,235 @@ def test_retained_node_loss_placement_restores_failed_node():
     assert context["nodes"] == ["node-failed"]
 
 
-def test_live_state_replaces_open_retained_attempt():
-    start = datetime(2026, 10, 14, 10, 0, tzinfo=timezone.utc)
-    retained = {
-        "workload_uid": "workload-uid",
-        "state": "RUNNING",
-        "id": "retained-attempt",
-        "attempt_id": "retained-attempt",
-        "start_time": start,
-        "end_time": start,
-        "kueue_state": "RUNNING",
-        "nodes": ["node-b"],
-        "pod_names": ["retry-pod"],
-        "history_complete": False,
+def test_same_attempt_unions_retained_and_new_live_failure_evidence():
+    admitted = "2026-10-14T10:00:00Z"
+    workload = {
+        "metadata": {
+            "name": "training-workload",
+            "namespace": "team-a",
+            "uid": "workload-uid",
+            "labels": {"user": "grace"},
+            "ownerReferences": [
+                {
+                    "kind": "Job",
+                    "name": "training",
+                    "uid": "job-uid",
+                    "controller": True,
+                }
+            ],
+        },
+        "spec": {
+            "queueName": "gpu",
+            "podSets": [
+                {
+                    "count": 1,
+                    "template": {"spec": {"containers": [{"resources": {"requests": {"nvidia.com/gpu": "8"}}}]}},
+                }
+            ],
+        },
+        "status": {
+            "conditions": [_condition("Admitted", admitted)],
+        },
     }
-    live = {
-        "workload_uid": "workload-uid",
-        "state": "COMPLETED",
-        "id": "retained-attempt",
-        "attempt_id": "retained-attempt",
-        "start_time": start,
-        "end_time": datetime(2026, 10, 14, 11, 0, tzinfo=timezone.utc),
-        "kueue_state": "FINISHED_SUCCEEDED",
-        "nodes": ["node-a", "node-b"],
-        "pod_names": ["first-pod", "retry-pod"],
+    live_pod = {
+        "metadata": {
+            "name": "new-failed-pod",
+            "namespace": "team-a",
+            "uid": "new-pod-uid",
+            "creationTimestamp": "2026-10-14T10:30:00Z",
+            "labels": {"batch.kubernetes.io/controller-uid": "job-uid"},
+        },
+        "spec": {"nodeName": "node-new"},
+        "status": {
+            "startTime": "2026-10-14T10:30:00Z",
+            "phase": "Failed",
+            "reason": "NodeLost",
+        },
     }
-
-    [reconciled] = KueueExecutionContextAdapter._reconcile_live_contexts(
-        [retained],
-        [live],
+    [live_attempt] = attempts_from_live_resources(
+        workload,
+        [live_pod],
+        [],
+        now=datetime(2026, 10, 14, 11, tzinfo=timezone.utc),
+    )
+    retained_attempt = WorkloadAttempt(
+        **{
+            **live_attempt.__dict__,
+            "end_time": datetime(
+                2026,
+                10,
+                14,
+                10,
+                15,
+                tzinfo=timezone.utc,
+            ),
+            "pod_uids": frozenset({"old-pod-uid"}),
+        }
+    )
+    retained_placement = PlacementRecord(
+        namespace="team-a",
+        pod_name="old-pod",
+        pod_uid="old-pod-uid",
+        node_name="node-old",
+        observed_at="2026-10-14T10:05:00Z",
+    )
+    retained = _AttemptEvidence(
+        attempts=[retained_attempt],
+        placements={"old-pod-uid": retained_placement},
+        retained_coverage=[{}],
+    )
+    live = _AttemptEvidence(
+        attempts=[live_attempt],
+        workload=workload,
+        pods={"new-pod-uid": live_pod},
     )
 
-    assert reconciled["state"] == "COMPLETED"
-    assert reconciled["kueue_state"] == "FINISHED_SUCCEEDED"
-    assert reconciled["attempt_id"] == "retained-attempt"
-    assert reconciled["nodes"] == ["node-a", "node-b"]
-    assert reconciled["pod_names"] == ["first-pod", "retry-pod"]
-    assert reconciled["history_complete"] is False
+    [combined] = KueueExecutionContextAdapter._combine_attempt_evidence([retained, live])
+    context = _context_from_attempt_evidence(combined)
+
+    assert context["attempt_id"] == live_attempt.attempt_id
+    assert context["nodes"] == ["node-new", "node-old"]
+    assert context["failed_node"] == "node-new"
+    assert context["gpu_count"] == 8
+    assert context["queue_name"] == "gpu"
+    assert context["user_name"] == "grace"
+
+
+def test_retained_terminal_and_timeout_specificity_beat_stale_live_state():
+    start = datetime(2026, 10, 14, 10, tzinfo=timezone.utc)
+    failed = {
+        "kind": "Workload",
+        "uid": "workload-uid",
+        "type": "Finished",
+        "reason": "Failed",
+        "time": "2026-10-14T11:00:00Z",
+        "restart_attempt": None,
+    }
+    timeout = {
+        "kind": "Job",
+        "uid": "job-uid",
+        "type": "Failed",
+        "reason": "DeadlineExceeded",
+        "time": "2026-10-14T11:00:00Z",
+        "restart_attempt": "0",
+    }
+
+    def attempt(terminal):
+        return WorkloadAttempt(
+            workload_uid="workload-uid",
+            namespace="team-a",
+            workload_name="training-workload",
+            owner_kind="Job",
+            admission_key="2026-10-14T10:00:00Z",
+            restart_attempt="0",
+            start_time=start,
+            end_time=datetime(
+                2026,
+                10,
+                14,
+                11,
+                tzinfo=timezone.utc,
+            ),
+            terminal=terminal,
+            open=terminal is None,
+            boundary_resolved=True,
+            pod_uids=frozenset(),
+            job_uids=frozenset({"job-uid"}),
+        )
+
+    stale_live_workload = {
+        "metadata": {
+            "namespace": "team-a",
+            "name": "training-workload",
+            "uid": "workload-uid",
+        },
+        "status": {"conditions": [_condition("Admitted", "2026-10-14T10:00:00Z")]},
+    }
+    evidence = _AttemptEvidence(
+        attempts=[attempt(failed), attempt(None), attempt(timeout)],
+        workload=stale_live_workload,
+        retained_coverage=[{}],
+    )
+
+    context = _context_from_attempt_evidence(evidence)
+
+    assert context["state"] == "TIMEOUT"
+    assert context["kueue_state"] == "FINISHED_FAILED"
+    assert context["end_time"] == datetime(
+        2026,
+        10,
+        14,
+        11,
+        tzinfo=timezone.utc,
+    )
+
+
+@pytest.mark.parametrize(
+    ("scheduled_at", "accepted"),
+    [
+        ("2026-10-14T10:30:00Z", True),
+        (None, False),
+    ],
+)
+def test_deleted_current_placement_requires_scheduled_at(
+    scheduled_at,
+    accepted,
+):
+    start = datetime(2026, 10, 14, 10, tzinfo=timezone.utc)
+    attempt = WorkloadAttempt(
+        workload_uid="workload-uid",
+        namespace="team-a",
+        workload_name="training-workload",
+        owner_kind="Job",
+        admission_key="2026-10-14T10:00:00Z",
+        restart_attempt="0",
+        start_time=start,
+        end_time=datetime(
+            2026,
+            10,
+            14,
+            11,
+            tzinfo=timezone.utc,
+        ),
+        terminal=None,
+        open=True,
+        boundary_resolved=True,
+        pod_uids=frozenset(),
+        job_uids=frozenset({"job-uid"}),
+    )
+    owner = ResourceIdentity(
+        "batch/v1",
+        "Job",
+        "team-a",
+        "training",
+        "job-uid",
+    )
+    placement = PlacementRecord(
+        namespace="team-a",
+        pod_name="deleted-pod",
+        pod_uid="deleted-pod-uid",
+        node_name="node-deleted",
+        observed_at="2026-10-14T10:40:00Z",
+        scheduled_at=scheduled_at,
+        owner_references=(owner,),
+    )
+    evidence = _AttemptEvidence(
+        attempts=[attempt],
+        jobs={
+            "job-uid": {
+                "metadata": {
+                    "namespace": "team-a",
+                    "name": "training",
+                    "uid": "job-uid",
+                }
+            }
+        },
+        placements={"deleted-pod-uid": placement},
+    )
+
+    context = _context_from_attempt_evidence(evidence)
+
+    assert ("deleted-pod-uid" in {item["pod_uid"] for item in context.get("pod_placements") or []}) is accepted
 
 
 def test_retained_time_range_requires_namespace():
