@@ -11,6 +11,9 @@ import pytest
 from attribution_blueprint.connectors.execution_contexts.kueue import (
     KueueExecutionContextAdapter,
 )
+from attribution_blueprint.connectors.execution_contexts.kueue.attempts import (
+    attempt_id_for,
+)
 from attribution_blueprint.kubernetes.client import (
     KubernetesClientError,
 )
@@ -268,9 +271,14 @@ def test_discover_by_ids_normalizes_finished_workload(mocker):
     contexts = KueueExecutionContextAdapter().discover_by_ids(["team-alpha/job-train-mnist-abc12"])
     assert len(contexts) == 1
     ctx = contexts[0]
-    assert ctx["id"] == "uid-aaaa-1001"
+    expected_attempt_id = attempt_id_for(
+        "uid-aaaa-1001",
+        "2026-05-01T12:00:00Z",
+        "0",
+    )
+    assert ctx["id"] == expected_attempt_id
     assert ctx["workload_uid"] == "uid-aaaa-1001"
-    assert ctx["attempt_id"] == "uid-aaaa-1001"
+    assert ctx["attempt_id"] == expected_attempt_id
     assert ctx["workload_type"] == "kueue"
     # BP-internal identity remains independent of the service wire field.
     assert ctx["scheduler"] == "kueue"
@@ -443,7 +451,10 @@ def test_failed_jobset_child_deadline_exceeded_normalizes_to_timeout(mocker):
         "metadata": {
             "name": "training-workers-0",
             "namespace": "team-alpha",
-            "labels": {"jobset.sigs.k8s.io/jobset-name": "training"},
+            "labels": {
+                "jobset.sigs.k8s.io/jobset-name": "training",
+                "jobset.sigs.k8s.io/restart-attempt": "0",
+            },
             "ownerReferences": [{"kind": "JobSet", "name": "training", "uid": "jobset-uid", "controller": True}],
         },
         "spec": {"activeDeadlineSeconds": 60},
@@ -472,7 +483,7 @@ def test_failed_jobset_child_deadline_exceeded_normalizes_to_timeout(mocker):
     assert ctx["time_limit"] == 1
 
 
-def test_reused_jobset_name_with_different_uid_is_not_used_as_owner(mocker):
+def test_reused_jobset_name_without_verified_restart_evidence_is_skipped(mocker):
     """The child Job is selected by `jobset-name=training`, a reusable name.
     If it is actually owned by a *replacement* JobSet with a different uid
     than the one on the Workload's ownerReference, it must not be treated
@@ -509,7 +520,10 @@ def test_reused_jobset_name_with_different_uid_is_not_used_as_owner(mocker):
         "metadata": {
             "name": "training-workers-0",
             "namespace": "team-alpha",
-            "labels": {"jobset.sigs.k8s.io/jobset-name": "training"},
+            "labels": {
+                "jobset.sigs.k8s.io/jobset-name": "training",
+                "jobset.sigs.k8s.io/restart-attempt": "0",
+            },
             "ownerReferences": [
                 {"kind": "JobSet", "name": "training", "uid": "jobset-uid-NEW", "controller": True}
             ],
@@ -533,13 +547,11 @@ def test_reused_jobset_name_with_different_uid_is_not_used_as_owner(mocker):
         jobs_payload={"items": [replacement_child_job]},
     )
 
-    ctx = KueueExecutionContextAdapter().discover_by_ids(["team-alpha/jobset-timeout-abc12"])[0]
+    contexts = KueueExecutionContextAdapter().discover_by_ids(["team-alpha/jobset-timeout-abc12"])
 
-    # The replacement JobSet's child evidence (DeadlineExceeded, time_limit)
-    # must not leak into this Workload's attribution.
-    assert ctx["state"] == "FAILED"
-    assert ctx["kueue_state"] == "FINISHED_FAILED"
-    assert "time_limit" not in ctx
+    # The replacement JobSet's restart identity and deadline cannot identify
+    # the old Workload's attempt.
+    assert contexts == []
 
 
 def _jobset_workload_and_children(*, first_reason: str, second_reason: str) -> tuple[dict, list[dict]]:
@@ -579,7 +591,10 @@ def _jobset_workload_and_children(*, first_reason: str, second_reason: str) -> t
             "metadata": {
                 "name": name,
                 "namespace": "team-alpha",
-                "labels": {"jobset.sigs.k8s.io/jobset-name": "training"},
+                "labels": {
+                    "jobset.sigs.k8s.io/jobset-name": "training",
+                    "jobset.sigs.k8s.io/restart-attempt": "0",
+                },
                 "ownerReferences": [
                     {"kind": "JobSet", "name": "training", "uid": "jobset-uid", "controller": True}
                 ],
@@ -1748,7 +1763,10 @@ def test_identically_named_jobsets_in_different_namespaces_do_not_cross_contamin
             "metadata": {
                 "name": name,
                 "namespace": namespace,
-                "labels": {"jobset.sigs.k8s.io/jobset-name": "trainer"},
+                "labels": {
+                    "jobset.sigs.k8s.io/jobset-name": "trainer",
+                    "jobset.sigs.k8s.io/restart-attempt": "0",
+                },
             },
             "spec": {"nodeName": node},
             "status": {},
@@ -1800,12 +1818,8 @@ def test_discover_by_time_range_rejects_naive_datetimes(mocker):
         )
 
 
-def test_start_time_uses_earliest_admitted_not_latest(mocker):
-    """When a workload was admitted, preempted, and re-admitted, start_time
-    must reflect the FIRST admission so a time-window query covering only
-    the original admission interval still finds the workload. The previous
-    code used max(lastTransitionTime), which silently shifted start_time
-    forward to the re-admission."""
+def test_live_start_time_uses_latest_admission_attempt(mocker):
+    """Live discovery represents the current attempt after re-admission."""
     payload = {
         "items": [
             {
@@ -1842,7 +1856,7 @@ def test_start_time_uses_earliest_admitted_not_latest(mocker):
     _wire_kubectl(mocker, workloads_payload=payload, pods_payload={"items": []}, jobs_payload={"items": []})
     contexts = KueueExecutionContextAdapter().discover_by_ids(["team-alpha/reattempted"])
     assert len(contexts) == 1
-    assert contexts[0]["start_time"] == datetime(2026, 5, 3, 12, 0, 0, tzinfo=timezone.utc)
+    assert contexts[0]["start_time"] == datetime(2026, 5, 3, 12, 10, 0, tzinfo=timezone.utc)
 
 
 def test_build_with_none_timeout_falls_back_to_default():
