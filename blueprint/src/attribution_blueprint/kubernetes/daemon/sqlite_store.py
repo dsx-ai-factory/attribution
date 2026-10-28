@@ -8,6 +8,7 @@ import sqlite3
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import replace
+from datetime import datetime
 from pathlib import Path
 
 from attribution_blueprint.kubernetes.daemon.models import (
@@ -345,12 +346,11 @@ class SQLitePlacementStore:
         ).fetchone()
         if row is not None:
             existing = _observation_from_row(row)
-            if _observation_content(existing) != _observation_content(observation):
-                raise ObservationConflictError(
-                    f"resource {observation.kind} {observation.namespace}/{observation.name} "
-                    f"UID {observation.uid} version {observation.resource_version} changed during replay"
-                )
-            return ObservationAppendResult.DUPLICATE
+            merged = _merge_observations(existing, observation)
+            if merged == existing:
+                return ObservationAppendResult.DUPLICATE
+            self._update_observation(connection, row["id"], merged)
+            return ObservationAppendResult.UPDATED
 
         cursor = connection.execute(
             """
@@ -387,6 +387,28 @@ class SQLitePlacementStore:
             ],
         )
         return ObservationAppendResult.APPENDED
+
+    @staticmethod
+    def _update_observation(
+        connection: sqlite3.Connection,
+        observation_id: int,
+        observation: ResourceObservation,
+    ) -> None:
+        connection.execute(
+            """
+            UPDATE resource_observation
+            SET source_timestamp = ?,
+                selected_metadata_json = ?,
+                status_json = ?
+            WHERE id = ?
+            """,
+            (
+                observation.source_timestamp,
+                _optional_json(observation.selected_metadata),
+                _optional_json(observation.status),
+                observation_id,
+            ),
+        )
 
     def _insert(self, connection: sqlite3.Connection, record: PlacementRecord) -> None:
         raw_json = json.dumps(record.to_resource(), separators=(",", ":"), sort_keys=True)
@@ -645,17 +667,93 @@ def _observation_from_row(row: sqlite3.Row) -> ResourceObservation:
     )
 
 
-def _observation_content(observation: ResourceObservation) -> tuple:
-    return (
-        observation.cluster_id,
-        observation.api_version,
-        observation.kind,
-        observation.namespace,
-        observation.name,
-        observation.uid,
-        observation.resource_version,
-        observation.owner_references,
-        _optional_json(observation.selected_metadata),
-        observation.source_timestamp,
-        _optional_json(observation.status),
+def _merge_observations(
+    existing: ResourceObservation,
+    replayed: ResourceObservation,
+) -> ResourceObservation:
+    immutable_existing = (
+        existing.cluster_id,
+        existing.api_version,
+        existing.kind,
+        existing.namespace,
+        existing.name,
+        existing.uid,
+        existing.resource_version,
+        existing.owner_references,
     )
+    immutable_replayed = (
+        replayed.cluster_id,
+        replayed.api_version,
+        replayed.kind,
+        replayed.namespace,
+        replayed.name,
+        replayed.uid,
+        replayed.resource_version,
+        replayed.owner_references,
+    )
+    try:
+        if immutable_existing != immutable_replayed:
+            raise ValueError("immutable resource identity changed")
+        selected_metadata = _merge_projection(
+            existing.selected_metadata,
+            replayed.selected_metadata,
+        )
+        status = _merge_projection(existing.status, replayed.status)
+        source_timestamp = _merge_source_timestamp(
+            existing.source_timestamp,
+            replayed.source_timestamp,
+        )
+    except ValueError as error:
+        raise ObservationConflictError(
+            f"resource {replayed.kind} {replayed.namespace}/{replayed.name} "
+            f"UID {replayed.uid} version {replayed.resource_version} changed during replay: {error}"
+        ) from error
+    return replace(
+        existing,
+        selected_metadata=selected_metadata,
+        source_timestamp=source_timestamp,
+        status=status,
+    )
+
+
+def _merge_projection(existing, replayed):
+    if existing is None:
+        return replayed
+    if replayed is None:
+        return existing
+    if isinstance(existing, dict) and isinstance(replayed, dict):
+        merged = dict(existing)
+        for key, value in replayed.items():
+            merged[key] = (
+                _merge_projection(merged[key], value)
+                if key in merged
+                else value
+            )
+        return merged
+    if isinstance(existing, list) and isinstance(replayed, list):
+        if len(existing) != len(replayed):
+            raise ValueError("projected list shape changed")
+        return [
+            _merge_projection(old_item, new_item)
+            for old_item, new_item in zip(existing, replayed, strict=True)
+        ]
+    if type(existing) is not type(replayed) or existing != replayed:
+        raise ValueError("projected value changed")
+    return existing
+
+
+def _merge_source_timestamp(
+    existing: str | None,
+    replayed: str | None,
+) -> str | None:
+    if existing is None:
+        return replayed
+    if replayed is None or replayed == existing:
+        return existing
+    try:
+        return max(
+            (existing, replayed),
+            key=lambda value: datetime.fromisoformat(value),
+        )
+    except ValueError as error:
+        raise ValueError("source timestamp is not ISO-8601") from error

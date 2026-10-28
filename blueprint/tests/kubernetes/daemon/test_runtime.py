@@ -7,7 +7,11 @@ from types import SimpleNamespace
 
 import pytest
 
-from attribution_blueprint.kubernetes.daemon.models import PlacementRecord, ResourceIdentity
+from attribution_blueprint.kubernetes.daemon.models import (
+    PlacementRecord,
+    ResourceIdentity,
+    ResourceObservation,
+)
 from attribution_blueprint.kubernetes.daemon.resolvers import ResolutionPending
 from attribution_blueprint.kubernetes.daemon.runtime import (
     KubernetesDaemon,
@@ -16,7 +20,10 @@ from attribution_blueprint.kubernetes.daemon.runtime import (
 )
 from attribution_blueprint.kubernetes.daemon.sqlite_store import SQLitePlacementStore
 from attribution_blueprint.kubernetes.daemon.store import CreateResult
-from attribution_blueprint.kubernetes.daemon.watch_sources import selected_status
+from attribution_blueprint.kubernetes.daemon.watch_sources import (
+    selected_metadata,
+    selected_status,
+)
 
 
 def _pod() -> dict:
@@ -930,6 +937,88 @@ def test_resource_version_expiry_resets_readiness_before_relisting(mocker):
 
     assert readiness_during_lists == [False, False]
     assert daemon.health.initial_list_complete is True
+
+
+def test_projection_expansion_survives_expired_watch_relist(tmp_path, mocker):
+    """A selector upgrade must enrich an old journal row during 410 recovery."""
+    from kubernetes.client.exceptions import ApiException
+
+    store = SQLitePlacementStore(str(tmp_path / "placements.db"))
+    pod = _pod()
+    pod["metadata"]["resourceVersion"] = "10"
+    old_observation = ResourceObservation.from_resource(
+        pod,
+        cluster_id="default",
+        event_type="SNAPSHOT",
+        status=selected_status("Pod", pod),
+        selected_metadata=None,
+        observed_at="2026-10-14T00:00:00Z",
+    )
+    store.append_observation(old_observation)
+
+    pod["metadata"]["labels"] = {
+        "jobset.sigs.k8s.io/restart-attempt": "1",
+    }
+    listing = SimpleNamespace(
+        items=[pod],
+        metadata=SimpleNamespace(resource_version="10"),
+    )
+    core_api = mocker.Mock()
+    core_api.list_namespaced_pod.return_value = listing
+    daemon = KubernetesDaemon(
+        core_api=core_api,
+        store=store,
+        namespace="team-a",
+        workers=1,
+    )
+    observed_resource_versions = []
+    watcher = mocker.Mock()
+
+    def stream(*args, **kwargs):
+        observed_resource_versions.append(kwargs["resource_version"])
+        if len(observed_resource_versions) == 1:
+            raise ApiException(status=410, reason="resource version expired")
+        daemon.stop()
+        return iter(())
+
+    watcher.stream.side_effect = stream
+    mocker.patch("kubernetes.watch.Watch", return_value=watcher)
+
+    daemon.run()
+
+    assert observed_resource_versions == ["10", "10"]
+    assert daemon.health.initial_list_complete is True
+    assert daemon.health.persistence_failed is False
+    [stored] = store.list_observations_for_uid(
+        "default",
+        "team-a",
+        "pod-uid-1",
+    )
+    assert stored.observed_at == old_observation.observed_at
+    assert stored.selected_metadata == selected_metadata(pod)
+
+
+def test_conflicting_deleted_capture_remains_a_required_failure(tmp_path):
+    path = tmp_path / "placements.db"
+    store = SQLitePlacementStore(str(path))
+    daemon = KubernetesDaemon(
+        core_api=None,
+        store=store,
+        namespace="team-a",
+    )
+    initial = _pod()
+    initial["status"] = {"phase": "Running"}
+    conflicting = _pod()
+    conflicting["status"] = {"phase": "Failed"}
+
+    assert daemon._capture(_PodWatchSource(), initial, "SNAPSHOT") is True
+    assert daemon._capture(_PodWatchSource(), conflicting, "DELETED") is False
+    assert daemon.health.persistence_failed is True
+    with sqlite3.connect(path) as connection:
+        marker = connection.execute(
+            "SELECT pod_uid FROM placement_deletion"
+        ).fetchone()
+    assert marker is None
 
 
 def test_owner_enrichment_write_failure_does_not_escape_or_kill_recording():

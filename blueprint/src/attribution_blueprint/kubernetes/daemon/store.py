@@ -23,6 +23,7 @@ class PlacementConflictError(RuntimeError):
 class ObservationAppendResult(str, Enum):
     APPENDED = "appended"
     DUPLICATE = "duplicate"
+    UPDATED = "updated"
 
 
 class ObservationConflictError(RuntimeError):

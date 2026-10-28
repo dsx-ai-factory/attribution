@@ -555,10 +555,84 @@ def test_replayed_resource_version_is_deduplicated(tmp_path):
     assert store.list_observations_for_uid("cluster-a", "team-a", "pod-uid-1") == [initial]
 
 
+def test_replayed_resource_version_accepts_additive_projection(tmp_path):
+    path = tmp_path / "placements.db"
+    store = SQLitePlacementStore(str(path))
+    initial = _observation(
+        selected_metadata={"labels": {"existing": "value"}},
+        status={"phase": "Running"},
+    )
+    expanded = replace(
+        initial,
+        event_type="SNAPSHOT",
+        observed_at="2026-10-14T00:01:00Z",
+        source_timestamp="2026-10-14T00:00:30Z",
+        selected_metadata={
+            "labels": {
+                "existing": "value",
+                "jobset.sigs.k8s.io/restart-attempt": "1",
+            }
+        },
+        status={
+            "phase": "Running",
+            "startTime": "2026-10-14T00:00:30Z",
+        },
+    )
+
+    assert store.append_observation(initial) == ObservationAppendResult.APPENDED
+    with sqlite3.connect(path) as connection:
+        original = connection.execute(
+            "SELECT id, observed_at FROM resource_observation"
+        ).fetchone()
+
+    assert store.append_observation(expanded) == ObservationAppendResult.UPDATED
+    # Replaying an older projection after upgrade keeps the richer durable row.
+    assert store.append_observation(initial) == ObservationAppendResult.DUPLICATE
+
+    [stored] = store.list_observations_for_uid(
+        "cluster-a",
+        "team-a",
+        "pod-uid-1",
+    )
+    assert stored.event_type == initial.event_type
+    assert stored.observed_at == initial.observed_at
+    assert stored.source_timestamp == expanded.source_timestamp
+    assert stored.selected_metadata == expanded.selected_metadata
+    assert stored.status == expanded.status
+    with sqlite3.connect(path) as connection:
+        replayed = connection.execute(
+            "SELECT id, observed_at FROM resource_observation"
+        ).fetchone()
+    assert replayed == original
+
+
 def test_changed_payload_for_same_resource_version_is_rejected(tmp_path):
     store = SQLitePlacementStore(str(tmp_path / "placements.db"))
     initial = _observation(status={"phase": "Pending"})
     conflicting = replace(initial, status={"phase": "Running"})
+
+    store.append_observation(initial)
+
+    with pytest.raises(ObservationConflictError, match="changed during replay"):
+        store.append_observation(conflicting)
+
+
+def test_changed_owners_for_same_resource_version_are_rejected(tmp_path):
+    store = SQLitePlacementStore(str(tmp_path / "placements.db"))
+    initial = _observation(status={"phase": "Running"})
+    conflicting = replace(
+        initial,
+        owner_references=(
+            *initial.owner_references,
+            OwnerReference(
+                api_version="batch/v1",
+                kind="Job",
+                name="replacement",
+                uid="job-uid-2",
+                controller=True,
+            ),
+        ),
+    )
 
     store.append_observation(initial)
 
