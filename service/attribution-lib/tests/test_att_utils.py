@@ -200,6 +200,8 @@ class TestApplogExtractNodeRank:
             ("[rank: 3] some error", 3),
             ("[rank:3] some error", 3),
             ("[rank:3]: some error", 3),
+            ("[default0]:[rank3]: some error", 3),
+            ("[default1]: [rank3]: some error", 3),
         ],
     )
     def test_rank_based_extraction(self, log_line, expected_rank):

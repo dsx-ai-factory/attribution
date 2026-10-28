@@ -125,6 +125,8 @@ def get_hostname(ip_or_hostname: str) -> str:
 
 
 RANK_REGEX = re.compile(r"^\[rank\s*:?\s*(?P<rank>\d+)\]")
+# "torchrun --tee" prefix: "[default0]:". The number is the local rank, not the node.
+TORCHRUN_TEE_PREFIX_REGEX = re.compile(r"^\[default\d+\]:\s*")
 # NCCL debug prefix: hostname:pid:tid [cudaDev]. cudaDev is the local GPU
 # index, not an srun/MPI rank. Peer addresses like "192.0.2.10<63270>" do
 # not match (no :pid:tid [digits]).
@@ -174,6 +176,7 @@ def applog_extract_node_rank(line: str) -> tuple[Optional[str], Optional[int]]:
     Returns:
         ``(node, rank)`` with ``None`` for any field that could not be identified.
     """
+    line = TORCHRUN_TEE_PREFIX_REGEX.sub("", line, count=1)
     rank = None
     node = None
     if (

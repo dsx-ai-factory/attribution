@@ -726,9 +726,19 @@ def test_csp_category_is_generated_from_committed_declarations():
     assert "running without error" not in csp_symptoms
 
 
-def test_batch_size_assertion_is_registered_above_generic_nvrx_failure():
+@pytest.mark.parametrize(
+    "symptom",
+    [
+        "Python Exception: AssertionError: batch size not divisible",
+        "Python Exception: argparse unrecognized arguments",
+        "Python Exception: ValueError: module grids do not cover every rank",
+        "Python Exception: ValueError: num-experts not divisible",
+        "Python Exception: RuntimeError: pinned activation buffer budget exceeded",
+        "Python Exception: FileNotFoundError: checkpoint iteration not found",
+    ],
+)
+def test_application_error_is_registered_above_generic_nvrx_failure(symptom):
     registry = _load_committed_registry()
-    symptom = "Python Exception: AssertionError: batch size not divisible"
 
     assert registry.resolve_symptom(symptom) == symptom
     match = registry.outcome_for(["NVRx detected failure", "Python Exception", symptom])

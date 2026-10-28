@@ -115,6 +115,7 @@ _REFINER_ORDER = [
     "WatchdogGpuCascadeCleanup",
     "CudaXidCascades",
     "ConnectionClosedCascade",
+    "NvrxFailureUserCauseCascade",
     "XidGenericCleanup",
     "Xid145RxpipePrivErrCascade",
     "SlurmTimeoutXid145Cascade",
@@ -394,6 +395,17 @@ _CONNECTION_CLOSED_TRIGGERS = [
     "NaN reported by Megatron",
     "cudaError out of memory",
 ]
+
+# Specific application errors that explain why NVRx detected a failure.
+_NVRX_FAILURE_USER_CAUSES = (
+    "Python Exception: AssertionError: batch size not divisible",
+    "Python Exception: argparse unrecognized arguments",
+    "Python Exception: ValueError: module grids do not cover every rank",
+    "Python Exception: ValueError: num-experts not divisible",
+    "Python Exception: RuntimeError: pinned activation buffer budget exceeded",
+    "Python Exception: FileNotFoundError: checkpoint iteration not found",
+    "Bad Token",
+)
 
 _XID145_RXPIPE_SYMPTOM = "XID-145-RLW_RXPIPE-8"
 _XID145_MULTICATEGORY_SYMPTOM = "XID-145-MultiCategory"
@@ -1824,6 +1836,30 @@ def connection_closed_cascade(context: RefinerContext):
 
     if any(root_cause in symptoms for root_cause in _CONNECTION_CLOSED_TRIGGERS):
         _remove_connection_closed_cascade(symptoms, my_bad_nodes)
+
+
+@refiner_def(
+    name="NvrxFailureUserCauseCascade",
+    author="NVIDIA Attribution team",
+    priority=_priority("NvrxFailureUserCauseCascade"),
+)
+def nvrx_failure_user_cause_cascade(context: RefinerContext):
+    """Discard NVRx detected failure when a specific application error explains it.
+
+    The application error can come from any rank, so the discard applies to the
+    job-level symptoms and to every node.
+    """
+    symptoms = context.symptoms
+    my_bad_nodes = context.my_bad_nodes
+    if symptoms is None:
+        return
+    if not any(cause in symptoms for cause in _NVRX_FAILURE_USER_CAUSES):
+        return
+    symptoms.discard("NVRx detected failure")
+    if my_bad_nodes is None:
+        return
+    for _node, errors in my_bad_nodes.symptom_groups():
+        errors.discard("NVRx detected failure")
 
 
 @refiner_def(name="XidGenericCleanup", author="NVIDIA Attribution team", priority=_priority("XidGenericCleanup"))
