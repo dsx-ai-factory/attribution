@@ -742,6 +742,34 @@ def test_latest_observations_are_queryable_by_resource_kind(tmp_path):
     ) == [updated]
 
 
+def test_history_candidates_use_single_noncontroller_owner(tmp_path):
+    store = SQLitePlacementStore(str(tmp_path / "placements.db"))
+    pod_group = replace(
+        _observation(),
+        api_version="scheduling.run.ai/v2alpha2",
+        kind="PodGroup",
+        name="training",
+        uid="podgroup-uid",
+        owner_references=(
+            OwnerReference(
+                api_version="jobset.x-k8s.io/v1alpha2",
+                kind="JobSet",
+                name="training",
+                uid="jobset-uid",
+                controller=False,
+            ),
+        ),
+        status={"phase": "Running"},
+    )
+    _capture(store, pod_group)
+
+    assert store.list_history_controller_uids(
+        "cluster-a",
+        "team-a",
+        "PodGroup",
+    ) == ["jobset-uid"]
+
+
 def test_controller_history_recursively_includes_descendant_resources(tmp_path):
     store = SQLitePlacementStore(str(tmp_path / "placements.db"))
     jobset = replace(

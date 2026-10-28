@@ -1231,6 +1231,8 @@ class KueueExecutionContextAdapter:
             histories = self.history_reader.find_histories(
                 self.namespace,
                 "Workload",
+                start=start,
+                end=end,
             )
             retained_evidence = self._evidence_from_histories(
                 histories,
