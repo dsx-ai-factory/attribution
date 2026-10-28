@@ -517,8 +517,8 @@ def test_newer_active_workload_protects_owner_group_from_late_old_terminal(
     )
 
     # Simulate delayed delivery: the expired incarnation is inserted last.
-    store.append_observation(active)
-    store.append_observation(expired)
+    _capture(store, active)
+    _capture(store, expired)
 
     reopened = SQLitePlacementStore(str(path), retention_days=1)
 
