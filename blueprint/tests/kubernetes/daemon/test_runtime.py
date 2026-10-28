@@ -11,7 +11,6 @@ import pytest
 from attribution_blueprint.kubernetes.daemon.models import (
     PlacementRecord,
     ResourceIdentity,
-    ResourceObservation,
 )
 from attribution_blueprint.kubernetes.daemon.resolvers import ResolutionPending
 from attribution_blueprint.kubernetes.daemon.runtime import (
@@ -1027,15 +1026,19 @@ def test_projection_expansion_survives_expired_watch_relist(tmp_path, mocker):
     store = SQLitePlacementStore(str(tmp_path / "placements.db"))
     pod = _pod()
     pod["metadata"]["resourceVersion"] = "10"
-    old_observation = ResourceObservation.from_resource(
-        pod,
-        cluster_id="default",
-        event_type="SNAPSHOT",
-        status=selected_status("Pod", pod),
-        selected_metadata=None,
-        observed_at="2026-10-14T00:00:00Z",
+    core_api = mocker.Mock()
+    daemon = KubernetesDaemon(
+        core_api=core_api,
+        store=store,
+        namespace="team-a",
+        workers=1,
     )
-    store.append_observation(old_observation)
+    assert daemon._capture(_PodWatchSource(), pod, "SNAPSHOT") is True
+    [old_observation] = store.list_observations_for_uid(
+        "default",
+        "team-a",
+        "pod-uid-1",
+    )
 
     pod["metadata"]["labels"] = {
         "jobset.sigs.k8s.io/restart-attempt": "1",
@@ -1044,14 +1047,7 @@ def test_projection_expansion_survives_expired_watch_relist(tmp_path, mocker):
         items=[pod],
         metadata=SimpleNamespace(resource_version="10"),
     )
-    core_api = mocker.Mock()
     core_api.list_namespaced_pod.return_value = listing
-    daemon = KubernetesDaemon(
-        core_api=core_api,
-        store=store,
-        namespace="team-a",
-        workers=1,
-    )
     observed_resource_versions = []
     watcher = mocker.Mock()
 

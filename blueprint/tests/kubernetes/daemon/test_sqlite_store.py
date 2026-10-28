@@ -652,15 +652,15 @@ def test_replayed_resource_version_accepts_additive_projection(tmp_path):
         },
     )
 
-    assert store.append_observation(initial) == ObservationAppendResult.APPENDED
+    assert _capture(store, initial) == ObservationAppendResult.APPENDED
     with sqlite3.connect(path) as connection:
         original = connection.execute(
             "SELECT id, observed_at FROM resource_observation"
         ).fetchone()
 
-    assert store.append_observation(expanded) == ObservationAppendResult.UPDATED
+    assert _capture(store, expanded) == ObservationAppendResult.UPDATED
     # Replaying an older projection after upgrade keeps the richer durable row.
-    assert store.append_observation(initial) == ObservationAppendResult.DUPLICATE
+    assert _capture(store, initial) == ObservationAppendResult.DUPLICATE
 
     [stored] = store.list_observations_for_uid(
         "cluster-a",
@@ -707,10 +707,10 @@ def test_changed_owners_for_same_resource_version_are_rejected(tmp_path):
         ),
     )
 
-    store.append_observation(initial)
+    _capture(store, initial)
 
     with pytest.raises(ObservationConflictError, match="changed during replay"):
-        store.append_observation(conflicting)
+        _capture(store, conflicting)
 
 
 def test_observations_are_queryable_by_controller_owner(tmp_path):
