@@ -80,9 +80,8 @@ def test_live_context_reconciles_only_matching_attempt_id():
 
     assert reconciled["state"] == "TIMEOUT"
     assert reconciled["end_time"] == live["end_time"]
-    # Retained membership is preserved because it is scoped from history.
-    assert reconciled["nodes"] == ["old-node"]
-    assert reconciled["pod_names"] == ["old-pod"]
+    assert reconciled["nodes"] == ["new-node", "old-node"]
+    assert reconciled["pod_names"] == ["new-pod", "old-pod"]
 
 
 def test_live_running_does_not_downgrade_retained_node_fail():
@@ -112,3 +111,62 @@ def test_live_running_does_not_downgrade_retained_node_fail():
     assert reconciled["state"] == "NODE_FAIL"
     assert reconciled["failed_node"] == "node-failed"
     assert reconciled["end_time"] == live["end_time"]
+
+
+def test_matching_attempt_merges_new_live_failure_evidence():
+    start = datetime(2026, 10, 14, 10, 0, tzinfo=timezone.utc)
+    retained = {
+        "workload_uid": "workload-uid",
+        "state": "RUNNING",
+        "id": "attempt-1",
+        "attempt_id": "attempt-1",
+        "start_time": start,
+        "end_time": datetime(2026, 10, 14, 10, 30, tzinfo=timezone.utc),
+        "kueue_state": "RUNNING",
+        "nodes": ["node-old"],
+        "pod_names": ["pod-old"],
+        "pod_placements": [
+            {
+                "pod_uid": "pod-old-uid",
+                "pod_name": "pod-old",
+                "node_name": "node-old",
+                "source": "kubernetes_daemon",
+            }
+        ],
+    }
+    live = {
+        "workload_uid": "workload-uid",
+        "state": "NODE_FAIL",
+        "failed_node": "node-failed",
+        "id": "attempt-1",
+        "attempt_id": "attempt-1",
+        "start_time": start,
+        "end_time": datetime(2026, 10, 14, 11, 0, tzinfo=timezone.utc),
+        "kueue_state": "RUNNING",
+        "nodes": ["node-failed"],
+        "pod_names": ["pod-failed"],
+        "pod_nodes": {"pod-failed": "node-failed"},
+        "pod_placements": [
+            {
+                "pod_uid": "pod-failed-uid",
+                "pod_name": "pod-failed",
+                "node_name": "node-failed",
+                "source": "live_pod",
+            }
+        ],
+    }
+
+    [reconciled] = KueueExecutionContextAdapter._reconcile_live_contexts(
+        [retained],
+        [live],
+    )
+
+    assert reconciled["state"] == "NODE_FAIL"
+    assert reconciled["failed_node"] == "node-failed"
+    assert reconciled["nodes"] == ["node-failed", "node-old"]
+    assert reconciled["pod_names"] == ["pod-failed", "pod-old"]
+    assert {
+        placement["pod_uid"]
+        for placement in reconciled["pod_placements"]
+    } == {"pod-failed-uid", "pod-old-uid"}
+    assert reconciled["pod_nodes"] == {"pod-failed": "node-failed"}
