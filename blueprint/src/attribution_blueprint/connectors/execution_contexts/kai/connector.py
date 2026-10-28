@@ -44,9 +44,13 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import NotRequired, TypedDict
 
-import yaml
 from loguru import logger
 
+from attribution_blueprint.connectors.execution_contexts.kai.helpers import (
+    POD_GROUP_ANNOTATION as _POD_GROUP_ANNOTATION,
+    controller_owner as _controller_owner,
+    resolve_owner as _resolve_owner,
+)
 from attribution_blueprint.connectors.execution_contexts.kubernetes.client import (
     KubernetesClient,
     KubernetesClientError,
@@ -66,8 +70,6 @@ _JOB_RESOURCE = "Job"
 _JOB_API_VERSION = "batch/v1"
 _JOBSET_RESOURCE = "JobSet"
 _JOBSET_GROUP = "jobset.x-k8s.io"
-_POD_GROUP_ANNOTATION = "pod-group-name"
-_TOP_OWNER_ANNOTATION = "kai.scheduler/top-owner-metadata"
 _JOBSET_NAME_LABEL = "jobset.sigs.k8s.io/jobset-name"
 
 _SHAPE_OWNED = "owned"
@@ -178,33 +180,6 @@ def _jobset_child_jobs(owner: dict, jobs: list[dict]) -> list[dict]:
         and controller["uid"] == owner["uid"]
         and (job.get("metadata") or {}).get("uid")
     ]
-
-
-def _top_owner(meta: dict) -> dict | None:
-    raw = (meta.get("annotations") or {}).get(_TOP_OWNER_ANNOTATION)
-    if not raw:
-        return None
-    try:
-        owner = yaml.safe_load(raw)
-    except yaml.YAMLError:
-        return None
-    if not isinstance(owner, dict):
-        return None
-    if not all(owner.get(field) for field in ("kind", "name", "uid")):
-        return None
-    return owner
-
-
-def _controller_owner(meta: dict) -> dict | None:
-    refs = [ref for ref in meta.get("ownerReferences") or [] if isinstance(ref, dict)]
-    for ref in refs:
-        if ref.get("controller") and ref.get("kind") and ref.get("name") and ref.get("uid"):
-            return ref
-    return None
-
-
-def _resolve_owner(meta: dict) -> dict | None:
-    return _top_owner(meta) or _controller_owner(meta)
 
 
 def _podgroup_shape(spec: dict) -> str:
