@@ -110,7 +110,7 @@ line   = "3: global_batch_size (12) must be divisible by micro_batch_size (4)"
 # Keep the arguments and values in the source evidence, not in the symptom label.
 [[extractor]]
 name     = "ArgparseUnrecognizedArguments"
-match_re = '^\s*(?:\d+:\s*)?(?:\[default\d+\]:\s*)?(?:\[rank\s*:?\s*\d+\]:\s*)?[\w./-]+\.py: error: unrecognized arguments: \S[^\r\n]*$'
+match_re = '^\s*(?:\d+:\s*)?(?:\[default\d+\]:\s*)?(?:\[rank\s*:?\s*\d+\]:\s*)?[\w./-]+: error: unrecognized arguments: \S[^\r\n]*$'
 emit     = { type = "bad_node", symptom = "Python Exception: argparse unrecognized arguments" }
 [[extractor.cases]]
 expect  = "bad"
@@ -123,6 +123,10 @@ symptom = "Python Exception: argparse unrecognized arguments"
 [[extractor.cases]]
 expect  = "bad"
 line    = "[default0]:pretrain_gpt.py: error: unrecognized arguments: --bad"
+symptom = "Python Exception: argparse unrecognized arguments"
+[[extractor.cases]]
+expect  = "bad"
+line    = "80: train: error: unrecognized arguments: --bad"
 symptom = "Python Exception: argparse unrecognized arguments"
 [[extractor.cases]]
 expect = "none"
