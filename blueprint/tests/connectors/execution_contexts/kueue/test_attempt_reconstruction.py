@@ -11,6 +11,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from attribution_blueprint.connectors.execution_contexts.kueue.attempts import (
+    WorkloadAttempt,
     attempts_from_workload_history,
     live_attempt_identity,
 )
@@ -32,6 +33,26 @@ from attribution_blueprint.kubernetes.daemon.sqlite_store import SQLitePlacement
 from attribution_blueprint.orchestrator import AttributionOrchestrator
 
 _RESTART_LABEL = "jobset.sigs.k8s.io/restart-attempt"
+
+
+def test_attempt_id_preserves_existing_canonical_hash():
+    timestamp = datetime(2026, 10, 14, tzinfo=timezone.utc)
+    attempt = WorkloadAttempt(
+        workload_uid="workload-uid",
+        namespace="team-a",
+        workload_name="training",
+        owner_kind="Job",
+        admission_key="admission-1",
+        restart_attempt="2",
+        start_time=timestamp,
+        end_time=timestamp,
+        terminal=None,
+        open=False,
+        boundary_resolved=True,
+        pod_uids=frozenset(),
+    )
+
+    assert attempt.attempt_id == "kueue:v1:workload-uid:249ca67a73b47645"
 
 
 def _owner(kind: str, name: str, uid: str) -> OwnerReference:
