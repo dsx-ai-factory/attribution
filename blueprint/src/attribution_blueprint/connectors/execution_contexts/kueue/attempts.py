@@ -364,21 +364,43 @@ def _restart_starts(observations: list[dict]) -> dict[str, str]:
 
 def _starts(admissions: list[dict], restarts: dict[str, str]) -> list[dict]:
     starts = []
+    ordered_restarts = sorted(
+        restarts.items(),
+        key=lambda item: (_parse_time(item[1]), item[0]),
+    )
     for index, admission in enumerate(admissions):
         next_admission = (
             admissions[index + 1]["time"]
             if index + 1 < len(admissions)
             else None
         )
-        scoped_restarts = [
+        active_at_boundary = [
             (restart, timestamp)
-            for restart, timestamp in restarts.items()
-            if _within(timestamp, admission["time"], next_admission)
-        ] or [("0", admission["time"])]
-        for restart, timestamp in sorted(
-            scoped_restarts,
-            key=lambda item: (_parse_time(item[1]), item[0]),
-        ):
+            for restart, timestamp in ordered_restarts
+            if _parse_time(timestamp) <= _parse_time(admission["time"])
+        ]
+        subsequent_restarts = [
+            (restart, timestamp)
+            for restart, timestamp in ordered_restarts
+            if _parse_time(timestamp) > _parse_time(admission["time"])
+            and (
+                next_admission is None
+                or _parse_time(timestamp) < _parse_time(next_admission)
+            )
+        ]
+        if active_at_boundary:
+            seed_restart = active_at_boundary[-1][0]
+            scoped_restarts = [(seed_restart, admission["time"])]
+            scoped_restarts.extend(
+                (restart, timestamp)
+                for restart, timestamp in subsequent_restarts
+                if restart != seed_restart
+            )
+        elif subsequent_restarts:
+            scoped_restarts = subsequent_restarts
+        else:
+            scoped_restarts = [("0", admission["time"])]
+        for restart, timestamp in scoped_restarts:
             starts.append(
                 {
                     "admission_key": admission["key"],
