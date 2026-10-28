@@ -574,6 +574,120 @@ def test_scheduler_readmission_creates_a_new_attempt():
     assert partial_context["history_complete"] is False
 
 
+def test_jobset_restart_generation_carries_across_readmission():
+    owner_reference = {
+        "apiVersion": "jobset.x-k8s.io/v1alpha2",
+        "kind": "JobSet",
+        "name": "training",
+        "uid": "jobset-uid",
+        "controller": True,
+    }
+
+    def workload_observation(
+        resource_version: str,
+        observed_at: str,
+        conditions: list[dict],
+    ) -> dict:
+        return {
+            "kind": "Workload",
+            "metadata": {
+                "namespace": "team-a",
+                "name": "training-workload",
+                "uid": "workload-uid",
+                "ownerReferences": [owner_reference],
+            },
+            "resourceVersion": resource_version,
+            "observedAt": observed_at,
+            "status": {"conditions": conditions},
+        }
+
+    history = {
+        "observations": [
+            workload_observation(
+                "1",
+                "2026-10-14T10:00:00Z",
+                [_condition("Admitted", "2026-10-14T10:00:00Z")],
+            ),
+            {
+                "kind": "Job",
+                "metadata": {"uid": "job-uid-0"},
+                "selectedMetadata": {
+                    "labels": {_RESTART_LABEL: "0"},
+                },
+                "observedAt": "2026-10-14T10:01:00Z",
+                "status": {"startTime": "2026-10-14T10:01:00Z"},
+            },
+            {
+                "kind": "Pod",
+                "metadata": {"uid": "restart-zero-pod"},
+                "selectedMetadata": {
+                    "labels": {_RESTART_LABEL: "0"},
+                },
+                "observedAt": "2026-10-14T10:02:00Z",
+                "status": {"startTime": "2026-10-14T10:02:00Z"},
+            },
+            {
+                "kind": "Job",
+                "metadata": {"uid": "job-uid-1"},
+                "selectedMetadata": {
+                    "labels": {_RESTART_LABEL: "1"},
+                },
+                "observedAt": "2026-10-14T10:30:00Z",
+                "status": {"startTime": "2026-10-14T10:30:00Z"},
+            },
+            {
+                "kind": "Pod",
+                "metadata": {"uid": "old-pod"},
+                "selectedMetadata": {
+                    "labels": {_RESTART_LABEL: "1"},
+                },
+                "observedAt": "2026-10-14T10:31:00Z",
+                "status": {"startTime": "2026-10-14T10:31:00Z"},
+            },
+            workload_observation(
+                "2",
+                "2026-10-14T11:00:00Z",
+                [_condition("Admitted", "2026-10-14T11:00:00Z")],
+            ),
+            {
+                "kind": "Pod",
+                "metadata": {"uid": "new-pod"},
+                "selectedMetadata": {
+                    "labels": {_RESTART_LABEL: "1"},
+                },
+                "observedAt": "2026-10-14T11:01:00Z",
+                "status": {"startTime": "2026-10-14T11:01:00Z"},
+            },
+        ]
+    }
+
+    attempts = attempts_from_workload_history(
+        history,
+        now=datetime(2026, 10, 14, 12, 0, tzinfo=timezone.utc),
+        workload_name="training-workload",
+    )
+    by_identity = {
+        (attempt.admission_key, attempt.restart_attempt): attempt
+        for attempt in attempts
+    }
+
+    assert len({attempt.attempt_id for attempt in attempts}) == len(attempts)
+    assert set(by_identity) == {
+        ("2026-10-14T10:00:00Z", "0"),
+        ("2026-10-14T10:00:00Z", "1"),
+        ("2026-10-14T11:00:00Z", "1"),
+    }
+    assert by_identity[
+        ("2026-10-14T10:00:00Z", "0")
+    ].pod_uids == frozenset({"restart-zero-pod"})
+    assert by_identity[
+        ("2026-10-14T10:00:00Z", "1")
+    ].pod_uids == frozenset({"old-pod"})
+    assert by_identity[
+        ("2026-10-14T11:00:00Z", "1")
+    ].pod_uids == frozenset({"new-pod"})
+
+
 def test_recreated_workloads_bound_pods_and_owner_terminal_by_incarnation():
     job_owner = {
         "apiVersion": "batch/v1",
@@ -1054,10 +1168,14 @@ def test_live_jobset_attempt_without_restart_resources_does_not_invent_zero():
     )
     assert live_with_resources is not None
     assert live_attempt_identity(workload, []) is None
-    [retained] = attempts_from_workload_history(
-        history,
-        workload_name="training-workload",
-        now=datetime(2026, 10, 14, 12, 0, tzinfo=timezone.utc),
+    retained = next(
+        attempt
+        for attempt in attempts_from_workload_history(
+            history,
+            workload_name="training-workload",
+            now=datetime(2026, 10, 14, 12, 0, tzinfo=timezone.utc),
+        )
+        if attempt.restart_attempt == "1"
     )
     assert retained.restart_attempt == "1"
     assert live_with_resources.attempt_id == retained.attempt_id
