@@ -1,5 +1,9 @@
 # NVIDIA Attribution
 
+[![blueprint release](https://img.shields.io/badge/dynamic/regex?url=https%3A%2F%2Fapi.github.com%2Frepos%2Fdsx-ai-factory%2Fattribution%2Freleases&search=%22tag_name%22%3A+%3F%22blueprint-v%28%5B%5E%22%5D%2B%29%22&replace=v%241&label=blueprint)](https://github.com/dsx-ai-factory/attribution/releases?q=blueprint&expanded=true)
+[![service-app release](https://img.shields.io/badge/dynamic/regex?url=https%3A%2F%2Fapi.github.com%2Frepos%2Fdsx-ai-factory%2Fattribution%2Freleases&search=%22tag_name%22%3A+%3F%22service-app-v%28%5B%5E%22%5D%2B%29%22&replace=v%241&label=service-app)](https://github.com/dsx-ai-factory/attribution/releases?q=service-app&expanded=true)
+[![attribution-lib release](https://img.shields.io/badge/dynamic/regex?url=https%3A%2F%2Fapi.github.com%2Frepos%2Fdsx-ai-factory%2Fattribution%2Freleases&search=%22tag_name%22%3A+%3F%22attribution-lib-v%28%5B%5E%22%5D%2B%29%22&replace=v%241&label=attribution-lib)](https://github.com/dsx-ai-factory/attribution/releases?q=attribution-lib&expanded=true)
+
 **Open source · pre-1.0**
 
 NVIDIA Attribution is a service-plus-orchestrator that turns the raw symptoms of a failed GPU workload into one structured diagnosis with the symptom chain that produced it.

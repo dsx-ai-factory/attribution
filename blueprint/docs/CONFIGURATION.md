@@ -107,7 +107,7 @@ timeout_seconds = 60
 
 | Field             | Required             | Default                     | Meaning                                                                                                             |
 | ----------------- | -------------------- | --------------------------- | ------------------------------------------------------------------------------------------------------------------- |
-| `[eca].component` | No                   | `slurm`                     | Selects the execution context adapter: `slurm`, `kueue`, or `static`. Defaults to `slurm` when unset.               |
+| `[eca].component` | No                   | `slurm`                     | Selects the execution context adapter: `slurm`, `kueue`, `kai`, or `static`. Defaults to `slurm` when unset.        |
 | `sacct_path`      | No                   | `sacct`                     | Path to the `sacct` binary. Use an absolute path if `sacct` is not on `PATH`.                                       |
 | `cluster_tz`      | Strongly recommended | blueprint host fixed offset | IANA timezone for the SLURM controller, used to anchor naive `sacct` timestamps and preserve regional/DST identity. |
 | `ids`             | Per run              | none                        | Comma-separated job IDs. Usually pass this by CLI, not TOML.                                                        |
@@ -208,85 +208,46 @@ uv run --project blueprint --frozen nvidia-attribution-blueprint --config ./attr
 | `namespace`              | No       | all namespaces  | Optional namespace scope. Also allows bare workload names in `ids` mode. Required when `placement_records_enabled` is set. |
 | `timeout_seconds`        | No       | `60`            | Timeout for each Kubernetes API request.                                                                          |
 | `workload_api_version`   | No       | `kueue.x-k8s.io/v1beta1` | Kueue Workload CRD `<group>/<version>` to read. Set this if the cluster serves a different Workload API version. |
-| `placement_records_enabled` | No    | `false`         | Reads retained placement from the configured recorder; discovery fails if the recorder cannot be read. Requires `namespace`, matching the one namespace the recorder watches. |
+| `placement_records_enabled` | No    | `false`         | Reads retained placement from the configured `kubernetes-daemon`; discovery fails if it cannot be read. Requires `namespace`, matching the one namespace the daemon watches. |
 
 
-The baseline Kueue adapter does not require the placement recorder or Prometheus. It
+The baseline Kueue adapter does not require `kubernetes-daemon` or Prometheus. It
 uses live Pods and a best-effort Kubernetes Events fallback. If Pods and their
 Events are cleaned up before attribution, the execution context can have
 missing `nodes` or `pod_names`; downstream node-scoped metrics and deleted Pod
 logs will then be incomplete.
 
-#### Pod placement recorder setup
+#### Kubernetes daemon
 
-Install the recorder before the workloads whose placement must be retained. A
-single-replica StatefulSet writes PlacementRecord JSON to SQLite on a
-`ReadWriteOnce` PVC and serves it through a ClusterIP Service.
-See the
-[recorder architecture, usage, and troubleshooting reference](../src/attribution_blueprint/connectors/execution_contexts/kueue/pod_placement/recorder/docs/README.md).
+`kubernetes-daemon` retains Pod-to-node placement after Kubernetes deletes
+the Pods. The same daemon installation, with the corresponding integration
+enabled, serves both the Kueue and KAI adapters. See
+[Attribute Kueue Workloads](./use-cases/kueue.md#recover-pod-placement-after-deletion)
+and [Attribute KAI PodGroups](./use-cases/kai.md#recover-pod-placement-after-deletion)
+for build, install, and verification steps, and the
+[kubernetes-daemon reference](../src/attribution_blueprint/kubernetes/daemon/docs/README.md)
+for architecture, enabling both integrations from one installation, and
+troubleshooting.
 
-Build the image, then install the SQLite backend:
-
-```bash
-kubectl config current-context
-docker build \
-  -f blueprint/docker/pod-placement-recorder.Dockerfile \
-  -t registry.example/pod-placement-recorder:VERSION .
-docker push registry.example/pod-placement-recorder:VERSION
-
-YES=1 RELEASE_NAME=attribution \
-  ./blueprint/scripts/install-pod-placement-recorder.sh team-a \
-  --set image.repository=registry.example/pod-placement-recorder \
-  --set image.tag=VERSION \
-  --set image.pullPolicy=IfNotPresent
-```
-
-For kind, load the locally built image with
-`kind load docker-image pod-placement-recorder:local --name CLUSTER` and keep
-the chart's default image values. Place the recorder on a system node pool
-outside the failure domain it observes. The chart accepts `nodeSelector` and
-`tolerations` values for that purpose; a recorder that fails with the workload
-cannot retain the workload's final Pod update. SQLite PVC settings are
-`storage.sqlite.size`, `storage.sqlite.storageClassName`, and
-`storage.sqlite.accessModes`. Records are removed automatically after
-`retentionDays`, which defaults to `30`.
-
-After installation, wait for the StatefulSet and verify its read API:
-
-```bash
-kubectl -n team-a rollout status statefulset/attribution-pod-placement-recorder
-kubectl -n team-a port-forward service/attribution-pod-placement-recorder 18080:8080
-curl -fsS \
-  'http://127.0.0.1:18080/v1/placements?namespace=team-a&workload_uid=WORKLOAD_UID'
-```
-
-Point an in-cluster Blueprint at the Service:
+Point the Kueue adapter at the Service:
 
 ```toml
 [eca.kueue]
 placement_records_enabled = true
 
-[eca.kueue.placement_recorder]
-endpoint = "http://attribution-pod-placement-recorder.team-a.svc:8080"
+[eca.kueue.kubernetes_daemon]
+endpoint = "http://attribution-kubernetes-daemon.team-a.svc:8080"
 timeout_seconds = 10
 ```
 
 `endpoint` is required when this section is present; `timeout_seconds`
-defaults to `10`. Optional `auth` supports `token` (`token_env`, optional
-`org_id`) or `mtls` (`cert_path`, `key_path`, optional `ca_cert_path` and
-`org_id`).
+defaults to `10`. The daemon chart serves plain HTTP without authentication.
+Optional `auth` configures requests to a terminating proxy; `mtls` requires an
+HTTPS proxy endpoint.
 
-When enabled, recorder lookup is fail-closed. After deleting a completed Pod,
-a validation run should retain the
-same Pod UID and node with `pod_placements[].source = "placement_record"`.
-For node-loss validation, `nodeFailureReason` must be present before the
-Pod disappears; post-hoc attribution should then return `NODE_FAIL` and the
-recorded `failed_node`. If Blueprint runs outside the cluster, use an
-authenticated proxy or port-forward and set the endpoint to that reachable
-URL. Optional `placement_recorder.auth` supports the same `token` and `mtls`
-fields as the Prometheus source. The recorder itself does not terminate
-authentication, so keep its Service private or place an authenticated proxy
-in front of it.
+When enabled, daemon lookup is fail-closed. See the
+[daemon reference](../src/attribution_blueprint/kubernetes/daemon/docs/README.md)
+for transport, retention, and recovery limits.
 
 To recover Job and JobSet placement from retained kube-state-metrics, configure a
 Prometheus-compatible endpoint under the Kueue adapter:
@@ -362,7 +323,7 @@ kube_pod_labels{
 }
 ```
 
-To prove the fallback rather than live-Pod or recorder recovery, leave
+To prove the fallback rather than live-Pod or daemon recovery, leave
 `placement_records_enabled = false`, delete the Pod after the series has been
 scraped, and run attribution while the Workload remains available. The
 result must contain the original Pod UID and node with
@@ -371,7 +332,7 @@ child Job objects so the adapter can resolve their exact UIDs.
 
 Kueue time-range filtering is client-side because the Workload API does not
 provide server-side time filtering. The adapter reads pod and node names from
-live owned pods and recorder records, then always merges in configured
+live owned pods and daemon records, then always merges in configured
 Prometheus placement data for Workloads with an owner Job (already-known Pod
 UIDs take precedence). If nodes or pod names are still missing afterward, it
 falls back to querying Kubernetes Events for UID-matched Pod scheduling
@@ -384,19 +345,11 @@ attribution time so their UIDs can be resolved without a name-based metrics
 join. If both a JobSet's Pods and child Jobs have been deleted, this UID-safe
 Prometheus route returns no placement even when the old metrics remain.
 
-For durable pod-to-node placement, install one pod-placement-recorder release per namespace:
-
-```bash
-YES=1 blueprint/scripts/install-pod-placement-recorder.sh team-a
-```
-
-The preview supports Job and JobSet owners and stores node names without
-reading Node objects; JobSet support does not require its API on Jobs-only
-clusters. Recorder `queueSize` and `workers` must be positive. Runtime API
-defaults are Kueue Workload `v1beta1` and JobSet `v1alpha2`; override
-`workloadVersion` or `jobsetVersion` to match the installed controllers.
-SQLite records older than `retentionDays` are removed automatically; the
-default is 30 days.
+For durable pod-to-node placement, see
+[Kubernetes daemon](#kubernetes-daemon) above. Its `queueSize` and `workers`
+must be positive. Runtime API defaults are Kueue Workload `v1beta1` and
+JobSet `v1alpha2`; override `integrations.kueue.workloadVersion` or
+`jobsetVersion` to match the installed controllers.
 
 The adapter derives `kueue_state` from Kueue conditions, using finished
 conditions before evicted, preempted, admitted, quota-reserved, and pending
@@ -431,6 +384,67 @@ across Kubernetes response orderings.
 
 For a complete runnable configuration, see
 [examples/kueue](../examples/kueue/README.md).
+
+### `[eca.kai]`
+
+Use the KAI adapter for Kubernetes batch workloads scheduled by the KAI
+scheduler. It reads KAI `PodGroup` objects, follows owner references to Job
+or JobSet pods, and normalizes the result into execution contexts. See
+[Attribute KAI PodGroups](./use-cases/kai.md) for the full use case.
+
+Example:
+
+```toml
+[eca]
+component = "kai"
+
+[eca.kai]
+kubeconfig = "/path/to/kubeconfig"
+context = "prod-batch"
+namespace = "team-a"
+timeout_seconds = 60
+placement_records_enabled = false
+```
+
+| Field                        | Required | Default         | Meaning                                                                                                                      |
+| ----------------------------- | -------- | --------------- | ------------------------------------------------------------------------------------------------------------------------------ |
+| `ids`                         | Per run  | none            | Comma-separated PodGroup refs. Use `<namespace>/<name>` unless `namespace` is configured.                                    |
+| `start_time`                  | Per run  | none            | ISO-8601 time for time-range mode.                                                                                           |
+| `end_time`                    | Per run  | none            | ISO-8601 time for time-range mode. Required with `start_time`.                                                               |
+| `nodelist`                    | Per run  | none            | Optional comma-separated Kubernetes node names for time-range mode.                                                          |
+| `kubeconfig`                  | No       | client default  | Optional kubeconfig path. Falls back to `KUBECONFIG` or `~/.kube/config`, then in-cluster credentials.                       |
+| `context`                     | No       | current context | Optional kubeconfig context name.                                                                                            |
+| `namespace`                   | No       | all namespaces  | Optional namespace scope. Also allows bare PodGroup names in `ids` mode. Required when `placement_records_enabled` is set.   |
+| `timeout_seconds`             | No       | `60`            | Timeout for each Kubernetes API request.                                                                                     |
+| `placement_records_enabled`   | No       | `false`         | Reads retained placement from the configured `kubernetes-daemon`; discovery fails if it cannot be read. Requires `namespace`, matching the one namespace the daemon watches. |
+
+The baseline KAI adapter does not require `kubernetes-daemon`. It uses live
+Pods only. If Pods are cleaned up before attribution, the execution context
+can have missing `nodes` or `pod_names`.
+
+#### `[eca.kai.kubernetes_daemon]`
+
+The KAI adapter reads from the same `kubernetes-daemon` installation used for
+Kueue (see [Kubernetes daemon](#kubernetes-daemon) above), scoped by KAI
+PodGroup UID instead of Kueue Workload UID; enable the KAI integration on
+that installation. Point the adapter at the Service:
+
+```toml
+[eca.kai]
+namespace = "team-a"
+placement_records_enabled = true
+
+[eca.kai.kubernetes_daemon]
+endpoint = "http://attribution-kubernetes-daemon.team-a.svc:8080"
+timeout_seconds = 10
+```
+
+`endpoint` is required when this section is present; `timeout_seconds`
+defaults to `10`. `auth` has the same proxy-only behavior as the Kueue daemon
+client; it does not enable authentication or TLS on the daemon.
+
+When enabled, daemon lookup is fail-closed. See the daemon reference above for
+transport, retention, and recovery limits.
 
 ### `[eca.static]`
 

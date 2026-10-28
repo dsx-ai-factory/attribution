@@ -12,6 +12,14 @@ watchTimeoutSeconds: 60
 jobsetVersion: v1alpha2
 retentionDays: 30
 
+integrations:
+  kueue:
+    enabled: false
+    workloadVersion: v1beta1
+  kai:
+    enabled: false
+    podGroupVersion: v2alpha2
+
 storage:
   sqlite:
     path: /data/placements.db
