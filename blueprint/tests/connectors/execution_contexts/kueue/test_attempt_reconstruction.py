@@ -1386,8 +1386,8 @@ def test_live_state_replaces_open_retained_attempt():
     assert reconciled["state"] == "COMPLETED"
     assert reconciled["kueue_state"] == "FINISHED_SUCCEEDED"
     assert reconciled["attempt_id"] == "retained-attempt"
-    assert reconciled["nodes"] == ["node-b"]
-    assert reconciled["pod_names"] == ["retry-pod"]
+    assert reconciled["nodes"] == ["node-a", "node-b"]
+    assert reconciled["pod_names"] == ["first-pod", "retry-pod"]
     assert reconciled["history_complete"] is False
 
 
