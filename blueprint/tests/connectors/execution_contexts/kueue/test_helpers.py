@@ -4,6 +4,10 @@
 from attribution_blueprint.connectors.execution_contexts.kueue.helpers import (
     controller_owner,
 )
+from attribution_blueprint.connectors.execution_contexts.kueue.pod_placement.models import (
+    OwnerIdentity,
+    WorkloadIdentity,
+)
 
 
 def test_controller_owner_requires_literal_true():
@@ -17,3 +21,8 @@ def test_controller_owner_requires_literal_true():
     assert controller_owner(resource(None)) is None
     assert controller_owner(resource(False)) is None
     assert controller_owner(resource(True))["uid"] == "job-uid"
+
+
+def test_legacy_placement_identity_imports_remain_available():
+    assert WorkloadIdentity("training", "workload-uid").uid == "workload-uid"
+    assert OwnerIdentity("batch/v1", "Job", "training", "job-uid").uid == "job-uid"
