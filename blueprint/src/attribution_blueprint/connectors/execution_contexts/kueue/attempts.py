@@ -8,9 +8,18 @@ from __future__ import annotations
 import hashlib
 import json
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime
 
-_RESTART_LABEL = "jobset.sigs.k8s.io/restart-attempt"
+from attribution_blueprint.kubernetes.attempts import (
+    RESTART_LABEL as _RESTART_LABEL,
+    controller_owner as _controller_owner,
+    latest_pod_observations as _pod_events,
+    observations_by_uid as _by_uid,
+    parse_time as _parse_time,
+    restart_attempt as _restart_attempt,
+    restart_starts as _restart_starts,
+    within as _within,
+)
 
 
 def attempt_id_for(
@@ -340,28 +349,6 @@ def _workload_boundaries(
     return boundaries
 
 
-def _restart_starts(observations: list[dict]) -> dict[str, str]:
-    starts = {}
-    for observation in observations:
-        if observation.get("kind") not in {"Job", "Pod"}:
-            continue
-        restart = _restart_attempt(observation)
-        if restart is None:
-            continue
-        status = observation.get("status") or {}
-        timestamp = (
-            status.get("startTime")
-            or observation.get("sourceTimestamp")
-            or observation.get("observedAt")
-        )
-        if timestamp and (
-            restart not in starts
-            or _parse_time(timestamp) < _parse_time(starts[restart])
-        ):
-            starts[restart] = timestamp
-    return starts
-
-
 def _starts(admissions: list[dict], restarts: dict[str, str]) -> list[dict]:
     starts = []
     ordered_restarts = sorted(
@@ -484,10 +471,11 @@ def _terminal_for(
                 and terminal["kind"] == "JobSet"
                 and terminal["uid"] == owner.get("uid")
             )
-            and _terminal_within(
+            and _within(
                 terminal["time"],
                 start["time"],
                 next_start,
+                include_end=True,
             )
             and (
                 workload_end is None
@@ -529,28 +517,6 @@ def _terminal_priority(terminal: dict) -> int:
     return 1
 
 
-def _terminal_within(
-    timestamp: str,
-    start: str,
-    end: str | None,
-) -> bool:
-    value = _parse_time(timestamp)
-    return value >= _parse_time(start) and (
-        end is None or value <= _parse_time(end)
-    )
-
-
-def _pod_events(observations: list[dict]) -> dict[str, dict]:
-    return {
-        uid: timeline[-1]
-        for uid, timeline in _by_uid(
-            item
-            for item in observations
-            if item.get("kind") == "Pod"
-        ).items()
-    }
-
-
 def _pod_in_attempt(
     observation: dict,
     restart_attempt: str,
@@ -563,47 +529,3 @@ def _pod_in_attempt(
     status = observation.get("status") or {}
     timestamp = status.get("startTime") or observation.get("observedAt")
     return bool(timestamp and _within(timestamp, start, end))
-
-
-def _restart_attempt(observation: dict) -> str | None:
-    labels = (observation.get("selectedMetadata") or {}).get("labels") or {}
-    value = labels.get(_RESTART_LABEL)
-    return str(value) if value is not None else None
-
-
-def _controller_owner(metadata: dict) -> dict | None:
-    controllers = [
-        owner
-        for owner in metadata.get("ownerReferences") or []
-        if owner.get("controller") is True
-        and owner.get("uid")
-        and owner.get("kind")
-    ]
-    return controllers[0] if len(controllers) == 1 else None
-
-
-def _by_uid(observations) -> dict[str, list[dict]]:
-    grouped = {}
-    for observation in observations:
-        uid = (observation.get("metadata") or {}).get("uid")
-        if uid:
-            grouped.setdefault(uid, []).append(observation)
-    for timeline in grouped.values():
-        timeline.sort(key=lambda item: _parse_time(item["observedAt"]))
-    return grouped
-
-
-def _within(timestamp: str, start: str, end: str | None) -> bool:
-    value = _parse_time(timestamp)
-    return value >= _parse_time(start) and (
-        end is None or value < _parse_time(end)
-    )
-
-
-def _parse_time(value: str) -> datetime:
-    parsed = datetime.fromisoformat(value)
-    return (
-        parsed.replace(tzinfo=timezone.utc)
-        if parsed.tzinfo is None
-        else parsed.astimezone(timezone.utc)
-    )
