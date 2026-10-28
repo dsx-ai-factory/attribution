@@ -1077,6 +1077,36 @@ class KueueExecutionContextAdapter:
                     not in {"COMPLETED", "PREEMPTED", "NODE_FAIL"}
                 ):
                     updated["state"] = "NODE_FAIL"
+                updated["nodes"] = sorted(
+                    set(updated.get("nodes") or [])
+                    | set(live.get("nodes") or [])
+                )
+                updated["pod_names"] = sorted(
+                    set(updated.get("pod_names") or [])
+                    | set(live.get("pod_names") or [])
+                )
+                placements_by_uid = {
+                    placement["pod_uid"]: placement
+                    for placement in updated.get("pod_placements") or []
+                    if placement.get("pod_uid")
+                }
+                for placement in live.get("pod_placements") or []:
+                    if placement.get("pod_uid"):
+                        placements_by_uid.setdefault(
+                            placement["pod_uid"],
+                            placement,
+                        )
+                if placements_by_uid:
+                    updated["pod_placements"] = [
+                        placements_by_uid[pod_uid]
+                        for pod_uid in sorted(placements_by_uid)
+                    ]
+                pod_nodes = dict(updated.get("pod_nodes") or {})
+                pod_nodes.update(live.get("pod_nodes") or {})
+                if pod_nodes:
+                    updated["pod_nodes"] = pod_nodes
+                if live.get("failed_node"):
+                    updated["failed_node"] = live["failed_node"]
                 reconciled[match_index] = updated
             else:
                 reconciled.append(live)
