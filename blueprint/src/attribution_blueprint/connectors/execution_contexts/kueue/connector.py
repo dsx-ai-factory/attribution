@@ -12,9 +12,8 @@ Wire-format mapping vs. the Slurm adapter:
     Slurm field        Kueue analog
     -----------------  -----------------------------------------------------
     sluid              Workload.metadata.uid (carried as `workload_uid`)
-    attempt_id         Workload.metadata.uid (per-attempt: Kueue creates a
-                       new Workload per requeue, so its uid is the natural
-                       attempt key — analogous to Slurm's SLUID)
+    attempt_id         Canonical Workload UID + admission boundary + JobSet
+                       restart generation identity
     job_id             "<namespace>/<name>" of the Workload object
     state              Service-facing scheduler state. Terminal Kueue states
                        are normalized to COMPLETED, FAILED, TIMEOUT,
@@ -73,6 +72,7 @@ from loguru import logger
 from attribution_blueprint.connectors.execution_contexts.kueue.attempts import (
     WorkloadAttempt,
     attempts_from_workload_history,
+    live_attempt_identity,
 )
 from attribution_blueprint.connectors.execution_contexts.kueue.helpers import (
     POD_JOBSET_LABEL as _POD_JOBSET_LABEL,
@@ -136,6 +136,7 @@ class KueueExecutionContext(TypedDict):
     queue_name: NotRequired[str]
     priority_class: NotRequired[int]
     gpu_count: NotRequired[int]
+    attempt_identity_resolved: NotRequired[bool]
     # Pod names belonging to this Workload at the time of discovery. Empty
     # list when the owner type isn't supported or all pods have been
     # garbage-collected.
@@ -718,21 +719,31 @@ def _parse_workload(
     kueue_state = _derive_state(conditions)
     state = _service_state(kueue_state, workload, pods, owner_jobs)
 
-    start_time = _earliest_condition_time(conditions, _COND_ADMITTED)
+    # `pods` is pooled across every workload in the batch, so a same-named JobSet in another namespace
+    #  would otherwise leak its pods (and overwrite `pod_nodes`) into this workload.
+    own_pods = [pod for pod in pods if ((pod.get("metadata") or {}).get("namespace") or "default") == namespace]
+    selector = _pod_selector_for(workload)
+    member_pods = [
+        pod
+        for pod in own_pods
+        if selector is not None and _pod_matches_selector(pod, selector)
+    ]
+    identity = live_attempt_identity(
+        workload,
+        [*member_pods, *_jobs_for_workload(workload, owner_jobs)],
+    )
+    if identity is None:
+        logger.info(
+            f"workload {namespace}/{name} has no stable live identity; skipping"
+        )
+        return None
+
+    start_time = identity.start_time
     end_time = _condition_time(conditions, _COND_FINISHED)
     if end_time is None:
         evicted = _condition_time(conditions, _COND_EVICTED)
         if evicted is not None:
             end_time = evicted
-    if start_time is None:
-        # Fall back to the workload's creationTimestamp — for never-admitted
-        # workloads it's the only timestamp Kubernetes guarantees to populate.
-        start_time = _parse_dt(meta.get("creationTimestamp"))
-
-    if start_time is None:
-        logger.warning(f"workload {namespace}/{name} has no start time; skipping")
-        return None
-
     if end_time is None:
         # Active workload — substitute now() as the evidence-collection end,
         # mirroring the Slurm adapter's behavior for RUNNING ExecutionContexts. Re-running
@@ -740,14 +751,10 @@ def _parse_workload(
         end_time = now
         logger.debug(f"workload {namespace}/{name} not finished; substituting now() for end_time")
 
-    # `pods` is pooled across every workload in the batch. The JobSet label is
-    # only unique within a namespace, so a same-named JobSet elsewhere would
-    # otherwise leak its pods (and overwrite `pod_nodes`) into this workload.
-    own_pods = [pod for pod in pods if ((pod.get("metadata") or {}).get("namespace") or "default") == namespace]
-    evidence = _collect_pod_evidence(own_pods, _pod_selector_for(workload))
+    evidence = _collect_pod_evidence(own_pods, selector)
 
     ctx: KueueExecutionContext = {
-        "id": uid,
+        "id": identity.attempt_id,
         # V2 accepts scheduler identity as a string, allowing service rules and
         # provenance to distinguish Kueue from other execution-context sources.
         "workload_type": "kueue",
@@ -759,10 +766,10 @@ def _parse_workload(
         "end_time": end_time,
         "job_id": f"{namespace}/{name}",
         "workload_uid": uid,
-        # `attempt_id` is the scheduler-agnostic per-attempt key used by
-        # the sqlite output's unique-row constraint. Kueue creates a new
-        # Workload per requeue, so its uid is the natural attempt key.
-        "attempt_id": uid,
+        # Live and retained discovery share the Workload/admission/restart
+        # identity so separate runs upsert the same persisted execution.
+        "attempt_id": identity.attempt_id,
+        "attempt_identity_resolved": identity.boundary_resolved,
         "namespace": namespace,
         "state": state,
         "kueue_state": kueue_state,
@@ -787,7 +794,7 @@ def _parse_workload(
         ctx["pod_names"] = evidence.pod_names
     if len(evidence.pod_nodes) > 0:
         ctx["pod_nodes"] = evidence.pod_nodes
-    pod_placements = _live_pod_placements(own_pods, _pod_selector_for(workload))
+    pod_placements = _live_pod_placements(own_pods, selector)
     if pod_placements:
         ctx["pod_placements"] = pod_placements
 
@@ -1145,6 +1152,7 @@ class KueueExecutionContextAdapter:
                 attempt,
                 coverage,
             ),
+            "attempt_identity_resolved": True,
         }
         return context
 
