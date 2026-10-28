@@ -6,7 +6,7 @@ from attribution_blueprint.connectors.execution_contexts.kai.connector import (
     KaiExecutionContext,
     KaiExecutionContextAdapter,
 )
-from attribution_blueprint.connectors.execution_contexts.kubernetes_daemon import (
+from attribution_blueprint.connectors.execution_contexts.kubernetes.daemon import (
     build_kubernetes_daemon_client,
 )
 from attribution_blueprint.exceptions import MCAError

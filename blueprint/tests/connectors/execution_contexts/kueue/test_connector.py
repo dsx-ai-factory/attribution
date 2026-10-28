@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from attribution_blueprint.connectors.execution_contexts.kubernetes_client import (
+from attribution_blueprint.connectors.execution_contexts.kubernetes.client import (
     KubernetesClientError,
 )
 from attribution_blueprint.connectors.execution_contexts.kueue import (

@@ -5,7 +5,7 @@ import os
 
 from attribution_blueprint import mca_registry as _registry
 from attribution_blueprint.connectors.auth import MTLSAuth, TokenAuth
-from attribution_blueprint.connectors.execution_contexts.kubernetes_daemon import (
+from attribution_blueprint.connectors.execution_contexts.kubernetes.daemon import (
     build_kubernetes_daemon_client,
 )
 from attribution_blueprint.connectors.execution_contexts.kueue.connector import (
@@ -17,7 +17,7 @@ from attribution_blueprint.mca_registry import _PARAM
 
 
 def _build_prometheus_metrics(spec: dict):
-    from attribution_blueprint.connectors.execution_contexts.kueue.pod_placement.prometheus_resolver import (
+    from attribution_blueprint.connectors.execution_contexts.kueue.prometheus_placement import (
         PrometheusPlacementResolver,
     )
     from attribution_blueprint.mca import _coerce_float, _coerce_int

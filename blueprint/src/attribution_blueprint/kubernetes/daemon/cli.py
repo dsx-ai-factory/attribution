@@ -57,7 +57,7 @@ def main() -> None:
     custom_api = client.CustomObjectsApi(api_client)
     resource_resolvers = []
     if args.enable_kueue:
-        from attribution_blueprint.connectors.execution_contexts.kueue.pod_placement.resource_resolver import (
+        from attribution_blueprint.connectors.execution_contexts.kueue.resource_resolver import (
             KueueResourceResolver,
         )
 

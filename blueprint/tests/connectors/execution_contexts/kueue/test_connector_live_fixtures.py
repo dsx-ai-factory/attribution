@@ -17,7 +17,7 @@ import json
 from datetime import datetime, timezone
 from pathlib import Path
 
-from attribution_blueprint.connectors.execution_contexts.kubernetes_client import (
+from attribution_blueprint.connectors.execution_contexts.kubernetes.client import (
     KubernetesClientError,
 )
 from attribution_blueprint.connectors.execution_contexts.kueue import (
