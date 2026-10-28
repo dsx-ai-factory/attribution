@@ -16,3 +16,13 @@ rules:
   - apiGroups: [jobset.x-k8s.io]
     resources: [jobsets]
     verbs: [get, list, watch]
+{{- if .Values.integrations.kueue.enabled }}
+  - apiGroups: [kueue.x-k8s.io]
+    resources: [workloads]
+    verbs: [get, list, watch]
+{{- end }}
+{{- if .Values.integrations.kai.enabled }}
+  - apiGroups: [scheduling.run.ai]
+    resources: [podgroups]
+    verbs: [get, list, watch]
+{{- end }}

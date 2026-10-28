@@ -11,10 +11,10 @@ Before running it:
 3. Confirm that the Kueue Workload still exists. Owned pods are required for
    `kubectl logs`, but placement can be recovered after pod deletion.
 4. Confirm the Blueprint host can reach the Attribution Service and Loki.
-5. To recover Pod placement after deletion, install the recorder before
+5. To recover Pod placement after deletion, install `kubernetes-daemon` before
    workloads run, schedule it outside their failure domain, set
    `placement_records_enabled = true`, and configure
-   `[eca.kueue.placement_recorder]` with a reachable endpoint.
+   `[eca.kueue.kubernetes_daemon]` with a reachable endpoint.
 6. Prometheus placement recovery requires retained `kube_pod_info` and
    `kube_pod_labels` metrics, the
    `batch.kubernetes.io/controller-uid` Pod-label allowlist, and surviving

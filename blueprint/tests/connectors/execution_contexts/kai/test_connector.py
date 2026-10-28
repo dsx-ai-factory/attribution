@@ -12,6 +12,7 @@ from attribution_blueprint.connectors.execution_contexts.kai import KaiExecution
 from attribution_blueprint.connectors.execution_contexts.kai.connector import _resolve_owner
 from attribution_blueprint.connectors.execution_contexts.kubernetes_client import KubernetesClientError
 from attribution_blueprint.exceptions import MCAError
+from attribution_blueprint.kubernetes.daemon.models import PlacementRecord
 
 FIXTURES = Path(__file__).parent.parent.parent.parent / "fixtures"
 PODGROUPS = json.loads((FIXTURES / "kai_podgroups.json").read_text())
@@ -881,6 +882,49 @@ def test_time_range_keeps_only_intersecting_podgroups(mocker):
     assert [c["id"] for c in contexts] == ["uid-in"]
 
 
+def test_time_range_skips_placement_reads_for_excluded_podgroups(mocker):
+    later = _podgroup(created="2026-05-03T12:00:00Z")
+    _wire_kubectl(
+        mocker,
+        [later],
+        [],
+        [_job("pg-a-job", "uid-job-uid-pg-a", completed="2026-05-03T13:00:00Z")],
+    )
+    reader = mocker.Mock()
+    reader.list_for_resource.side_effect = RuntimeError("must not be called")
+    adapter = KaiExecutionContextAdapter(
+        namespace="team-alpha",
+        placement_records_enabled=True,
+        placement_reader=reader,
+    )
+
+    assert adapter.discover_by_time_range(START, END) == []
+    reader.list_for_resource.assert_not_called()
+
+
+def test_time_range_nodelist_includes_retained_nodes(mocker):
+    _wire_kubectl(mocker, [_podgroup()], [], [_job("pg-a-job", "uid-job-uid-pg-a")])
+    reader = mocker.Mock()
+    reader.list_for_resource.return_value = [
+        PlacementRecord(
+            namespace="team-alpha",
+            pod_name="deleted-0",
+            pod_uid="pod-uid-deleted",
+            node_name="node009",
+            observed_at="2026-05-01T12:05:00Z",
+        )
+    ]
+    adapter = KaiExecutionContextAdapter(
+        namespace="team-alpha",
+        placement_records_enabled=True,
+        placement_reader=reader,
+    )
+
+    contexts = adapter.discover_by_time_range(START, END, nodelist=["node009"])
+
+    assert [context["id"] for context in contexts] == ["uid-pg-a"]
+
+
 def test_time_range_nodelist_filters_on_member_pod_nodes(mocker):
     a = _podgroup(name="pg-a", uid="uid-a")
     b = _podgroup(name="pg-b", uid="uid-b")
@@ -1001,6 +1045,86 @@ def test_denied_jobset_lookup_fails_the_pass(mocker):
         KaiExecutionContextAdapter().discover_by_ids(["team-alpha/pg-a"])
 
 
+def test_out_of_namespace_id_rejected_before_kubernetes_read_when_placement_records_enabled(mocker):
+    fake = _wire_kubectl(mocker, [_podgroup()], [])
+    adapter = KaiExecutionContextAdapter(
+        namespace="team-alpha",
+        placement_records_enabled=True,
+        placement_reader=mocker.Mock(),
+    )
+
+    with pytest.raises(ValueError, match="outside configured namespace"):
+        adapter.discover_by_ids(["team-beta/pg-a"])
+
+    assert fake.calls == []
+
+
+def test_daemon_placements_restore_deleted_pod_and_node_failure(mocker):
+    _wire_kubectl(mocker, [_podgroup()], [], [_job("pg-a-job", "uid-job-uid-pg-a")])
+    reader = mocker.Mock()
+    reader.list_for_resource.return_value = [
+        PlacementRecord(
+            namespace="team-alpha",
+            pod_name="deleted-0",
+            pod_uid="pod-uid-deleted",
+            node_name="node009",
+            observed_at="2026-05-01T12:05:00Z",
+            node_failure_reason="NodeLost",
+        )
+    ]
+    adapter = KaiExecutionContextAdapter(
+        placement_records_enabled=True,
+        placement_reader=reader,
+    )
+
+    [ctx] = adapter.discover_by_ids(["team-alpha/pg-a"])
+
+    reader.list_for_resource.assert_called_once_with("team-alpha", "uid-pg-a")
+    assert ctx["state"] == "NODE_FAIL"
+    assert ctx["failed_node"] == "node009"
+    assert ctx["nodes"] == ["node009"]
+    assert ctx["pod_names"] == ["deleted-0"]
+    assert ctx["pod_nodes"] == {"deleted-0": "node009"}
+    assert ctx["pod_placements"] == [
+        {
+            "pod_uid": "pod-uid-deleted",
+            "pod_name": "deleted-0",
+            "node_name": "node009",
+            "source": "kubernetes_daemon",
+        }
+    ]
+
+
+def test_retained_placement_does_not_overwrite_live_pod_name_mapping(mocker):
+    pod = _pod(
+        "trainer-0",
+        node="node-live",
+        controller=("Job", "uid-job-uid-pg-a"),
+    )
+    _wire_kubectl(mocker, [_podgroup()], [pod])
+    reader = mocker.Mock()
+    reader.list_for_resource.return_value = [
+        PlacementRecord(
+            namespace="team-alpha",
+            pod_name="trainer-0",
+            pod_uid="pod-uid-deleted",
+            node_name="node-old",
+            observed_at="2026-05-01T12:05:00Z",
+        )
+    ]
+    adapter = KaiExecutionContextAdapter(
+        placement_records_enabled=True,
+        placement_reader=reader,
+    )
+
+    [ctx] = adapter.discover_by_ids(["team-alpha/pg-a"])
+
+    assert ctx["pod_nodes"] == {"trainer-0": "node-live"}
+    assert {placement["pod_uid"] for placement in ctx["pod_placements"]} == {
+        "pod-uid-deleted",
+    }
+
+
 def test_denied_podgroup_lookup_fails_instead_of_skipping(mocker):
     fake = _wire_kubectl(mocker, [], [])
     fake.failures["PodGroup"] = KubernetesClientError("Forbidden")
@@ -1031,3 +1155,43 @@ def test_builder_defaults_and_validation():
 
     with pytest.raises(MCAError, match="positive"):
         component.build({"timeout_seconds": 0}, ctx={"framework": "eca"})
+
+    with pytest.raises(MCAError, match="requires eca.kai.kubernetes_daemon"):
+        component.build(
+            {"namespace": "team-alpha", "placement_records_enabled": True},
+            ctx={"framework": "eca"},
+        )
+
+    with pytest.raises(MCAError, match="requires eca.kai.namespace"):
+        component.build(
+            {
+                "placement_records_enabled": True,
+                "kubernetes_daemon": {"endpoint": "http://daemon:8080"},
+            },
+            ctx={"framework": "eca"},
+        )
+
+
+def test_builder_coerces_cli_and_environment_boolean_strings():
+    component = mca_registry.get_component("eca", "kai")
+
+    disabled = component.build(
+        {"placement_records_enabled": "false"},
+        ctx={"framework": "eca"},
+    )
+    enabled = component.build(
+        {
+            "namespace": "team-alpha",
+            "placement_records_enabled": "true",
+            "kubernetes_daemon": {"endpoint": "http://daemon:8080"},
+        },
+        ctx={"framework": "eca"},
+    )
+
+    assert disabled.placement_records_enabled is False
+    assert enabled.placement_records_enabled is True
+    with pytest.raises(MCAError, match="must be a bool"):
+        component.build(
+            {"placement_records_enabled": "sometimes"},
+            ctx={"framework": "eca"},
+        )

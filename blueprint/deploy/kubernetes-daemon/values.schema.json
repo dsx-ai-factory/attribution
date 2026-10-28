@@ -5,6 +5,25 @@
     "queueSize": {"type": "integer", "minimum": 1},
     "workers": {"type": "integer", "minimum": 1},
     "retentionDays": {"type": "integer", "minimum": 1},
+    "integrations": {
+      "type": "object",
+      "properties": {
+        "kueue": {
+          "type": "object",
+          "properties": {
+            "enabled": {"type": "boolean"},
+            "workloadVersion": {"type": "string", "minLength": 1}
+          }
+        },
+        "kai": {
+          "type": "object",
+          "properties": {
+            "enabled": {"type": "boolean"},
+            "podGroupVersion": {"type": "string", "minLength": 1}
+          }
+        }
+      }
+    },
     "storage": {
       "type": "object",
       "required": ["sqlite"],
