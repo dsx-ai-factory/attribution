@@ -13,6 +13,99 @@ from datetime import datetime, timezone
 _RESTART_LABEL = "jobset.sigs.k8s.io/restart-attempt"
 
 
+def attempt_id_for(
+    workload_uid: str,
+    admission_key: str,
+    restart_attempt: str,
+) -> str:
+    """Return the canonical identity shared by live and retained discovery."""
+    canonical = json.dumps(
+        {
+            "admission": admission_key,
+            "restartAttempt": restart_attempt,
+            "workloadUid": workload_uid,
+        },
+        separators=(",", ":"),
+        sort_keys=True,
+    )
+    digest = hashlib.sha256(canonical.encode()).hexdigest()[:16]
+    return f"kueue:v1:{workload_uid}:{digest}"
+
+
+@dataclass(frozen=True)
+class LiveAttemptIdentity:
+    attempt_id: str
+    start_time: datetime
+    boundary_resolved: bool
+
+
+def live_attempt_identity(
+    workload: dict,
+    resources: list[dict],
+) -> LiveAttemptIdentity | None:
+    """Resolve the current live attempt using retained-history semantics."""
+    metadata = workload.get("metadata") or {}
+    workload_uid = metadata.get("uid")
+    admissions = _admissions([workload])
+    if not workload_uid:
+        return None
+    if not admissions:
+        created = metadata.get("creationTimestamp")
+        if not created:
+            return None
+        return LiveAttemptIdentity(
+            attempt_id=f"kueue:pre:v1:{workload_uid}",
+            start_time=_parse_time(created),
+            boundary_resolved=False,
+        )
+
+    admission = admissions[-1]
+    restart_values: set[str] = set()
+    restart_starts: dict[str, str] = {}
+    for resource in resources:
+        labels = (resource.get("metadata") or {}).get("labels") or {}
+        restart = labels.get(_RESTART_LABEL)
+        if restart is None:
+            continue
+        try:
+            restart_number = int(restart)
+        except (TypeError, ValueError):
+            return None
+        if restart_number < 0:
+            return None
+        restart_key = str(restart_number)
+        restart_values.add(restart_key)
+        timestamp = (
+            (resource.get("status") or {}).get("startTime")
+            or (resource.get("metadata") or {}).get("creationTimestamp")
+        )
+        if timestamp and (
+            restart_key not in restart_starts
+            or _parse_time(timestamp) < _parse_time(restart_starts[restart_key])
+        ):
+            restart_starts[restart_key] = timestamp
+
+    if restart_values:
+        restart_attempt = str(max(int(value) for value in restart_values))
+        restart_start = restart_starts.get(restart_attempt, admission["time"])
+    else:
+        owner = _controller_owner(metadata)
+        if owner is not None and owner.get("kind") == "JobSet":
+            return None
+        restart_attempt = "0"
+        restart_start = admission["time"]
+    start = max(admission["time"], restart_start, key=_parse_time)
+    return LiveAttemptIdentity(
+        attempt_id=attempt_id_for(
+            workload_uid,
+            admission["key"],
+            restart_attempt,
+        ),
+        start_time=_parse_time(start),
+        boundary_resolved=True,
+    )
+
+
 @dataclass(frozen=True)
 class WorkloadAttempt:
     workload_uid: str
@@ -30,17 +123,11 @@ class WorkloadAttempt:
 
     @property
     def attempt_id(self) -> str:
-        canonical = json.dumps(
-            {
-                "admission": self.admission_key,
-                "restartAttempt": self.restart_attempt,
-                "workloadUid": self.workload_uid,
-            },
-            separators=(",", ":"),
-            sort_keys=True,
+        return attempt_id_for(
+            self.workload_uid,
+            self.admission_key,
+            self.restart_attempt,
         )
-        digest = hashlib.sha256(canonical.encode()).hexdigest()[:16]
-        return f"kueue:v1:{self.workload_uid}:{digest}"
 
 
 def attempts_from_workload_history(

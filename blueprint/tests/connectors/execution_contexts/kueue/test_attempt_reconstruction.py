@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import sqlite3
 from copy import deepcopy
 from datetime import datetime, timezone
 from unittest.mock import MagicMock
@@ -11,10 +12,13 @@ import pytest
 
 from attribution_blueprint.connectors.execution_contexts.kueue.attempts import (
     attempts_from_workload_history,
+    live_attempt_identity,
 )
 from attribution_blueprint.connectors.execution_contexts.kueue.connector import (
     KueueExecutionContextAdapter,
+    _parse_workload,
 )
+from attribution_blueprint.connectors.outputs.sqlite import SQLiteOutput
 from attribution_blueprint.kubernetes.daemon.client import KubernetesDaemonClient
 from attribution_blueprint.kubernetes.daemon.health import HealthState
 from attribution_blueprint.kubernetes.daemon.models import (
@@ -971,6 +975,181 @@ def test_never_admitted_history_does_not_invent_running_attempt():
         now=datetime(2026, 10, 14, 12, 0, tzinfo=timezone.utc),
         workload_name="pending-workload",
     ) == []
+
+
+def test_live_attempt_without_admission_boundary_uses_explicit_pre_execution_identity():
+    workload = {
+        "metadata": {
+            "name": "pending-workload",
+            "namespace": "team-a",
+            "uid": "workload-uid",
+            "creationTimestamp": "2026-10-14T10:00:00Z",
+        },
+        "status": {"conditions": []},
+    }
+
+    identity = live_attempt_identity(workload, [])
+
+    assert identity is not None
+    assert identity.attempt_id == "kueue:pre:v1:workload-uid"
+    assert identity.boundary_resolved is False
+
+
+def test_live_jobset_attempt_without_restart_resources_does_not_invent_zero():
+    admitted = "2026-10-14T10:00:00Z"
+    owner = {
+        "apiVersion": "jobset.x-k8s.io/v1alpha2",
+        "kind": "JobSet",
+        "name": "training",
+        "uid": "jobset-uid",
+        "controller": True,
+    }
+    workload = {
+        "metadata": {
+            "name": "training-workload",
+            "namespace": "team-a",
+            "uid": "workload-uid",
+            "creationTimestamp": "2026-10-14T09:59:00Z",
+            "ownerReferences": [owner],
+        },
+        "status": {
+            "conditions": [
+                _condition("Admitted", admitted),
+            ]
+        },
+    }
+    history = {
+        "observations": [
+            {
+                "kind": "Workload",
+                "metadata": workload["metadata"],
+                "observedAt": admitted,
+                "status": workload["status"],
+            },
+            {
+                "kind": "Job",
+                "metadata": {
+                    "uid": "job-uid-1",
+                    "ownerReferences": [owner],
+                },
+                "selectedMetadata": {
+                    "labels": {_RESTART_LABEL: "1"},
+                },
+                "observedAt": "2026-10-14T10:30:00Z",
+                "status": {"startTime": "2026-10-14T10:30:00Z"},
+            },
+        ]
+    }
+
+    live_with_resources = live_attempt_identity(
+        workload,
+        [
+            {
+                "metadata": {
+                    "labels": {_RESTART_LABEL: "1"},
+                },
+                "status": {"startTime": "2026-10-14T10:30:00Z"},
+            }
+        ],
+    )
+    assert live_with_resources is not None
+    assert live_attempt_identity(workload, []) is None
+    [retained] = attempts_from_workload_history(
+        history,
+        workload_name="training-workload",
+        now=datetime(2026, 10, 14, 12, 0, tzinfo=timezone.utc),
+    )
+    assert retained.restart_attempt == "1"
+    assert live_with_resources.attempt_id == retained.attempt_id
+
+
+def test_live_then_retained_discovery_writes_one_execution_context(tmp_path):
+    admitted = "2026-10-14T10:00:00Z"
+    finished = "2026-10-14T11:00:00Z"
+    workload = {
+        "metadata": {
+            "name": "training-workload",
+            "namespace": "team-a",
+            "uid": "workload-uid",
+            "ownerReferences": [
+                {
+                    "apiVersion": "batch/v1",
+                    "kind": "Job",
+                    "name": "training",
+                    "uid": "job-uid",
+                    "controller": True,
+                }
+            ],
+        },
+        "status": {
+            "conditions": [
+                _condition("Admitted", admitted),
+                _condition("Finished", finished, reason="Succeeded"),
+            ]
+        },
+    }
+    pod = {
+        "metadata": {
+            "name": "training-pod",
+            "namespace": "team-a",
+            "uid": "pod-uid",
+            "creationTimestamp": "2026-10-14T10:01:00Z",
+            "labels": {
+                "batch.kubernetes.io/controller-uid": "job-uid",
+            },
+        },
+        "spec": {"nodeName": "node-a"},
+        "status": {"startTime": "2026-10-14T10:01:00Z"},
+    }
+    live = _parse_workload(
+        workload,
+        [pod],
+        {},
+        datetime(2026, 10, 14, 12, 0, tzinfo=timezone.utc),
+    )
+    assert live is not None
+
+    history = {
+        "observations": [
+            {
+                "kind": "Workload",
+                "metadata": workload["metadata"],
+                "observedAt": admitted,
+                "status": workload["status"],
+            }
+        ]
+    }
+    [attempt] = attempts_from_workload_history(
+        history,
+        workload_name="training-workload",
+        now=datetime(2026, 10, 14, 12, 0, tzinfo=timezone.utc),
+    )
+    retained = KueueExecutionContextAdapter._context_from_history_attempt(
+        attempt,
+        [],
+        {},
+    )
+    assert live["attempt_id"] == retained["attempt_id"]
+
+    db = tmp_path / "attributions.db"
+    result = {"verdict": {"attribution_outcome": "Pass"}}
+    live_output = SQLiteOutput(str(db))
+    live_output.write(live, result)
+    live_output.close()
+    retained_output = SQLiteOutput(str(db))
+    retained_output.write(retained, result)
+    retained_output.close()
+
+    with sqlite3.connect(db) as connection:
+        context_count = connection.execute(
+            "SELECT COUNT(*) FROM execution_context"
+        ).fetchone()[0]
+        run_count = connection.execute(
+            "SELECT COUNT(*) FROM attribution_run"
+        ).fetchone()[0]
+
+    assert context_count == 1
+    assert run_count == 2
 
 
 def test_live_state_replaces_open_retained_attempt():
