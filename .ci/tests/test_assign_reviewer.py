@@ -54,7 +54,9 @@ def fake_github(monkeypatch: pytest.MonkeyPatch, pull: dict, timeline: list[dict
 
     monkeypatch.setattr(ar, "github", github)
     monkeypatch.setattr(
-        ar, "github_pages", lambda token, path: timeline if "timeline" in path else TEAM if "teams" in path else [pull]
+        ar,
+        "github_pages",
+        lambda token, path: timeline if "timeline" in path else TEAM if ar.MAINTAINER_TEAM in path else [pull],
     )
     monkeypatch.setenv("SLACK_USER_IDS", '{"author": "UA", "alice": "U1", "bob": "U2", "carol": "U3"}')
     monkeypatch.setenv("ONCALL_SLACK", '{"channel": "CHAN", "group": "S1"}')
@@ -357,6 +359,21 @@ def test_outside_pr_opened_tags_oncall(monkeypatch: pytest.MonkeyPatch) -> None:
     bot["user"]["type"] = "Bot"
     fake_github(monkeypatch, bot, [])
     assert ar.assign("t", "t", "o/r", opened) == []
+
+
+def test_maintainer_team_sets_outside_authors_and_primaries(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A non-maintainer is an outside author, and only a maintainer becomes primary."""
+    opened = {"action": "opened", "pull_request": {"number": 7}, "sender": {"login": "alice"}}
+    fake_github(monkeypatch, pr(author="alice"), [])
+    monkeypatch.setattr(
+        ar,
+        "github_pages",
+        lambda token, path: [] if "timeline" in path else TEAM[3:] if ar.MAINTAINER_TEAM in path else TEAM,
+    )
+    assert [(m["channel"], m["text"].splitlines()[0]) for m in ar.assign("t", "t", "o/r", opened)] == [
+        ("CHAN", "<!subteam^S1> New pull request from alice: fix: thing"),
+        ("U3", "You are the primary reviewer: fix: thing"),
+    ]
 
 
 def test_no_eligible_reviewer_asks_oncall(monkeypatch: pytest.MonkeyPatch) -> None:
