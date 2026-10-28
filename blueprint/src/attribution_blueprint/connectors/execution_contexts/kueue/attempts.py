@@ -42,86 +42,6 @@ def attempt_id_for(
 
 
 @dataclass(frozen=True)
-class LiveAttemptIdentity:
-    attempt_id: str
-    admission_key: str | None
-    restart_attempt: str
-    start_time: datetime
-    boundary_resolved: bool
-
-
-def live_attempt_identity(
-    workload: dict,
-    resources: list[dict],
-) -> LiveAttemptIdentity | None:
-    """Resolve the current live attempt using retained-history semantics."""
-    metadata = workload.get("metadata") or {}
-    workload_uid = metadata.get("uid")
-    admissions = _admissions([workload])
-    if not workload_uid:
-        return None
-    if not admissions:
-        created = metadata.get("creationTimestamp")
-        if not created:
-            return None
-        return LiveAttemptIdentity(
-            attempt_id=f"kueue:pre:v1:{workload_uid}",
-            admission_key=None,
-            restart_attempt="0",
-            start_time=_parse_time(created),
-            boundary_resolved=False,
-        )
-
-    admission = admissions[-1]
-    restart_values: set[str] = set()
-    restart_starts: dict[str, str] = {}
-    for resource in resources:
-        labels = (resource.get("metadata") or {}).get("labels") or {}
-        restart = labels.get(_RESTART_LABEL)
-        if restart is None:
-            continue
-        try:
-            restart_number = int(restart)
-        except (TypeError, ValueError):
-            return None
-        if restart_number < 0:
-            return None
-        restart_key = str(restart_number)
-        restart_values.add(restart_key)
-        timestamp = (
-            (resource.get("status") or {}).get("startTime")
-            or (resource.get("metadata") or {}).get("creationTimestamp")
-        )
-        if timestamp and (
-            restart_key not in restart_starts
-            or _parse_time(timestamp) < _parse_time(restart_starts[restart_key])
-        ):
-            restart_starts[restart_key] = timestamp
-
-    if restart_values:
-        restart_attempt = str(max(int(value) for value in restart_values))
-        restart_start = restart_starts.get(restart_attempt, admission["time"])
-    else:
-        owner = _controller_owner(metadata)
-        if owner is not None and owner.get("kind") == "JobSet":
-            return None
-        restart_attempt = "0"
-        restart_start = admission["time"]
-    start = max(admission["time"], restart_start, key=_parse_time)
-    return LiveAttemptIdentity(
-        attempt_id=attempt_id_for(
-            workload_uid,
-            admission["key"],
-            restart_attempt,
-        ),
-        admission_key=admission["key"],
-        restart_attempt=restart_attempt,
-        start_time=_parse_time(start),
-        boundary_resolved=True,
-    )
-
-
-@dataclass(frozen=True)
 class WorkloadAttempt:
     workload_uid: str
     namespace: str
@@ -135,6 +55,7 @@ class WorkloadAttempt:
     open: bool
     boundary_resolved: bool
     pod_uids: frozenset[str]
+    job_uids: frozenset[str] = frozenset()
 
     @property
     def attempt_id(self) -> str:
@@ -156,12 +77,15 @@ def attempts_from_workload_history(
     workloads = _by_uid(
         item
         for item in observations
-        if item.get("kind") == "Workload"
-        and (item.get("metadata") or {}).get("name") == workload_name
+        if item.get("kind") == "Workload" and (item.get("metadata") or {}).get("name") == workload_name
     )
     restart_starts = _restart_starts(observations)
     terminals = _terminal_events(observations)
     pod_events = _pod_events(observations)
+    job_events = {
+        uid: timeline[-1]
+        for uid, timeline in _by_uid(item for item in observations if item.get("kind") == "Job").items()
+    }
     workload_boundaries = _workload_boundaries(workloads)
     attempts = []
     for workload_uid, timeline in workloads.items():
@@ -175,10 +99,7 @@ def attempts_from_workload_history(
             restart: timestamp
             for restart, timestamp in restart_starts.items()
             if _parse_time(timestamp) >= _parse_time(first_admission)
-            and (
-                boundary.end is None
-                or _parse_time(timestamp) < _parse_time(boundary.end)
-            )
+            and (boundary.end is None or _parse_time(timestamp) < _parse_time(boundary.end))
         }
         prior_restarts = [
             (restart, timestamp)
@@ -194,18 +115,10 @@ def attempts_from_workload_history(
         starts = _starts(admissions, scoped_restarts)
         owner = _controller_owner(latest_metadata)
         for index, start in enumerate(starts):
-            next_start = (
-                starts[index + 1]["time"]
-                if index + 1 < len(starts)
-                else None
-            )
+            next_start = starts[index + 1]["time"] if index + 1 < len(starts) else None
             workload_end = boundary.end
             attempt_end = min(
-                (
-                    boundary
-                    for boundary in (next_start, workload_end)
-                    if boundary is not None
-                ),
+                (boundary for boundary in (next_start, workload_end) if boundary is not None),
                 key=_parse_time,
                 default=None,
             )
@@ -236,17 +149,24 @@ def attempts_from_workload_history(
                     start_time=_parse_time(start["time"]),
                     end_time=end_time,
                     terminal=terminal,
-                    open=(
-                        terminal is None
-                        and attempt_end is None
-                        and not boundary.retired
-                    ),
+                    open=(terminal is None and attempt_end is None and not boundary.retired),
                     boundary_resolved=boundary.resolved,
                     pod_uids=frozenset(
                         uid
                         for uid, event in pod_events.items()
                         if boundary.resolved
-                        and _pod_in_attempt(
+                        and _resource_in_attempt(
+                            event,
+                            start["restart_attempt"],
+                            start["time"],
+                            attempt_end,
+                        )
+                    ),
+                    job_uids=frozenset(
+                        uid
+                        for uid, event in job_events.items()
+                        if boundary.resolved
+                        and _resource_in_attempt(
                             event,
                             start["restart_attempt"],
                             start["time"],
@@ -264,6 +184,130 @@ def attempts_from_workload_history(
     )
 
 
+def attempts_from_live_resources(
+    workload: dict,
+    pods: list[dict],
+    jobs: list[dict],
+    *,
+    now: datetime,
+) -> list[WorkloadAttempt]:
+    """Normalize live Kubernetes resources into retained-history evidence."""
+    workload_metadata = workload.get("metadata") or {}
+    workload_name = workload_metadata.get("name")
+    if not workload_name or not workload_metadata.get("uid"):
+        return []
+    pods = [
+        pod
+        for pod in pods
+        if (pod.get("metadata") or {}).get("uid")
+    ]
+    jobs = [
+        job
+        for job in jobs
+        if (job.get("metadata") or {}).get("uid")
+    ]
+    owner = _controller_owner(workload.get("metadata") or {})
+    if (
+        owner is not None
+        and owner.get("kind") == "JobSet"
+        and not any(
+            ((resource.get("metadata") or {}).get("labels") or {}).get(_RESTART_LABEL) is not None
+            for resource in [*pods, *jobs]
+        )
+    ):
+        return []
+    observed_at = now.isoformat()
+    admissions = _admissions(
+        [
+            {
+                "status": workload.get("status") or {},
+            }
+        ]
+    )
+    resource_fallback = admissions[-1]["time"] if admissions else observed_at
+
+    def observation(resource: dict, kind: str) -> dict:
+        metadata = resource.get("metadata") or {}
+        selected_metadata = {
+            field: dict(values) for field in ("annotations", "labels") if (values := metadata.get(field) or {})
+        }
+        if metadata.get("deletionTimestamp"):
+            selected_metadata["deletionTimestamp"] = metadata["deletionTimestamp"]
+        return {
+            "apiVersion": resource.get("apiVersion") or "",
+            "kind": kind,
+            "metadata": {
+                "namespace": metadata.get("namespace") or "",
+                "name": metadata.get("name") or "",
+                "uid": metadata["uid"],
+                "ownerReferences": metadata.get("ownerReferences") or [],
+            },
+            "eventType": "MODIFIED",
+            "observedAt": (
+                (resource.get("status") or {}).get("startTime")
+                or metadata.get("creationTimestamp")
+                or resource_fallback
+            ),
+            "selectedMetadata": selected_metadata or None,
+            "spec": resource.get("spec") or {},
+            "status": resource.get("status") or {},
+        }
+
+    history = {
+        "observations": [
+            observation(workload, "Workload"),
+            *(observation(job, "Job") for job in jobs),
+            *(observation(pod, "Pod") for pod in pods),
+        ]
+    }
+    attempts = attempts_from_workload_history(
+        history,
+        workload_name=workload_name,
+        now=now,
+    )
+    return attempts[-1:]
+
+
+def merge_attempts(
+    attempts: list[WorkloadAttempt],
+) -> WorkloadAttempt:
+    """Union evidence for one canonical attempt before context construction."""
+    if not attempts:
+        raise ValueError("at least one attempt is required")
+    attempt_ids = {attempt.attempt_id for attempt in attempts}
+    if len(attempt_ids) != 1:
+        raise ValueError("cannot merge different Kueue attempts")
+    first = attempts[0]
+    terminals = [attempt.terminal for attempt in attempts if attempt.terminal is not None]
+    terminal = min(
+        terminals,
+        key=lambda item: (
+            -_terminal_priority(item),
+            _parse_time(item["time"]),
+        ),
+        default=None,
+    )
+    end_time = _parse_time(terminal["time"]) if terminal is not None else max(attempt.end_time for attempt in attempts)
+    return WorkloadAttempt(
+        workload_uid=first.workload_uid,
+        namespace=first.namespace,
+        workload_name=first.workload_name,
+        owner_kind=next(
+            (attempt.owner_kind for attempt in attempts if attempt.owner_kind is not None),
+            None,
+        ),
+        admission_key=first.admission_key,
+        restart_attempt=first.restart_attempt,
+        start_time=min(attempt.start_time for attempt in attempts),
+        end_time=end_time,
+        terminal=terminal,
+        open=terminal is None and any(attempt.open for attempt in attempts),
+        boundary_resolved=all(attempt.boundary_resolved for attempt in attempts),
+        pod_uids=frozenset().union(*(attempt.pod_uids for attempt in attempts)),
+        job_uids=frozenset().union(*(attempt.job_uids for attempt in attempts)),
+    )
+
+
 @dataclass(frozen=True)
 class _WorkloadBoundary:
     end: str | None
@@ -277,11 +321,7 @@ def _admissions(timeline: list[dict]) -> list[dict]:
     for observation in timeline:
         for condition in (observation.get("status") or {}).get("conditions") or []:
             transition = condition.get("lastTransitionTime")
-            if (
-                condition.get("type") == "Admitted"
-                and condition.get("status") == "True"
-                and transition
-            ):
+            if condition.get("type") == "Admitted" and condition.get("status") == "True" and transition:
                 key = str(condition.get("transitionID") or transition)
                 boundaries[key] = {
                     "key": key,
@@ -308,22 +348,13 @@ def _workload_boundaries(
         )
     incarnations.sort()
     boundaries = {}
-    for index, (_first_seen, workload_uid, timeline, _admitted_at) in enumerate(
-        incarnations
-    ):
-        deletion_observations = [
-            observation
-            for observation in timeline
-            if observation.get("eventType") == "DELETED"
-        ]
+    for index, (_first_seen, workload_uid, timeline, _admitted_at) in enumerate(incarnations):
+        deletion_observations = [observation for observation in timeline if observation.get("eventType") == "DELETED"]
         deletion = min(
             (
                 selected_metadata["deletionTimestamp"]
                 for observation in deletion_observations
-                if (
-                    selected_metadata := observation.get("selectedMetadata")
-                    or {}
-                ).get("deletionTimestamp")
+                if (selected_metadata := observation.get("selectedMetadata") or {}).get("deletionTimestamp")
             ),
             key=_parse_time,
             default=None,
@@ -332,9 +363,7 @@ def _workload_boundaries(
             (
                 condition["lastTransitionTime"]
                 for observation in timeline
-                for condition in (
-                    (observation.get("status") or {}).get("conditions") or []
-                )
+                for condition in ((observation.get("status") or {}).get("conditions") or [])
                 if condition.get("status") == "True"
                 and condition.get("type") == "Finished"
                 and condition.get("lastTransitionTime")
@@ -345,19 +374,13 @@ def _workload_boundaries(
         replacement = next(
             (
                 admitted_at
-                for _sort_time, _uid, _timeline, admitted_at in incarnations[
-                    index + 1 :
-                ]
+                for _sort_time, _uid, _timeline, admitted_at in incarnations[index + 1 :]
                 if admitted_at is not None
             ),
             None,
         )
         end = min(
-            (
-                boundary
-                for boundary in (deletion, terminal, replacement)
-                if boundary is not None
-            ),
+            (boundary for boundary in (deletion, terminal, replacement) if boundary is not None),
             key=_parse_time,
             default=None,
         )
@@ -367,11 +390,7 @@ def _workload_boundaries(
             end=end,
             retired=retired,
             resolved=not retired or end is not None,
-            allow_owner_at_end=(
-                terminal is not None
-                and end is not None
-                and _parse_time(terminal) == _parse_time(end)
-            ),
+            allow_owner_at_end=(terminal is not None and end is not None and _parse_time(terminal) == _parse_time(end)),
         )
     return boundaries
 
@@ -383,11 +402,7 @@ def _starts(admissions: list[dict], restarts: dict[str, str]) -> list[dict]:
         key=lambda item: (_parse_time(item[1]), item[0]),
     )
     for index, admission in enumerate(admissions):
-        next_admission = (
-            admissions[index + 1]["time"]
-            if index + 1 < len(admissions)
-            else None
-        )
+        next_admission = admissions[index + 1]["time"] if index + 1 < len(admissions) else None
         active_at_boundary = [
             (restart, timestamp)
             for restart, timestamp in ordered_restarts
@@ -397,18 +412,13 @@ def _starts(admissions: list[dict], restarts: dict[str, str]) -> list[dict]:
             (restart, timestamp)
             for restart, timestamp in ordered_restarts
             if _parse_time(timestamp) > _parse_time(admission["time"])
-            and (
-                next_admission is None
-                or _parse_time(timestamp) < _parse_time(next_admission)
-            )
+            and (next_admission is None or _parse_time(timestamp) < _parse_time(next_admission))
         ]
         if active_at_boundary:
             seed_restart = active_at_boundary[-1][0]
             scoped_restarts = [(seed_restart, admission["time"])]
             scoped_restarts.extend(
-                (restart, timestamp)
-                for restart, timestamp in subsequent_restarts
-                if restart != seed_restart
+                (restart, timestamp) for restart, timestamp in subsequent_restarts if restart != seed_restart
             )
         elif subsequent_restarts:
             scoped_restarts = subsequent_restarts
@@ -436,16 +446,36 @@ def _terminal_events(observations: list[dict]) -> list[dict]:
         if kind not in {"Workload", "Job", "JobSet"}:
             continue
         status = observation.get("status") or {}
+        requeued_at = max(
+            (
+                condition["lastTransitionTime"]
+                for condition in status.get("conditions") or []
+                if condition.get("type") == "Requeued"
+                and condition.get("status") == "True"
+                and condition.get("lastTransitionTime")
+            ),
+            key=_parse_time,
+            default=None,
+        )
         for condition in status.get("conditions") or []:
             condition_type = condition.get("type")
             transition = condition.get("lastTransitionTime")
+            if (
+                kind == "Workload"
+                and condition_type == "Evicted"
+                and requeued_at is not None
+                and transition is not None
+                and _parse_time(requeued_at) >= _parse_time(transition)
+            ):
+                continue
             supported = (
                 kind == "Workload"
                 and condition_type in {"Evicted", "Finished"}
                 or kind == "Job"
                 and condition_type in {"Failed", "Complete"}
                 or kind == "JobSet"
-                and condition_type in {
+                and condition_type
+                in {
                     "RestartingJobSet",
                     "Completed",
                     "Failed",
@@ -457,6 +487,15 @@ def _terminal_events(observations: list[dict]) -> list[dict]:
                 {
                     "kind": kind,
                     "uid": (observation.get("metadata") or {}).get("uid"),
+                    "owner_uid": (
+                        owner["uid"]
+                        if (
+                            owner := _controller_owner(
+                                observation.get("metadata") or {}
+                            )
+                        )
+                        else None
+                    ),
                     "type": condition_type,
                     "reason": condition.get("reason"),
                     "time": transition,
@@ -464,8 +503,7 @@ def _terminal_events(observations: list[dict]) -> list[dict]:
                         _restart_attempt(observation)
                         if kind == "Job"
                         else str(max(int(status.get("restarts") or 0) - 1, 0))
-                        if kind == "JobSet"
-                        and condition_type == "RestartingJobSet"
+                        if kind == "JobSet" and condition_type == "RestartingJobSet"
                         else None
                     ),
                 }
@@ -487,40 +525,54 @@ def _terminal_for(
         terminal
         for terminal in terminals
         if (
-                terminal["kind"] == "Workload"
-                and terminal["uid"] == workload_uid
-                or owner is not None
-                and owner.get("kind") == "Job"
-                and terminal["kind"] == "Job"
-                and terminal["uid"] == owner.get("uid")
+            terminal["kind"] == "Workload"
+            and terminal["uid"] == workload_uid
+            or owner is not None
+            and owner.get("kind") == "Job"
+            and terminal["kind"] == "Job"
+            and terminal["uid"] == owner.get("uid")
+            or owner is not None
+            and owner.get("kind") == "JobSet"
+            and terminal["kind"] == "JobSet"
+            and terminal["uid"] == owner.get("uid")
                 or owner is not None
                 and owner.get("kind") == "JobSet"
-                and terminal["kind"] == "JobSet"
-                and terminal["uid"] == owner.get("uid")
+                and terminal["kind"] == "Job"
+                and terminal["type"] == "Failed"
+                and terminal["owner_uid"] == owner.get("uid")
+        )
+        and _within(
+            terminal["time"],
+            start["time"],
+            next_start,
+            include_end=True,
+        )
+        and (
+            workload_end is None
+            or _parse_time(terminal["time"]) < _parse_time(workload_end)
+            or (
+                (terminal["kind"] == "Workload" and terminal["uid"] == workload_uid or allow_owner_at_workload_end)
+                and _parse_time(terminal["time"]) == _parse_time(workload_end)
             )
-            and _within(
-                terminal["time"],
-                start["time"],
-                next_start,
-                include_end=True,
-            )
-            and (
-                workload_end is None
-                or _parse_time(terminal["time"]) < _parse_time(workload_end)
-                or (
-                    (
-                        terminal["kind"] == "Workload"
-                        and terminal["uid"] == workload_uid
-                        or allow_owner_at_workload_end
-                    )
-                    and _parse_time(terminal["time"]) == _parse_time(workload_end)
-                )
-            )
-            and terminal["restart_attempt"] in {
-                None,
-                start["restart_attempt"],
-            }
+        )
+        and terminal["restart_attempt"]
+        in {
+            None,
+            start["restart_attempt"],
+        }
     ]
+    if owner is not None and owner.get("kind") == "JobSet":
+        child_failures = [
+            terminal
+            for terminal in candidates
+            if terminal["kind"] == "Job"
+            and terminal["type"] == "Failed"
+        ]
+        if child_failures:
+            return min(
+                child_failures,
+                key=lambda terminal: _parse_time(terminal["time"]),
+            )
     return min(
         candidates,
         key=lambda terminal: (
@@ -533,18 +585,14 @@ def _terminal_for(
 
 def _terminal_priority(terminal: dict) -> int:
     """Prefer specific owner outcomes over aggregate Workload failures."""
-    if (
-        terminal["kind"] == "Job"
-        and terminal["type"] == "Failed"
-        and terminal.get("reason") == "DeadlineExceeded"
-    ):
+    if terminal["kind"] == "Job" and terminal["type"] == "Failed" and terminal.get("reason") == "DeadlineExceeded":
         return 3
     if terminal["kind"] in {"Job", "JobSet"}:
         return 2
     return 1
 
 
-def _pod_in_attempt(
+def _resource_in_attempt(
     observation: dict,
     restart_attempt: str,
     start: str,
