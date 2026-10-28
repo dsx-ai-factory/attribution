@@ -47,11 +47,11 @@ from typing import NotRequired, TypedDict
 import yaml
 from loguru import logger
 
-from attribution_blueprint.connectors.execution_contexts.kubernetes_client import (
+from attribution_blueprint.connectors.execution_contexts.kubernetes.client import (
     KubernetesClient,
     KubernetesClientError,
 )
-from attribution_blueprint.connectors.execution_contexts.kubernetes_helpers import (
+from attribution_blueprint.connectors.execution_contexts.kubernetes.helpers import (
     earliest_job_failure_reason,
     job_time_limit_minutes,
 )

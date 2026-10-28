@@ -3,7 +3,7 @@
 
 import pytest
 
-from attribution_blueprint.connectors.execution_contexts.kubernetes_helpers import (
+from attribution_blueprint.connectors.execution_contexts.kubernetes.helpers import (
     earliest_job_failure_reason,
     job_time_limit_minutes,
 )
