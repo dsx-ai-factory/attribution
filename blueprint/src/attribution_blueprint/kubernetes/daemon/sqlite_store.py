@@ -502,33 +502,50 @@ class SQLitePlacementStore:
             (row["cluster_id"], row["namespace"], row["uid"])
             for row in rows
         }
-        candidates: dict[tuple[str, str, str], sqlite3.Row] = {}
+        scheduler_groups: dict[
+            tuple[str, str, str],
+            list[sqlite3.Row],
+        ] = {}
+        orphan_candidates: dict[
+            tuple[str, str, str],
+            sqlite3.Row,
+        ] = {}
         for row in rows:
             controller_uid = _controller_uid(row)
             if row["kind"] in {"Workload", "PodGroup"}:
                 root_uid = controller_uid or row["uid"]
                 key = (row["cluster_id"], row["namespace"], root_uid)
-                current = candidates.get(key)
-                if (
-                    current is None
-                    or current["kind"] not in {"Workload", "PodGroup"}
-                    or row["id"] > current["id"]
-                ):
-                    candidates[key] = row
+                scheduler_groups.setdefault(key, []).append(row)
             elif controller_uid is None or (
                 row["cluster_id"],
                 row["namespace"],
                 controller_uid,
             ) not in observed:
                 key = (row["cluster_id"], row["namespace"], row["uid"])
-                candidates.setdefault(key, row)
-        for (cluster_id, namespace, controller_uid), candidate in candidates.items():
-            if not _expired_terminal_resource(
+                orphan_candidates.setdefault(key, row)
+        expired_roots = {
+            key
+            for key, scheduler_rows in scheduler_groups.items()
+            if all(
+                _expired_terminal_resource(
+                    connection,
+                    row,
+                    self.retention_days,
+                )
+                for row in scheduler_rows
+            )
+        }
+        expired_roots.update(
+            key
+            for key, candidate in orphan_candidates.items()
+            if key not in scheduler_groups
+            and _expired_terminal_resource(
                 connection,
                 candidate,
                 self.retention_days,
-            ):
-                continue
+            )
+        )
+        for cluster_id, namespace, controller_uid in expired_roots:
             connection.execute(
                 """
                 WITH RECURSIVE related(uid) AS (
