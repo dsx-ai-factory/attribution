@@ -785,14 +785,27 @@ def test_recreated_workloads_bound_pods_and_owner_terminal_by_incarnation():
                 },
             },
             {
+                "kind": "Job",
+                "metadata": {"uid": "job-restart-1"},
+                "eventType": "ADDED",
+                "observedAt": "2026-10-14T10:30:00Z",
+                "selectedMetadata": {
+                    "labels": {_RESTART_LABEL: "1"},
+                },
+                "status": {"startTime": "2026-10-14T10:30:00Z"},
+            },
+            {
                 "kind": "Pod",
                 "metadata": {
                     "uid": "pod-new",
                     "ownerReferences": [pod_owner],
                 },
                 "eventType": "ADDED",
-                "observedAt": "2026-10-14T10:16:00Z",
-                "status": {"startTime": "2026-10-14T10:11:00Z"},
+                "observedAt": "2026-10-14T10:31:00Z",
+                "selectedMetadata": {
+                    "labels": {_RESTART_LABEL: "1"},
+                },
+                "status": {"startTime": "2026-10-14T10:31:00Z"},
             },
             {
                 "kind": "Job",
@@ -817,11 +830,15 @@ def test_recreated_workloads_bound_pods_and_owner_terminal_by_incarnation():
     assert len(attempts) == 2
     old, new = attempts
     assert old.workload_uid == "workload-old"
+    assert old.start_time <= old.end_time
+    assert old.restart_attempt == "0"
     assert old.end_time == datetime(2026, 10, 14, 10, 10, tzinfo=timezone.utc)
     assert old.terminal is None
     assert old.open is False
     assert old.pod_uids == frozenset({"pod-old"})
     assert new.workload_uid == "workload-new"
+    assert new.restart_attempt == "1"
+    assert new.start_time == datetime(2026, 10, 14, 10, 30, tzinfo=timezone.utc)
     assert new.terminal["kind"] == "Job"
     assert new.pod_uids == frozenset({"pod-new"})
 
@@ -1291,6 +1308,50 @@ def test_live_then_retained_discovery_writes_one_execution_context(tmp_path):
     assert run_count == 2
 
 
+def test_retained_node_loss_placement_restores_failed_node():
+    start = datetime(2026, 10, 14, 10, 0, tzinfo=timezone.utc)
+    end = datetime(2026, 10, 14, 11, 0, tzinfo=timezone.utc)
+    attempt = WorkloadAttempt(
+        workload_uid="workload-uid",
+        namespace="team-a",
+        workload_name="training-workload",
+        owner_kind="JobSet",
+        admission_key=start.isoformat(),
+        restart_attempt="1",
+        start_time=start,
+        end_time=end,
+        terminal={
+            "kind": "Workload",
+            "uid": "workload-uid",
+            "type": "Finished",
+            "reason": "Failed",
+            "time": end.isoformat(),
+            "restart_attempt": None,
+        },
+        open=False,
+        boundary_resolved=True,
+        pod_uids=frozenset({"failed-pod-uid"}),
+    )
+    placement = PlacementRecord(
+        namespace="team-a",
+        pod_name="failed-pod",
+        pod_uid="failed-pod-uid",
+        node_name="node-failed",
+        observed_at=start.isoformat(),
+        node_failure_reason="NodeLost",
+    )
+
+    context = KueueExecutionContextAdapter._context_from_history_attempt(
+        attempt,
+        [placement],
+        {},
+    )
+
+    assert context["state"] == "NODE_FAIL"
+    assert context["failed_node"] == "node-failed"
+    assert context["nodes"] == ["node-failed"]
+
+
 def test_live_state_replaces_open_retained_attempt():
     start = datetime(2026, 10, 14, 10, 0, tzinfo=timezone.utc)
     retained = {
@@ -1308,8 +1369,8 @@ def test_live_state_replaces_open_retained_attempt():
     live = {
         "workload_uid": "workload-uid",
         "state": "COMPLETED",
-        "id": "workload-uid",
-        "attempt_id": "workload-uid",
+        "id": "retained-attempt",
+        "attempt_id": "retained-attempt",
         "start_time": start,
         "end_time": datetime(2026, 10, 14, 11, 0, tzinfo=timezone.utc),
         "kueue_state": "FINISHED_SUCCEEDED",

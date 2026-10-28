@@ -44,6 +44,8 @@ def attempt_id_for(
 @dataclass(frozen=True)
 class LiveAttemptIdentity:
     attempt_id: str
+    admission_key: str | None
+    restart_attempt: str
     start_time: datetime
     boundary_resolved: bool
 
@@ -64,6 +66,8 @@ def live_attempt_identity(
             return None
         return LiveAttemptIdentity(
             attempt_id=f"kueue:pre:v1:{workload_uid}",
+            admission_key=None,
+            restart_attempt="0",
             start_time=_parse_time(created),
             boundary_resolved=False,
         )
@@ -110,6 +114,8 @@ def live_attempt_identity(
             admission["key"],
             restart_attempt,
         ),
+        admission_key=admission["key"],
+        restart_attempt=restart_attempt,
         start_time=_parse_time(start),
         boundary_resolved=True,
     )
@@ -163,7 +169,29 @@ def attempts_from_workload_history(
         admissions = _admissions(timeline)
         if not admissions:
             continue
-        starts = _starts(admissions, restart_starts)
+        boundary = workload_boundaries[workload_uid]
+        first_admission = admissions[0]["time"]
+        scoped_restarts = {
+            restart: timestamp
+            for restart, timestamp in restart_starts.items()
+            if _parse_time(timestamp) >= _parse_time(first_admission)
+            and (
+                boundary.end is None
+                or _parse_time(timestamp) < _parse_time(boundary.end)
+            )
+        }
+        prior_restarts = [
+            (restart, timestamp)
+            for restart, timestamp in restart_starts.items()
+            if _parse_time(timestamp) < _parse_time(first_admission)
+        ]
+        if prior_restarts:
+            active_restart, active_timestamp = max(
+                prior_restarts,
+                key=lambda item: (_parse_time(item[1]), item[0]),
+            )
+            scoped_restarts[active_restart] = active_timestamp
+        starts = _starts(admissions, scoped_restarts)
         owner = _controller_owner(latest_metadata)
         for index, start in enumerate(starts):
             next_start = (
@@ -171,7 +199,6 @@ def attempts_from_workload_history(
                 if index + 1 < len(starts)
                 else None
             )
-            boundary = workload_boundaries[workload_uid]
             workload_end = boundary.end
             attempt_end = min(
                 (
