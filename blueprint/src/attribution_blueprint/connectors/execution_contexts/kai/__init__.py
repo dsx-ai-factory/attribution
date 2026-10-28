@@ -6,10 +6,10 @@ from attribution_blueprint.connectors.execution_contexts.kai.connector import (
     KaiExecutionContext,
     KaiExecutionContextAdapter,
 )
-from attribution_blueprint.connectors.execution_contexts.kubernetes.daemon import (
+from attribution_blueprint.exceptions import MCAError
+from attribution_blueprint.kubernetes.daemon.config import (
     build_kubernetes_daemon_client,
 )
-from attribution_blueprint.exceptions import MCAError
 from attribution_blueprint.mca_registry import _PARAM
 
 

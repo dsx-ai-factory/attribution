@@ -8,11 +8,11 @@ from pathlib import Path
 
 import pytest
 
-from attribution_blueprint.connectors.execution_contexts.kubernetes.client import (
-    KubernetesClientError,
-)
 from attribution_blueprint.connectors.execution_contexts.kueue import (
     KueueExecutionContextAdapter,
+)
+from attribution_blueprint.kubernetes.client import (
+    KubernetesClientError,
 )
 
 FIXTURES = Path(__file__).parent.parent.parent.parent / "fixtures"

@@ -3,11 +3,11 @@
 
 import pytest
 
-from attribution_blueprint.connectors.execution_contexts.kubernetes.helpers import (
+from attribution_blueprint.kubernetes.helpers import (
     earliest_job_failure_reason,
     job_time_limit_minutes,
+    pod_node_failure_reason,
 )
-from attribution_blueprint.kubernetes.helpers import pod_node_failure_reason
 
 
 def _pod(status=None):

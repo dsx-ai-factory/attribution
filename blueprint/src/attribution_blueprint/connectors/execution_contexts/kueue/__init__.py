@@ -3,14 +3,14 @@
 
 from attribution_blueprint import mca_registry as _registry
 from attribution_blueprint.connectors.auth import build_auth
-from attribution_blueprint.connectors.execution_contexts.kubernetes.daemon import (
-    build_kubernetes_daemon_client,
-)
 from attribution_blueprint.connectors.execution_contexts.kueue.connector import (
     KueueExecutionContext,
     KueueExecutionContextAdapter,
 )
 from attribution_blueprint.exceptions import MCAError
+from attribution_blueprint.kubernetes.daemon.config import (
+    build_kubernetes_daemon_client,
+)
 from attribution_blueprint.mca_registry import _PARAM
 
 
