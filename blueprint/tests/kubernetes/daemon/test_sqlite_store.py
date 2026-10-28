@@ -461,6 +461,67 @@ def test_old_active_workload_history_is_retained(tmp_path):
     ) == [workload]
 
 
+def test_newer_active_workload_protects_owner_group_from_late_old_terminal(
+    tmp_path,
+):
+    path = tmp_path / "placements.db"
+    store = SQLitePlacementStore(str(path), retention_days=30)
+    old = (datetime.now(timezone.utc) - timedelta(days=2)).isoformat()
+    current = datetime.now(timezone.utc).isoformat()
+    jobset_owner = OwnerReference(
+        api_version="jobset.x-k8s.io/v1alpha2",
+        kind="JobSet",
+        name="training",
+        uid="jobset-uid",
+        controller=True,
+    )
+    active = _history_observation(
+        kind="Workload",
+        name="training-workload",
+        uid="workload-new",
+        observed_at=current,
+        owners=(jobset_owner,),
+        status={
+            "conditions": [
+                {"type": "Admitted", "status": "True"},
+            ]
+        },
+    )
+    expired = _history_observation(
+        kind="Workload",
+        name="training-workload",
+        uid="workload-old",
+        observed_at=old,
+        owners=(jobset_owner,),
+        status={
+            "conditions": [
+                {
+                    "type": "Finished",
+                    "status": "True",
+                    "lastTransitionTime": old,
+                }
+            ]
+        },
+    )
+
+    # Simulate delayed delivery: the expired incarnation is inserted last.
+    store.append_observation(active)
+    store.append_observation(expired)
+
+    reopened = SQLitePlacementStore(str(path), retention_days=1)
+
+    assert reopened.list_observations_for_uid(
+        "cluster-a",
+        "team-a",
+        "workload-new",
+    ) == [active]
+    assert reopened.list_observations_for_uid(
+        "cluster-a",
+        "team-a",
+        "workload-old",
+    ) == [expired]
+
+
 def test_expired_non_workload_histories_are_pruned(tmp_path):
     path = tmp_path / "placements.db"
     store = SQLitePlacementStore(str(path), retention_days=30)
