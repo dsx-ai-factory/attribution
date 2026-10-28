@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime
 from enum import Enum
 from typing import Protocol
 
@@ -66,6 +67,17 @@ class ObservationJournal(Protocol):
         namespace: str,
         kind: str,
     ) -> list[ResourceObservation]: ...
+
+    def list_history_controller_uids(
+        self,
+        cluster_id: str,
+        namespace: str,
+        kind: str,
+        *,
+        name: str | None = None,
+        start: datetime | None = None,
+        end: datetime | None = None,
+    ) -> list[str]: ...
 
     def get_watch_coverage(
         self,

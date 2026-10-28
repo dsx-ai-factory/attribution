@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import json
 import threading
+from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
@@ -39,6 +40,19 @@ def serve_api(
                 requested_namespace = (query.get("namespace") or [""])[0]
                 kind = (query.get("kind") or [""])[0]
                 name = (query.get("name") or [None])[0]
+                start_value = (query.get("start") or [None])[0]
+                end_value = (query.get("end") or [None])[0]
+                try:
+                    start = _aware_datetime(start_value)
+                    end = _aware_datetime(end_value)
+                    if start is not None and end is not None and start > end:
+                        raise ValueError
+                except (TypeError, ValueError):
+                    status, body = 400, {
+                        "error": "start/end must be aware ISO-8601 values"
+                    }
+                    self._write_response(status, body)
+                    return
                 if not requested_namespace or not kind:
                     status, body = 400, {
                         "error": "namespace and kind are required"
@@ -49,19 +63,15 @@ def serve_api(
                     }
                 else:
                     try:
-                        candidates = evidence_store.list_latest_observations_for_kind(
+                        controller_uids = evidence_store.list_history_controller_uids(
                             cluster_id,
                             requested_namespace,
                             kind,
+                            name=name,
+                            start=start,
+                            end=end,
                         )
-                        if name:
-                            candidates = [
-                                candidate
-                                for candidate in candidates
-                                if candidate.name == name
-                            ]
                         histories = []
-                        seen_controllers: set[str] = set()
                         # Coverage and gaps are scoped to (cluster_id, namespace)
                         coverage = (
                             _coverage_response(
@@ -70,14 +80,10 @@ def serve_api(
                                 cluster_id,
                                 requested_namespace,
                             )
-                            if candidates
+                            if controller_uids
                             else None
                         )
-                        for candidate in candidates:
-                            controller_uid = _controller_uid(candidate) or candidate.uid
-                            if controller_uid in seen_controllers:
-                                continue
-                            seen_controllers.add(controller_uid)
+                        for controller_uid in controller_uids:
                             observations = evidence_store.list_observations_for_controller(
                                 cluster_id,
                                 requested_namespace,
@@ -123,6 +129,9 @@ def serve_api(
             else:
                 status, body = 404, {"status": "not-found"}
 
+            self._write_response(status, body)
+
+        def _write_response(self, status, body):
             payload = json.dumps(body).encode()
             self.send_response(status)
             self.send_header("Content-Type", "application/json")
@@ -136,6 +145,15 @@ def serve_api(
     server = ThreadingHTTPServer(("0.0.0.0", port), Handler)
     threading.Thread(target=server.serve_forever, name="kubernetes-daemon-api-server", daemon=True).start()
     return server
+
+
+def _aware_datetime(value: str | None) -> datetime | None:
+    if value is None:
+        return None
+    parsed = datetime.fromisoformat(value)
+    if parsed.tzinfo is None:
+        raise ValueError("timestamp must be timezone-aware")
+    return parsed
 
 
 def _history_response(
@@ -182,15 +200,6 @@ def _observation_response(observation: ResourceObservation) -> dict:
     if observation.status is not None:
         result["status"] = observation.status
     return result
-
-
-def _controller_uid(observation: ResourceObservation) -> str | None:
-    controllers = [
-        owner.uid
-        for owner in observation.owner_references
-        if owner.controller
-    ]
-    return controllers[0] if len(controllers) == 1 else None
 
 
 def _placements_for_observations(
