@@ -85,10 +85,8 @@ from attribution_blueprint.connectors.execution_contexts.kueue.helpers import (
     pod_matches_selector as _pod_matches_selector,
     pod_selector_for as _pod_selector_for,
 )
-from attribution_blueprint.connectors.execution_contexts.kueue.pod_placement.models import (
+from attribution_blueprint.connectors.execution_contexts.kueue.prometheus_placement import (
     PlacementQuery,
-)
-from attribution_blueprint.connectors.execution_contexts.kueue.pod_placement.store import (
     PlacementResolver,
 )
 from attribution_blueprint.kubernetes.daemon.models import PlacementRecord, PodPlacement
