@@ -62,14 +62,14 @@ or comment. A plain PR comment does not count.
 `.github/workflows/auto-assign-pr.yml` runs `.github/scripts/assign_reviewer.py`.
 
 - When a PR opens, the author becomes the assignee. If the author is not on
-  the `attribution` team, the bot posts the PR to the team's Slack channel and
-  tags on-call. Drafts are included.
-- When a PR is ready, the bot picks one primary from the `attribution` team and
-  requests their review. It skips the author, anyone already requested, and
+  the `attribution-maintainer` team, the bot posts the PR to the team's Slack
+  channel and tags on-call. Drafts are included.
+- When a PR is ready, the bot picks one primary from the
+  `attribution-maintainer` team and requests their review. It skips the author, anyone already requested, and
   the members in `EXCLUDED_REVIEWERS` in the script. If someone already
   requested an eligible team member, that person becomes the primary instead.
-  The bot records the primary in a PR comment and removes the team's CODEOWNERS
-  request, so only the primary is notified.
+  The bot records the primary in a PR comment and removes the `attribution`
+  CODEOWNERS request, so only the primary is notified.
 - When anyone removes the primary before they review, the bot picks a
   replacement. It never re-picks an earlier primary on its own. If someone
   requested another team member since the primary was picked, that person

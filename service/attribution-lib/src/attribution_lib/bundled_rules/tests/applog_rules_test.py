@@ -491,6 +491,45 @@ class TestIBPairRules:
         assert events[0]["payload"]["peer"] == "192.0.2.1"
 
 
+@pytest.mark.parametrize(
+    "peer,emits",
+    [
+        ("gpu-01.rack-a.example", False),
+        ("gpu-01", False),
+        ("gpu-01.rack-b.example", True),
+    ],
+)
+def test_socket_progress_opt_self_peer_requires_same_qualified_name(app_tst_bldr, timezone, peer, emits):
+    start = datetime.fromtimestamp(1741860016, tz=timezone)
+    job_info = (
+        JobInfoBuilder(
+            id="12345678",
+            cluster="cluster_b722552b",
+            state="CANCELLED",
+            type="training",
+            framework="megatron",
+            node_to_ranks=make_node_to_ranks(["gpu-01.rack-a.example", "gpu-02.rack-a.example"], 8),
+            job_start_time=start,
+            source_name="artifical slurm",
+            timezone=timezone,
+        )
+        .job_end_time(datetime.fromtimestamp(1741862869, tz=timezone))
+        .build()
+    )
+    line = "0: NCCL WARN socketProgressOpt: Call to recv from 192.0.2.2<28601> failed : Connection reset by peer"
+    with hostname_mapping({"192.0.2.2": peer}):
+        result = app_tst_bldr(job_info, [line])
+    rows = result.event_stream.query_raw(
+        """
+        SELECT e.payload FROM events e JOIN event_types et ON e.event_type = et.id
+        WHERE et.name = 'Attribution.node.bad'
+        """,
+        [],
+    )
+    bad_nodes = [json.loads(row[0])["node"] for row in rows]
+    assert (peer in bad_nodes) == emits
+
+
 def test_multicast_skip_marker_logs_from_applog(app_tst_bldr, big_jobinfo):
     test_data = [
         make_applog_entry(

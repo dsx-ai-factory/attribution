@@ -133,6 +133,9 @@ RANK_REGEX = re.compile(r"^\[rank\s*:?\s*(?P<rank>\d+)\]")
 NCCL_HOST_PID_TID_REGEX = re.compile(
     r"(?<![A-Za-z0-9._-])(?P<node>[A-Za-z0-9][A-Za-z0-9._-]*):(?P<pid>\d+):(?P<tid>\d+)\s+\[(?P<cuda_dev>\d+)\]"
 )
+# Megatron rank errors name the emitting node: "RuntimeError: Rank N, node HOST, device D[, ...]:".
+# Match only through the device number so trailing fields such as ", iteration N" still match.
+MEGATRON_RANK_ERROR_REGEX = re.compile(r"RuntimeError: Rank \d+, node (?P<node>[A-Za-z0-9._-]+), device \d+")
 
 
 def _leading_explicit_applog_rank(line: str) -> Optional[int]:
@@ -160,7 +163,8 @@ def _leading_explicit_applog_rank(line: str) -> Optional[int]:
 def applog_extract_node_rank(line: str) -> tuple[Optional[str], Optional[int]]:
     """Extract node name and rank from an application-log line.
 
-    Prefers an NCCL ``hostname:pid:tid [cudaDev]`` prefix when present.
+    Prefers the node named by a Megatron ``RuntimeError: Rank N, node HOST, device D``
+    message or an NCCL ``hostname:pid:tid [cudaDev]`` prefix when present.
     Rank is only a leading srun ``-l`` or ``[rankN]`` prefix, never NCCL's
     CUDA device index.
 
@@ -207,6 +211,9 @@ def applog_extract_node_rank(line: str) -> tuple[Optional[str], Optional[int]]:
     if "[" in line and (nccl := NCCL_HOST_PID_TID_REGEX.search(line)) is not None:
         node = nccl.group("node")
         # Wipe timestamp-driven rank 0; keep a real srun / [rankN] prefix.
+        rank = _leading_explicit_applog_rank(line)
+    if "RuntimeError: Rank" in line and (megatron := MEGATRON_RANK_ERROR_REGEX.search(line)) is not None:
+        node = megatron.group("node")
         rank = _leading_explicit_applog_rank(line)
     return node, rank
 
