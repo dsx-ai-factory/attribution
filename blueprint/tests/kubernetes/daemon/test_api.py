@@ -293,6 +293,141 @@ def test_history_endpoint_discovers_controller_observations(tmp_path):
     }
 
 
+def test_history_window_keeps_active_and_delayed_complete_histories(tmp_path):
+    store = SQLitePlacementStore(str(tmp_path / "placements.db"))
+
+    def workload(
+        uid,
+        resource_version,
+        observed_at,
+        conditions,
+    ):
+        return ResourceObservation(
+            cluster_id="cluster-a",
+            api_version="kueue.x-k8s.io/v1beta1",
+            kind="Workload",
+            namespace="team-a",
+            name=uid,
+            uid=uid,
+            resource_version=resource_version,
+            event_type="MODIFIED",
+            observed_at=observed_at,
+            status={"conditions": conditions},
+        )
+
+    active = workload(
+        "active-uid",
+        "1",
+        "2026-10-01T00:00:00Z",
+        [
+            {
+                "type": "Admitted",
+                "status": "True",
+                "lastTransitionTime": "2026-10-01T00:00:00Z",
+            }
+        ],
+    )
+    delayed_early = workload(
+        "delayed-uid",
+        "1",
+        "2026-10-01T00:00:00Z",
+        [
+            {
+                "type": "Admitted",
+                "status": "True",
+                "lastTransitionTime": "2026-10-01T00:00:00Z",
+            }
+        ],
+    )
+    delayed_terminal = workload(
+        "delayed-uid",
+        "2",
+        "2026-10-15T00:00:00Z",
+        [
+            {
+                "type": "Finished",
+                "status": "True",
+                "lastTransitionTime": "2026-10-05T00:00:00Z",
+            }
+        ],
+    )
+    stale = workload(
+        "stale-uid",
+        "1",
+        "2026-10-05T00:00:00Z",
+        [
+            {
+                "type": "Finished",
+                "status": "True",
+                "lastTransitionTime": "2026-10-05T00:00:00Z",
+            }
+        ],
+    )
+    requeued = workload(
+        "requeued-uid",
+        "1",
+        "2026-10-05T00:00:00Z",
+        [
+            {
+                "type": "Evicted",
+                "status": "True",
+                "lastTransitionTime": "2026-10-05T00:00:00Z",
+            },
+            {
+                "type": "Requeued",
+                "status": "True",
+                "lastTransitionTime": "2026-10-06T00:00:00Z",
+            },
+        ],
+    )
+    for observation in (
+        active,
+        delayed_early,
+        delayed_terminal,
+        requeued,
+        stale,
+    ):
+        _capture(store, observation)
+
+    server = serve_api(
+        HealthState(),
+        store,
+        0,
+        "team-a",
+        cluster_id="cluster-a",
+    )
+    try:
+        response = requests.get(
+            f"http://127.0.0.1:{server.server_port}/v1/history",
+            params={
+                "namespace": "team-a",
+                "kind": "Workload",
+                "start": "2026-10-14T00:00:00Z",
+                "end": "2026-10-14T23:59:59Z",
+            },
+            timeout=2,
+        )
+    finally:
+        server.shutdown()
+        server.server_close()
+
+    assert response.status_code == 200
+    histories = response.json()["items"]
+    histories_by_uid = {
+        history["observations"][0]["metadata"]["uid"]: history
+        for history in histories
+    }
+    assert set(histories_by_uid) == {
+        "active-uid",
+        "delayed-uid",
+        "requeued-uid",
+    }
+    assert [
+        observation["metadata"]["resourceVersion"]
+        for observation in histories_by_uid["delayed-uid"]["observations"]
+    ] == ["1", "2"]
+
+
 def test_history_endpoint_computes_coverage_once_for_multiple_controllers(tmp_path, mocker):
     """Coverage/gaps are scoped to (cluster_id, namespace), not to any one
     controller, so the handler must compute them once per request rather
