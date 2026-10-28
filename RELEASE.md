@@ -38,8 +38,18 @@ migration steps.
 ## Release artifacts
 
 For the initial process, a component tag on a reviewed default-branch commit is
-the release. The process does not publish packages, prebuilt container images,
-or Helm charts.
+the release. Each tag gets a GitHub Release page carrying that component's
+`CHANGELOG.md` section. The process does not currently publish packages, prebuilt container images, or Helm charts.
+
+GitHub marks exactly one release per repository as "Latest". Here that badge
+belongs to the newest stable Blueprint release, because a Blueprint release is
+the stamp for a supported Library and Service set (see
+[Release bundles](#release-bundles)).
+Library and Service releases
+they never take the badge, even when they are newer than that Blueprint
+release. Therefore, "Latest" means "latest supported set", not necessarily "most recent
+tag". Resolve any component's current release by its tag prefix, not by
+`releases/latest`.
 
 Prebuilt container images, including an NGC image, and a public Helm chart are
 planned future artifacts. No publication date is committed for those artifacts.
