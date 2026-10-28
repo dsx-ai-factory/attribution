@@ -10,8 +10,8 @@ import pytest
 from attribution_blueprint import mca_registry
 from attribution_blueprint.connectors.execution_contexts.kai import KaiExecutionContextAdapter
 from attribution_blueprint.connectors.execution_contexts.kai.connector import _resolve_owner
-from attribution_blueprint.connectors.execution_contexts.kubernetes.client import KubernetesClientError
 from attribution_blueprint.exceptions import MCAError
+from attribution_blueprint.kubernetes.client import KubernetesClientError
 from attribution_blueprint.kubernetes.daemon.models import PlacementRecord
 
 FIXTURES = Path(__file__).parent.parent.parent.parent / "fixtures"

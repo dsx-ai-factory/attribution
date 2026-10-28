@@ -70,14 +70,6 @@ from typing import NamedTuple, NotRequired, TypedDict
 
 from loguru import logger
 
-from attribution_blueprint.connectors.execution_contexts.kubernetes.client import (
-    KubernetesClient,
-    KubernetesClientError,
-)
-from attribution_blueprint.connectors.execution_contexts.kubernetes.helpers import (
-    earliest_job_failure_reason as _earliest_job_failure_reason,
-    job_time_limit_minutes as _job_time_limit_minutes,
-)
 from attribution_blueprint.connectors.execution_contexts.kueue.helpers import (
     POD_JOBSET_LABEL as _POD_JOBSET_LABEL,
     jobs_for_workload as _jobs_for_workload,
@@ -89,10 +81,16 @@ from attribution_blueprint.connectors.execution_contexts.kueue.prometheus_placem
     PlacementQuery,
     PlacementResolver,
 )
+from attribution_blueprint.kubernetes.client import (
+    KubernetesClient,
+    KubernetesClientError,
+)
 from attribution_blueprint.kubernetes.daemon.models import PlacementRecord, PodPlacement
 from attribution_blueprint.kubernetes.daemon.store import PlacementReader
 from attribution_blueprint.kubernetes.helpers import (
     NODE_LOSS_DISRUPTION_REASONS as _NODE_LOSS_DISRUPTION_REASONS,
+    earliest_job_failure_reason as _earliest_job_failure_reason,
+    job_time_limit_minutes as _job_time_limit_minutes,
     pod_node_failure_reason as _pod_node_failure_reason,
 )
 from attribution_blueprint.types import assert_aware

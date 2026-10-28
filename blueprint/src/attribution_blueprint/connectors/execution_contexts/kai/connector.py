@@ -51,17 +51,18 @@ from attribution_blueprint.connectors.execution_contexts.kai.helpers import (
     controller_owner as _controller_owner,
     resolve_owner as _resolve_owner,
 )
-from attribution_blueprint.connectors.execution_contexts.kubernetes.client import (
+from attribution_blueprint.kubernetes.client import (
     KubernetesClient,
     KubernetesClientError,
 )
-from attribution_blueprint.connectors.execution_contexts.kubernetes.helpers import (
-    earliest_job_failure_reason,
-    job_time_limit_minutes,
-)
 from attribution_blueprint.kubernetes.daemon.models import PlacementRecord, PodPlacement
 from attribution_blueprint.kubernetes.daemon.store import PlacementReader
-from attribution_blueprint.kubernetes.helpers import NODE_LOSS_DISRUPTION_REASONS, pod_node_failure_reason
+from attribution_blueprint.kubernetes.helpers import (
+    NODE_LOSS_DISRUPTION_REASONS,
+    earliest_job_failure_reason,
+    job_time_limit_minutes,
+    pod_node_failure_reason,
+)
 from attribution_blueprint.types import assert_aware
 
 _PODGROUP_RESOURCE = "PodGroup"

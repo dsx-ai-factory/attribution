@@ -3,7 +3,7 @@
 
 """Compatibility import for scheduler-neutral Kubernetes client code."""
 
-from attribution_blueprint.connectors.execution_contexts.kubernetes.client import (
+from attribution_blueprint.kubernetes.client import (
     KubernetesClient,
     KubernetesClientError,
 )

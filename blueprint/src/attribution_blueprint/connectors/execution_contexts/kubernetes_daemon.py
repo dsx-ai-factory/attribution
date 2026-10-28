@@ -3,7 +3,7 @@
 
 """Compatibility import for KubernetesDaemon connector configuration."""
 
-from attribution_blueprint.connectors.execution_contexts.kubernetes.daemon import (
+from attribution_blueprint.kubernetes.daemon.config import (
     build_kubernetes_daemon_client,
 )
 
