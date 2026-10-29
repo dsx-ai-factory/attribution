@@ -56,6 +56,34 @@ def _entry_ids(entries: list[Any]) -> list[Any]:
     return [entry.get("id") if isinstance(entry, dict) else None for entry in entries]
 
 
+def test_jit_compilation_guidance_resolves_by_emitted_catalog_id() -> None:
+    """Keep the compiler-failure symptom reachable without changing its verdict."""
+    _load_catalog.cache_clear()
+    entry = _load_catalog()["jit-c-compilation-failure"]
+    assert entry["title"] == "Triton/Inductor JIT C-compilation failure"
+    assert "Triton/Inductor JIT C-compilation failure" in entry["aliases"]
+    assert entry["likely_owner"] == "ambiguous"
+    assert entry["verification"] == "draft"
+    assert "recommended_action" not in entry
+    assert set(entry["personas"]) == {"tenant_sre"}
+    assert "internal_notes" not in entry
+
+
+def test_jit_compilation_guidance_includes_recovery_and_accessible_evidence() -> None:
+    """Keep version-scoped actions and an evidence-aware handoff with the entry."""
+    entry = next(entry for entry in _catalog_entries() if entry["id"] == "jit-c-compilation-failure")
+    tenant = entry["personas"]["tenant_sre"]
+    assert "for PyTorch/Inductor workloads" in tenant["action"]
+    assert "confirming that compilation and execution both complete" in tenant["action"]
+    assert "stop repeated retries" in tenant["action"]
+    assert "cluster administrator or cloud provider" in tenant["action"]
+    assert "NVIDIA Attribution diagnosis" in tenant["support_details"]
+    assert "do not delay asking for help" in tenant["support_details"]
+    patterns = {signal["pattern"] for signal in entry["signals"]}
+    assert "InductorError: CalledProcessError: Command" in patterns
+    assert "InductorError: subprocess.CalledProcessError: Command" in patterns
+
+
 def _duplicate_id_messages(entries: list[Any]) -> list[str]:
     """One message per id that more than one entry claims."""
     ids = _entry_ids(entries)
