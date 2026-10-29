@@ -2897,3 +2897,25 @@ outcome_symptom(
     doc="irisc-not-responding",
     hw_cause="irisc not responding",
 )
+
+# A local verbs command failure identifies the reporting node, but does not
+# establish a physical NIC defect. Existing specific syslog diagnoses retain
+# their current classifications.
+outcome_symptom(
+    "Local HCA command failure",
+    outcome="Fail InfraHW",
+    priority=OutcomePriority.LOW,
+    doc="local-hca-command-failure",
+    hw_cause="Unknown HW Cause",
+    fallback_prefix=True,
+)
+
+# Only a local command failure plus independent corroboration establishes the
+# stronger NIC diagnosis. Standalone syslog diagnoses retain their mappings.
+outcome_symptom(
+    "Corroborated local HCA command failure",
+    outcome="Fail InfraHW",
+    priority=OutcomePriority.HIGH_HW,
+    doc="local-hca-command-failure",
+    hw_cause="Known HW Cause - Node (NIC)",
+)

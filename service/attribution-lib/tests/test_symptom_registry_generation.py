@@ -656,6 +656,7 @@ def test_generated_registry_resolves_all_declared_fallback_families():
         "EFA Error-7 something": "EFA Error-",
         "bad kernel stack frame pointer in some_dynamic_tool": "bad kernel stack frame pointer",
         "Call to ibv_modify_qp failed: eno 9999": "Call to ibv_modify_qp failed",
+        "Local HCA command failure (ibv_query_qp eno 110)": "Local HCA command failure",
         "NVRx node health check failed: example_gpu_check": "NVRx node health check failed",
         "NVRx GPU recovery action: Requires a node reboot to recover": "NVRx GPU recovery action",
     }
@@ -1119,6 +1120,8 @@ def test_bad_nic_state_outcome_metadata():
     assert match is not None
     assert match.doc == "detected-bad-nic-state"
     assert match.hw_cause == "NIC firmware initialization failure"
+
+
 @pytest.mark.parametrize("symptom", ["NV_ERR_RESET_REQUIRED", "NV_ERR_RESET_REQUIRED kernel_channel.c"])
 def test_gpu_reset_outcome_retains_documentation(symptom: str) -> None:
     """Check that GPU-reset variants retain their declared documentation.

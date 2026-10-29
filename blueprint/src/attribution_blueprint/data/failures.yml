@@ -17429,3 +17429,35 @@ failures:
   severity: high
   verification: verified
   last_reviewed: 2026-10-20
+- id: local-hca-command-failure
+  title: Local HCA command failure
+  aliases:
+  - Corroborated local HCA command failure
+  category: distributed_comm
+  likely_owner: infrastructure
+  personas:
+    tenant_sre:
+      title: A local RDMA adapter operation failed
+      summary: A verbs control operation failed on the reporting node. A remote peer is not blamed solely because it appears in the connection details.
+      impact: Workload communication may fail. A local command failure alone does not establish physical adapter damage.
+      action: Share the diagnosis and source evidence with the infrastructure owner to inspect the affected adapter and its resource limits.
+      support_details: Include node, device identity, operation, errno, timestamps, and corroborating syslog or provider evidence when available.
+  summary: Local RDMA control-call failures with device-scoped guards and optional independent corroboration.
+  technical_details: >-
+    Supported local errno values are 11, 110 and 125. Memory-registration EAGAIN remains interesting unless
+    a different verb fails on the same node and device within five minutes, or a matching NIC syslog diagnosis corroborates it.
+    Repeated instances of one verb, ambiguous devices, and missing timestamps do not satisfy that guard.
+    New qualifying local failures map to Fail InfraHW with Unknown HW Cause. Independent NIC syslog or normalized
+    provider system-check/NIC-fault evidence on the same node within five minutes establishes the corroborated
+    diagnosis with Known HW Cause - Node (NIC). Provider instance-status evidence alone is insufficient.
+    Existing standalone NIC syslog outcome mappings and resolved-peer QP timeout handling remain unchanged.
+    IPv4-mapped errno-22 QP errors retain their existing outcome while attributing the local node and preserving peer context.
+  signals:
+  - kind: log
+    pattern: 'Call to ibv_(modify_qp|query_qp|create_cq|reg_mr|dereg_mr) failed'
+    note: Interpret the operation, errno, source node and device together; a log match alone does not establish hardware damage.
+  related:
+  - detected-bad-nic-state
+  - irisc-not-responding
+  severity: high
+  last_reviewed: 2026-10-29

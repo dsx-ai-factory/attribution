@@ -340,7 +340,8 @@ class TestIBPairRules:
         data = [
             "Call to ibv_modify_qp failed with 110 Connection timed out, on dev mlx5_4:1, curr state INIT, next state RTR, local GID index 3, local GID ::ffff:192.0.2.30, remote GID ::ffff:198.51.100.30"
         ]
-        result = app_tst_bldr(big_jobinfo, data)
+        with hostname_mapping({"198.51.100.30": "peer-node"}):
+            result = app_tst_bldr(big_jobinfo, data)
         events = self._get_events_by_type(
             result.event_stream, ["Attribution.node.bad_peers", "Application.bad_pair.complete"]
         )

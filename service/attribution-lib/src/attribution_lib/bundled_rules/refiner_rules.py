@@ -10,6 +10,7 @@ import re
 from datetime import timedelta
 from typing import Optional
 
+from common.hca import attribute_local_hca_failures
 from common.refiner_helpers import (
     _add_symptom_from_source,
     _get_earliest_watchdog_source,
@@ -52,6 +53,8 @@ from attribution_lib.utils import normalize_pci_id
 declare_event_types(
     *BAD_PAIR_EVENT_TYPES,
     "Application.megatron-lm.runtime_args",
+    "Application.hca.command_failure",
+    "Application.mfu",
     "Node failure reported by slurm",
 )
 
@@ -80,6 +83,7 @@ _SCRUB_ORDER = [
     "Xid140Cascade",
     "PoisonedGspComposite",
     "DetectBadNicState",
+    "LocalHcaCommandFailures",
     # Combine only the scheduler failure and surviving independent epilog
     # non-response evidence after more specific per-node causes are scrubbed.
     "CorroboratedNodeFailure",
@@ -872,6 +876,16 @@ def detect_bad_nic_state(context: RefinerContext):
         node_group.add(combined)
         for component in _BAD_NIC_COMPONENTS:
             symptoms[component].discard_selected(combined)
+
+
+@refiner_def(
+    name="LocalHcaCommandFailures",
+    author="NVIDIA Attribution team",
+    priority=_priority("LocalHcaCommandFailures"),
+)
+def local_hca_command_failures(context: RefinerContext):
+    """Resolve local command failures after existing NIC syslog correlation."""
+    attribute_local_hca_failures(context)
 
 
 # Raw-keyword promotion rules
