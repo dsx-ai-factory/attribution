@@ -2910,6 +2910,16 @@ outcome_symptom(
     fallback_prefix=True,
 )
 
+# Preserve the existing QP timeout tier when an unresolved peer takes the
+# local-command path.
+outcome_symptom(
+    "Local HCA command failure (ibv_modify_qp eno 110)",
+    outcome="Fail InfraHW",
+    priority=OutcomePriority.MEDIUM_SW,
+    doc="local-hca-command-failure",
+    hw_cause="Unknown HW Cause",
+)
+
 # Only a local command failure plus independent corroboration establishes the
 # stronger NIC diagnosis. Standalone syslog diagnoses retain their mappings.
 outcome_symptom(

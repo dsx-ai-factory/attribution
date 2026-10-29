@@ -338,7 +338,7 @@ class TestIBPairRules:
 
     def test_ibv_modify_qp_failed_creates_bad_pair_and_bad_peers(self, app_tst_bldr, big_jobinfo):
         data = [
-            "Call to ibv_modify_qp failed with 110 Connection timed out, on dev mlx5_4:1, curr state INIT, next state RTR, local GID index 3, local GID ::ffff:192.0.2.30, remote GID ::ffff:198.51.100.30"
+            "local-node:123:456 [0] Call to ibv_modify_qp failed with 110 Connection timed out, on dev mlx5_4:1, curr state INIT, next state RTR, local GID index 3, local GID ::ffff:192.0.2.30, remote GID ::ffff:198.51.100.30"
         ]
         with hostname_mapping({"198.51.100.30": "peer-node"}):
             result = app_tst_bldr(big_jobinfo, data)

@@ -54,7 +54,8 @@ def verb(name, errno=11, device="mlx5_4", process="123:456"):
 def run(event_manager, obs_data, job, request, graphs):
     count = 0
 
-    def _run(lines, syslogs=(), mapping=None, provider=()):
+    def _run(lines, syslogs=(), mapping=None, provider=(), job_script=None):
+        current_job = job._replace(job_script_content=job_script) if job_script else job
         nonlocal count
         count += 1
         stream = event_manager.create_stream(f"{request.node.name}-{count}")
@@ -83,7 +84,7 @@ def run(event_manager, obs_data, job, request, graphs):
         stream.register_observation_context(app.context)
         stream.register_observation_context(sys.context)
         with hostname_mapping(mapping or {"192.0.2.1": "node-a", "192.0.2.2": "node-b"}):
-            bad = core.calculate_bad_nodes(event_stream=stream, job_info=job, applog_in=app, syslog_in=sys)
+            bad = core.calculate_bad_nodes(event_stream=stream, job_info=current_job, applog_in=app, syslog_in=sys)
         # Exercise the normalized provider-evidence contract without embedding
         # provider-specific collection or inventory logic in public rules.
         for symptom, node, offset, kind in provider:
@@ -95,7 +96,7 @@ def run(event_manager, obs_data, job, request, graphs):
         recorder = DecisionRecorder(job.id)
         result = core.attribute(
             event_stream=stream,
-            job_info=job,
+            job_info=current_job,
             bad_node_result=bad,
             extract_job_metadata_from_logfile=False,
             run_collectors=True,
@@ -159,7 +160,7 @@ def test_unavailable_peer_is_never_blamed(run, errno, peer):
     assert reported["src_device"] == "mlx5_4:-1"
 
 
-@pytest.mark.parametrize("name", ["ibv_query_qp", "ibv_create_cq", "ibv_dereg_mr"])
+@pytest.mark.parametrize("name", ["ibv_query_qp", "ibv_dereg_mr"])
 def test_local_verbs_are_attributed_to_emitter(run, name):
     result, _ = run([(verb(name), 0)])
     assert set(exported(result)[0]) == {"node-a"}
@@ -178,7 +179,7 @@ def test_registration_eagain_alone_remains_interesting(run):
     "offset,device,qualified", [(299, "mlx5_4", True), (301, "mlx5_4", False), (1, "mlx5_5", False)]
 )
 def test_registration_guard_is_time_and_device_scoped(run, offset, device, qualified):
-    result, _ = run([(verb("ibv_reg_mr"), 0), (verb("ibv_create_cq", device=device), offset)])
+    result, _ = run([(verb("ibv_reg_mr"), 0), (verb("ibv_query_qp", device=device), offset)])
     bad, _ = exported(result)
     assert any("ibv_reg_mr eno 11" in symptom for symptom in bad["node-a"]) == qualified
 
@@ -193,17 +194,19 @@ def test_device_less_wrapper_needs_unambiguous_same_thread_anchor(run, ambiguous
     assert any("ibv_reg_mr eno 11" in symptom for symptom in bad["node-a"]) == (not ambiguous)
 
 
-@pytest.mark.parametrize("device,offset,qualified", [("mlx5_4", 1, True), ("mlx5_5", 1, False), ("mlx5_4", 301, False)])
+@pytest.mark.parametrize(
+    "device,offset,qualified", [("0000:03:00.3", 1, True), ("0000:04:00.3", 1, False), ("0000:03:00.3", 301, False)]
+)
 def test_irisc_corroboration_requires_same_device_and_time(run, device, offset, qualified):
-    log = f"mlx5_core 0000:03:00.3: {device}: Health issue observed, irisc not responding, severity(3) ERROR:"
-    result, _ = run([(verb("ibv_reg_mr"), 0)], [("node-a", log, offset)])
+    log = "mlx5_core 0000:03:00.3: Health issue observed, irisc not responding, severity(3) ERROR:"
+    result, _ = run([(verb("ibv_reg_mr", device=device), 0)], [("node-a", log, offset)])
     assert any("ibv_reg_mr eno 11" in s for s in exported(result)[0]["node-a"]) == qualified
 
 
 def test_health_compromised_is_not_corroboration(run):
     result, _ = run(
         [(verb("ibv_reg_mr"), 0)],
-        [("node-a", "mlx5_core 0000:03:00.3 mlx5_4: device's health compromised - reached miss count", 1)],
+        [("node-a", "mlx5_core 0000:03:00.3: device's health compromised - reached miss count", 1)],
     )
     assert not any("ibv_reg_mr eno 11" in s for s in exported(result)[0].get("node-a", set()))
 
@@ -224,7 +227,7 @@ def test_nccl_error2_is_recognized(attribution_test_builder, job):
 
 
 def test_registration_guard_does_not_combine_nodes(run):
-    result, _ = run([(verb("ibv_reg_mr"), 0), (verb("ibv_create_cq").replace("node-a:", "node-b:"), 1)])
+    result, _ = run([(verb("ibv_reg_mr"), 0), (verb("ibv_query_qp").replace("node-a:", "node-b:"), 1)])
     assert not any("ibv_reg_mr eno 11" in s for s in exported(result)[0].get("node-a", set()))
 
 
@@ -284,8 +287,8 @@ def test_single_initialization_message_is_not_corroboration(run, job):
 
 @pytest.mark.parametrize("errno", [11, 110, 125])
 def test_corroborated_local_failure_has_known_nic_classification(run, errno):
-    log = "mlx5_core 0000:03:00.3: mlx5_4: Health issue observed, irisc not responding, severity(3) ERROR:"
-    result, _ = run([(verb("ibv_query_qp", errno=errno), 0)], [("node-a", log, 1)])
+    log = "mlx5_core 0000:03:00.3: Health issue observed, irisc not responding, severity(3) ERROR:"
+    result, _ = run([(verb("ibv_query_qp", errno=errno, device="0000:03:00.3"), 0)], [("node-a", log, 1)])
     outcome = result.outcome_attr.value()
     assert outcome.outcome == "Fail InfraHW"
     assert outcome.hw_cause == "Known HW Cause - Node (NIC)"
@@ -302,36 +305,39 @@ def test_standalone_nic_diagnosis_keeps_existing_classification(run):
 @pytest.mark.parametrize(
     "symptom,node,offset,kind,qualifies",
     [
-        ("CSP Event EC2 System Check Failed", "node-a", 1, ObservationSource.CSP_EVENT, True),
         ("CSP Event NIC Fault", "node-a", 1, ObservationSource.CSP_EVENT, True),
-        ("CSP Event EC2 System Check Failed", "node-b", 1, ObservationSource.CSP_EVENT, False),
-        ("CSP Event EC2 System Check Failed", "node-a", 301, ObservationSource.CSP_EVENT, False),
+        ("CSP Event NIC Fault", "node-b", 1, ObservationSource.CSP_EVENT, False),
+        ("CSP Event NIC Fault", "node-a", 301, ObservationSource.CSP_EVENT, False),
         ("CSP Event EC2 Instance Check Failed", "node-a", 1, ObservationSource.CSP_EVENT, False),
-        ("CSP Event EC2 System Check Failed", "node-a", 1, ObservationSource.APPLOG, False),
+        ("CSP Event NIC Fault", "node-a", 1, ObservationSource.APPLOG, False),
     ],
 )
 def test_provider_corroboration_requires_the_right_node_source_and_time(run, symptom, node, offset, kind, qualifies):
     result, _ = run([(verb("ibv_query_qp"), 0)], provider=[(symptom, node, offset, kind)])
     assert ("Corroborated local HCA command failure" in exported(result)[0]["node-a"]) == qualifies
     if qualifies:
-        assert result.outcome_attr.value().hw_cause == "Known HW Cause - Node (NIC)"
+        assert result.outcome_attr.value().root_cause_symptom == "CSP Event NIC Fault"
+        assert result.outcome_attr.value().hw_cause == "Known HW Cause - Node"
+        group = result.bad_nodes_attr.my_bad_nodes["node-a"].attributions
+        assert group["CSP Event NIC Fault"].has_bad()
 
 
 def test_registration_guard_does_not_use_unknown_times(run):
-    result, _ = run([(verb("ibv_reg_mr"), None), (verb("ibv_create_cq"), None)])
+    result, _ = run([(verb("ibv_reg_mr"), None), (verb("ibv_query_qp"), None)])
     assert not any("ibv_reg_mr eno 11" in s for s in exported(result)[0]["node-a"])
 
 
 def test_window_boundary_is_inclusive(run):
-    result, _ = run([(verb("ibv_reg_mr"), 0), (verb("ibv_create_cq"), 300)])
+    result, _ = run([(verb("ibv_reg_mr"), 0), (verb("ibv_query_qp"), 300)])
     assert any("ibv_reg_mr eno 11" in s for s in exported(result)[0]["node-a"])
 
 
-def test_successful_progress_excludes_stale_guard_proofs(run):
+def test_successful_progress_excludes_stale_guard_proofs(run, job):
+    timestamp = (job.job_start_time + timedelta(seconds=30)).strftime("%Y-%m-%d %H:%M:%S")
     result, _ = run(
         [
-            (verb("ibv_create_cq"), 0),
-            ("[2023-11-14 14:14:00] iteration 1/ 10 | throughput per GPU (TFLOP/s/GPU): 100.0 |", 10),
+            (verb("ibv_query_qp"), 0),
+            (f"[{timestamp}] iteration 1/ 10 | throughput per GPU (TFLOP/s/GPU): 100.0 |", 10),
             (verb("ibv_reg_mr"), 20),
         ]
     )
@@ -370,7 +376,7 @@ def test_both_endpoints_keep_independent_fault_evidence(run):
 def test_provider_evidence_does_not_bypass_registration_guard(run):
     result, _ = run(
         [(verb("ibv_reg_mr"), 0)],
-        provider=[("CSP Event EC2 System Check Failed", "node-a", 1, ObservationSource.CSP_EVENT)],
+        provider=[("CSP Event NIC Fault", "node-a", 1, ObservationSource.CSP_EVENT)],
     )
     assert not any(
         "Local HCA command failure" in s or "Corroborated local HCA" in s
@@ -394,7 +400,7 @@ def test_repeated_and_incremental_attribution_recomputes_guard(event_manager, ob
     )
     result = attributor.attribute()
     assert not any("ibv_reg_mr" in s for s in exported(result)[0].get("node-a", set()))
-    entries2 = [make_applog_entry(verb("ibv_create_cq"), start_ns + int(1e9), "node-a")]
+    entries2 = [make_applog_entry(verb("ibv_query_qp"), start_ns + int(1e9), "node-a")]
     second = obs_data(job, entries2, ObservationSource.APPLOG, insert_tflops_line=False)
     attributor.ingest(
         Observation(
@@ -410,7 +416,7 @@ def test_repeated_and_incremental_attribution_recomputes_guard(event_manager, ob
 
 
 def test_guard_proofs_do_not_leak_between_execution_contexts(run):
-    run([(verb("ibv_create_cq"), 0)])
+    run([(verb("ibv_query_qp"), 0)])
     result, _ = run([(verb("ibv_reg_mr"), 1)])
     assert not any("ibv_reg_mr" in s for s in exported(result)[0].get("node-a", set()))
 
@@ -441,4 +447,100 @@ def test_unidentified_emitter_does_not_blame_an_implicit_rank(event_manager, obs
         event_stream=stream, job_info=job, bad_node_result=bad, extract_job_metadata_from_logfile=False
     )
     assert not any("Local HCA" in s for values in exported(result)[0].values() for s in values)
-    assert any("Local HCA" in symptom or "ibv_modify_qp" in symptom for symptom in result.symptoms.symptoms())
+    assert not exported(result)[0]
+    assert not result.bad_nodes_attr.my_bad_nodes.job_level.has_bad()
+    assert any(
+        "Local HCA" in symptom or "ibv_modify_qp" in symptom
+        for symptom, _ in result.bad_nodes_attr.my_bad_nodes.job_level.all_items()
+    )
+
+
+@pytest.mark.parametrize("name", ["ibv_reg_mr", "ibv_create_cq"])
+def test_resource_limit_errors_cannot_corroborate_each_other(run, name):
+    other = "ibv_create_cq" if name == "ibv_reg_mr" else "ibv_reg_mr"
+    result, _ = run([(verb(name), 0), (verb(other), 1)])
+    assert not any("Local HCA" in s for values in exported(result)[0].values() for s in values)
+    assert any(name in s for s in exported(result)[1]["node-a"])
+
+
+@pytest.mark.parametrize("peer", ["N/A", "::ffff:198.51.100.7", "::ffff:192.0.2.2"])
+def test_overwritten_nccl_parameters_preserve_user_error(run, peer):
+    result, _ = run([(modify(110, remote=peer), 0)], job_script="export NCCL_IB_TC=128")
+    assert result.outcome_attr.value().outcome == "Fail User"
+    assert "Overwrite NCCL parameters" in result.outcome_attr.value().root_cause_symptom
+    assert set(exported(result)[0]) == ({"node-a", "node-b"} if peer == "::ffff:192.0.2.2" else {"node-a"})
+    assert not any("Local HCA" in s for values in exported(result)[0].values() for s in values)
+
+
+def test_unmapped_address_is_pair_evidence_not_node_identity(run):
+    result, stream = run([(modify(remote="::ffff:198.51.100.7"), 0)])
+    bad, interesting = exported(result)
+    assert set(bad) == {"node-a"}
+    assert not any("198.51" in node for node in set(bad) | set(interesting))
+    assert events(stream, "Application.bad_pair.complete")[0][2]["remote_dev_ip"] == "198.51.100.7"
+
+
+@pytest.mark.parametrize("errno", [22, 110])
+def test_unidentified_emitter_never_blames_resolved_peer(event_manager, obs_data, job, request, errno):
+    stream = event_manager.create_stream(request.node.name)
+    line = "Last error: " + modify(errno, local="N/A").split("NCCL WARN ", 1)[1]
+    app = obs_data(
+        job,
+        [{"body": line, "ts": int((job.job_start_time.timestamp() + 20) * 1e9)}],
+        ObservationSource.APPLOG,
+        insert_tflops_line=False,
+    )
+    stream.register_observation_context(app.context)
+    with hostname_mapping({"192.0.2.2": "node-b"}):
+        bad = core.calculate_bad_nodes(event_stream=stream, job_info=job, applog_in=app)
+    result = core.attribute(
+        event_stream=stream, job_info=job, bad_node_result=bad, extract_job_metadata_from_logfile=False
+    )
+    assert not exported(result)[0]
+    assert "node-b" in exported(result)[1]
+
+
+def test_mapped_local_gid_identifies_unlabeled_emitter(run):
+    line = "Last error: " + modify().split("NCCL WARN ", 1)[1]
+    result, _ = run([(line, 0)])
+    assert set(exported(result)[0]) == {"node-a"}
+
+
+def test_logged_emitter_takes_precedence_over_declared_metadata(run):
+    result, _ = run([(verb("ibv_query_qp").replace("node-a:", "node-c:"), 0)])
+    assert set(exported(result)[0]) == {"node-c"}
+
+
+@pytest.mark.parametrize("timed", [True, False])
+def test_standard_progress_filter_demotes_local_failure(run, job, timed):
+    timestamp = (job.job_start_time + timedelta(seconds=30)).strftime("%Y-%m-%d %H:%M:%S")
+    result, _ = run(
+        [
+            (verb("ibv_query_qp"), 0 if timed else None),
+            (f"[{timestamp}] iteration 1/ 10 | throughput per GPU (TFLOP/s/GPU): 100.0 |", 10),
+        ]
+    )
+    assert not any("Local HCA" in s for values in exported(result)[0].values() for s in values)
+    assert any("Local HCA" in s for values in exported(result)[1].values() for s in values)
+
+
+def test_existing_csp_cascade_is_preserved(run):
+    result, _ = run(
+        [
+            (verb("ibv_query_qp"), 0),
+            ("node-a:123:456 [0] pyxis: container start failed", 1),
+        ],
+        provider=[("CSP Event NIC Fault", "node-a", 2, ObservationSource.CSP_EVENT)],
+    )
+    assert result.outcome_attr.value().root_cause_symptom == "CSP Event NIC Fault"
+    assert not any("pyxis" in s.lower() for s in exported(result)[0]["node-a"])
+
+
+def test_unresolved_timeout_retains_original_priority(run):
+    import attribution_lib
+    from attribution_lib.symptoms.declarations import OutcomePriority
+    from attribution_lib.symptoms.registry_generation import OUTCOME_PRIORITIES
+
+    result, _ = run([(modify(110, remote="N/A"), 0)])
+    match = attribution_lib.get_symptom_registry().outcome_for([result.outcome_attr.value().root_cause_symptom])
+    assert match.tier_index == OUTCOME_PRIORITIES.index(OutcomePriority.MEDIUM_SW)

@@ -17,7 +17,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Literal, Optional
 
-from common.hca import command_failure_event, command_source_node, parse_command_errno
+from common.hca import command_failure_events, command_source_node, parse_command_errno
 from common.nccl_helpers import get_status_name
 from common.nccl_watchdog import NcclWatchdogData, NcclWatchdogParseState
 from common.rankpulse import RankpulseParseState
@@ -30,7 +30,7 @@ from attribution_lib.event_helpers import query_events_with_source
 from attribution_lib.events import BAD_PAIR_EVENT_TYPES, DemotionTypes, sql_placeholders
 from attribution_lib.network_identity import NetworkSourceIdentity, network_source_identity, normalize_network_hostname
 from attribution_lib.observation.inbound import Source as ObsSource
-from attribution_lib.rule_helpers import _bad
+from attribution_lib.rule_helpers import _bad, _interesting
 from attribution_lib.rules import (
     EventTriple,
     ExtractorAccumulator,
@@ -149,6 +149,7 @@ declare_event_types(
     "Attribution.node.bad",
     "Attribution.node.bad_peers",
     "Attribution.node.interesting_peers",
+    "Attribution.node.interesting",
     "Application.hca.command_failure",
     "Application.bad_pair.complete",
     "Application.bad_pair.partial",
@@ -490,7 +491,7 @@ def ibv_modify_qp_failed_event(
     local_gid, remote_gid = groups["local_gid"], groups["remote_gid"]
     remote_ip = remote_gid[7:] if remote_gid.startswith("::ffff:") else remote_gid
 
-    peer_node = get_hostname(remote_ip) if remote_gid != "N/A" else None
+    peer_node = normalize_network_hostname(get_hostname(remote_ip)) if remote_gid != "N/A" else None
 
     msg = f"Call to ibv_modify_qp failed: eno {error_code}"
     if error_code == 11:
@@ -508,15 +509,24 @@ def ibv_modify_qp_failed_event(
     # Only the errno-22 variant with two IPv4-mapped GIDs establishes a
     # local-side fault. Keep mismatched-GID and resolved timeout behavior.
     local_argument_error = error_code == 22 and all(gid.startswith("::ffff:") for gid in (local_gid, remote_gid))
-    unresolved_peer = peer_node is None or normalize_network_hostname(peer_node) is None
+    unresolved_peer = peer_node is None
     local_command_error = error_code in {11, 110, 125} and unresolved_peer
-    if local_command_error:
-        events = [command_failure_event("ibv_modify_qp", error_code, node, source, groups["local_hca"])]
+    configuration_error = "(Overwrite NCCL parameters)" in msg
+    if configuration_error:
+        events = [
+            _bad_peers(node, peer_node, msg, source, demotion="Call to ibv_modify_qp failed")
+            if node is not None and peer_node is not None
+            else _bad(node, msg, source, demotion="Call to ibv_modify_qp failed")
+        ]
+    elif local_command_error:
+        events = command_failure_events("ibv_modify_qp", error_code, node, source, groups["local_hca"])
+    elif node is None:
+        events = [_interesting(None, msg, source)]
     elif local_argument_error:
         events = [_bad(node, msg, source, demotion="Call to ibv_modify_qp failed")]
     else:
         events = [_bad_peers(node, peer_node, msg, source, demotion="Call to ibv_modify_qp failed")]
-    if local_argument_error or local_command_error:
+    if local_argument_error or local_command_error or node is None:
         events.append(
             EventTriple(
                 type="Attribution.node.interesting_peers",
@@ -568,7 +578,7 @@ def local_hca_command_failure_event(
     error_code = parse_command_errno(groups["error"])
     if error_code not in {11, 110, 125}:
         return []
-    return [command_failure_event(groups["verb"], error_code, node, source)]
+    return command_failure_events(groups["verb"], error_code, node, source)
 
 
 @rule_processor("applog:Connection closed by remote peer")

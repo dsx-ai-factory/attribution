@@ -174,4 +174,4 @@ processor           = "applog:pytorch_watchdog"
 name = "LocalHcaCommandFailure"
 match_re = 'Call to (?P<verb>ibv_query_qp|ibv_create_cq|ibv_reg_mr|ibv_dereg_mr) failed with (?P<error>[^\r\n]+)'
 processor = "applog:LocalHcaCommandFailure"
-derived_event_types = ["Application.hca.command_failure"]
+derived_event_types = ["Application.hca.command_failure", "Attribution.node.bad", "Attribution.node.interesting"]

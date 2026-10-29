@@ -11,14 +11,12 @@ from datetime import datetime, timedelta
 
 from attribution_lib.event_helpers import query_events_with_source
 from attribution_lib.events import EventStream
+from attribution_lib.network_identity import network_source_identity, normalize_network_hostname
 from attribution_lib.observation.inbound import Source as ObservationSource
+from attribution_lib.rule_helpers import _bad, _interesting
 from attribution_lib.rules import EventTriple, RefinerContext
 from attribution_lib.sources import Source, SourceSet
-from attribution_lib.utils import (
-    NCCL_HOST_PID_TID_REGEX,
-    _leading_explicit_applog_rank,
-    convert_hostname_to_short_format,
-)
+from attribution_lib.utils import NCCL_HOST_PID_TID_REGEX
 
 _DEVICE_RE = re.compile(r"\b(?:mlx5_\d+|[0-9a-fA-F]{4}:[0-9a-fA-F]{2}:[0-9a-fA-F]{2}\.[0-7])\b")
 _ERRNO_RE = re.compile(r"\berrno\s+(\d+)\b|^\s*(\d+)\b")
@@ -26,7 +24,7 @@ _WINDOW = timedelta(minutes=5)
 _NIC_SYSLOG = {"irisc not responding", "detected bad NIC state"}
 # Provider connectors own instance identity, lifecycle checks and event mapping.
 # An instance-status check alone does not establish a hardware fault.
-_PROVIDER_FAULTS = {"CSP Event NIC Fault", "CSP Event EC2 System Check Failed"}
+_PROVIDER_FAULTS = {"CSP Event NIC Fault"}
 _COMPOUND = "Corroborated local HCA command failure"
 
 
@@ -47,15 +45,9 @@ def _devices(datum: str) -> set[str]:
 
 
 def command_source_node(node: str | None, source: Source) -> str | None:
-    """Accept a declared node, a logged emitter or an explicitly mapped rank."""
-    if source.declared_node:
-        return convert_hostname_to_short_format(source.declared_node).lower()
-    logged = NCCL_HOST_PID_TID_REGEX.search(source.datum)
-    if logged:
-        return convert_hostname_to_short_format(logged["node"]).lower()
-    if _leading_explicit_applog_rank(source.datum) is not None and node:
-        return convert_hostname_to_short_format(node).lower()
-    return None
+    """Use shared network identity rules, then explicit observation metadata."""
+    identity = network_source_identity(source.datum, prefix_hostname=node)
+    return identity.hostname or (normalize_network_hostname(source.declared_node) if source.declared_node else None)
 
 
 def command_failure_event(
@@ -75,6 +67,29 @@ def command_failure_event(
         },
         source=source,
     )
+
+
+def command_symptom(verb: str, errno: int) -> str:
+    return f"Local HCA command failure ({verb} eno {errno})"
+
+
+def command_failure_events(
+    verb: str, errno: int, node: str | None, source: Source, device: str | None = None
+) -> list[EventTriple]:
+    """Send candidates through the standard progress-demotion filter."""
+    event = command_failure_event(verb, errno, node, source, device)
+    emitter = event.payload["node"]
+    symptom = command_symptom(verb, errno)
+    attribution = (
+        _bad(emitter, symptom, source, demotion="LocalHcaCommandFailure")
+        if emitter is not None
+        else _interesting(None, symptom, source)
+    )
+    return [event, attribution]
+
+
+def _resource_limited(command: "_Command") -> bool:
+    return command.errno == 11 and command.verb in {"ibv_reg_mr", "ibv_create_cq"}
 
 
 @dataclass(frozen=True)
@@ -101,12 +116,15 @@ def _source_near(sources: list[Source], time: datetime | None) -> Source | None:
 
 
 def _commands(stream: EventStream) -> list[_Command]:
-    commands = [
+    return [
         _Command(**payload, source=source)
         for _, _, payload, source in query_events_with_source(
             stream, stream.mgr.types.get_id("Application.hca.command_failure")
         )
     ]
+
+
+def _resolve_devices(commands: list[_Command]) -> list[_Command]:
     anchors = defaultdict(lambda: defaultdict(list))
     for command in commands:
         if command.device and command.node and command.process and command.source.time is not None:
@@ -161,38 +179,28 @@ def attribute_local_hca_failures(context: RefinerContext) -> None:
     commands = _commands(stream)
     if not commands:
         return
-    # Successful progress makes earlier application failures contextual. Do not
-    # use them as proofs for a later isolated registration failure.
-    mfu = [
-        source.time
-        for _, _, _, source in query_events_with_source(stream, stream.mgr.types.get_id("Application.mfu"))
-        if source.time is not None
-    ]
-    last_progress = max(mfu, default=None)
-    active = [
-        command
-        for command in commands
-        if not (last_progress is not None and command.source.time is not None and command.source.time < last_progress)
-    ]
-    active_set = set(active)
+    # Only candidates that survived the normal attribution filters can provide
+    # guard proofs or become compound diagnoses. Never revive demoted evidence.
+    active = []
+    for command in commands:
+        if command.node is None or command.node not in nodes:
+            continue
+        group = nodes[command.node].attributions
+        symptom = command_symptom(command.verb, command.errno)
+        if symptom in group and command.source in group[symptom]:
+            active.append(command)
+    active = _resolve_devices(active)
+    commands = active
     by_device = defaultdict(lambda: defaultdict(list))
     for command in active:
-        if command.node and command.device and command.source.time is not None:
+        if command.node and command.device and command.source.time is not None and not _resource_limited(command):
             by_device[command.node, command.device][command.verb].append(command.source)
     for verbs in by_device.values():
         for sources in verbs.values():
             sources.sort(key=lambda source: source.time)
     corroborating_sources = []
     for command in commands:
-        symptom = f"Local HCA command failure ({command.verb} eno {command.errno})"
-        if command.node is None:
-            unattributed = SourceSet(symptom)
-            if command in active_set and not (command.verb == "ibv_reg_mr" and command.errno == 11):
-                unattributed.add(command.source)
-            else:
-                unattributed.add_interesting(command.source)
-            nodes.job_level.add(unattributed)
-            continue
+        symptom = command_symptom(command.verb, command.errno)
         proof = []
         if command.device:
             proof = [
@@ -200,32 +208,29 @@ def attribute_local_hca_failures(context: RefinerContext) -> None:
                 for verb, sources in by_device[command.node, command.device].items()
                 if verb != command.verb and (source := _source_near(sources, command.source.time)) is not None
             ]
-        group = nodes[command.node].attributions if command.node in nodes else None
-        corroboration = _corroboration(command, group) if group is not None else []
-        guarded = command.verb == "ibv_reg_mr" and command.errno == 11
-        is_active = command in active_set
+        group = nodes[command.node].attributions
+        corroboration = _corroboration(command, group)
+        guarded = _resource_limited(command)
         guard_proof = proof or [
             source for _, source in corroboration if source.source_context.source == ObservationSource.SYSLOG
         ]
-        qualifies = is_active and (not guarded or guard_proof)
-        sources = SourceSet(symptom)
-        if qualifies:
-            sources.add(command.source)
-            if guarded:
-                for source in guard_proof:
-                    sources.add(source)
-        else:
-            sources.add_interesting(command.source)
+        qualifies = not guarded or bool(guard_proof)
+        sources = group[symptom]
+        if not qualifies:
+            sources.discard_selected([command.source])
+        elif guarded:
+            for proof_source in guard_proof:
+                sources.add_interesting(proof_source)
         if command.device_source is not None:
             sources.add_interesting(command.device_source)
-        nodes.add([command.node], sources)
         if qualifies and corroboration:
             combined = SourceSet(_COMPOUND).add(command.source)
             if command.device_source is not None:
                 combined.add(command.device_source)
             for matched_symptom, source in corroboration:
                 combined.add(source)
-                corroborating_sources.append((command.node, matched_symptom, source))
+                if matched_symptom in _NIC_SYSLOG:
+                    corroborating_sources.append((command.node, matched_symptom, source))
             nodes.add([command.node], combined)
     # Demote only proofs consumed by the compound, after all commands have been
     # examined. Independent nodes, episodes and outcomes remain available.

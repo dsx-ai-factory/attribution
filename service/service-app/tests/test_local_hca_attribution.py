@@ -31,13 +31,13 @@ def test_local_hca_endpoint_and_corroborated_diagnosis(client, monkeypatch, corr
         "on dev mlx5_4:1, local GID index 3, local GID ::ffff:192.0.2.1, remote GID ::ffff:192.0.2.2"
     )
     if corroborated:
-        line = "node-a:123:456 [0] NCCL WARN Call to ibv_query_qp failed with error Connection timed out errno 110 on dev mlx5_4"
+        line = "node-a:123:456 [0] NCCL WARN Call to ibv_query_qp failed with error Connection timed out errno 110 on dev 0000:03:00.3"
     observations = [("applog", line)]
     if corroborated:
         observations.append(
             (
                 "syslog",
-                "mlx5_core 0000:03:00.3: mlx5_4: Health issue observed, irisc not responding, severity(3) ERROR:",
+                "mlx5_core 0000:03:00.3: Health issue observed, irisc not responding, severity(3) ERROR:",
             )
         )
     for index, (source, body) in enumerate(observations):

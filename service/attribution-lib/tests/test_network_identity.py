@@ -52,3 +52,15 @@ def test_explicit_nccl_hostname_does_not_require_a_gid_or_allocation():
     assert identity.hostname == "outside"
     assert identity.local_ip is None
     assert identity.mapped_hostname is None
+
+
+@pytest.mark.parametrize("spelling", ["localGid", "local GID"])
+def test_local_gid_spellings_share_identity_rules(spelling):
+    with hostname_mapping({"192.0.2.1": "node-a"}):
+        identity = network_source_identity(f"Last error: {spelling} ::ffff:192.0.2.1, remote GID N/A")
+    assert identity.hostname == "node-a"
+
+
+def test_rank_does_not_identify_network_emitter():
+    identity = network_source_identity("[1] NCCL WARN Call to ibv_query_qp failed", prefix_hostname="node-b")
+    assert identity.hostname is None
