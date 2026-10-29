@@ -24,12 +24,8 @@ Emits one workload-level context per PodGroup, with these KAI specifics:
                        a completed one stays COMPLETED without one.
 
 Member Pods are joined on the `pod-group-name` annotation plus namespace,
-then validated against the exact owning Job UID; JobSet members must belong
-to current child Jobs. Kubernetes exposes no reliable per-annotation
-assignment timestamp (`managedFields` records a field manager's last write to
-*any* owned field, and a Pod's own `creationTimestamp` can predate its
-PodGroup by design), so membership intentionally does not use time as a
-discriminator; see `_member_pods` for the resulting known limitation.
+then validated against the exact owning Job UID — see `_member_pods` for
+why membership intentionally does not use timestamps as a discriminator.
 
 The owner comes from the `kai.scheduler/top-owner-metadata` annotation, or
 else the PodGroup's controller ownerReference. Only PodGroups owned by a
@@ -103,9 +99,7 @@ class KaiExecutionContext(TypedDict):
     owner_kind: str
     owner_name: str
     owner_uid: str
-    # The owner's own state, e.g. "Complete", "Failed:BackoffLimitExceeded",
-    # "Suspended" or "Active".
-    owner_state: str
+    owner_state: str  # native owner wording; see `_owner_state`
     failed_node: NotRequired[str]
     time_limit: NotRequired[int]
 
@@ -257,13 +251,11 @@ def _condition(owner_object: dict, condition_type: str) -> dict | None:
 
 
 def _owner_state(owner: dict, owner_object: dict, owner_jobs: list[dict]) -> tuple[str, str]:
-    """Return the service-facing state and the native owner state.
+    """Return (service-facing state, native owner state).
 
-    The service state is COMPLETED, FAILED, TIMEOUT or RUNNING. It is derived
-    from the same terminal signal as the end time, so an owner without one is
-    RUNNING, including while suspended. A Job whose Failed condition reports
-    DeadlineExceeded is TIMEOUT. The native state keeps the owner's own
-    wording, including the failure reason.
+    Service state is COMPLETED, FAILED, TIMEOUT, or RUNNING (including while
+    suspended), derived from the same terminal signal as the end time. Native
+    state keeps the owner's own wording, e.g. "Failed:BackoffLimitExceeded".
     """
     if _owner_end_time(owner, owner_object) is None:
         return "RUNNING", "Suspended" if _condition(owner_object, "Suspended") else "Active"
