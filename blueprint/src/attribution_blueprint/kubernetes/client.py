@@ -13,7 +13,7 @@ class KubernetesClientError(RuntimeError):
 
     `status` carries the HTTP status code when the failure was an API
     response (e.g. 404, 403); it is `None` for connection-level failures
-    (timeout, DNS, malformed response, ...).=
+    (timeout, DNS, malformed response, ...).
     """
 
     def __init__(self, message: str, *, status: int | None = None):
