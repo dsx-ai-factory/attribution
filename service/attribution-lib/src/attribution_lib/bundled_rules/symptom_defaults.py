@@ -1450,6 +1450,43 @@ outcome_symptom(
     doc="python-exception",
 )
 
+# Concrete application configuration and runtime errors also outrank generic
+# NVRx failure context. Keep arguments, paths, and values in source evidence.
+outcome_symptom(
+    "Python Exception: argparse unrecognized arguments",
+    outcome="Fail User",
+    priority=OutcomePriority.LOW,
+    doc="python-exception",
+)
+
+outcome_symptom(
+    "Python Exception: ValueError: module grids do not cover every rank",
+    outcome="Fail User",
+    priority=OutcomePriority.LOW,
+    doc="python-exception",
+)
+
+outcome_symptom(
+    "Python Exception: ValueError: num-experts not divisible",
+    outcome="Fail User",
+    priority=OutcomePriority.LOW,
+    doc="python-exception",
+)
+
+outcome_symptom(
+    "Python Exception: RuntimeError: pinned activation buffer budget exceeded",
+    outcome="Fail User",
+    priority=OutcomePriority.LOW,
+    doc="python-exception",
+)
+
+outcome_symptom(
+    "Python Exception: FileNotFoundError: checkpoint iteration not found",
+    outcome="Fail User",
+    priority=OutcomePriority.LOW,
+    doc="python-exception",
+)
+
 # The compiler failure is specific evidence, but does not establish whether
 # application code, the toolchain, or node-local files caused it.
 # Prefer it over a peer closure attributed to the same node.

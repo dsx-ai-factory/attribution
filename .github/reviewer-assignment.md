@@ -28,6 +28,12 @@ review. The team, not the author, makes sure every PR has a reviewer.
 - Request specialists as extra reviewers when you need help.
 - Own the review until the PR is merged, closed, or handed over.
 
+**Issue triager**
+
+- Confirm the issue, ask the reporter for missing details, label it, and route
+  it to the right owner.
+- Triage does not include the fix. Fixing the issue is a separate assignment.
+
 **On-call engineer**
 
 - Acknowledge each PR the bot announces in the team's Slack channel, and make
@@ -59,17 +65,23 @@ or comment. A plain PR comment does not count.
 
 ## What the automation does
 
-`.github/workflows/auto-assign-pr.yml` runs `.github/scripts/assign_reviewer.py`.
+`.github/workflows/auto-assign-pr.yml` and
+`.github/workflows/auto-assign-issue.yml` run `.github/scripts/assign_reviewer.py`.
 
 - When a PR opens, the author becomes the assignee. If the author is not on
-  the `attribution` team, the bot posts the PR to the team's Slack channel and
-  tags on-call. Drafts are included.
-- When a PR is ready, the bot picks one primary from the `attribution` team and
-  requests their review. It skips the author, anyone already requested, and
+  the `attribution-maintainer` team, the bot posts the PR to the team's Slack
+  channel and tags on-call. Drafts are included.
+- When someone outside the `attribution-maintainer` team opens an issue, the
+  bot assigns a random team member, skipping `EXCLUDED_REVIEWERS`, to triage
+  it. An issue that already has an assignee is left alone. Issues get no
+  Slack message, bot comment, or reminder; everything else on this page
+  applies to PRs only.
+- When a PR is ready, the bot picks one primary from the
+  `attribution-maintainer` team and requests their review. It skips the author, anyone already requested, and
   the members in `EXCLUDED_REVIEWERS` in the script. If someone already
   requested an eligible team member, that person becomes the primary instead.
-  The bot records the primary in a PR comment and removes the team's CODEOWNERS
-  request, so only the primary is notified.
+  The bot records the primary in a PR comment and removes the `attribution`
+  CODEOWNERS request, so only the primary is notified.
 - When anyone removes the primary before they review, the bot picks a
   replacement. It never re-picks an earlier primary on its own. If someone
   requested another team member since the primary was picked, that person
@@ -88,6 +100,8 @@ or comment. A plain PR comment does not count.
 
 ## Setup
 
+Both workflows use `PR_ASSIGNER_TOKEN`.
+
 - `PR_ASSIGNER_TOKEN` secret: looks up the team and removes the team request.
   It needs read access to the organization's teams and write access to pull
   requests in this repository (`Pull requests: write` for a fine-grained token).
@@ -101,6 +115,8 @@ or comment. A plain PR comment does not count.
   channel ID and user group ID, for example
   `{"channel": "C0123ABCD", "group": "S0123ABCD"}`. Without it, the bot skips
   on-call messages with a warning in the run log.
+- Team members need read access to this repository to be assigned. GitHub
+  silently ignores an assignee without it.
 
 ## Recovery
 
@@ -114,3 +130,5 @@ or comment. A plain PR comment does not count.
   `REVIEWER_ONCALL_SLACK` variables. Assignment and comments continue.
 - To stop automation, disable the workflow in the Actions tab. On-call then
   requests a primary by hand for each new PR.
+- To stop issue triage, disable the Assign Issue workflow in the Actions tab.
+  Maintainers then assign a triager by hand.

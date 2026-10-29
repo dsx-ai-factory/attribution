@@ -10,6 +10,7 @@ import pytest
 import attribution_lib
 from attribution_lib.rule_types.definitions import CollectorContext
 from attribution_lib.core import process_check
+from attribution_lib.events import DemotionTypes
 from attribution_lib.job_info import JobInfoBuilder
 from attribution_lib.observation.inbound import (
     Source as ObservationSource,
@@ -489,6 +490,90 @@ class TestIBPairRules:
         events = self._get_events_by_type(result.event_stream, "Attribution.node.bad_peers")
         assert len(events) >= 1
         assert events[0]["payload"]["peer"] == "192.0.2.1"
+
+
+@pytest.mark.parametrize(
+    "peer,emits",
+    [
+        ("gpu-01.rack-a.example", False),
+        ("gpu-01", False),
+        ("gpu-01.rack-b.example", True),
+    ],
+)
+def test_socket_progress_opt_self_peer_requires_same_qualified_name(app_tst_bldr, timezone, peer, emits):
+    start = datetime.fromtimestamp(1741860016, tz=timezone)
+    job_info = (
+        JobInfoBuilder(
+            id="12345678",
+            cluster="cluster_b722552b",
+            state="CANCELLED",
+            type="training",
+            framework="megatron",
+            node_to_ranks=make_node_to_ranks(["gpu-01.rack-a.example", "gpu-02.rack-a.example"], 8),
+            job_start_time=start,
+            source_name="artifical slurm",
+            timezone=timezone,
+        )
+        .job_end_time(datetime.fromtimestamp(1741862869, tz=timezone))
+        .build()
+    )
+    line = "0: NCCL WARN socketProgressOpt: Call to recv from 192.0.2.2<28601> failed : Connection reset by peer"
+    with hostname_mapping({"192.0.2.2": peer}):
+        result = app_tst_bldr(job_info, [line])
+    rows = result.event_stream.query_raw(
+        """
+        SELECT e.payload FROM events e JOIN event_types et ON e.event_type = et.id
+        WHERE et.name = 'Attribution.node.bad'
+        """,
+        [],
+    )
+    bad_nodes = [json.loads(row[0])["node"] for row in rows]
+    assert (peer in bad_nodes) == emits
+
+
+@pytest.mark.parametrize(
+    "mapping,expected_peer",
+    [
+        pytest.param({"192.0.2.2": "node-a"}, "node-a", id="mapped-rank-zero-peer"),
+        pytest.param({"192.0.2.2": "node-b.example"}, "node-b.example", id="mapped-qualified-peer"),
+        pytest.param({}, "192.0.2.2", id="unmapped-peer"),
+    ],
+)
+def test_socket_progress_opt_without_source_hostname_preserves_peer(
+    app_tst_bldr, simple_job_factory, mapping, expected_peer
+):
+    """Keep peer evidence when the observation identifies no single source node.
+
+    Args:
+        app_tst_bldr: Fixture that processes application-log observations.
+        simple_job_factory: Fixture that builds the synthetic job allocation.
+        mapping: Explicit IP-to-hostname mapping for this case.
+        expected_peer: Peer identity that must remain in the emitted event.
+
+    Returns:
+        None.
+    """
+    job_info = simple_job_factory(nodes=["node-a", "node-b.example"])
+    line = "NCCL WARN socketProgressOpt: Call to recv from 192.0.2.2<28601> failed : Connection reset by peer"
+    with hostname_mapping(mapping):
+        result = app_tst_bldr(job_info, entries=[{"body": line, "resources": "AllJobResources"}])
+    rows = result.event_stream.query_raw(
+        """
+        SELECT e.payload, e.resources, e.source_datum
+        FROM events e JOIN event_types et ON e.event_type = et.id
+        WHERE et.name = 'Attribution.node.bad'
+        """,
+        [],
+    )
+    assert len(rows) == 1
+    payload, resources, source_datum = rows[0]
+    assert json.loads(payload) == {
+        "node": expected_peer,
+        "symptom": "Connection reset by peer",
+        DemotionTypes.AFTER_MFU_DEMOTION: "socketProgressOpt",
+    }
+    assert json.loads(resources) == "AllJobResources"
+    assert source_datum == line
 
 
 def test_multicast_skip_marker_logs_from_applog(app_tst_bldr, big_jobinfo):
