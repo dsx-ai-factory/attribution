@@ -250,13 +250,30 @@ def socket_poll_connect_event(groups: Dict[str, str], node: str, source: Source,
 
 
 @rule_processor("applog:socketProgressOpt")
-def socket_progress_opt_event(groups: Dict[str, str], node: str, source: Source, ctx: RuleContext) -> List[EventTriple]:
+def socket_progress_opt_event(
+    groups: Dict[str, str], node: str | None, source: Source, ctx: RuleContext
+) -> List[EventTriple]:
+    """Emit a socket failure for the peer unless it is the known source node.
+
+    Args:
+        groups: Matched peer IP and failure reason.
+        node: Verified source hostname, or None when the source node is unknown.
+        source: Original application-log evidence.
+        ctx: Rule execution context.
+
+    Returns:
+        A peer failure event, or no events for a known self-peer connection.
+        An unknown source hostname preserves the peer event.
+    """
     peer_node = get_hostname(groups["ip"])
     # The verified node can be fully qualified while the mapped peer is short, so a short name
     # matches its qualified form. Two qualified names must match exactly, as in verify_node.
-    same_node = node == peer_node or (
-        ("." not in node or "." not in peer_node)
-        and convert_hostname_to_short_format(node) == convert_hostname_to_short_format(peer_node)
+    same_node = node is not None and (
+        node == peer_node
+        or (
+            ("." not in node or "." not in peer_node)
+            and convert_hostname_to_short_format(node) == convert_hostname_to_short_format(peer_node)
+        )
     )
     if same_node:
         return []
