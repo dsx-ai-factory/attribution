@@ -97,6 +97,23 @@ run_ci_tests() {
     )
 }
 
+run_symptom_docs() {
+    (
+        cd "${repository_root}"
+        uv run --project service/attribution-lib --frozen pytest .ci/symptom-docs-tests -q
+        local base_sha="${SYMPTOM_DOC_BASE:-}"
+        if [[ -z "${base_sha}" ]]; then
+            base_sha="$(git merge-base HEAD origin/main)"
+        fi
+        local check_args=(--base "${base_sha}" --output "${SYMPTOM_DOC_OUTPUT:-.symptom-doc-check}")
+        if [[ "${SYMPTOM_DOC_ADVISORY:-false}" == "true" ]]; then
+            check_args+=(--advisory)
+        fi
+        uv run --project service/attribution-lib --frozen python .ci/symptom_doc_check.py check \
+            "${check_args[@]}"
+    )
+}
+
 case "${suite}" in
     attribution-lib)
         run_attribution_lib
@@ -122,9 +139,13 @@ case "${suite}" in
     ci-tests)
         run_ci_tests
         ;;
+    symptom-docs)
+        run_symptom_docs
+        ;;
     all)
         run_end_to_end
         run_attribution_lib
+        run_symptom_docs
         run_service_app
         run_service_app_client_drift
         run_license_compliance
@@ -133,7 +154,7 @@ case "${suite}" in
         run_ci_tests
         ;;
     *)
-        echo "usage: $0 {all|attribution-lib|service-app|blueprint|service-app-client-drift|license-compliance|frontend|end-to-end|ci-tests}" >&2
+        echo "usage: $0 {all|attribution-lib|service-app|blueprint|service-app-client-drift|license-compliance|frontend|end-to-end|ci-tests|symptom-docs}" >&2
         exit 2
         ;;
 esac
