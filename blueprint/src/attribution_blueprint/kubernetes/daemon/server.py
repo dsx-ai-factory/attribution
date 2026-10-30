@@ -5,20 +5,24 @@ from __future__ import annotations
 
 import json
 import threading
+from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
 from loguru import logger
 
 from attribution_blueprint.kubernetes.daemon.health import HealthState
-from attribution_blueprint.kubernetes.daemon.store import PlacementReader
+from attribution_blueprint.kubernetes.daemon.models import ResourceObservation
+from attribution_blueprint.kubernetes.daemon.store import PlacementStore
 
 
 def serve_api(
     state: HealthState,
-    placement_reader: PlacementReader,
+    evidence_store: PlacementStore,
     port: int,
     namespace: str,
+    *,
+    cluster_id: str = "default",
 ) -> ThreadingHTTPServer:
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self):
@@ -31,6 +35,77 @@ def serve_api(
                     "status": "ready" if ready else "not-ready",
                     "disabledWatches": state.disabled_watch_status(),
                 }
+            elif parsed.path == "/v1/history":
+                query = parse_qs(parsed.query)
+                requested_namespace = (query.get("namespace") or [""])[0]
+                kind = (query.get("kind") or [""])[0]
+                name = (query.get("name") or [None])[0]
+                start_value = (query.get("start") or [None])[0]
+                end_value = (query.get("end") or [None])[0]
+                try:
+                    start = _aware_datetime(start_value)
+                    end = _aware_datetime(end_value)
+                    if start is not None and end is not None and start > end:
+                        raise ValueError
+                except (TypeError, ValueError):
+                    status, body = 400, {
+                        "error": "start/end must be aware ISO-8601 values"
+                    }
+                    self._write_response(status, body)
+                    return
+                if not requested_namespace or not kind:
+                    status, body = 400, {
+                        "error": "namespace and kind are required"
+                    }
+                elif requested_namespace != namespace:
+                    status, body = 403, {
+                        "error": f"this daemon only serves namespace {namespace!r}, got {requested_namespace!r}"
+                    }
+                else:
+                    try:
+                        controller_uids = evidence_store.list_history_controller_uids(
+                            cluster_id,
+                            requested_namespace,
+                            kind,
+                            name=name,
+                            start=start,
+                            end=end,
+                        )
+                        histories = []
+                        # Coverage and gaps are scoped to (cluster_id, namespace)
+                        coverage = (
+                            _coverage_response(
+                                state,
+                                evidence_store,
+                                cluster_id,
+                                requested_namespace,
+                            )
+                            if controller_uids
+                            else None
+                        )
+                        for controller_uid in controller_uids:
+                            observations = evidence_store.list_observations_for_controller(
+                                cluster_id,
+                                requested_namespace,
+                                controller_uid,
+                            )
+                            histories.append(
+                                _history_response(
+                                    requested_namespace,
+                                    observations,
+                                    _placements_for_observations(
+                                        evidence_store,
+                                        observations,
+                                    ),
+                                    coverage,
+                                )
+                            )
+                        status, body = 200, {"items": histories}
+                    except Exception:
+                        logger.exception("execution history discovery failed")
+                        status, body = 500, {
+                            "error": "execution history discovery failed"
+                        }
             elif parsed.path == "/v1/placements":
                 query = parse_qs(parsed.query)
                 requested_namespace = (query.get("namespace") or [""])[0]
@@ -43,7 +118,10 @@ def serve_api(
                     }
                 else:
                     try:
-                        records = placement_reader.list_for_resource(requested_namespace, resource_uid)
+                        records = evidence_store.list_for_resource(
+                            requested_namespace,
+                            resource_uid,
+                        )
                         status, body = 200, {"items": [record.to_resource() for record in records]}
                     except Exception:
                         logger.exception("placement lookup failed")
@@ -51,6 +129,9 @@ def serve_api(
             else:
                 status, body = 404, {"status": "not-found"}
 
+            self._write_response(status, body)
+
+        def _write_response(self, status, body):
             payload = json.dumps(body).encode()
             self.send_response(status)
             self.send_header("Content-Type", "application/json")
@@ -64,3 +145,117 @@ def serve_api(
     server = ThreadingHTTPServer(("0.0.0.0", port), Handler)
     threading.Thread(target=server.serve_forever, name="kubernetes-daemon-api-server", daemon=True).start()
     return server
+
+
+def _aware_datetime(value: str | None) -> datetime | None:
+    if value is None:
+        return None
+    parsed = datetime.fromisoformat(value)
+    if parsed.tzinfo is None:
+        raise ValueError("timestamp must be timezone-aware")
+    return parsed
+
+
+def _history_response(
+    namespace: str,
+    observations: list[ResourceObservation],
+    placements: list[dict],
+    coverage: dict,
+) -> dict:
+    return {
+        "namespace": namespace,
+        "observations": [_observation_response(observation) for observation in observations],
+        "placements": placements,
+        "coverage": coverage,
+    }
+
+
+def _observation_response(observation: ResourceObservation) -> dict:
+    result = {
+        "apiVersion": observation.api_version,
+        "kind": observation.kind,
+        "metadata": {
+            "namespace": observation.namespace,
+            "name": observation.name,
+            "uid": observation.uid,
+            "resourceVersion": observation.resource_version,
+            "ownerReferences": [
+                {
+                    "apiVersion": owner.api_version,
+                    "kind": owner.kind,
+                    "name": owner.name,
+                    "uid": owner.uid,
+                    "controller": owner.controller,
+                }
+                for owner in observation.owner_references
+            ],
+        },
+        "eventType": observation.event_type,
+        "observedAt": observation.observed_at,
+    }
+    if observation.selected_metadata is not None:
+        result["selectedMetadata"] = observation.selected_metadata
+    if observation.source_timestamp is not None:
+        result["sourceTimestamp"] = observation.source_timestamp
+    if observation.status is not None:
+        result["status"] = observation.status
+    return result
+
+
+def _placements_for_observations(
+    evidence_store: PlacementStore,
+    observations: list[ResourceObservation],
+) -> list[dict]:
+    records = {
+        record.pod_uid: record
+        for observation in observations
+        if observation.kind == "Pod"
+        and (record := evidence_store.get_by_pod_uid(observation.uid))
+        is not None
+    }
+    return [
+        records[pod_uid].to_resource()
+        for pod_uid in sorted(records)
+    ]
+
+
+def _coverage_response(
+    state: HealthState,
+    evidence_store: PlacementStore,
+    cluster_id: str,
+    namespace: str,
+) -> dict:
+    return {
+        "sources": [
+            {
+                "sourceName": item.source_name,
+                "apiVersion": item.api_version,
+                "kind": item.kind,
+                "coverageStartedAt": item.coverage_started_at,
+                "resourceVersion": item.resource_version,
+                "checkpointedAt": item.checkpointed_at,
+            }
+            for item in evidence_store.list_watch_coverages(
+                cluster_id,
+                namespace,
+            )
+        ],
+        "gaps": [
+            {
+                "sourceName": item.source_name,
+                "apiVersion": item.api_version,
+                "kind": item.kind,
+                "reason": item.reason,
+                "startResourceVersion": item.start_resource_version,
+                "startedAt": item.started_at,
+                "detectedAt": item.detected_at,
+                "endResourceVersion": item.end_resource_version,
+                "recoveredAt": item.recovered_at,
+            }
+            for item in evidence_store.list_coverage_gaps(
+                cluster_id,
+                namespace,
+            )
+        ],
+        "disabledWatches": state.disabled_watch_status(),
+    }

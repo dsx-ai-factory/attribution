@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime
 from enum import Enum
 from typing import Protocol
 
@@ -60,13 +61,6 @@ class ObservationJournal(Protocol):
         uid: str,
     ) -> list[ResourceObservation]: ...
 
-    def list_observations_for_owner(
-        self,
-        cluster_id: str,
-        namespace: str,
-        owner_uid: str,
-    ) -> list[ResourceObservation]: ...
-
     def list_latest_observations_for_kind(
         self,
         cluster_id: str,
@@ -74,12 +68,29 @@ class ObservationJournal(Protocol):
         kind: str,
     ) -> list[ResourceObservation]: ...
 
+    def list_history_controller_uids(
+        self,
+        cluster_id: str,
+        namespace: str,
+        kind: str,
+        *,
+        name: str | None = None,
+        start: datetime | None = None,
+        end: datetime | None = None,
+    ) -> list[str]: ...
+
     def get_watch_coverage(
         self,
         cluster_id: str,
         namespace: str,
         source_name: str,
     ) -> WatchCoverage | None: ...
+
+    def list_watch_coverages(
+        self,
+        cluster_id: str,
+        namespace: str,
+    ) -> list[WatchCoverage]: ...
 
     def begin_coverage_gap(
         self,
@@ -124,6 +135,12 @@ class ObservationJournal(Protocol):
         namespace: str,
     ) -> list[CoverageGap]: ...
 
+    def list_observations_for_controller(
+        self,
+        cluster_id: str,
+        namespace: str,
+        controller_uid: str,
+    ) -> list[ResourceObservation]: ...
 
 class PlacementReader(Protocol):
     def list_for_resource(self, namespace: str, resource_uid: str) -> list[PlacementRecord]: ...

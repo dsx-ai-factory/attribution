@@ -3,6 +3,8 @@
 
 from __future__ import annotations
 
+from datetime import datetime
+
 import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
@@ -64,3 +66,75 @@ class KubernetesDaemonClient:
         ):
             raise ValueError("daemon returned a placement outside the requested resource")
         return records
+
+    def find_histories(
+        self,
+        namespace: str,
+        kind: str,
+        *,
+        name: str | None = None,
+        start: datetime | None = None,
+        end: datetime | None = None,
+    ) -> list[dict]:
+        """Find retained controller histories containing a resource kind/name."""
+        if not namespace:
+            raise ValueError("namespace must not be empty")
+        if not kind:
+            raise ValueError("kind must not be empty")
+        if start is not None and start.tzinfo is None:
+            raise ValueError("start must be timezone-aware")
+        if end is not None and end.tzinfo is None:
+            raise ValueError("end must be timezone-aware")
+        if start is not None and end is not None and start > end:
+            raise ValueError("start must not be after end")
+        params = {
+            "namespace": namespace,
+            "kind": kind,
+        }
+        if name:
+            params["name"] = name
+        if start is not None:
+            params["start"] = start.isoformat()
+        if end is not None:
+            params["end"] = end.isoformat()
+        response = self.session.get(
+            f"{self.endpoint}/v1/history",
+            params=params,
+            timeout=self.timeout_seconds,
+        )
+        response.raise_for_status()
+        payload = response.json()
+        if not isinstance(payload, dict) or not isinstance(
+            payload.get("items"),
+            list,
+        ):
+            raise ValueError(
+                "daemon histories response must contain an items list"
+            )
+        histories = payload["items"]
+        for history in histories:
+            if not isinstance(history, dict):
+                raise ValueError("daemon histories items must be objects")
+            if history.get("namespace") != namespace:
+                raise ValueError(
+                    "daemon returned history outside the requested namespace"
+                )
+            if not isinstance(history.get("observations"), list):
+                raise ValueError(
+                    "daemon history response must contain an observations list"
+                )
+            if "placements" in history and not isinstance(
+                history["placements"],
+                list,
+            ):
+                raise ValueError(
+                    "daemon history response placements must be a list"
+                )
+            if "coverage" in history and not isinstance(
+                history["coverage"],
+                dict,
+            ):
+                raise ValueError(
+                    "daemon history response coverage must be an object"
+                )
+        return histories

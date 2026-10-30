@@ -196,6 +196,9 @@ def selected_status(kind: str, resource: dict) -> dict:
 def selected_metadata(resource: dict) -> dict | None:
     metadata = resource.get("metadata") or {}
     selected = {}
+    deletion_timestamp = metadata.get("deletionTimestamp")
+    if deletion_timestamp:
+        selected["deletionTimestamp"] = deletion_timestamp
     for field in ("labels", "annotations"):
         values = metadata.get(field) or {}
         retained = {key: values[key] for key in sorted(_ATTEMPT_METADATA_KEYS & values.keys())}

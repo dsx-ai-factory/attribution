@@ -308,7 +308,7 @@ class SQLitePlacementStore:
         namespace: str,
         kind: str,
     ) -> list[ResourceObservation]:
-        with self._connect() as connection:
+        with self._connection() as connection:
             rows = connection.execute(
                 """
                 WITH latest AS (
@@ -323,6 +323,95 @@ class SQLitePlacementStore:
                 ORDER BY observation.id
                 """,
                 (cluster_id, namespace, kind),
+            ).fetchall()
+        return [_observation_from_row(row) for row in rows]
+
+    def list_history_controller_uids(
+        self,
+        cluster_id: str,
+        namespace: str,
+        kind: str,
+        *,
+        name: str | None = None,
+        start: datetime | None = None,
+        end: datetime | None = None,
+    ) -> list[str]:
+        """Select conservative controller candidates for complete histories.
+
+        ``end`` is intentionally not used to exclude candidates because the
+        latest retained projection cannot prove an execution began after it.
+        Exact overlap remains the reconstruction layer's responsibility.
+        """
+        del end
+        grouped: dict[str, list[ResourceObservation]] = {}
+        for candidate in self.list_latest_observations_for_kind(
+            cluster_id,
+            namespace,
+            kind,
+        ):
+            if name is not None and candidate.name != name:
+                continue
+            controllers = [
+                owner.uid
+                for owner in candidate.owner_references
+                if owner.controller
+            ]
+            owners = [
+                owner.uid
+                for owner in candidate.owner_references
+            ]
+            controller_uid = (
+                controllers[0]
+                if len(controllers) == 1
+                else owners[0]
+                if len(owners) == 1
+                else candidate.uid
+            )
+            grouped.setdefault(controller_uid, []).append(candidate)
+        return [
+            controller_uid
+            for controller_uid in sorted(grouped)
+            if any(
+                _history_candidate_may_overlap(candidate, start)
+                for candidate in grouped[controller_uid]
+            )
+        ]
+
+    def list_observations_for_controller(
+        self,
+        cluster_id: str,
+        namespace: str,
+        controller_uid: str,
+    ) -> list[ResourceObservation]:
+        with self._connection() as connection:
+            rows = connection.execute(
+                """
+                WITH RECURSIVE related(uid) AS (
+                    SELECT ?
+                    UNION
+                    SELECT observation.uid
+                    FROM resource_observation AS observation
+                    JOIN observation_owner_reference AS owner
+                      ON owner.observation_id = observation.id
+                    JOIN related
+                      ON related.uid = owner.owner_uid
+                    WHERE observation.cluster_id = ?
+                      AND observation.namespace = ?
+                )
+                SELECT observation.*
+                FROM resource_observation AS observation
+                JOIN related USING (uid)
+                WHERE observation.cluster_id = ?
+                  AND observation.namespace = ?
+                ORDER BY observation.id
+                """,
+                (
+                    controller_uid,
+                    cluster_id,
+                    namespace,
+                    cluster_id,
+                    namespace,
+                ),
             ).fetchall()
         return [_observation_from_row(row) for row in rows]
 
@@ -342,6 +431,23 @@ class SQLitePlacementStore:
                 (cluster_id, namespace, source_name),
             ).fetchone()
         return _watch_coverage_from_row(row) if row else None
+
+    def list_watch_coverages(
+        self,
+        cluster_id: str,
+        namespace: str,
+    ) -> list[WatchCoverage]:
+        with self._connection() as connection:
+            rows = connection.execute(
+                """
+                SELECT *
+                FROM watch_coverage
+                WHERE cluster_id = ? AND namespace = ?
+                ORDER BY source_name
+                """,
+                (cluster_id, namespace),
+            ).fetchall()
+        return [_watch_coverage_from_row(row) for row in rows]
 
     def begin_coverage_gap(
         self,
@@ -846,6 +952,46 @@ class SQLitePlacementStore:
             """,
             (cutoff, cutoff),
         )
+
+
+def _history_candidate_may_overlap(
+    candidate: ResourceObservation,
+    start: datetime | None,
+) -> bool:
+    if start is None:
+        return True
+    status = candidate.status or {}
+    terminal_values = [
+        condition.get("lastTransitionTime")
+        for condition in status.get("conditions") or []
+        if condition.get("status") == "True"
+        and condition.get("type")
+        in {"Complete", "Completed", "Failed", "Finished"}
+        and condition.get("lastTransitionTime")
+    ]
+    if status.get("completionTime"):
+        terminal_values.append(status["completionTime"])
+    if not terminal_values and not (
+        status.get("terminalState")
+        or status.get("phase") in {"Failed", "Succeeded"}
+    ):
+        return True
+    timestamps = [
+        *terminal_values,
+        candidate.observed_at,
+    ]
+    if candidate.source_timestamp is not None:
+        timestamps.append(candidate.source_timestamp)
+    try:
+        for value in timestamps:
+            parsed = datetime.fromisoformat(value)
+            if parsed.tzinfo is None:
+                return True
+            if parsed >= start:
+                return True
+        return False
+    except (TypeError, ValueError):
+        return True
 
 
 def _controller_uid(row: sqlite3.Row) -> str | None:

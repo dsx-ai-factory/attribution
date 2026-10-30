@@ -1,7 +1,9 @@
 # Kubernetes daemon
 
-`kubernetes-daemon` provides best-effort Pod placement history after Kubernetes
-deletes Pods.
+`kubernetes-daemon` retains Pod-to-node placement, ownership, and selected
+lifecycle evidence after Kubernetes deletes resources. Evidence collection is
+independent of whether a Kueue Workload, a KAI PodGroup, both, or neither can
+be resolved for a Pod.
 
 ## Architecture
 
@@ -15,12 +17,26 @@ watch resource version. Per-Pod enrichment is serialized, newer observations
 reject stale writes, and successful associations remain queryable after Pod
 deletion until retention expires.
 
+```text
+Pod, Job, and optional controller/scheduler LIST/WATCH
+  -> journal selected lifecycle transitions and owner references immediately
+  -> derive namespace, Pod UID, and node placement
+  -> resolve the Job or JobSet owner (Kubernetes-native, no scheduler required)
+  -> resolve optional scheduler-specific associations (Kueue Workload, KAI
+     PodGroup, ...) via configured resource resolvers
+  -> serve scheduler-neutral records over HTTP
+  -> each adapter merges retained and live placement
+```
+
+Base placement, Pod UID, namespace, node, and owner references, is retained
+even when ownership or scheduler resolution is still pending or fails; "owner
+not resolved yet" describes the evidence rather than discarding it.
+
 This is bounded recovery, not complete history. Capacity exhaustion can skip
 enrichment for a new Pod UID while retaining its base placement, so
 resource-UID queries can omit that Pod. Retries can exhaust, in-memory retries
 are lost on restart, deleted relationship evidence may be unavailable, and
 Pods created and deleted while the daemon is unavailable can be missed.
-Placement records do not distinguish execution attempts.
 
 The Helm chart deploys a single-replica StatefulSet with a PVC, a
 namespace-scoped ServiceAccount and Role, health probes, and a ClusterIP
@@ -31,7 +47,10 @@ Deleted placements and completed or deleted controller histories are removed
 after `retentionDays`; active histories are retained. The default is 30 days.
 Cleanup runs at startup and during normal store activity.
 
-It does not retain Pod logs or Pod specifications.
+The daemon captures placement plus `NodeLost`, PodGC `DeletionByPodGC`, and
+non-zero container exit evidence. Its lifecycle journal retains selected
+status and attempt-identity metadata, not logs or complete resource
+specifications.
 
 ## Usage
 
@@ -62,11 +81,9 @@ helm upgrade --install attribution blueprint/deploy/kubernetes-daemon \
   --set integrations.kai.enabled=true
 ```
 
-Enabling an integration also adds the matching RBAC rule (`kueue.x-k8s.io`
-Workloads or `scheduling.run.ai` PodGroups) to the generated Role. Enable only
-the scheduler(s) actually present in the cluster; an absent CRD causes that
-resolver to retain owner-level evidence without the scheduler association,
-not a crash.
+Enabling an integration also watches the matching resource and adds its RBAC
+rule (`kueue.x-k8s.io` Workloads or `scheduling.run.ai` PodGroups) to the
+generated Role. Enable only schedulers whose CRDs are installed.
 
 | Value                                  | Default   | Meaning                                                     |
 | --------------------------------------- | --------- | ------------------------------------------------------------ |
@@ -77,6 +94,8 @@ not a crash.
 
 Other useful chart settings are:
 
+- `clusterId`
+- `watches.pods`, `watches.jobs`, and `watches.jobsets`
 - `retentionDays` (default `30`)
 - `storage.sqlite.size`, `storage.sqlite.storageClassName`, and
   `storage.sqlite.accessModes`
@@ -136,19 +155,23 @@ kubectl -n team-a port-forward service/attribution-kubernetes-daemon 18080:8080
 ```bash
 curl -fsS \
   'http://127.0.0.1:18080/v1/placements?namespace=team-a&resource_uid=WORKLOAD_OR_PODGROUP_UID'
+curl -fsS \
+  'http://127.0.0.1:18080/v1/history?namespace=team-a&kind=Workload&name=WORKLOAD_NAME'
 ```
 
-The service exposes `/livez`, `/readyz`, and the scoped `/v1/placements` read
-endpoint, which requires `resource_uid` alongside `namespace`. The resource
-UID matches a resource associated with that Pod by a configured integration.
+The service exposes `/livez`, `/readyz`, and two namespace-scoped read
+endpoints. `/v1/placements` requires `resource_uid`, which matches a resource
+associated with a Pod by a configured integration. `/v1/history` requires a
+resource `kind`, accepts an optional `name`, and returns matching retained
+controller histories with observations, Pod placements, and watch coverage.
 
 ## Troubleshooting
 
 **The daemon is not ready**
 
-Check `/readyz` and logs. Readiness requires the initial Pod list to complete
-and required storage writes to succeed. Verify access to Pods and, when enabled,
-Kueue Workloads, KAI PodGroups, Jobs, and any installed JobSet API.
+Check `/readyz` and logs. Readiness requires every configured initial list to
+complete and required storage writes to succeed. Verify access to Pods, Jobs,
+and each enabled JobSet or scheduler API.
 
 **Placement is missing**
 
@@ -171,9 +194,11 @@ reachable and that any proxy authentication or TLS settings are valid.
 
 **Records disappear too early or consume too much storage**
 
-Set `retentionDays` to a positive integer appropriate for the attribution
-window and confirm the PVC is persistent. Deleting the PVC or namespace
-deletes the records.
+`retentionDays` applies only to the derived placement view. Lifecycle
+observations are append-only and currently have no automatic retention limit.
+Size and monitor the PVC for the expected event volume. Confirm the PVC is
+persistent; deleting the PVC or namespace deletes both placements and
+observations.
 
 **Node failure is not retained**
 

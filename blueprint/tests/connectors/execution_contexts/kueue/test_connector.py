@@ -11,6 +11,9 @@ import pytest
 from attribution_blueprint.connectors.execution_contexts.kueue import (
     KueueExecutionContextAdapter,
 )
+from attribution_blueprint.connectors.execution_contexts.kueue.attempts import (
+    attempt_id_for,
+)
 from attribution_blueprint.kubernetes.client import (
     KubernetesClientError,
 )
@@ -120,8 +123,14 @@ class _FakeKubernetesClient:
     ) -> dict:
         kind = resource_kind.lower() + "s"
         self.calls.append(
-            {"op": "get_one", "kind": kind, "name": name, "namespace": namespace, "label_selector": None,
-             "field_selector": None}
+            {
+                "op": "get_one",
+                "kind": kind,
+                "name": name,
+                "namespace": namespace,
+                "label_selector": None,
+                "field_selector": None,
+            }
         )
         if kind == "workloads":
             items = self.workloads_payload["items"]
@@ -230,8 +239,9 @@ class _FailingKindReader:
         prefix=None,
     ):
         kind = resource_kind.lower() + "s"
-        if self._should_fail(kind, {"namespace": namespace, "field_selector": field_selector,
-                                     "label_selector": label_selector}):
+        if self._should_fail(
+            kind, {"namespace": namespace, "field_selector": field_selector, "label_selector": label_selector}
+        ):
             raise self._error
         return self._fake.list(
             resource_kind,
@@ -268,9 +278,14 @@ def test_discover_by_ids_normalizes_finished_workload(mocker):
     contexts = KueueExecutionContextAdapter().discover_by_ids(["team-alpha/job-train-mnist-abc12"])
     assert len(contexts) == 1
     ctx = contexts[0]
-    assert ctx["id"] == "uid-aaaa-1001"
+    expected_attempt_id = attempt_id_for(
+        "uid-aaaa-1001",
+        "2026-05-01T12:00:00Z",
+        "0",
+    )
+    assert ctx["id"] == expected_attempt_id
     assert ctx["workload_uid"] == "uid-aaaa-1001"
-    assert ctx["attempt_id"] == "uid-aaaa-1001"
+    assert ctx["attempt_id"] == expected_attempt_id
     assert ctx["workload_type"] == "kueue"
     # BP-internal identity remains independent of the service wire field.
     assert ctx["scheduler"] == "kueue"
@@ -307,6 +322,135 @@ def test_finished_success_takes_precedence_over_retried_node_loss(mocker):
     assert ctx["state"] == "COMPLETED"
     assert ctx["kueue_state"] == "FINISHED_SUCCEEDED"
     assert ctx["failed_node"] == "node005"
+
+
+def test_live_attempt_excludes_node_loss_from_previous_restart_and_admission(mocker):
+    workload = {
+        "metadata": {
+            "name": "training-workload",
+            "namespace": "team-alpha",
+            "uid": "workload-uid",
+            "creationTimestamp": "2026-05-01T09:59:00Z",
+            "ownerReferences": [
+                {
+                    "kind": "JobSet",
+                    "name": "training",
+                    "uid": "jobset-uid",
+                    "controller": True,
+                }
+            ],
+        },
+        "spec": {},
+        "status": {
+            "conditions": [
+                {
+                    "type": "Admitted",
+                    "status": "True",
+                    "lastTransitionTime": "2026-05-01T10:00:00Z",
+                },
+                {
+                    "type": "Admitted",
+                    "status": "True",
+                    "lastTransitionTime": "2026-05-01T11:00:00Z",
+                },
+                {
+                    "type": "PodsReady",
+                    "status": "True",
+                    "lastTransitionTime": "2026-05-01T11:01:00Z",
+                },
+            ]
+        },
+    }
+
+    def pod(name, uid, node, restart, created, *, node_lost=False):
+        status = {"phase": "Running"}
+        if node_lost:
+            status = {"phase": "Failed", "reason": "NodeLost"}
+        return {
+            "metadata": {
+                "name": name,
+                "namespace": "team-alpha",
+                "uid": uid,
+                "creationTimestamp": created,
+                "labels": {
+                    "jobset.sigs.k8s.io/jobset-name": "training",
+                    "jobset.sigs.k8s.io/restart-attempt": restart,
+                },
+            },
+            "spec": {"nodeName": node},
+            "status": status,
+        }
+
+    def job(name, uid, restart, created):
+        return {
+            "metadata": {
+                "name": name,
+                "namespace": "team-alpha",
+                "uid": uid,
+                "creationTimestamp": created,
+                "labels": {
+                    "jobset.sigs.k8s.io/jobset-name": "training",
+                    "jobset.sigs.k8s.io/restart-attempt": restart,
+                },
+                "ownerReferences": [
+                    {
+                        "kind": "JobSet",
+                        "name": "training",
+                        "uid": "jobset-uid",
+                        "controller": True,
+                    }
+                ],
+            },
+            "status": {"startTime": created},
+        }
+
+    _wire_kubectl(
+        mocker,
+        workloads_payload={"items": [workload]},
+        pods_payload={
+            "items": [
+                pod(
+                    "old-pod",
+                    "old-pod-uid",
+                    "node-old",
+                    "0",
+                    "2026-05-01T10:01:00Z",
+                    node_lost=True,
+                ),
+                pod(
+                    "new-pod",
+                    "new-pod-uid",
+                    "node-new",
+                    "1",
+                    "2026-05-01T11:01:00Z",
+                ),
+            ]
+        },
+        jobs_payload={
+            "items": [
+                job(
+                    "training-workers-0",
+                    "job-uid-0",
+                    "0",
+                    "2026-05-01T10:00:30Z",
+                ),
+                job(
+                    "training-workers-1",
+                    "job-uid-1",
+                    "1",
+                    "2026-05-01T11:00:30Z",
+                ),
+            ]
+        },
+    )
+
+    [ctx] = KueueExecutionContextAdapter().discover_by_ids(["team-alpha/training-workload"])
+
+    assert ctx["restart_attempt"] == "1"
+    assert ctx["nodes"] == ["node-new"]
+    assert ctx["pod_names"] == ["new-pod"]
+    assert ctx["state"] == "RUNNING"
+    assert "failed_node" not in ctx
 
 
 def test_discover_by_ids_carries_kueue_gpu_count(mocker):
@@ -378,6 +522,48 @@ def test_failed_workload_deadline_exceeded_normalizes_to_timeout(mocker):
     assert ctx["kueue_state"] == "FINISHED_FAILED"
 
 
+def test_live_owner_terminal_is_not_downgraded_by_running_workload(mocker):
+    workloads = deepcopy(WORKLOADS)
+    workload = workloads["items"][1]
+    workload["status"]["conditions"] = [
+        condition
+        for condition in workload["status"]["conditions"]
+        if condition["type"] != "Finished"
+    ]
+    jobs = deepcopy(JOBS)
+    jobs["items"][1]["status"] = {
+        "startTime": "2026-05-01T13:00:00Z",
+        "conditions": [
+            {
+                "type": "Failed",
+                "status": "True",
+                "reason": "DeadlineExceeded",
+                "lastTransitionTime": "2026-05-01T13:30:00Z",
+            }
+        ],
+    }
+    _wire_kubectl(
+        mocker,
+        workloads_payload=workloads,
+        jobs_payload=jobs,
+    )
+
+    [ctx] = KueueExecutionContextAdapter().discover_by_ids(
+        ["team-alpha/job-llama-7b-pretrain-xyz77"]
+    )
+
+    assert ctx["state"] == "TIMEOUT"
+    assert ctx["kueue_state"] == "FINISHED_FAILED"
+    assert ctx["end_time"] == datetime(
+        2026,
+        5,
+        1,
+        13,
+        30,
+        tzinfo=timezone.utc,
+    )
+
+
 def test_reused_job_name_with_different_uid_is_not_used_as_owner(mocker):
     """Kubernetes names are reusable after deletion. If the Job the Workload
     pointed to (`owner-1002`) was deleted and a new, unrelated Job with the
@@ -443,11 +629,17 @@ def test_failed_jobset_child_deadline_exceeded_normalizes_to_timeout(mocker):
         "metadata": {
             "name": "training-workers-0",
             "namespace": "team-alpha",
-            "labels": {"jobset.sigs.k8s.io/jobset-name": "training"},
+            "uid": "training-workers-0-uid",
+            "creationTimestamp": "2026-05-01T12:01:10Z",
+            "labels": {
+                "jobset.sigs.k8s.io/jobset-name": "training",
+                "jobset.sigs.k8s.io/restart-attempt": "0",
+            },
             "ownerReferences": [{"kind": "JobSet", "name": "training", "uid": "jobset-uid", "controller": True}],
         },
         "spec": {"activeDeadlineSeconds": 60},
         "status": {
+            "startTime": "2026-05-01T12:01:10Z",
             "conditions": [
                 {
                     "type": "Failed",
@@ -455,7 +647,7 @@ def test_failed_jobset_child_deadline_exceeded_normalizes_to_timeout(mocker):
                     "reason": "DeadlineExceeded",
                     "lastTransitionTime": "2026-05-01T12:02:00Z",
                 }
-            ]
+            ],
         },
     }
     _wire_kubectl(
@@ -472,7 +664,7 @@ def test_failed_jobset_child_deadline_exceeded_normalizes_to_timeout(mocker):
     assert ctx["time_limit"] == 1
 
 
-def test_reused_jobset_name_with_different_uid_is_not_used_as_owner(mocker):
+def test_reused_jobset_name_without_verified_restart_evidence_is_skipped(mocker):
     """The child Job is selected by `jobset-name=training`, a reusable name.
     If it is actually owned by a *replacement* JobSet with a different uid
     than the one on the Workload's ownerReference, it must not be treated
@@ -485,9 +677,7 @@ def test_reused_jobset_name_with_different_uid_is_not_used_as_owner(mocker):
             "namespace": "team-alpha",
             "uid": "workload-jobset-timeout",
             "creationTimestamp": "2026-05-01T12:00:00Z",
-            "ownerReferences": [
-                {"kind": "JobSet", "name": "training", "uid": "jobset-uid-OLD", "controller": True}
-            ],
+            "ownerReferences": [{"kind": "JobSet", "name": "training", "uid": "jobset-uid-OLD", "controller": True}],
         },
         "spec": {"podSets": []},
         "status": {
@@ -509,10 +699,11 @@ def test_reused_jobset_name_with_different_uid_is_not_used_as_owner(mocker):
         "metadata": {
             "name": "training-workers-0",
             "namespace": "team-alpha",
-            "labels": {"jobset.sigs.k8s.io/jobset-name": "training"},
-            "ownerReferences": [
-                {"kind": "JobSet", "name": "training", "uid": "jobset-uid-NEW", "controller": True}
-            ],
+            "labels": {
+                "jobset.sigs.k8s.io/jobset-name": "training",
+                "jobset.sigs.k8s.io/restart-attempt": "0",
+            },
+            "ownerReferences": [{"kind": "JobSet", "name": "training", "uid": "jobset-uid-NEW", "controller": True}],
         },
         "spec": {"activeDeadlineSeconds": 60},
         "status": {
@@ -533,13 +724,11 @@ def test_reused_jobset_name_with_different_uid_is_not_used_as_owner(mocker):
         jobs_payload={"items": [replacement_child_job]},
     )
 
-    ctx = KueueExecutionContextAdapter().discover_by_ids(["team-alpha/jobset-timeout-abc12"])[0]
+    contexts = KueueExecutionContextAdapter().discover_by_ids(["team-alpha/jobset-timeout-abc12"])
 
-    # The replacement JobSet's child evidence (DeadlineExceeded, time_limit)
-    # must not leak into this Workload's attribution.
-    assert ctx["state"] == "FAILED"
-    assert ctx["kueue_state"] == "FINISHED_FAILED"
-    assert "time_limit" not in ctx
+    # The replacement JobSet's restart identity and deadline cannot identify
+    # the old Workload's attempt.
+    assert contexts == []
 
 
 def _jobset_workload_and_children(*, first_reason: str, second_reason: str) -> tuple[dict, list[dict]]:
@@ -579,16 +768,19 @@ def _jobset_workload_and_children(*, first_reason: str, second_reason: str) -> t
             "metadata": {
                 "name": name,
                 "namespace": "team-alpha",
-                "labels": {"jobset.sigs.k8s.io/jobset-name": "training"},
-                "ownerReferences": [
-                    {"kind": "JobSet", "name": "training", "uid": "jobset-uid", "controller": True}
-                ],
+                "uid": f"{name}-uid",
+                "labels": {
+                    "jobset.sigs.k8s.io/jobset-name": "training",
+                    "jobset.sigs.k8s.io/restart-attempt": "0",
+                },
+                "ownerReferences": [{"kind": "JobSet", "name": "training", "uid": "jobset-uid", "controller": True}],
             },
             "spec": {},
             "status": {
+                "startTime": "2026-05-01T12:01:10Z",
                 "conditions": [
                     {"type": "Failed", "status": "True", "reason": reason, "lastTransitionTime": transition_time}
-                ]
+                ],
             },
         }
 
@@ -1229,6 +1421,7 @@ def test_pods_filtered_by_batch_controller_uid_not_workload_uid_or_kueue_label(m
                 "metadata": {
                     "name": "p-batch-controller-uid",
                     "namespace": "team-alpha",
+                        "uid": "pod-batch-controller-uid",
                     "labels": {
                         "batch.kubernetes.io/controller-uid": "JOB-UID-1",
                         "batch.kubernetes.io/job-name": "regr",
@@ -1243,6 +1436,7 @@ def test_pods_filtered_by_batch_controller_uid_not_workload_uid_or_kueue_label(m
                 "metadata": {
                     "name": "p-kueue-label-only",
                     "namespace": "team-alpha",
+                        "uid": "pod-kueue-label-only",
                     # Pod that ONLY carries the kueue label (with the owner
                     # job uid as value) - must NOT match, because pods
                     # don't actually carry this label in real clusters and
@@ -1258,6 +1452,7 @@ def test_pods_filtered_by_batch_controller_uid_not_workload_uid_or_kueue_label(m
                 "metadata": {
                     "name": "p-workload-uid",
                     "namespace": "team-alpha",
+                        "uid": "pod-workload-uid",
                     # batch label present but value is the Workload UID,
                     # not the owner Job UID - must NOT match.
                     "labels": {"batch.kubernetes.io/controller-uid": "WORKLOAD-UID-1"},
@@ -1681,6 +1876,7 @@ def test_same_named_jobsets_in_two_namespaces_keep_separate_pod_evidence():
                         "apiVersion": "jobset.x-k8s.io/v1alpha2",
                         "kind": "JobSet",
                         "name": "train",
+                        "uid": f"jobset-{ns}",
                         "controller": True,
                     }
                 ],
@@ -1696,7 +1892,16 @@ def test_same_named_jobsets_in_two_namespaces_keep_separate_pod_evidence():
 
     def _pod(ns: str, node: str) -> dict:
         return {
-            "metadata": {"name": "train-w-0-0", "namespace": ns, "labels": {"jobset.sigs.k8s.io/jobset-name": "train"}},
+            "metadata": {
+                "name": "train-w-0-0",
+                "namespace": ns,
+                "uid": f"pod-{ns}",
+                "creationTimestamp": "2026-05-01T12:01:00Z",
+                "labels": {
+                    "jobset.sigs.k8s.io/jobset-name": "train",
+                    "jobset.sigs.k8s.io/restart-attempt": "0",
+                },
+            },
             "spec": {"nodeName": node},
             "status": {},
         }
@@ -1748,10 +1953,15 @@ def test_identically_named_jobsets_in_different_namespaces_do_not_cross_contamin
             "metadata": {
                 "name": name,
                 "namespace": namespace,
-                "labels": {"jobset.sigs.k8s.io/jobset-name": "trainer"},
+                "uid": f"pod-{namespace}",
+                "creationTimestamp": "2026-05-01T12:01:30Z",
+                "labels": {
+                    "jobset.sigs.k8s.io/jobset-name": "trainer",
+                    "jobset.sigs.k8s.io/restart-attempt": "0",
+                },
             },
             "spec": {"nodeName": node},
-            "status": {},
+            "status": {"startTime": "2026-05-01T12:01:30Z"},
         }
         if node_lost:
             pod["status"] = {"phase": "Failed", "reason": "NodeLost"}
@@ -1800,12 +2010,8 @@ def test_discover_by_time_range_rejects_naive_datetimes(mocker):
         )
 
 
-def test_start_time_uses_earliest_admitted_not_latest(mocker):
-    """When a workload was admitted, preempted, and re-admitted, start_time
-    must reflect the FIRST admission so a time-window query covering only
-    the original admission interval still finds the workload. The previous
-    code used max(lastTransitionTime), which silently shifted start_time
-    forward to the re-admission."""
+def test_live_start_time_uses_latest_admission_attempt(mocker):
+    """Live discovery represents the current attempt after re-admission."""
     payload = {
         "items": [
             {
@@ -1842,7 +2048,7 @@ def test_start_time_uses_earliest_admitted_not_latest(mocker):
     _wire_kubectl(mocker, workloads_payload=payload, pods_payload={"items": []}, jobs_payload={"items": []})
     contexts = KueueExecutionContextAdapter().discover_by_ids(["team-alpha/reattempted"])
     assert len(contexts) == 1
-    assert contexts[0]["start_time"] == datetime(2026, 5, 3, 12, 0, 0, tzinfo=timezone.utc)
+    assert contexts[0]["start_time"] == datetime(2026, 5, 3, 12, 10, 0, tzinfo=timezone.utc)
 
 
 def test_build_with_none_timeout_falls_back_to_default():
@@ -1912,7 +2118,7 @@ def test_discover_by_time_range_intersects_csv_nodelist(mocker):
     assert names == {"job-llama-7b-pretrain-xyz77", "job-train-mnist-abc12"}
 
 
-class TestMergePlacementRecordsFailedNode:
+class _SupersededMergePlacementRecordsTests:
     """`_merge_placement_records` is the only merge source that can recover
     `failed_node` after Pod GC — node-loss/exit-code evidence lives only on
     the Pod object, so neither the PromQL placement route nor the Kubernetes
@@ -2019,15 +2225,92 @@ class TestMergePlacementRecordsFailedNode:
         assert ctx["failed_node"] == "node-b"
         assert ctx["state"] == "NODE_FAIL"
 
-    def test_finalize_prefers_deleted_pod_node_loss_over_surviving_pod_exit(self, mocker):
+    def test_deleted_current_attempt_pod_is_recovered_by_owner_and_time(
+        self,
+        mocker,
+    ):
+        from dataclasses import replace
+
+        record = replace(
+            self._record(
+                node_name="node-b",
+                node_failure_reason="NodeLost",
+                pod_uid="deleted-pod-uid",
+                pod_name="deleted-pod",
+            ),
+            scheduled_at="2026-05-01T00:30:00Z",
+        )
+        eca = KueueExecutionContextAdapter()
+        mocker.patch.object(
+            eca,
+            "_fetch_placement_records",
+            return_value=[record],
+        )
+        ctx = self._context(
+            attempt_identity_resolved=True,
+            owner_job_uids=["job-uid-1"],
+            start_time=datetime(2026, 5, 1, tzinfo=timezone.utc),
+            end_time=datetime(2026, 5, 1, 1, tzinfo=timezone.utc),
+            pod_placements=[
+                {
+                    "pod_uid": "live-pod-uid",
+                    "pod_name": "live-pod",
+                    "node_name": "node-a",
+                    "source": "live_pod",
+                }
+            ],
+        )
+
+        eca._merge_placement_records(ctx)
+
+        assert ctx["state"] == "NODE_FAIL"
+        assert ctx["failed_node"] == "node-b"
+        assert {placement["pod_uid"] for placement in ctx["pod_placements"]} == {
+            "deleted-pod-uid",
+            "live-pod-uid",
+        }
+
+    def test_late_observation_without_scheduled_time_does_not_enter_attempt(
+        self,
+        mocker,
+    ):
+        from dataclasses import replace
+
+        record = replace(
+            self._record(
+                node_name="node-old",
+                node_failure_reason="NodeLost",
+                pod_uid="old-pod-uid",
+                pod_name="old-pod",
+            ),
+            observed_at="2026-05-01T00:30:00Z",
+            scheduled_at=None,
+        )
+        eca = KueueExecutionContextAdapter()
+        mocker.patch.object(
+            eca,
+            "_fetch_placement_records",
+            return_value=[record],
+        )
+        ctx = self._context(
+            attempt_identity_resolved=True,
+            owner_job_uids=["job-uid-1"],
+            start_time=datetime(2026, 5, 1, tzinfo=timezone.utc),
+            end_time=datetime(2026, 5, 1, 1, tzinfo=timezone.utc),
+            pod_placements=[],
+        )
+
+        eca._merge_placement_records(ctx)
+
+        assert ctx["state"] == "FAILED"
+        assert "failed_node" not in ctx
+        assert ctx.get("pod_placements") in (None, [])
+
+    def test_finalize_excludes_deleted_node_loss_outside_live_attempt(self, mocker):
         workload = deepcopy(WORKLOADS["items"][0])
         workload["metadata"]["name"] = "wl-a"
         workload["metadata"]["uid"] = "workload-uid-1"
-        finished = next(
-            condition
-            for condition in workload["status"]["conditions"]
-            if condition["type"] == "Finished"
-        )
+        finished = next(condition for condition in workload["status"]["conditions"] if condition["type"] == "Finished")
         finished["reason"] = "Failed"
 
         surviving_pod = {
@@ -2062,8 +2345,9 @@ class TestMergePlacementRecordsFailedNode:
 
         [ctx] = eca._finalize([workload])
 
-        assert ctx["state"] == "NODE_FAIL"
-        assert ctx["failed_node"] == "node-b"
+        assert ctx["state"] == "FAILED"
+        assert ctx["failed_node"] == "node-a"
+        assert ctx["nodes"] == ["node-a"]
 
     def test_node_loss_evidence_outranks_alphabetically_smaller_exit_code_node(self, mocker):
         """Node-loss evidence must win regardless of node-name ordering: a
@@ -2134,6 +2418,21 @@ class TestMergePrometheusPlacements:
         )
 
         resolver.placements_for_many.assert_called_once()
+
+    def test_unverified_attempt_omits_prometheus_query(self, mocker):
+        resolver = mocker.Mock()
+        eca = KueueExecutionContextAdapter(prometheus_placement_resolver=resolver)
+        context = self._context(
+            attempt_identity_resolved=False,
+            owner_job_uids=["job-uid-1"],
+        )
+
+        eca._merge_prometheus_placements_batched(
+            [(self._workload(), context)],
+            owner_jobs={},
+        )
+
+        resolver.placements_for_many.assert_not_called()
 
     def test_partial_multi_pod_placement_queries_prometheus(self, mocker):
         resolver = mocker.Mock()
@@ -2217,9 +2516,7 @@ class TestMergePrometheusPlacements:
                     "namespace": "team-a",
                     "uid": "child-job-uid-1",
                     "labels": {"jobset.sigs.k8s.io/jobset-name": "set-a"},
-                    "ownerReferences": [
-                        {"kind": "JobSet", "name": "set-a", "uid": "jobset-uid-1", "controller": True}
-                    ],
+                    "ownerReferences": [{"kind": "JobSet", "name": "set-a", "uid": "jobset-uid-1", "controller": True}],
                 }
             },
             "team-a/set-a-workers-1": {
@@ -2227,9 +2524,7 @@ class TestMergePrometheusPlacements:
                     "namespace": "team-a",
                     "uid": "child-job-uid-2",
                     "labels": {"jobset.sigs.k8s.io/jobset-name": "set-a"},
-                    "ownerReferences": [
-                        {"kind": "JobSet", "name": "set-a", "uid": "jobset-uid-1", "controller": True}
-                    ],
+                    "ownerReferences": [{"kind": "JobSet", "name": "set-a", "uid": "jobset-uid-1", "controller": True}],
                 }
             },
         }
@@ -2310,6 +2605,47 @@ class TestMergePrometheusPlacements:
         resolver.placements_for_many.assert_called_once()
         assert {p["pod_uid"] for p in context["pod_placements"]} == {"pod-uid-A", "pod-uid-B"}
         assert set(context["nodes"]) == {"node-a", "node-b"}
+
+    def test_resolved_attempt_rejects_unverified_prometheus_pod(self, mocker):
+        resolver = mocker.Mock()
+        resolver.placements_for_many.return_value = {
+            "workload-uid-1": [
+                {
+                    "pod_uid": "old-pod-uid",
+                    "pod_name": "old-pod",
+                    "node_name": "node-old",
+                    "source": "prometheus",
+                }
+            ]
+        }
+        eca = KueueExecutionContextAdapter(
+            prometheus_placement_resolver=resolver,
+        )
+        context = self._context(
+            attempt_identity_resolved=True,
+            nodes=["node-current"],
+            pod_names=["current-pod"],
+            pod_placements=[
+                {
+                    "pod_uid": "current-pod-uid",
+                    "pod_name": "current-pod",
+                    "node_name": "node-current",
+                    "source": "live_pod",
+                }
+            ],
+        )
+
+        eca._merge_prometheus_placements_batched(
+            [(self._workload(), context)],
+            owner_jobs={},
+        )
+
+        assert context["nodes"] == ["node-current"]
+        assert context["pod_names"] == ["current-pod"]
+        assert {
+            placement["pod_uid"]
+            for placement in context["pod_placements"]
+        } == {"current-pod-uid"}
 
 
 class TestPlacementReader:

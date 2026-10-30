@@ -742,6 +742,89 @@ def test_latest_observations_are_queryable_by_resource_kind(tmp_path):
     ) == [updated]
 
 
+def test_history_candidates_use_single_noncontroller_owner(tmp_path):
+    store = SQLitePlacementStore(str(tmp_path / "placements.db"))
+    pod_group = replace(
+        _observation(),
+        api_version="scheduling.run.ai/v2alpha2",
+        kind="PodGroup",
+        name="training",
+        uid="podgroup-uid",
+        owner_references=(
+            OwnerReference(
+                api_version="jobset.x-k8s.io/v1alpha2",
+                kind="JobSet",
+                name="training",
+                uid="jobset-uid",
+                controller=False,
+            ),
+        ),
+        status={"phase": "Running"},
+    )
+    _capture(store, pod_group)
+
+    assert store.list_history_controller_uids(
+        "cluster-a",
+        "team-a",
+        "PodGroup",
+    ) == ["jobset-uid"]
+
+
+def test_controller_history_recursively_includes_descendant_resources(tmp_path):
+    store = SQLitePlacementStore(str(tmp_path / "placements.db"))
+    jobset = replace(
+        _observation(),
+        api_version="jobset.x-k8s.io/v1alpha2",
+        kind="JobSet",
+        name="training",
+        uid="jobset-uid-1",
+        owner_references=(),
+    )
+    job = replace(
+        _observation(resource_version="2"),
+        api_version="batch/v1",
+        kind="Job",
+        name="training-workers-0",
+        uid="job-uid-1",
+        owner_references=(
+            OwnerReference(
+                api_version="jobset.x-k8s.io/v1alpha2",
+                kind="JobSet",
+                name="training",
+                uid="jobset-uid-1",
+                controller=True,
+            ),
+        ),
+    )
+    pod = replace(
+        _observation(resource_version="3"),
+        name="training-workers-0-abcde",
+        uid="pod-uid-1",
+    )
+    unrelated = replace(
+        _observation(resource_version="4"),
+        name="other-pod",
+        uid="other-pod-uid",
+        owner_references=(
+            OwnerReference(
+                api_version="batch/v1",
+                kind="Job",
+                name="other-job",
+                uid="other-job-uid",
+                controller=True,
+            ),
+        ),
+    )
+    for observation in (jobset, job, pod, unrelated):
+        _capture(store, observation)
+
+    assert store.list_observations_for_controller(
+        "cluster-a",
+        "team-a",
+        "jobset-uid-1",
+    ) == [jobset, job, pod]
+
+
 def test_observation_journal_does_not_change_placement_view(tmp_path):
     store = SQLitePlacementStore(str(tmp_path / "placements.db"))
 
@@ -791,6 +874,9 @@ def test_watch_coverage_and_gaps_survive_reopen(tmp_path):
     assert coverage.coverage_started_at == "2026-10-14T00:00:00Z"
     assert coverage.resource_version == "20"
     assert coverage.checkpointed_at == "2026-10-14T00:01:00Z"
+    assert reopened.list_watch_coverages("cluster-a", "team-a") == [
+        coverage
+    ]
     [gap] = reopened.list_coverage_gaps("cluster-a", "team-a")
     assert gap.reason == "WATCH_SOURCE_CHANGED"
     assert gap.start_resource_version == "10"
