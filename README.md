@@ -81,7 +81,7 @@ Three cases the rules engine handles in production:
 * **Python.** `>=3.14.6,<3.15` on the host running the Attribution Service. 3.11+ on the host running the Blueprint orchestrator. The two can run on the same host or different hosts.
 * **uv package manager.** Install with `curl -LsSf https://astral.sh/uv/install.sh | sh`. Every `uv run` command resolves and installs dependencies on first invocation, no separate install step.
 * **Scheduler.** Slurm 25.11+ (SLUID required), or Kueue v0.6+ with JobSet v0.5+ for JobSet-shaped distributed training. NVIDIA KAI Scheduler support is pending: the Service API accepts `kai` as a scheduler value, but attribution for it is not implemented yet.
-* **Telemetry backends (any subset of):** Loki for application or system logs, a PromQL-compatible Prometheus or Mimir instance for node metrics, `kubectl` access for Kueue pod log collection, or local files for sacct-resolved StdOut/StdErr paths.
+* **Telemetry backends (any subset of):** Loki or VictoriaLogs for application or system logs, a PromQL-compatible Prometheus or Mimir instance for node metrics, `kubectl` access for Kueue pod log collection, or local files for sacct-resolved StdOut/StdErr paths.
 * **Network reach.** The Blueprint must reach the Attribution Service over HTTP. The Service does not need outbound network access.
 * **Supported GPU architectures.** A100, H100, L40S, B200, GB200, GB300. GB200 and GB300 rule coverage continues to mature as coverage expands.
 

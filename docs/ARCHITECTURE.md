@@ -35,9 +35,11 @@ flowchart TD
 
         Log[log]
         LogLoki[loki]
+        LogVictoriaLogs[victorialogs]
         LogLocal[local_file]
         LogKubectl[kubectl_logs]
         Log --> LogLoki
+        Log --> LogVictoriaLogs
         Log --> LogLocal
         Log --> LogKubectl
 
@@ -111,7 +113,7 @@ The Blueprint's configuration model is patterned on Open MPI's Modular Component
 | Framework | Components today | Shape | Sources |
 |---|---|---|---|
 | eca (execution context adapter) | slurm, kueue, static | component-selector | (none) |
-| log | loki, local_file, kubectl_logs | per-source component-selector | applog, syslog |
+| log | loki, victorialogs, local_file, kubectl_logs | per-source component-selector | applog, syslog |
 | metrics | promql | per-source component-selector | node_metrics |
 | output | stdout, sqlite | per-instance component-selector | (none) |
 | attribution | (implicit HTTP client) | flat: service_url, timeout_seconds | (none) |
@@ -139,15 +141,15 @@ The Service returns a raw verdict. The Blueprint enriches it with normalized fie
 
 | Source | What it carries | Connectors that emit it |
 |---|---|---|
-| applog | Application stdout, NCCL output, framework logs from PyTorch and NeMo, anything written by the workload itself | loki, local_file, kubectl_logs (pod stdout) |
-| syslog | Kernel ring buffer, XID lines, dmesg, systemd, fabric manager | loki, local_file, kubectl_logs (with a node-agent DaemonSet) |
+| applog | Application stdout, NCCL output, framework logs from PyTorch and NeMo, anything written by the workload itself | loki, victorialogs, local_file, kubectl_logs (pod stdout) |
+| syslog | Kernel ring buffer, XID lines, dmesg, systemd, fabric manager | loki, victorialogs, local_file, kubectl_logs (with a node-agent DaemonSet) |
 | node_metrics | DCGM counters, NVLink PLR, host-side fabric counters, anything PromQL can query | promql |
 
 Source names are wire-format enum values the Service expects. Each log or metric connector instance produces exactly one `Source`. A backend serving multiple Sources is instantiated once per Source so failure isolation lives at the instance boundary.
 
 ## Auth
 
-The Blueprint's `connectors/auth/` package provides two HTTP auth schemes shared by telemetry connectors (Loki, PromQL):
+The Blueprint's `connectors/auth/` package provides two HTTP auth schemes shared by telemetry connectors (Loki, VictoriaLogs, PromQL):
 
 * **Token-based.** Bearer token in the `Authorization` header. Token issuance happens through whatever identity system the operator already runs.
 * **mTLS.** Mutual TLS. Client and server certificates configured per connector instance.

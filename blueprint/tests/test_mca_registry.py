@@ -123,9 +123,11 @@ def test_log_components_registered_by_connector_packages():
     r.register_framework(name="log", aliases=("logs",), sources=("applog", "syslog"))
     _fresh_import(
         "attribution_blueprint.connectors.logs.loki",
+        "attribution_blueprint.connectors.logs.victorialogs",
         "attribution_blueprint.connectors.logs.local_file",
     )
     assert r.get_component("log", "loki").name == "loki"
+    assert r.get_component("log", "victorialogs").name == "victorialogs"
     assert r.get_component("log", "local_file").name == "local_file"
 
 
@@ -217,9 +219,28 @@ def test_built_schema_has_expected_shape():
     assert schema["log"]["_aliases"] == ("logs",)
     for src in ("applog", "syslog"):
         assert src in schema["log"]
-        assert {"loki", "local_file", "kubectl_logs"} <= set(schema["log"][src]["_selector"])
+        assert {"loki", "victorialogs", "local_file", "kubectl_logs"} <= set(schema["log"][src]["_selector"])
         assert "query_kwargs" in schema["log"][src]["_selector"]["loki"]
         assert schema["log"][src]["_selector"]["loki"]["query_kwargs"].get("_open") is True
+        victorialogs_schema = schema["log"][src]["_selector"]["victorialogs"]
+        assert set(victorialogs_schema) == {
+            "endpoint",
+            "timeout_seconds",
+            "limit",
+            "query",
+            "queries",
+            "node_field",
+            "auth",
+            "query_kwargs",
+        }
+        assert set(victorialogs_schema["auth"]) == {
+            "type",
+            "cert_path",
+            "key_path",
+            "ca_cert_path",
+            "token_env",
+        }
+        assert victorialogs_schema["query_kwargs"].get("_open") is True
         assert set(schema["log"][src]["_selector"]["loki"]["auth"]) == {
             "type",
             "cert_path",

@@ -7,7 +7,7 @@ logs should be fetched, and in what shape?*
 
 It's only responsible for fetching data; parsing and attribution
 happen downstream. Write one when the target logs live somewhere that
-[existing connectors](./CONFIGURATION.md#log-collection) (e.g. `local_file`, `loki`,
+[existing connectors](./CONFIGURATION.md#log-collection) (e.g. `local_file`, `loki`, `victorialogs`,
 `kubectl_logs`) cannot reach.
 Connectors are located under [`src/attribution_blueprint/connectors/logs/`](../src/attribution_blueprint/connectors/logs/).
 

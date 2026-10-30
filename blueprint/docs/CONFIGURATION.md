@@ -605,6 +605,7 @@ The supported log components are:
 
 - `local_file`, read files visible on the blueprint host
 - `loki`, query Loki over HTTP
+- `victorialogs`, query VictoriaLogs over HTTP using LogsQL
 - `kubectl_logs`, collect Kubernetes pod logs for Kueue workloads
 
 Prefer [pre-shaped entries](#pre-shaped-entries) for `local_file`: a path ending in `.jsonl` is read as observation entries, one JSON object per line, each carrying its own timestamp and node. Raw log files are also accepted, as the per-source sections below describe.
@@ -769,6 +770,57 @@ Fields:
 The bundled Loki templates are examples. If your labels are not `service_name`, `app`, or `host_name`, set `query`, `queries`, `query_kwargs`, and `node_label` for your environment.
 
 Custom templates may use `{job_id}` (the execution context ID) and any `{key}` supplied in `query_kwargs`. Literal `{` and `}` in LogQL label selectors must be doubled (`{{`, `}}`).
+
+### VictoriaLogs SYSLOG Or APPLOG
+
+Use VictoriaLogs to collect system or application logs with LogsQL. Authentication
+is optional when the endpoint does not require it.
+
+```toml
+[log.syslog]
+component = "victorialogs"
+
+[log.syslog.victorialogs]
+endpoint = "http://127.0.0.1:9428"
+query_kwargs = { service_name = "example-cluster" }
+limit = 5000
+node_field = "host_name"
+```
+
+Configure APPLOG independently when it uses the same endpoint:
+
+```toml
+[log.applog]
+component = "victorialogs"
+
+[log.applog.victorialogs]
+endpoint = "http://127.0.0.1:9428"
+query_kwargs = { service_name = "example-cluster", app = "example-training" }
+```
+
+Fields:
+
+| Field | Required | Meaning |
+| --- | --- | --- |
+| `endpoint` | Yes | VictoriaLogs base URL. |
+| `timeout_seconds` | No | HTTP timeout. Defaults to `60.0`. |
+| `limit` | No | Maximum records per query response. Defaults to `5000`; must be positive. |
+| `node_field` | No | Row field used as the node name and to scope each query to context nodes. Defaults to `host_name`; set to `""` to disable node filtering and row-based node lookup. |
+| `auth.type` | No | Optional `token` or `mtls` authentication. Omit the entire `auth` block for an unauthenticated endpoint. |
+| `auth.token_env` | For token | Environment variable containing the bearer token. |
+| `auth.cert_path` | For mTLS | Client certificate path. |
+| `auth.key_path` | For mTLS | Client private key path. |
+| `auth.ca_cert_path` | No | CA bundle path for mTLS. |
+| `query_kwargs` | Usually | Values used by the bundled LogsQL templates. |
+| `query` | No | One custom LogsQL template replacing the bundled templates for this source. |
+| `queries` | No | Custom LogsQL template list replacing the bundled templates; takes precedence over `query`. |
+
+The bundled templates target `service_name`, `app`, `slurm_job_id`, and `host_name`.
+Templates may use `{job_id}` (the execution context ID) and any `{key}` supplied
+in `query_kwargs`. LogsQL queries are paginated backward in time when a response
+reaches `limit`; rows at a page boundary are deduplicated. If more than `limit`
+records share one timestamp, the connector warns that some records may be
+truncated.
 
 ### Kubectl Pod Logs
 
