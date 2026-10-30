@@ -24,12 +24,8 @@ Emits one workload-level context per PodGroup, with these KAI specifics:
                        a completed one stays COMPLETED without one.
 
 Member Pods are joined on the `pod-group-name` annotation plus namespace,
-then validated against the exact owning Job UID; JobSet members must belong
-to current child Jobs. Kubernetes exposes no reliable per-annotation
-assignment timestamp (`managedFields` records a field manager's last write to
-*any* owned field, and a Pod's own `creationTimestamp` can predate its
-PodGroup by design), so membership intentionally does not use time as a
-discriminator; see `_member_pods` for the resulting known limitation.
+then validated against the exact owning Job UID — see `_member_pods` for
+why membership intentionally does not use timestamps as a discriminator.
 
 The owner comes from the `kai.scheduler/top-owner-metadata` annotation, or
 else the PodGroup's controller ownerReference. Only PodGroups owned by a
@@ -44,20 +40,25 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import NotRequired, TypedDict
 
-import yaml
 from loguru import logger
 
-from attribution_blueprint.connectors.execution_contexts.kubernetes_client import (
+from attribution_blueprint.connectors.execution_contexts.kai.helpers import (
+    POD_GROUP_ANNOTATION as _POD_GROUP_ANNOTATION,
+    controller_owner as _controller_owner,
+    resolve_owner as _resolve_owner,
+)
+from attribution_blueprint.kubernetes.client import (
     KubernetesClient,
     KubernetesClientError,
 )
-from attribution_blueprint.connectors.execution_contexts.kubernetes_helpers import (
-    earliest_job_failure_reason,
-    job_time_limit_minutes,
-)
 from attribution_blueprint.kubernetes.daemon.models import PlacementRecord, PodPlacement
 from attribution_blueprint.kubernetes.daemon.store import PlacementReader
-from attribution_blueprint.kubernetes.helpers import NODE_LOSS_DISRUPTION_REASONS, pod_node_failure_reason
+from attribution_blueprint.kubernetes.helpers import (
+    NODE_LOSS_DISRUPTION_REASONS,
+    earliest_job_failure_reason,
+    job_time_limit_minutes,
+    pod_node_failure_reason,
+)
 from attribution_blueprint.types import assert_aware
 
 _PODGROUP_RESOURCE = "PodGroup"
@@ -66,8 +67,6 @@ _JOB_RESOURCE = "Job"
 _JOB_API_VERSION = "batch/v1"
 _JOBSET_RESOURCE = "JobSet"
 _JOBSET_GROUP = "jobset.x-k8s.io"
-_POD_GROUP_ANNOTATION = "pod-group-name"
-_TOP_OWNER_ANNOTATION = "kai.scheduler/top-owner-metadata"
 _JOBSET_NAME_LABEL = "jobset.sigs.k8s.io/jobset-name"
 
 _SHAPE_OWNED = "owned"
@@ -100,9 +99,7 @@ class KaiExecutionContext(TypedDict):
     owner_kind: str
     owner_name: str
     owner_uid: str
-    # The owner's own state, e.g. "Complete", "Failed:BackoffLimitExceeded",
-    # "Suspended" or "Active".
-    owner_state: str
+    owner_state: str  # native owner wording; see `_owner_state`
     failed_node: NotRequired[str]
     time_limit: NotRequired[int]
 
@@ -180,33 +177,6 @@ def _jobset_child_jobs(owner: dict, jobs: list[dict]) -> list[dict]:
     ]
 
 
-def _top_owner(meta: dict) -> dict | None:
-    raw = (meta.get("annotations") or {}).get(_TOP_OWNER_ANNOTATION)
-    if not raw:
-        return None
-    try:
-        owner = yaml.safe_load(raw)
-    except yaml.YAMLError:
-        return None
-    if not isinstance(owner, dict):
-        return None
-    if not all(owner.get(field) for field in ("kind", "name", "uid")):
-        return None
-    return owner
-
-
-def _controller_owner(meta: dict) -> dict | None:
-    refs = [ref for ref in meta.get("ownerReferences") or [] if isinstance(ref, dict)]
-    for ref in refs:
-        if ref.get("controller") and ref.get("kind") and ref.get("name") and ref.get("uid"):
-            return ref
-    return None
-
-
-def _resolve_owner(meta: dict) -> dict | None:
-    return _top_owner(meta) or _controller_owner(meta)
-
-
 def _podgroup_shape(spec: dict) -> str:
     return _SHAPE_HIERARCHICAL if spec.get("subGroups") else _SHAPE_OWNED
 
@@ -281,13 +251,11 @@ def _condition(owner_object: dict, condition_type: str) -> dict | None:
 
 
 def _owner_state(owner: dict, owner_object: dict, owner_jobs: list[dict]) -> tuple[str, str]:
-    """Return the service-facing state and the native owner state.
+    """Return (service-facing state, native owner state).
 
-    The service state is COMPLETED, FAILED, TIMEOUT or RUNNING. It is derived
-    from the same terminal signal as the end time, so an owner without one is
-    RUNNING, including while suspended. A Job whose Failed condition reports
-    DeadlineExceeded is TIMEOUT. The native state keeps the owner's own
-    wording, including the failure reason.
+    Service state is COMPLETED, FAILED, TIMEOUT, or RUNNING (including while
+    suspended), derived from the same terminal signal as the end time. Native
+    state keeps the owner's own wording, e.g. "Failed:BackoffLimitExceeded".
     """
     if _owner_end_time(owner, owner_object) is None:
         return "RUNNING", "Suspended" if _condition(owner_object, "Suspended") else "Active"

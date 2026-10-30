@@ -3,13 +3,12 @@
 
 from __future__ import annotations
 
-import yaml
-
+from attribution_blueprint.connectors.execution_contexts.kai.helpers import (
+    POD_GROUP_ANNOTATION,
+    top_owner,
+)
 from attribution_blueprint.kubernetes.daemon.models import ResourceIdentity
 from attribution_blueprint.kubernetes.daemon.resolvers import ResolutionPending, UnsupportedOwner
-
-_POD_GROUP_ANNOTATION = "pod-group-name"
-_TOP_OWNER_ANNOTATION = "kai.scheduler/top-owner-metadata"
 
 
 class KaiResourceResolver:
@@ -24,7 +23,7 @@ class KaiResourceResolver:
 
         metadata = pod.get("metadata") or {}
         namespace = metadata.get("namespace")
-        pod_group_name = (metadata.get("annotations") or {}).get(_POD_GROUP_ANNOTATION)
+        pod_group_name = (metadata.get("annotations") or {}).get(POD_GROUP_ANNOTATION)
         if not namespace or not pod_group_name:
             raise UnsupportedOwner("Pod has no KAI PodGroup association")
         try:
@@ -41,7 +40,10 @@ class KaiResourceResolver:
             raise
 
         pod_group_metadata = pod_group.get("metadata") or {}
-        controller = _top_owner(pod_group_metadata) or _controller_owner(pod_group)
+        controller = top_owner(
+            pod_group_metadata,
+            require_complete=False,
+        ) or _controller_owner(pod_group)
         if controller is None or controller.get("kind") != owner.kind or controller.get("uid") != owner.uid:
             raise UnsupportedOwner("KAI PodGroup does not belong to the resolved Pod owner")
         if not pod_group_metadata.get("name") or not pod_group_metadata.get("uid"):
@@ -65,14 +67,3 @@ def _controller_owner(resource: dict) -> dict | None:
         if owner.get("controller", True)
     ]
     return owners[0] if len(owners) == 1 else None
-
-
-def _top_owner(metadata: dict) -> dict | None:
-    raw = (metadata.get("annotations") or {}).get(_TOP_OWNER_ANNOTATION)
-    if not raw:
-        return None
-    try:
-        owner = yaml.safe_load(raw)
-    except yaml.YAMLError:
-        return None
-    return owner if isinstance(owner, dict) else None

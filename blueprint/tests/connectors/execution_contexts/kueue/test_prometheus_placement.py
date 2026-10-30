@@ -5,8 +5,8 @@ from datetime import datetime, timezone
 
 import pytest
 
-from attribution_blueprint.connectors.execution_contexts.kueue.pod_placement.models import PlacementQuery
-from attribution_blueprint.connectors.execution_contexts.kueue.pod_placement.prometheus_resolver import (
+from attribution_blueprint.connectors.execution_contexts.kueue.prometheus_placement import (
+    PlacementQuery,
     PrometheusPlacementResolver,
 )
 

@@ -43,24 +43,9 @@ path because the local_file log connector needs one; in Kubernetes, pod
 stdout is fetched via `kubectl logs` and belongs to a future log connector,
 not the ECA.
 
-Pod ownership is resolved via the **standard batch/v1 Job pod labels**,
-not the Kueue label. `kueue.x-k8s.io/job-uid` is set by Kueue on the
-**Workload** object (carrying the owner Job's UID so callers can link a
-Workload back to its Job. The pods are created by the Kubernetes Job
-controller, which stamps the `batch.kubernetes.io/controller-uid=<job.uid>`
-and `batch.kubernetes.io/job-name=<job.name>` labels.
-This adapter pulls the owner Job's UID out of the Workload's
-`ownerReferences` and selects pods with
-`batch.kubernetes.io/controller-uid=<owner_uid>`.
-
-The JobSet pod label carries only a name, which is unique per namespace
-but not cluster-wide, so `_pod_selector_for`/`_pod_matches_selector`
-always scope matching to the Workload's own namespace.
-
-Owner Jobs/JobSet children are looked up by namespace/name, but names are
-reusable after deletion. `_jobs_for_workload` confirms the fetched
-object's uid against the ownerReference's uid before trusting it as the
-real owner.
+Pod ownership is resolved via the standard batch/v1 Job pod labels, not the
+Kueue label — see `pod_selector_for` in helpers.py for the selector logic
+and `_jobs_for_workload` for how owner Jobs are verified by uid, not name.
 """
 
 from __future__ import annotations
@@ -70,14 +55,6 @@ from typing import NamedTuple, NotRequired, TypedDict
 
 from loguru import logger
 
-from attribution_blueprint.connectors.execution_contexts.kubernetes_client import (
-    KubernetesClient,
-    KubernetesClientError,
-)
-from attribution_blueprint.connectors.execution_contexts.kubernetes_helpers import (
-    earliest_job_failure_reason as _earliest_job_failure_reason,
-    job_time_limit_minutes as _job_time_limit_minutes,
-)
 from attribution_blueprint.connectors.execution_contexts.kueue.helpers import (
     POD_JOBSET_LABEL as _POD_JOBSET_LABEL,
     jobs_for_workload as _jobs_for_workload,
@@ -85,16 +62,20 @@ from attribution_blueprint.connectors.execution_contexts.kueue.helpers import (
     pod_matches_selector as _pod_matches_selector,
     pod_selector_for as _pod_selector_for,
 )
-from attribution_blueprint.connectors.execution_contexts.kueue.pod_placement.models import (
+from attribution_blueprint.connectors.execution_contexts.kueue.prometheus_placement import (
     PlacementQuery,
-)
-from attribution_blueprint.connectors.execution_contexts.kueue.pod_placement.store import (
     PlacementResolver,
+)
+from attribution_blueprint.kubernetes.client import (
+    KubernetesClient,
+    KubernetesClientError,
 )
 from attribution_blueprint.kubernetes.daemon.models import PlacementRecord, PodPlacement
 from attribution_blueprint.kubernetes.daemon.store import PlacementReader
 from attribution_blueprint.kubernetes.helpers import (
     NODE_LOSS_DISRUPTION_REASONS as _NODE_LOSS_DISRUPTION_REASONS,
+    earliest_job_failure_reason as _earliest_job_failure_reason,
+    job_time_limit_minutes as _job_time_limit_minutes,
     pod_node_failure_reason as _pod_node_failure_reason,
 )
 from attribution_blueprint.types import assert_aware
@@ -270,18 +251,9 @@ def _collect_pod_evidence(
     """Return sorted unique nodes, the lex-smallest failed_node, sorted pod
     names, and the pod -> node mapping for pods matching `selector`.
 
-    The caller is responsible for narrowing the input list to pods that
-    might belong to this workload — typically via the kubectl label
-    selector in `_fetch_pods_for`. This function still re-checks each pod
-    against `_pod_matches_selector` as a defensive filter (namespace +
-    label), since cluster-wide discovery can pool pods across namespaces.
-
-    Pod names are returned alongside the node evidence so downstream
-    connectors (e.g. `kubectl_logs`) don't have to re-derive the
-    per-owner pod selector and re-fetch the pod list.
-
-    Returns empty evidence when `selector` is None — Workloads without
-    a recognised owner have no pods to attribute.
+    Re-checks each pod against `_pod_matches_selector` as a defensive filter,
+    since cluster-wide discovery can pool pods from other namespaces. Returns
+    empty evidence when `selector` is None (no recognised owner).
     """
     if not selector:
         return _PodEvidence([], None, [], {})
@@ -488,14 +460,7 @@ def _extract_time_limit(workload: dict, owner_jobs: dict[str, dict]) -> int | No
 
 
 def _non_negative_int(value: object) -> int | None:
-    """Coerce Kubernetes resource quantities that should be plain integers.
-
-    Args:
-        value: Raw Kubernetes resource value.
-
-    Returns:
-        A non-negative integer, or None when no integer is present.
-    """
+    """Coerce a raw Kubernetes resource value to a non-negative int, or None."""
     if isinstance(value, bool):
         return None
     if isinstance(value, int) and value >= 0:
@@ -506,14 +471,7 @@ def _non_negative_int(value: object) -> int | None:
 
 
 def _resource_gpu_count(resources: object) -> int:
-    """Return GPU count from one Kubernetes resources map.
-
-    Args:
-        resources: Container ``resources.requests`` or ``resources.limits``.
-
-    Returns:
-        Sum of GPU-like extended resources in the map.
-    """
+    """Return the sum of GPU-like extended resources in one `requests`/`limits` map."""
     if not isinstance(resources, dict):
         return 0
     total = 0
@@ -528,14 +486,7 @@ def _resource_gpu_count(resources: object) -> int:
 
 
 def _container_gpu_count(container: object) -> int:
-    """Return GPU count requested by one Kubernetes container.
-
-    Args:
-        container: Pod template container object.
-
-    Returns:
-        Requested GPU count, falling back to limits when requests are absent.
-    """
+    """Return GPU count requested by one container, falling back to limits when requests are absent."""
     if not isinstance(container, dict):
         return 0
     resources = container.get("resources")
@@ -548,15 +499,10 @@ def _container_gpu_count(container: object) -> int:
 
 
 def _workload_gpu_count(workload: dict) -> int | None:
-    """Return total GPU count requested by a Kueue Workload.
+    """Return total GPU count across all pod sets.
 
-    Args:
-        workload: Kueue Workload API object.
-
-    Returns:
-        Total GPUs across all pod sets. Returns 0 when the Workload pod sets
-        are parseable but no GPU resource is declared, or None when the
-        Workload shape is missing.
+    Returns 0 when pod sets are parseable but no GPU resource is declared,
+    or None when the Workload shape itself is missing/malformed.
     """
     total = 0
     spec = workload.get("spec")
@@ -591,16 +537,11 @@ def _workload_gpu_count(workload: dict) -> int | None:
 
 
 def _workload_window(workload: dict, now: datetime) -> tuple[datetime, datetime] | None:
-    """Return `(start_time, end_time)` for a Workload using ONLY data carried
-    on the Workload object itself — no pod or owner-Job fetches.
+    """Return `(start_time, end_time)` for a Workload using only data carried
+    on the Workload object — no pod or owner-Job fetches.
 
-    Used by `discover_by_time_range` to filter the cluster-wide listing by
-    time window BEFORE issuing per-workload Pod/owner-Job API round-trips.
-    The full `_parse_workload` computes the
-    same window plus pod/node/time-limit evidence; this helper short-circuits
-    when the caller only needs to know "does this workload overlap [start,
-    end]?". Returns `None` if no start time can be derived (the workload
-    would be skipped by the full parse anyway).
+    Cheap pre-filter for `discover_by_time_range`, before the full
+    `_parse_workload` pass. Returns `None` if no start time can be derived.
     """
     meta = workload.get("metadata") or {}
     if not meta.get("uid") or not meta.get("name"):
@@ -681,9 +622,7 @@ def _parse_workload(
         # V2 accepts scheduler identity as a string, allowing service rules and
         # provenance to distinguish Kueue from other execution-context sources.
         "workload_type": "kueue",
-        # BP-internal connector identity. SQLite's `scheduler_type` column
-        # reads this in preference to the service-facing `workload_type`.
-        "scheduler": "kueue",
+        "scheduler": "kueue",  # see TypedDict field comment above
         "nodes": evidence.nodes,
         "start_time": start_time,
         "end_time": end_time,
@@ -749,11 +688,8 @@ class KueueExecutionContextAdapter:
     (KUBECONFIG env var, ~/.kube/config) or, if neither resolves, in-cluster
     service-account credentials. `namespace` selects a single namespace; the
     empty string queries every namespace. `workload_api_version` pins the
-    Kueue Workload CRD's `<group>/<version>` the adapter reads; Kueue versions
-    this API, so there is no runtime "ask the cluster for its preferred
-    version" step — the default tracks the Workload API version Kueue has
-    shipped as `v1beta1` since 0.6, and callers running a cluster that serves
-    a different version configure this directly.
+    Kueue Workload CRD's `<group>/<version>` the adapter reads (see
+    `_DEFAULT_WORKLOAD_API_VERSION` above).
     """
 
     def __init__(
@@ -836,15 +772,10 @@ class KueueExecutionContextAdapter:
         """List workloads, then filter by (start_time, end_time) intersection.
 
         Kueue's API does NOT support server-side time filtering on Workloads,
-        so we list and filter client-side — same pattern as a sacct call
-        without `--jobs`. The `nodelist` argument intersects against the
-        observed pod nodes; empty intersection drops the workload. Each list
-        entry may be a CSV of plain k8s node names — Kueue parses comma lists
-        here rather than at the CLI layer so the orchestrator's contract stays
-        scheduler-agnostic.
-
-        `start` and `end` must be tz-aware. Naive datetimes would crash the
-        per-workload comparison against (tz-aware) parsed condition times.
+        so we list and filter client-side. `nodelist` entries may be CSVs of
+        plain node names; a workload survives only if its nodes intersect.
+        `start`/`end` must be tz-aware to compare against parsed condition
+        times.
         """
         assert_aware(start, "discover_by_time_range.start")
         assert_aware(end, "discover_by_time_range.end")
@@ -853,8 +784,6 @@ class KueueExecutionContextAdapter:
             namespace=self.namespace or None,
             api_version=self.workload_api_version,
         )
-        # parse only the timestamps each workload object
-        # already carries (conditions + creationTimestamp).
         from datetime import timezone
 
         now = datetime.now(tz=timezone.utc)
@@ -962,12 +891,9 @@ class KueueExecutionContextAdapter:
         """Recover `(nodes, pod_names)` from short-lived Kubernetes Events.
 
         Queries only the exact owner Job UID(s)' `SuccessfulCreate` Events,
-        then only the resulting pod names' `Scheduled` Events, via
-        `--field-selector` — never a namespace-wide Event list. This keeps
-        the RBAC/scale/retention footprint bounded to this one workload
-        one Events query per owner Job UID and per pod name.
-        Skips entirely (no calls) once `context["end_time"]` is older than
-        `event_max_age_seconds`.
+        then the resulting pod names' `Scheduled` Events, via
+        `--field-selector` — never a namespace-wide list. Skips entirely once
+        `context["end_time"]` is older than `event_max_age_seconds`.
         """
         age = datetime.now(tz=timezone.utc) - context["end_time"]
         if age.total_seconds() > self.event_max_age_seconds:

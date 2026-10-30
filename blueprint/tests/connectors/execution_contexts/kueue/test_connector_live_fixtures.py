@@ -17,11 +17,11 @@ import json
 from datetime import datetime, timezone
 from pathlib import Path
 
-from attribution_blueprint.connectors.execution_contexts.kubernetes_client import (
-    KubernetesClientError,
-)
 from attribution_blueprint.connectors.execution_contexts.kueue import (
     KueueExecutionContextAdapter,
+)
+from attribution_blueprint.kubernetes.client import (
+    KubernetesClientError,
 )
 
 LIVE = Path(__file__).parent.parent.parent.parent / "fixtures" / "kueue_live"

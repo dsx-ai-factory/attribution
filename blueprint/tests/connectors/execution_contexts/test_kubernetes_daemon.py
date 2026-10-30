@@ -3,10 +3,10 @@
 
 import pytest
 
-from attribution_blueprint.connectors.execution_contexts.kubernetes_daemon import (
+from attribution_blueprint.exceptions import MCAError
+from attribution_blueprint.kubernetes.daemon.config import (
     build_kubernetes_daemon_client,
 )
-from attribution_blueprint.exceptions import MCAError
 
 
 def test_build_client_requires_endpoint():

@@ -5,15 +5,26 @@
 
 from __future__ import annotations
 
-from attribution_blueprint.connectors.execution_contexts.kueue.pod_placement.models import (
-    OwnerIdentity,
-    WorkloadIdentity,
-)
+from dataclasses import dataclass
 
 POD_OWNER_LABEL = "batch.kubernetes.io/controller-uid"
 POD_JOBSET_LABEL = "jobset.sigs.k8s.io/jobset-name"
 WORKLOAD_ANNOTATION = "kueue.x-k8s.io/workload"
 WORKLOAD_OWNER_UID_LABEL = "kueue.x-k8s.io/job-uid"
+
+
+@dataclass(frozen=True)
+class WorkloadIdentity:
+    name: str
+    uid: str
+
+
+@dataclass(frozen=True)
+class OwnerIdentity:
+    api_version: str
+    kind: str
+    name: str
+    uid: str
 
 
 def controller_owner(resource: dict, kind: str | None = None) -> dict | None:
