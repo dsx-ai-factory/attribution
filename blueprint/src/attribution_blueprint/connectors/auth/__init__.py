@@ -3,6 +3,7 @@
 
 from attribution_blueprint.connectors.auth.mtls import MTLSAuth
 from attribution_blueprint.connectors.auth.protocol import Auth
+from attribution_blueprint.connectors.auth.spec import build_auth
 from attribution_blueprint.connectors.auth.token import TokenAuth
 
-__all__ = ["Auth", "MTLSAuth", "TokenAuth"]
+__all__ = ["Auth", "MTLSAuth", "TokenAuth", "build_auth"]
