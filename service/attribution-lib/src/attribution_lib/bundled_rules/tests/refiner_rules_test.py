@@ -1462,6 +1462,31 @@ class TestSlurmStateSymptoms:
         assert calculate_outcome(symptoms).value().outcome == "Fail User"
 
     @pytest.mark.parametrize("scheduler", [Scheduler.KUEUE, Scheduler.KAI])
+    def test_queue_scheduler_unknown_without_nodes_remains_incomplete(
+        self, stream, obs_ctx, scheduler
+    ):
+        ji = _job_info_with(state="UNKNOWN", nodes=[], scheduler=scheduler)
+        symptoms = _make_symptoms(obs_ctx)
+
+        _run(stream, ji, symptoms)
+
+        assert not symptoms
+        assert calculate_outcome(symptoms).value().outcome == "Incomplete Info"
+
+    @pytest.mark.parametrize("scheduler", [Scheduler.KUEUE, Scheduler.KAI])
+    def test_queue_scheduler_unknown_without_nodes_preserves_failure_evidence(
+        self, stream, obs_ctx, scheduler
+    ):
+        ji = _job_info_with(state="UNKNOWN", nodes=[], scheduler=scheduler)
+        symptoms = _make_symptoms(obs_ctx, "Python Exception")
+
+        _run(stream, ji, symptoms)
+
+        assert "Python Exception" in symptoms
+        assert "Job didn't start" not in symptoms
+        assert calculate_outcome(symptoms).value().outcome == "Fail User"
+
+    @pytest.mark.parametrize("scheduler", [Scheduler.KUEUE, Scheduler.KAI])
     def test_node_fail_without_specific_node_uses_scheduler_evidence(self, stream, obs_ctx, scheduler):
         ji = _job_info_with(
             state="NODE_FAIL",
@@ -3481,6 +3506,55 @@ class TestLastResortSymptoms:
         _run(stream, ji, symptoms)
         assert "job failed" in symptoms
         assert symptoms["job failed"].one_source().rule == "last resort; slurm status"
+
+    @pytest.mark.parametrize("scheduler", [Scheduler.KUEUE, Scheduler.KAI])
+    def test_empty_symptoms_unknown_kubernetes_attempt_stays_empty(
+        self, stream, obs_ctx, scheduler
+    ):
+        ji = _job_info_with(
+            state="UNKNOWN",
+            scheduler=scheduler,
+            exit_code_signal=None,
+        )
+        symptoms = _make_symptoms(obs_ctx)
+
+        _run(stream, ji, symptoms)
+
+        assert not symptoms
+
+    @pytest.mark.parametrize("scheduler", [Scheduler.KUEUE, Scheduler.KAI])
+    @pytest.mark.parametrize(
+        ("extract_metadata", "expected_symptom", "expected_outcome"),
+        [
+            (False, "Cancelled by user", "Cancelled by User"),
+            (True, "job failed", "Fail User"),
+        ],
+    )
+    def test_unknown_kubernetes_attempt_leaves_cancellation_reclassification_to_metadata_fallback(
+        self,
+        stream,
+        obs_ctx,
+        scheduler,
+        extract_metadata,
+        expected_symptom,
+        expected_outcome,
+    ):
+        ji = _job_info_with(
+            state="UNKNOWN",
+            scheduler=scheduler,
+            exit_code_signal=None,
+        )
+        symptoms = _make_symptoms(obs_ctx, "Cancelled by user")
+
+        _run(
+            stream,
+            ji,
+            symptoms,
+            extract_job_metadata_from_logfile=extract_metadata,
+        )
+
+        assert list(symptoms.symptoms()) == [expected_symptom]
+        assert calculate_outcome(symptoms).value().outcome == expected_outcome
 
     def test_non_empty_symptoms_no_last_resort(self, stream, obs_ctx):
         ji = _job_info_with(state="COMPLETED")

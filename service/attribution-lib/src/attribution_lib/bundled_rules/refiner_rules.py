@@ -879,7 +879,7 @@ def detect_bad_nic_state(context: RefinerContext):
 # Kubernetes scheduler terminal results remain authoritative when
 # pod/node evidence has expired.
 _KUBERNETES_ALLOWED_ZERO_NODE_STATES = frozenset(
-    {"EVICTED", "COMPLETED", "FAILED", "TIMEOUT", "NODE_FAIL", "PREEMPTED", "REQUEUED"}
+    {"EVICTED", "COMPLETED", "FAILED", "TIMEOUT", "NODE_FAIL", "PREEMPTED", "REQUEUED", "UNKNOWN"}
 )
 
 
@@ -2028,9 +2028,10 @@ def last_resort_symptoms(context: RefinerContext):
             symptoms.add(job_info.source_value("Cancelled by user", job_info.state, "last resort; slurm status"))
         elif job_info.state == "REQUEUED":
             symptoms.add(job_info.source_value("Job requeued", job_info.state, "last resort; slurm status"))
-        elif job_info.state == "EVICTED":
-            # Native eviction reason is preserved in raw scheduler context;
-            # an empty symptom set resolves to Incomplete Info.
+        elif job_info.state == "EVICTED" or (
+            job_info.state == "UNKNOWN"
+            and job_info.scheduler in KUBERNETES_SCHEDULER_TYPES
+        ):
             pass
         elif job_info.state != "RUNNING":
             symptoms.add(job_info.source_value("job failed", job_info.state, "last resort; slurm status"))
