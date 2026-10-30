@@ -721,6 +721,28 @@ class TestTimestampExtraction:
             result = _extract_timestamp_from_pytorch_format(line, timezone)
             assert result is None, f"Should not match: {line}"
 
+    @pytest.mark.parametrize(
+        ("line", "job_end", "expected_year"),
+        [
+            pytest.param(
+                "[E1025 13:56:48.346 ProcessGroupNCCL.cpp:2174] msg", (2026, 10, 25, 13, 54, 49), 2026, id="after_end"
+            ),
+            pytest.param(
+                "[E1025 13:50:00.000 ProcessGroupNCCL.cpp:2174] msg", (2026, 10, 25, 13, 54, 49), 2026, id="before_end"
+            ),
+            pytest.param(
+                "[E1231 23:59:00.000 ProcessGroupNCCL.cpp:2174] msg", (2027, 1, 1, 0, 5, 0), 2026, id="prior_year"
+            ),
+        ],
+    )
+    def test_pytorch_format_year_from_job_end(self, timezone, line, job_end, expected_year):
+        """A line logged shortly after the job end keeps the year of the job end."""
+
+        result = _extract_timestamp_from_pytorch_format(line, timezone, datetime(*job_end, tzinfo=timezone))
+
+        assert result is not None
+        assert result.year == expected_year
+
     def test_extract_timestamp_from_log_line_pytorch_single_digit_month(self, timezone):
         """Test the main extraction function with PyTorch single-digit month format."""
 
