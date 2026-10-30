@@ -486,7 +486,7 @@ def irrecoverable_net_ib_communicator_error_event(
 def ibv_modify_qp_failed_event(
     groups: Dict[str, str], node: str, source: Source, ctx: RuleContext
 ) -> List[EventTriple]:
-    node = command_source_node(node, source)
+    node = command_source_node(node, source, ctx)
     error_code = int(groups["error_code"])
     local_gid, remote_gid = groups["local_gid"], groups["remote_gid"]
     remote_ip = remote_gid[7:] if remote_gid.startswith("::ffff:") else remote_gid
@@ -578,7 +578,7 @@ def local_hca_command_failure_event(
     error_code = parse_command_errno(groups["error"])
     if error_code not in {11, 110, 125}:
         return []
-    return command_failure_events(groups["verb"], error_code, node, source)
+    return command_failure_events(groups["verb"], error_code, command_source_node(node, source, ctx), source)
 
 
 @rule_processor("applog:Connection closed by remote peer")

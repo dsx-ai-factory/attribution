@@ -2910,6 +2910,16 @@ outcome_symptom(
     fallback_prefix=True,
 )
 
+# Keep unresolved QP EAGAIN at its existing priority tier while applying the
+# local-command hardware classification.
+outcome_symptom(
+    "Local HCA command failure (ibv_modify_qp eno 11)",
+    outcome="Fail InfraHW",
+    priority=OutcomePriority.MEDIUM_SW,
+    doc="local-hca-command-failure",
+    hw_cause="Unknown HW Cause",
+)
+
 # Preserve the existing QP timeout tier when an unresolved peer takes the
 # local-command path.
 outcome_symptom(

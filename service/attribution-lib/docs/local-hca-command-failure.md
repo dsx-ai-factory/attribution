@@ -59,10 +59,15 @@ adapter defect.
 
 Emitter identity follows the shared network rules: prefer the explicit NCCL
 emitter, accept a verified leading hostname or mapped local GID, then use
-explicit observation metadata. Rank alone and remote GIDs do not identify the
-emitter. Unknown emitters remain interesting evidence without a hardware
-verdict. Unmapped peer addresses remain in pair details, not node identities.
+explicit observation metadata. As a last fallback, a leading `srun -l` rank
+(`0:`) or explicit `[rankN]` label is resolved through the job's rank mapping.
+Unknown ranks, implicit rank zero, CUDA device indexes and remote GIDs do not
+identify the emitter. Local GID parsing skips the `local GID index` field and
+reads the address field that follows. Unknown emitters remain interesting
+evidence without a hardware verdict. Unmapped peer addresses remain in pair details, not node identities.
 Local command candidates use the existing after-MFU demotion filter, including
 its timestamp comparison and line-number fallback. Only surviving candidates
-can corroborate another failure. Unresolved QP timeouts preserve
-the existing timeout priority tier.
+can corroborate another failure. Unresolved QP errno 11 and 110 retain the
+existing MEDIUM_SW priority tier. Their local-command classification is
+`Fail InfraHW / Unknown HW Cause`; the resource-limit guard is specific to
+`ibv_reg_mr` and `ibv_create_cq` EAGAIN, not `ibv_modify_qp`.

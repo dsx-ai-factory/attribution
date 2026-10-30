@@ -54,7 +54,7 @@ def verb(name, errno=11, device="mlx5_4", process="123:456"):
 def run(event_manager, obs_data, job, request, graphs):
     count = 0
 
-    def _run(lines, syslogs=(), mapping=None, provider=(), job_script=None):
+    def _run(lines, syslogs=(), mapping=None, provider=(), job_script=None, declared_nodes=True):
         current_job = job._replace(job_script_content=job_script) if job_script else job
         nonlocal count
         count += 1
@@ -64,7 +64,9 @@ def run(event_manager, obs_data, job, request, graphs):
             job,
             [
                 (
-                    {"body": line, "resources": [{"kind": "node", "hostname": "node-a"}]}
+                    {"body": line, **({"ts": int((start + 20 + offset) * 1e9)} if offset is not None else {})}
+                    if not declared_nodes
+                    else {"body": line, "resources": [{"kind": "node", "hostname": "node-a"}]}
                     if offset is None
                     else make_applog_entry(
                         line, (start + 20 + offset) * 1e9, "node-b" if line.startswith("node-b:") else "node-a"
@@ -83,7 +85,7 @@ def run(event_manager, obs_data, job, request, graphs):
         )
         stream.register_observation_context(app.context)
         stream.register_observation_context(sys.context)
-        with hostname_mapping(mapping or {"192.0.2.1": "node-a", "192.0.2.2": "node-b"}):
+        with hostname_mapping(mapping if mapping is not None else {"192.0.2.1": "node-a", "192.0.2.2": "node-b"}):
             bad = core.calculate_bad_nodes(event_stream=stream, job_info=current_job, applog_in=app, syslog_in=sys)
         # Exercise the normalized provider-evidence contract without embedding
         # provider-specific collection or inventory logic in public rules.
@@ -500,10 +502,14 @@ def test_unidentified_emitter_never_blames_resolved_peer(event_manager, obs_data
     assert "node-b" in exported(result)[1]
 
 
-def test_mapped_local_gid_identifies_unlabeled_emitter(run):
+@pytest.mark.parametrize("mapped", [False, True])
+def test_mapped_local_gid_identifies_unlabeled_emitter(run, mapped):
     line = "Last error: " + modify().split("NCCL WARN ", 1)[1]
-    result, _ = run([(line, 0)])
-    assert set(exported(result)[0]) == {"node-a"}
+    result, stream = run([(line, 0)], mapping={"192.0.2.1": "node-a"} if mapped else {}, declared_nodes=False)
+    pair = events(stream, "Application.bad_pair.complete")[0]
+    assert pair[3].declared_node is None
+    assert pair[2]["local_node"] == ("node-a" if mapped else None)
+    assert set(exported(result)[0]) == ({"node-a"} if mapped else set())
 
 
 def test_logged_emitter_takes_precedence_over_declared_metadata(run):
@@ -536,11 +542,42 @@ def test_existing_csp_cascade_is_preserved(run):
     assert not any("pyxis" in s.lower() for s in exported(result)[0]["node-a"])
 
 
-def test_unresolved_timeout_retains_original_priority(run):
+@pytest.mark.parametrize("errno", [11, 110])
+def test_unresolved_qp_error_retains_original_priority(run, errno):
     import attribution_lib
     from attribution_lib.symptoms.declarations import OutcomePriority
     from attribution_lib.symptoms.registry_generation import OUTCOME_PRIORITIES
 
-    result, _ = run([(modify(110, remote="N/A"), 0)])
+    result, _ = run([(modify(errno, remote="N/A"), 0)])
+    assert result.outcome_attr.value().outcome == "Fail InfraHW"
+    assert result.outcome_attr.value().hw_cause == "Unknown HW Cause"
     match = attribution_lib.get_symptom_registry().outcome_for([result.outcome_attr.value().root_cause_symptom])
     assert match.tier_index == OUTCOME_PRIORITIES.index(OutcomePriority.MEDIUM_SW)
+
+
+@pytest.mark.parametrize(
+    "prefix,expected", [("0: ", "node-a"), ("1: ", "node-b"), ("[rank1] ", "node-b"), ("99: ", None), ("", None)]
+)
+@pytest.mark.parametrize("command", ["modify", "query"])
+def test_explicit_leading_rank_uses_job_topology_only_as_fallback(run, prefix, expected, command):
+    line = modify(125, local="N/A", remote="N/A") if command == "modify" else verb("ibv_query_qp", 110)
+    line = prefix + line.split("NCCL WARN ", 1)[1]
+    result, stream = run([(line, 0)], mapping={}, declared_nodes=False)
+    event = events(stream, "Application.hca.command_failure")[0]
+    assert event[3].declared_node is None
+    assert event[2]["node"] == expected
+    assert set(exported(result)[0]) == ({expected} if expected else set())
+
+
+@pytest.mark.parametrize("prefix", ["1: ", "1: node-b:123:456 [0] NCCL WARN "])
+def test_gid_or_explicit_emitter_precedes_rank_fallback(run, prefix):
+    line = prefix + modify().split("NCCL WARN ", 1)[1]
+    result, _ = run([(line, 0)], mapping={"192.0.2.1": "node-a"}, declared_nodes=False)
+    expected = "node-b" if "node-b:" in prefix else "node-a"
+    assert set(exported(result)[0]) == {expected}
+
+
+def test_declared_node_precedes_explicit_rank_fallback(run):
+    line = "1: " + verb("ibv_query_qp").split("NCCL WARN ", 1)[1]
+    result, _ = run([(line, 0)], mapping={})
+    assert set(exported(result)[0]) == {"node-a"}

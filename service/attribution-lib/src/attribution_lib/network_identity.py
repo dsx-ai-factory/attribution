@@ -9,7 +9,7 @@ from ipaddress import ip_address
 
 from attribution_lib.utils import NCCL_HOST_PID_TID_REGEX, get_hostname
 
-_LOCAL_GID = re.compile(r"\blocal(?:Gid| GID)\s+(?P<ip>[^\s,]+)")
+_LOCAL_GID = re.compile(r"\blocal(?:Gid| GID)\s+(?!index\b)(?P<ip>[^\s,]+)")
 _HOST_PREFIX = re.compile(r"^(?P<node>[A-Za-z][A-Za-z0-9_.-]*):\s")
 
 

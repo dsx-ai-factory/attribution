@@ -14,9 +14,9 @@ from attribution_lib.events import EventStream
 from attribution_lib.network_identity import network_source_identity, normalize_network_hostname
 from attribution_lib.observation.inbound import Source as ObservationSource
 from attribution_lib.rule_helpers import _bad, _interesting
-from attribution_lib.rules import EventTriple, RefinerContext
+from attribution_lib.rules import EventTriple, RefinerContext, RuleContext
 from attribution_lib.sources import Source, SourceSet
-from attribution_lib.utils import NCCL_HOST_PID_TID_REGEX
+from attribution_lib.utils import NCCL_HOST_PID_TID_REGEX, _leading_explicit_applog_rank
 
 _DEVICE_RE = re.compile(r"\b(?:mlx5_\d+|[0-9a-fA-F]{4}:[0-9a-fA-F]{2}:[0-9a-fA-F]{2}\.[0-7])\b")
 _ERRNO_RE = re.compile(r"\berrno\s+(\d+)\b|^\s*(\d+)\b")
@@ -44,22 +44,27 @@ def _devices(datum: str) -> set[str]:
     return {match.group().lower() for match in _DEVICE_RE.finditer(datum)}
 
 
-def command_source_node(node: str | None, source: Source) -> str | None:
-    """Use shared network identity rules, then explicit observation metadata."""
+def command_source_node(node: str | None, source: Source, ctx: RuleContext) -> str | None:
+    """Prefer logged/mapped identity and metadata; resolve explicit ranks last."""
     identity = network_source_identity(source.datum, prefix_hostname=node)
-    return identity.hostname or (normalize_network_hostname(source.declared_node) if source.declared_node else None)
+    declared = normalize_network_hostname(source.declared_node) if source.declared_node else None
+    if identity.hostname or declared:
+        return identity.hostname or declared
+    rank = _leading_explicit_applog_rank(source.datum)
+    ranked_node = ctx.get_node_from_rank(rank) if rank is not None else None
+    return normalize_network_hostname(ranked_node) if ranked_node else None
 
 
 def command_failure_event(
     verb: str, errno: int, node: str | None, source: Source, device: str | None = None
 ) -> EventTriple:
-    """Keep exact source/process/device context without assigning a remote fault."""
+    """Keep the resolved emitter and source/process/device context."""
     devices = _devices(device or source.datum)
     process = NCCL_HOST_PID_TID_REGEX.search(source.datum)
     return EventTriple(
         type="Application.hca.command_failure",
         payload={
-            "node": command_source_node(node, source),
+            "node": node,
             "verb": verb,
             "errno": errno,
             "device": next(iter(devices)) if len(devices) == 1 else None,

@@ -571,8 +571,8 @@ class TestApplogRules:
         )
         + rule_lines(
             [
-                "host-9ad02e1b:123:456 [0] Call to ibv_modify_qp failed with 110 Connection timed out, on dev mlx5_4:1, curr state INIT, next state RTR, local GID index 3, local GID ::ffff:192.0.2.1, remote GID ::ffff:127.0.0.1",
-                "host-9ad02e1b:123:456 [0] Call to ibv_modify_qp failed with 110 Connection timed out, on dev mlx5_4:1, curr state INIT, next state RTR, local GID index 3, local GID ::ffff:192.0.2.1, remote GID localhost",
+                "0: Call to ibv_modify_qp failed with 110 Connection timed out, on dev mlx5_4:1, curr state INIT, next state RTR, local GID index 3, local GID ::ffff:192.0.2.1, remote GID ::ffff:127.0.0.1",
+                "0: Call to ibv_modify_qp failed with 110 Connection timed out, on dev mlx5_4:1, curr state INIT, next state RTR, local GID index 3, local GID ::ffff:192.0.2.1, remote GID localhost",
             ],
             "bad_peers",
             [0, "localhost"],
@@ -581,7 +581,7 @@ class TestApplogRules:
         )
         + rule_lines(
             [
-                "host-9ad02e1b:123:456 [0] Call to ibv_modify_qp failed with 22 Connection timed out, on dev mlx5_4:1, curr state INIT, next state RTR, local GID index 3, local GID ::ffff:192.0.2.1, remote GID ::ffff:127.0.0.1",
+                "0: Call to ibv_modify_qp failed with 22 Connection timed out, on dev mlx5_4:1, curr state INIT, next state RTR, local GID index 3, local GID ::ffff:192.0.2.1, remote GID ::ffff:127.0.0.1",
             ],
             "bad",
             [0],
@@ -590,7 +590,7 @@ class TestApplogRules:
         )
         + rule_lines(
             [
-                "host-9ad02e1b:123:456 [0] Call to ibv_modify_qp failed with 22 Connection timed out, on dev mlx5_4:1, curr state INIT, next state RTR, local GID index 3, local GID ::ffff:192.0.2.1, remote GID localhost",
+                "0: Call to ibv_modify_qp failed with 22 Connection timed out, on dev mlx5_4:1, curr state INIT, next state RTR, local GID index 3, local GID ::ffff:192.0.2.1, remote GID localhost",
             ],
             "bad_peers",
             [0, "localhost"],
@@ -599,7 +599,7 @@ class TestApplogRules:
         )
         + rule_lines(
             [
-                "host-9ad02e1b:123:456 [0] Call to ibv_modify_qp failed with 11 Resource temporarily unavailable, on dev mlx5_4:1, curr state INIT, next state RTR, local GID index 3, local GID ::ffff:192.0.2.1, remote GID ::ffff:127.0.0.1",
+                "0: Call to ibv_modify_qp failed with 11 Resource temporarily unavailable, on dev mlx5_4:1, curr state INIT, next state RTR, local GID index 3, local GID ::ffff:192.0.2.1, remote GID ::ffff:127.0.0.1",
             ],
             "bad_peers",
             [0, "localhost"],
@@ -1363,7 +1363,7 @@ class TestApplogRules:
 
         # Test log line with error code 110 (timeout)
         log_lines = [
-            "host-9ad02e1b:123:456 [0] Call to ibv_modify_qp failed with 110 Connection timed out, on dev mlx5_4:1, curr state INIT, next state RTR, local GID index 3, local GID ::ffff:192.0.2.1, remote GID ::ffff:127.0.0.1"
+            "0: Call to ibv_modify_qp failed with 110 Connection timed out, on dev mlx5_4:1, curr state INIT, next state RTR, local GID index 3, local GID ::ffff:192.0.2.1, remote GID ::ffff:127.0.0.1"
         ]
 
         result = attribution_test_builder(
