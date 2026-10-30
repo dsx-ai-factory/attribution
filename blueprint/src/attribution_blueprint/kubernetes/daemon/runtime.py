@@ -11,16 +11,25 @@ from itertools import count
 from loguru import logger
 
 from attribution_blueprint.kubernetes.daemon.health import HealthState
-from attribution_blueprint.kubernetes.daemon.models import PlacementRecord
+from attribution_blueprint.kubernetes.daemon.models import (
+    ObservationEventType,
+    PlacementRecord,
+    ResourceObservation,
+)
 from attribution_blueprint.kubernetes.daemon.resolvers import (
     AssociatedResourceResolver,
     OwnershipResolver,
     ResolutionPending,
     StaleOwnerReference,
     UnsupportedOwner,
-    normalize_resource,
 )
 from attribution_blueprint.kubernetes.daemon.store import CreateResult, PlacementStore
+from attribution_blueprint.kubernetes.daemon.watch_sources import (
+    ResourceWatchSource,
+    pod_watch_source,
+    selected_metadata,
+    source_timestamp,
+)
 from attribution_blueprint.kubernetes.helpers import pod_container_exit_reason, pod_node_failure_reason
 
 _WORK_GENERATIONS = count()
@@ -28,6 +37,10 @@ _WORK_GENERATIONS = count()
 
 class RequiredPersistenceError(RuntimeError):
     """A required placement write failed before its watch checkpoint."""
+
+
+class _ObservationPersistenceFailed(RuntimeError):
+    pass
 
 
 class KubernetesDaemon:
@@ -47,6 +60,8 @@ class KubernetesDaemon:
         watch_timeout_seconds: int = 60,
         max_resolution_attempts: int = 5,
         retry_poll_seconds: float = 1.0,
+        cluster_id: str = "default",
+        watch_sources: tuple[ResourceWatchSource, ...] | None = None,
     ):
         if queue_size <= 0:
             raise ValueError("queue_size must be positive")
@@ -62,6 +77,10 @@ class KubernetesDaemon:
         self.watch_timeout_seconds = watch_timeout_seconds
         self.max_resolution_attempts = max_resolution_attempts
         self.retry_poll_seconds = retry_poll_seconds
+        self.cluster_id = cluster_id
+        self.watch_sources = watch_sources
+        if self.watch_sources is None:
+            self.watch_sources = (pod_watch_source(core_api, namespace),) if core_api is not None else ()
         self.health = HealthState()
         self.worker_count = workers
         self.stop_event = threading.Event()
@@ -76,11 +95,10 @@ class KubernetesDaemon:
         self._latest_generation: dict[str, int] = {}
         self._lock = threading.Lock()
         self._work_available = threading.Condition(self._lock)
+        self._initial_lists_complete: set[str] = set()
+        self._initial_lists_lock = threading.Lock()
 
     def run(self) -> None:
-        from kubernetes.client.exceptions import ApiException
-        from kubernetes.watch import Watch
-
         workers = [
             threading.Thread(target=self._worker, name=f"kubernetes-daemon-worker-{index}", daemon=True)
             for index in range(self.worker_count)
@@ -92,68 +110,150 @@ class KubernetesDaemon:
             worker.start()
         retry_thread.start()
 
-        resource_version = None
-        backoff = 1.0
-        while not self.stop_event.is_set():
-            try:
-                if resource_version is None:
-                    listing = self.core_api.list_namespaced_pod(self.namespace)
-                    resource_version = self._enqueue_listing(listing)
-                    self.health.update(initial_list_complete=True)
+        watchers = [
+            threading.Thread(
+                target=self._watch_source,
+                args=(source,),
+                name=f"kubernetes-daemon-watch-{source.name}",
+                daemon=True,
+            )
+            for source in self.watch_sources
+        ]
+        for watcher in watchers:
+            watcher.start()
 
-                watcher = Watch()
-                for event in watcher.stream(
-                    self.core_api.list_namespaced_pod,
-                    namespace=self.namespace,
-                    resource_version=resource_version,
-                    timeout_seconds=self.watch_timeout_seconds,
-                    allow_watch_bookmarks=True,
-                ):
-                    pod_dict = _as_dict(event.get("object"))
-                    next_resource_version = (
-                        (pod_dict.get("metadata") or {}).get("resourceVersion")
-                        or resource_version
-                    )
-                    self._enqueue(pod_dict, deleted=event.get("type") == "DELETED")
-                    resource_version = next_resource_version
-                    if self.stop_event.is_set():
-                        watcher.stop()
-                        break
-                backoff = 1.0
-            except ApiException as error:
-                if error.status == 410:
-                    logger.warning("Pod watch resourceVersion expired; relisting")
-                    resource_version = None
-                    self.health.update(initial_list_complete=False)
-                    continue
-                logger.warning(f"Pod watch failed: {error}")
-            except RequiredPersistenceError as error:
-                logger.warning(f"{error}; replaying from the last persisted resourceVersion")
-            except Exception:
-                logger.exception("Pod watch failed")
-            self.stop_event.wait(backoff + random.uniform(0, backoff / 4))
-            backoff = min(backoff * 2, 30)
-
+        while any(watcher.is_alive() for watcher in watchers):
+            if self.stop_event.wait(0.5):
+                break
+        for watcher in watchers:
+            watcher.join(timeout=self.watch_timeout_seconds + 1)
         # Drain whatever is already pending or in flight before returning;
         # anything still deferred in `_retry` is abandoned on shutdown.
         while self._pending or self._in_flight:
             with self._work_available:
                 self._work_available.wait(timeout=0.5)
 
+    def _watch_source(self, source: ResourceWatchSource) -> None:
+        from kubernetes.client.exceptions import ApiException
+
+        resource_version = None
+        backoff = 1.0
+        while not self.stop_event.is_set():
+            try:
+                if resource_version is None:
+                    resources, listed_resource_version = source.list_resources()
+                    for resource in resources:
+                        if not self._capture(source, resource, "SNAPSHOT"):
+                            raise _ObservationPersistenceFailed
+                    if source.kind == "Pod":
+                        self._reconcile_active_pods(resources)
+                    resource_version = listed_resource_version
+                    self._mark_initial_list_complete(source.name)
+
+                for event in source.stream(resource_version, self.watch_timeout_seconds):
+                    resource = event.get("object") or {}
+                    metadata = resource.get("metadata") or {}
+                    event_resource_version = metadata.get("resourceVersion")
+                    event_type = event.get("type")
+                    if event_type in {"ADDED", "MODIFIED", "DELETED"}:
+                        if not self._capture(source, resource, event_type):
+                            raise _ObservationPersistenceFailed
+                        if event_resource_version:
+                            resource_version = event_resource_version
+                    elif event_type == "BOOKMARK" and event_resource_version:
+                        resource_version = event_resource_version
+                    if self.stop_event.is_set():
+                        break
+                backoff = 1.0
+            except _ObservationPersistenceFailed:
+                logger.warning(
+                    f"{source.name} observation persistence failed; "
+                    f"restarting from resourceVersion {resource_version or 'initial-list'}"
+                )
+            except ApiException as error:
+                if error.status == 410:
+                    logger.warning(f"{source.name} watch resourceVersion expired; relisting")
+                    resource_version = None
+                    self.health.update(initial_list_complete=False)
+                    continue
+                logger.warning(f"{source.name} watch failed: {error}")
+            except RequiredPersistenceError as error:
+                logger.warning(f"{error}; replaying from the last persisted resourceVersion")
+            except Exception:
+                logger.exception(f"{source.name} watch failed")
+            self.stop_event.wait(backoff + random.uniform(0, backoff / 4))
+            backoff = min(backoff * 2, 30)
+
+    def _capture(
+        self,
+        source: ResourceWatchSource,
+        resource: dict,
+        event_type: ObservationEventType,
+    ) -> bool:
+        status = source.selected_status(resource)
+        metadata = resource.get("metadata") or {}
+        observation = ResourceObservation.from_resource(
+            resource,
+            cluster_id=self.cluster_id,
+            event_type=event_type,
+            status=status,
+            selected_metadata=selected_metadata(resource),
+            source_timestamp=source_timestamp(
+                {
+                    "status": status,
+                    "metadata": {
+                        "creationTimestamp": metadata.get("creationTimestamp"),
+                        "deletionTimestamp": metadata.get("deletionTimestamp"),
+                    },
+                }
+            ),
+        )
+        placement = None
+        if observation.kind == "Pod" and (resource.get("spec") or {}).get("nodeName"):
+            failure_reason = pod_node_failure_reason(resource) or pod_container_exit_reason(resource)
+            placement = PlacementRecord.for_pod(resource, node_failure_reason=failure_reason)
+        try:
+            result = self.store.capture_observation(
+                observation,
+                placement=placement,
+                mark_deleted=placement is not None and event_type == "DELETED",
+            )
+        except Exception:
+            self.health.update(persistence_failed=True)
+            logger.exception(
+                f"failed to persist {source.name} capture "
+                f"{observation.namespace}/{observation.name}@{observation.resource_version}"
+            )
+            return False
+        self.health.update(persistence_failed=False)
+
+        if placement is not None:
+            assert result.placement is not None
+            if result.placement != CreateResult.DUPLICATE:
+                logger.info(
+                    f"{result.placement.value} placement for Pod "
+                    f"{placement.namespace}/{placement.pod_name}"
+                )
+            if observation.uid:
+                self._schedule(observation.uid, resource)
+        return True
+
+    def _mark_initial_list_complete(self, source_name: str) -> None:
+        with self._initial_lists_lock:
+            self._initial_lists_complete.add(source_name)
+            all_complete = len(self._initial_lists_complete) == len(self.watch_sources)
+        self.health.update(initial_list_complete=all_complete)
+
     def stop(self) -> None:
         self.stop_event.set()
 
-    def _enqueue_listing(self, listing) -> str:
-        pods = [_as_dict(pod) for pod in listing.items]
-        for pod in pods:
-            self._enqueue(pod)
+    def _reconcile_active_pods(self, pods: list[dict]) -> None:
         active_pod_uids = {
             uid
             for pod in pods
             if (uid := (pod.get("metadata") or {}).get("uid"))
         }
-        self._reconcile_active_pods(active_pod_uids)
-        return listing.metadata.resource_version
+        self._reconcile_active_pod_uids(active_pod_uids)
 
     def _enqueue(self, pod: dict, *, deleted: bool = False) -> None:
         # Unbound Pod ingestion belongs to the reusable watch interface in
@@ -443,7 +543,7 @@ class KubernetesDaemon:
             return False
         return True
 
-    def _reconcile_active_pods(self, active_pod_uids: set[str]) -> None:
+    def _reconcile_active_pod_uids(self, active_pod_uids: set[str]) -> None:
         try:
             self.store.reconcile_active_pods(self.namespace, active_pod_uids)
         except Exception as error:
@@ -475,9 +575,3 @@ def _stored_owner_matches_pod(record: PlacementRecord, pod: dict) -> bool:
         ]
         return len(job_references) == 1 and job_references[0].uid == controller_uid
     return False
-
-
-def _as_dict(resource) -> dict:
-    if isinstance(resource, dict):
-        return resource
-    return normalize_resource(resource.to_dict())

@@ -8,10 +8,21 @@ import sqlite3
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import replace
+from datetime import datetime
 from pathlib import Path
 
-from attribution_blueprint.kubernetes.daemon.models import PlacementRecord
-from attribution_blueprint.kubernetes.daemon.store import CreateResult, PlacementConflictError
+from attribution_blueprint.kubernetes.daemon.models import (
+    OwnerReference,
+    PlacementRecord,
+    ResourceObservation,
+)
+from attribution_blueprint.kubernetes.daemon.store import (
+    CaptureResult,
+    CreateResult,
+    ObservationAppendResult,
+    ObservationConflictError,
+    PlacementConflictError,
+)
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS placement_record (
@@ -40,6 +51,36 @@ CREATE TABLE IF NOT EXISTS placement_deletion (
 );
 CREATE INDEX IF NOT EXISTS placement_deletion_expiration
     ON placement_deletion(deleted_at);
+CREATE TABLE IF NOT EXISTS resource_observation (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    cluster_id TEXT NOT NULL,
+    api_version TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    namespace TEXT NOT NULL,
+    name TEXT NOT NULL,
+    uid TEXT NOT NULL,
+    resource_version TEXT NOT NULL,
+    event_type TEXT NOT NULL,
+    observed_at TEXT NOT NULL,
+    source_timestamp TEXT,
+    owner_references_json TEXT NOT NULL,
+    selected_metadata_json TEXT,
+    status_json TEXT,
+    UNIQUE(cluster_id, api_version, kind, uid, resource_version)
+);
+CREATE INDEX IF NOT EXISTS resource_observation_identity
+    ON resource_observation(cluster_id, namespace, uid, id);
+CREATE INDEX IF NOT EXISTS resource_observation_kind
+    ON resource_observation(cluster_id, namespace, kind, id);
+CREATE TABLE IF NOT EXISTS observation_owner_reference (
+    observation_id INTEGER NOT NULL,
+    owner_uid TEXT NOT NULL,
+    controller INTEGER NOT NULL,
+    PRIMARY KEY(observation_id, owner_uid),
+    FOREIGN KEY(observation_id) REFERENCES resource_observation(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS observation_owner_identity
+    ON observation_owner_reference(owner_uid, observation_id);
 """
 
 
@@ -67,7 +108,8 @@ class SQLitePlacementStore:
         Path(path).parent.mkdir(parents=True, exist_ok=True)
         with self._connection() as connection:
             connection.executescript(_SCHEMA)
-            connection.execute("PRAGMA user_version = 2")
+            self._migrate_observation_schema(connection)
+            connection.execute("PRAGMA user_version = 4")
             self._prune_expired(connection)
 
     def _connect(self) -> sqlite3.Connection:
@@ -92,44 +134,7 @@ class SQLitePlacementStore:
         with self._connection() as connection:
             connection.execute("BEGIN IMMEDIATE")
             self._prune_expired(connection)
-            row = connection.execute(
-                "SELECT raw_json FROM placement_record WHERE pod_uid = ?",
-                (record.pod_uid,),
-            ).fetchone()
-            if row is None:
-                self._insert(connection, record)
-                return CreateResult.CREATED
-
-            existing = PlacementRecord.from_resource(json.loads(row["raw_json"]))
-            if _placement_identity(existing) != _placement_identity(record):
-                raise PlacementConflictError(
-                    f"placement for Pod UID {record.pod_uid} already exists with different immutable data"
-                )
-            if (
-                existing.scheduled_at
-                and record.scheduled_at
-                and existing.scheduled_at != record.scheduled_at
-            ):
-                raise PlacementConflictError(
-                    f"placement for Pod UID {record.pod_uid} has conflicting scheduling timestamps"
-                )
-            failure_reason = existing.node_failure_reason
-            if _failure_evidence_rank(record.node_failure_reason) > _failure_evidence_rank(failure_reason):
-                failure_reason = record.node_failure_reason
-            merge_base = existing
-            if record.owner is not None and record.owner != existing.owner:
-                merge_base = replace(existing, associated_resources=())
-            merged = merge_base.enriched(
-                scheduled_at=record.scheduled_at,
-                owner_references=record.owner_references if record.owner is not None else None,
-                owner=record.owner,
-                associated_resources=record.associated_resources,
-                node_failure_reason=failure_reason,
-            )
-            if merged == existing:
-                return CreateResult.DUPLICATE
-            self._update(connection, merged)
-            return CreateResult.UPDATED
+            return self._create(connection, record)
 
     def get_by_pod_uid(self, pod_uid: str) -> PlacementRecord | None:
         with self._connection() as connection:
@@ -196,6 +201,215 @@ class SQLitePlacementStore:
             )
             self._prune_expired(connection)
 
+    def append_observation(self, observation: ResourceObservation) -> ObservationAppendResult:
+        with self._connection() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            result = self._append_observation(connection, observation)
+            self._prune_expired(connection)
+        return result
+
+    def capture_observation(
+        self,
+        observation: ResourceObservation,
+        *,
+        placement: PlacementRecord | None,
+        mark_deleted: bool = False,
+    ) -> CaptureResult:
+        if mark_deleted and placement is None:
+            raise ValueError("mark_deleted requires a placement")
+        with self._connection() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            observation_result = self._append_observation(connection, observation)
+            placement_result = self._create(connection, placement) if placement is not None else None
+            if mark_deleted:
+                connection.execute(
+                    """
+                    INSERT INTO placement_deletion(pod_uid)
+                    VALUES (?)
+                    ON CONFLICT(pod_uid) DO NOTHING
+                    """,
+                    (placement.pod_uid,),
+                )
+            self._prune_expired(connection)
+            return CaptureResult(observation_result, placement_result)
+
+    def list_observations_for_uid(
+        self,
+        cluster_id: str,
+        namespace: str,
+        uid: str,
+    ) -> list[ResourceObservation]:
+        with self._connection() as connection:
+            self._prune_expired(connection)
+            rows = connection.execute(
+                """
+                SELECT *
+                FROM resource_observation
+                WHERE cluster_id = ? AND namespace = ? AND uid = ?
+                ORDER BY id
+                """,
+                (cluster_id, namespace, uid),
+            ).fetchall()
+        return [_observation_from_row(row) for row in rows]
+
+    def list_observations_for_owner(
+        self,
+        cluster_id: str,
+        namespace: str,
+        owner_uid: str,
+    ) -> list[ResourceObservation]:
+        with self._connection() as connection:
+            self._prune_expired(connection)
+            rows = connection.execute(
+                """
+                SELECT observation.*
+                FROM resource_observation AS observation
+                JOIN observation_owner_reference AS owner
+                  ON owner.observation_id = observation.id
+                WHERE observation.cluster_id = ?
+                  AND observation.namespace = ?
+                  AND owner.owner_uid = ?
+                ORDER BY observation.id
+                """,
+                (cluster_id, namespace, owner_uid),
+            ).fetchall()
+        return [_observation_from_row(row) for row in rows]
+
+    def _create(
+        self,
+        connection: sqlite3.Connection,
+        record: PlacementRecord,
+    ) -> CreateResult:
+        row = connection.execute(
+            "SELECT raw_json FROM placement_record WHERE pod_uid = ?",
+            (record.pod_uid,),
+        ).fetchone()
+        if row is None:
+            self._insert(connection, record)
+            return CreateResult.CREATED
+
+        existing = PlacementRecord.from_resource(json.loads(row["raw_json"]))
+        if _placement_identity(existing) != _placement_identity(record):
+            raise PlacementConflictError(
+                f"placement for Pod UID {record.pod_uid} already exists with different immutable data"
+            )
+        if (
+            existing.scheduled_at
+            and record.scheduled_at
+            and existing.scheduled_at != record.scheduled_at
+        ):
+            raise PlacementConflictError(
+                f"placement for Pod UID {record.pod_uid} has conflicting scheduling timestamps"
+            )
+        failure_reason = existing.node_failure_reason
+        if _failure_evidence_rank(record.node_failure_reason) > _failure_evidence_rank(
+            failure_reason
+        ):
+            failure_reason = record.node_failure_reason
+        merge_base = existing
+        if record.owner is not None and record.owner != existing.owner:
+            merge_base = replace(existing, associated_resources=())
+        merged = merge_base.enriched(
+            scheduled_at=record.scheduled_at,
+            owner_references=record.owner_references if record.owner is not None else None,
+            owner=record.owner,
+            associated_resources=record.associated_resources,
+            node_failure_reason=failure_reason,
+        )
+        if merged == existing:
+            return CreateResult.DUPLICATE
+        self._update(connection, merged)
+        return CreateResult.UPDATED
+
+    def _append_observation(
+        self,
+        connection: sqlite3.Connection,
+        observation: ResourceObservation,
+    ) -> ObservationAppendResult:
+        owner_references_json = _owner_references_json(observation.owner_references)
+        selected_metadata_json = _optional_json(observation.selected_metadata)
+        status_json = _optional_json(observation.status)
+        row = connection.execute(
+            """
+            SELECT *
+            FROM resource_observation
+            WHERE cluster_id = ? AND api_version = ? AND kind = ?
+              AND uid = ? AND resource_version = ?
+            """,
+            (
+                observation.cluster_id,
+                observation.api_version,
+                observation.kind,
+                observation.uid,
+                observation.resource_version,
+            ),
+        ).fetchone()
+        if row is not None:
+            existing = _observation_from_row(row)
+            merged = _merge_observations(existing, observation)
+            if merged == existing:
+                return ObservationAppendResult.DUPLICATE
+            self._update_observation(connection, row["id"], merged)
+            return ObservationAppendResult.UPDATED
+
+        cursor = connection.execute(
+            """
+            INSERT INTO resource_observation(
+                cluster_id, api_version, kind, namespace, name, uid,
+                resource_version, event_type, observed_at, source_timestamp,
+                owner_references_json, selected_metadata_json, status_json
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                observation.cluster_id,
+                observation.api_version,
+                observation.kind,
+                observation.namespace,
+                observation.name,
+                observation.uid,
+                observation.resource_version,
+                observation.event_type,
+                observation.observed_at,
+                observation.source_timestamp,
+                owner_references_json,
+                selected_metadata_json,
+                status_json,
+            ),
+        )
+        connection.executemany(
+            """
+            INSERT INTO observation_owner_reference(observation_id, owner_uid, controller)
+            VALUES (?, ?, ?)
+            """,
+            [
+                (cursor.lastrowid, owner.uid, int(owner.controller))
+                for owner in observation.owner_references
+            ],
+        )
+        return ObservationAppendResult.APPENDED
+
+    @staticmethod
+    def _update_observation(
+        connection: sqlite3.Connection,
+        observation_id: int,
+        observation: ResourceObservation,
+    ) -> None:
+        connection.execute(
+            """
+            UPDATE resource_observation
+            SET source_timestamp = ?,
+                selected_metadata_json = ?,
+                status_json = ?
+            WHERE id = ?
+            """,
+            (
+                observation.source_timestamp,
+                _optional_json(observation.selected_metadata),
+                _optional_json(observation.status),
+                observation_id,
+            ),
+        )
+
     def _insert(self, connection: sqlite3.Connection, record: PlacementRecord) -> None:
         raw_json = json.dumps(record.to_resource(), separators=(",", ":"), sort_keys=True)
         connection.execute(
@@ -249,6 +463,17 @@ class SQLitePlacementStore:
             ],
         )
 
+    @staticmethod
+    def _migrate_observation_schema(connection: sqlite3.Connection) -> None:
+        columns = {
+            row["name"]
+            for row in connection.execute("PRAGMA table_info(resource_observation)").fetchall()
+        }
+        if "selected_metadata_json" not in columns:
+            connection.execute(
+                "ALTER TABLE resource_observation ADD COLUMN selected_metadata_json TEXT"
+            )
+
     def _prune_expired(self, connection: sqlite3.Connection) -> None:
         connection.execute(
             """
@@ -261,6 +486,141 @@ class SQLitePlacementStore:
             """,
             (f"-{self.retention_days} days",),
         )
+        rows = connection.execute(
+            """
+            WITH latest AS (
+                SELECT cluster_id, namespace, uid, MAX(id) AS observation_id
+                FROM resource_observation
+                GROUP BY cluster_id, namespace, uid
+            )
+            SELECT observation.*
+            FROM resource_observation AS observation
+            JOIN latest ON latest.observation_id = observation.id
+            """
+        ).fetchall()
+        observed = {
+            (row["cluster_id"], row["namespace"], row["uid"])
+            for row in rows
+        }
+        scheduler_groups: dict[
+            tuple[str, str, str],
+            list[sqlite3.Row],
+        ] = {}
+        orphan_candidates: dict[
+            tuple[str, str, str],
+            sqlite3.Row,
+        ] = {}
+        for row in rows:
+            controller_uid = _controller_uid(row)
+            if row["kind"] in {"Workload", "PodGroup"}:
+                root_uid = controller_uid or row["uid"]
+                key = (row["cluster_id"], row["namespace"], root_uid)
+                scheduler_groups.setdefault(key, []).append(row)
+            elif controller_uid is None or (
+                row["cluster_id"],
+                row["namespace"],
+                controller_uid,
+            ) not in observed:
+                key = (row["cluster_id"], row["namespace"], row["uid"])
+                orphan_candidates.setdefault(key, row)
+        expired_roots = {
+            key
+            for key, scheduler_rows in scheduler_groups.items()
+            if all(
+                _expired_terminal_resource(
+                    connection,
+                    row,
+                    self.retention_days,
+                )
+                for row in scheduler_rows
+            )
+        }
+        expired_roots.update(
+            key
+            for key, candidate in orphan_candidates.items()
+            if key not in scheduler_groups
+            and _expired_terminal_resource(
+                connection,
+                candidate,
+                self.retention_days,
+            )
+        )
+        for cluster_id, namespace, controller_uid in expired_roots:
+            connection.execute(
+                """
+                WITH RECURSIVE related(uid) AS (
+                    SELECT ?
+                    UNION
+                    SELECT observation.uid
+                    FROM resource_observation AS observation
+                    JOIN observation_owner_reference AS owner
+                      ON owner.observation_id = observation.id
+                    JOIN related ON related.uid = owner.owner_uid
+                    WHERE observation.cluster_id = ?
+                      AND observation.namespace = ?
+                )
+                DELETE FROM resource_observation
+                WHERE cluster_id = ? AND namespace = ?
+                  AND uid IN (SELECT uid FROM related)
+                """,
+                (
+                    controller_uid,
+                    cluster_id,
+                    namespace,
+                    cluster_id,
+                    namespace,
+                ),
+            )
+
+
+def _controller_uid(row: sqlite3.Row) -> str | None:
+    controllers = [
+        owner.get("uid")
+        for owner in json.loads(row["owner_references_json"])
+        if owner.get("controller") is True and owner.get("uid")
+    ]
+    return controllers[0] if len(controllers) == 1 else None
+
+
+def _expired_terminal_resource(
+    connection: sqlite3.Connection,
+    row: sqlite3.Row,
+    retention_days: int,
+) -> bool:
+    terminal_at = _terminal_at(row)
+    if terminal_at is None:
+        return False
+    return bool(
+        connection.execute(
+            "SELECT datetime(?) < datetime('now', ?)",
+            (terminal_at, f"-{retention_days} days"),
+        ).fetchone()[0]
+    )
+
+
+def _terminal_at(row: sqlite3.Row) -> str | None:
+    if row["event_type"] == "DELETED":
+        return row["observed_at"]
+    status = json.loads(row["status_json"]) if row["status_json"] else {}
+    transitions = [
+        condition.get("lastTransitionTime")
+        for condition in status.get("conditions") or []
+        if condition.get("type") in {
+            "Complete",
+            "Completed",
+            "Failed",
+            "Finished",
+        }
+        and condition.get("status") == "True"
+        and condition.get("lastTransitionTime")
+    ]
+    if transitions:
+        return max(transitions)
+    if status.get("phase") in {"Failed", "Succeeded"} or status.get(
+        "terminalState"
+    ):
+        return row["source_timestamp"] or row["observed_at"]
+    return status.get("completionTime")
 
 
 def _placement_identity(record: PlacementRecord) -> tuple:
@@ -270,3 +630,147 @@ def _placement_identity(record: PlacementRecord) -> tuple:
         record.pod_uid,
         record.node_name,
     )
+
+
+def _owner_references_json(owner_references: tuple[OwnerReference, ...]) -> str:
+    return json.dumps(
+        [
+            {
+                "apiVersion": owner.api_version,
+                "kind": owner.kind,
+                "name": owner.name,
+                "uid": owner.uid,
+                "controller": owner.controller,
+            }
+            for owner in owner_references
+        ],
+        separators=(",", ":"),
+        sort_keys=True,
+    )
+
+
+def _optional_json(value: dict | None) -> str | None:
+    return json.dumps(value, separators=(",", ":"), sort_keys=True) if value is not None else None
+
+
+def _observation_from_row(row: sqlite3.Row) -> ResourceObservation:
+    return ResourceObservation(
+        cluster_id=row["cluster_id"],
+        api_version=row["api_version"],
+        kind=row["kind"],
+        namespace=row["namespace"],
+        name=row["name"],
+        uid=row["uid"],
+        resource_version=row["resource_version"],
+        event_type=row["event_type"],
+        observed_at=row["observed_at"],
+        source_timestamp=row["source_timestamp"],
+        owner_references=tuple(
+            OwnerReference(
+                api_version=owner.get("apiVersion") or "",
+                kind=owner["kind"],
+                name=owner["name"],
+                uid=owner["uid"],
+                controller=bool(owner["controller"]),
+            )
+            for owner in json.loads(row["owner_references_json"])
+        ),
+        selected_metadata=(
+            json.loads(row["selected_metadata_json"])
+            if row["selected_metadata_json"] is not None
+            else None
+        ),
+        status=json.loads(row["status_json"]) if row["status_json"] is not None else None,
+    )
+
+
+def _merge_observations(
+    existing: ResourceObservation,
+    replayed: ResourceObservation,
+) -> ResourceObservation:
+    immutable_existing = (
+        existing.cluster_id,
+        existing.api_version,
+        existing.kind,
+        existing.namespace,
+        existing.name,
+        existing.uid,
+        existing.resource_version,
+        existing.owner_references,
+    )
+    immutable_replayed = (
+        replayed.cluster_id,
+        replayed.api_version,
+        replayed.kind,
+        replayed.namespace,
+        replayed.name,
+        replayed.uid,
+        replayed.resource_version,
+        replayed.owner_references,
+    )
+    try:
+        if immutable_existing != immutable_replayed:
+            raise ValueError("immutable resource identity changed")
+        selected_metadata = _merge_projection(
+            existing.selected_metadata,
+            replayed.selected_metadata,
+        )
+        status = _merge_projection(existing.status, replayed.status)
+        source_timestamp = _merge_source_timestamp(
+            existing.source_timestamp,
+            replayed.source_timestamp,
+        )
+    except ValueError as error:
+        raise ObservationConflictError(
+            f"resource {replayed.kind} {replayed.namespace}/{replayed.name} "
+            f"UID {replayed.uid} version {replayed.resource_version} changed during replay: {error}"
+        ) from error
+    return replace(
+        existing,
+        selected_metadata=selected_metadata,
+        source_timestamp=source_timestamp,
+        status=status,
+    )
+
+
+def _merge_projection(existing, replayed):
+    if existing is None:
+        return replayed
+    if replayed is None:
+        return existing
+    if isinstance(existing, dict) and isinstance(replayed, dict):
+        merged = dict(existing)
+        for key, value in replayed.items():
+            merged[key] = (
+                _merge_projection(merged[key], value)
+                if key in merged
+                else value
+            )
+        return merged
+    if isinstance(existing, list) and isinstance(replayed, list):
+        if len(existing) != len(replayed):
+            raise ValueError("projected list shape changed")
+        return [
+            _merge_projection(old_item, new_item)
+            for old_item, new_item in zip(existing, replayed, strict=True)
+        ]
+    if type(existing) is not type(replayed) or existing != replayed:
+        raise ValueError("projected value changed")
+    return existing
+
+
+def _merge_source_timestamp(
+    existing: str | None,
+    replayed: str | None,
+) -> str | None:
+    if existing is None:
+        return replayed
+    if replayed is None or replayed == existing:
+        return existing
+    try:
+        return max(
+            (existing, replayed),
+            key=lambda value: datetime.fromisoformat(value),
+        )
+    except ValueError as error:
+        raise ValueError("source timestamp is not ISO-8601") from error

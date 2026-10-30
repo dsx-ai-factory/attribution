@@ -7,15 +7,21 @@ metadata:
   name: {{ .Release.Name }}-kubernetes-daemon
   namespace: {{ .Release.Namespace }}
 rules:
+{{- if .Values.watches.pods }}
   - apiGroups: [""]
     resources: [pods]
     verbs: [get, list, watch]
+{{- end }}
+{{- if .Values.watches.jobs }}
   - apiGroups: [batch]
     resources: [jobs]
     verbs: [get, list, watch]
+{{- end }}
+{{- if .Values.watches.jobsets }}
   - apiGroups: [jobset.x-k8s.io]
     resources: [jobsets]
     verbs: [get, list, watch]
+{{- end }}
 {{- if .Values.integrations.kueue.enabled }}
   - apiGroups: [kueue.x-k8s.io]
     resources: [workloads]

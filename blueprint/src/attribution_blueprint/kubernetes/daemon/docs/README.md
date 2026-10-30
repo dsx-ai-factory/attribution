@@ -27,10 +27,9 @@ namespace-scoped ServiceAccount and Role, health probes, and a ClusterIP
 Service. SQLite is deliberately single-writer; do not scale the StatefulSet
 above one replica or mount the database from multiple writers.
 
-Records become eligible for removal `retentionDays` after a deletion marker is
-stored from a Pod deletion event or full-list reconciliation. Active or
-otherwise unmarked records are not age-pruned. The default is 30 days; cleanup
-runs during store and API activity.
+Deleted placements and completed or deleted controller histories are removed
+after `retentionDays`; active histories are retained. The default is 30 days.
+Cleanup runs at startup and during normal store activity.
 
 It does not retain Pod logs or Pod specifications.
 
