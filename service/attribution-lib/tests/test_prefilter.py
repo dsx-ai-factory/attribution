@@ -4,6 +4,7 @@
 import os
 import tempfile
 import textwrap
+from unittest.mock import Mock
 
 import pytest
 
@@ -13,7 +14,8 @@ from attribution_lib.declarative.loader import load_toml_rules
 from attribution_lib.exceptions import RuleIngestionError, UninitializedRuleEngineError
 from attribution_lib.observation.inbound import Source as ObservationSource
 from attribution_lib.prefilters import PreFilterSpec, register_pre_filter
-from attribution_lib.rules_engine import RuleLoader
+from attribution_lib.rules_engine import RuleLoader, process_observation_source
+from test_support.helpers import observation_base
 
 
 @pytest.fixture
@@ -115,7 +117,54 @@ class TestBundledPrefilterRegistration:
         pf = attribution_lib.get_pre_filter(ObservationSource.HEALTH_CHECK)
         assert "laso" in pf.exclude_terms
         assert "prolog" in pf.exclude_terms
-        assert len(pf.callables) == 1, "epilog callable must be registered"
+        assert len(pf.callables) == 1, "exclude_re callable for other jobs' epilog lines must be registered"
+
+    @pytest.mark.parametrize(
+        ("job_id", "line", "skip"),
+        [
+            ("1234", "epilog_1234:15-healthchecks sw_sys_logs_nvidia_xid: failed", False),
+            ("1234", "[EPILOG] <JobID:1234> epilog-60-tmpfiles: unknown error", False),
+            ("1234", "[EPILOG] <JobID:1234> 70-last-user-processes: 1 processes still running", False),
+            ("1234.1", "[EPILOG] <JobID:1234> epilog-60-tmpfiles: unknown error", False),
+            ("1234-0", "epilog_1234:15-healthchecks failed", False),
+            ("1234", "epilog_1234_healthcheck failed", False),
+            ("abc", "epilog_1234: failed", True),
+            ("1234", "epilog_5678:15-healthchecks failed", True),
+            ("1234", "[EPILOG] <JobID:5678> epilog-60-tmpfiles: unknown error", True),
+            ("1234", "[EPILOG] <JobID:5678> 70-last-user-processes: 1 processes still running", True),
+            ("1234", "[EPILOG] <JobID:12345> epilog-60-tmpfiles: unknown error", True),
+            ("1234", "epilog_12345:15-healthchecks failed", True),
+            ("1234", "epilog_1234: failed; epilog_5678: failed", True),
+            ("1234", "[HC] <JobID:5678> CHECK_NETWORK hw_drv_net_ib_devinfo_cx8: port down", False),
+            ("1234", "Not responding", False),
+        ],
+    )
+    def test_health_check_epilog_job_filter(self, job_id, line, skip, simple_job_factory, timezone):
+        """Keep epilog lines of this job and lines with no epilog, skip lines that name another job's epilog.
+
+        A job id with no leading digits has no job number, so every tagged epilog line is skipped.
+
+        Args:
+            job_id: ``JobInfo.id`` of the job under attribution.
+            line: Health-check line body.
+            skip: True if the pre-filter must skip the line.
+            simple_job_factory: Job-info fixture factory.
+            timezone: Timezone fixture.
+        """
+        job_info = simple_job_factory(job_id=job_id, nodes=["node-a"])
+        engine = Mock(
+            pre_filters={ObservationSource.HEALTH_CHECK: attribution_lib.get_pre_filter(ObservationSource.HEALTH_CHECK)}
+        )
+        data = [{"body": line, "ts": 1700005000000000000, "resources": [{"kind": "node", "hostname": "node-a"}]}]
+        process_observation_source(
+            event_stream=None,
+            observation_source=observation_base(job_info, timezone, ObservationSource.HEALTH_CHECK, data),
+            job_info=job_info,
+            rules_engine=engine,
+            pre_filtered=False,
+        )
+        processed = engine.observation_processor.return_value.process_line.call_args_list
+        assert (len(processed) == 0) is skip
 
     def test_registered_sources_complete(self):
         """Fail if a source gains or loses a prefilter unexpectedly."""
@@ -150,6 +199,78 @@ class TestTomlPrefilterLoading:
         assert "fatal" in result.include_terms
         assert "debug" in result.exclude_terms
         assert "info" in result.exclude_terms
+
+    def test_exclude_re_registers_one_callable(self):
+        loader = self._load("""
+            sources = ["HEALTH_CHECK"]
+            [prefilter]
+            exclude = ["laso"]
+            exclude_re = ['epilog_(?!{job_number}(?!\\d))\\d+', '\\[EPILOG\\] <JobID:(?!{job_number}(?!\\d))\\d+>']
+        """)
+        result = loader.build().get_pre_filter(ObservationSource.HEALTH_CHECK)
+        assert result.exclude_terms == ["laso"]
+        assert len(result.callables) == 1
+
+    def test_exclude_re_rejects_unknown_job_field(self):
+        with pytest.raises(RegistrationError, match="unknown job field 'nope'"):
+            self._load("""
+                sources = ["HEALTH_CHECK"]
+                [prefilter]
+                exclude_re = ["epilog_{nope}"]
+            """)
+
+    def test_exclude_re_rejects_bad_regex(self):
+        with pytest.raises(RegistrationError, match=r"\[prefilter\].exclude_re"):
+            self._load("""
+                sources = ["HEALTH_CHECK"]
+                [prefilter]
+                exclude_re = ["epilog_("]
+            """)
+
+    @pytest.mark.parametrize(
+        ("pattern", "body", "skip"),
+        [
+            ("node-{cluster}", "node-a.b", True),
+            ("node-{cluster}", "node-axb", False),
+            ("job {id}", "job 1234.1", True),
+            ("job {job_number}$", "job 1234", True),
+            (r"\d{{4}}", "1234", True),
+            (r"\d{{4}}", "123", False),
+        ],
+    )
+    def test_exclude_re_fills_in_escaped_job_fields(self, pattern, body, skip, simple_job_factory):
+        """Job fields are regex escaped when filled in, and doubled braces stay regex braces.
+
+        Args:
+            pattern: ``exclude_re`` pattern.
+            body: Entry body to check.
+            skip: True if the callable must skip the entry.
+            simple_job_factory: Job-info fixture factory.
+        """
+        loader = self._load(f"""
+            sources = ["HEALTH_CHECK"]
+            [prefilter]
+            exclude_re = ['{pattern}']
+        """)
+        callable_ = loader.build().get_pre_filter(ObservationSource.HEALTH_CHECK).callables[0]
+        job_info = simple_job_factory(job_id="1234.1", cluster="a.b", nodes=["node-a"])
+        assert callable_(Mock(body=Mock(return_value=body)), job_info) is skip
+
+    def test_exclude_re_refills_patterns_when_a_used_job_field_changes(self, simple_job_factory):
+        """The same job id on another cluster gets patterns filled in for that cluster.
+
+        Args:
+            simple_job_factory: Job-info fixture factory.
+        """
+        loader = self._load("""
+            sources = ["HEALTH_CHECK"]
+            [prefilter]
+            exclude_re = ["node-{cluster}"]
+        """)
+        callable_ = loader.build().get_pre_filter(ObservationSource.HEALTH_CHECK).callables[0]
+        entry = Mock(body=Mock(return_value="node-b"))
+        assert callable_(entry, simple_job_factory(job_id="1", cluster="a", nodes=["node-a"])) is False
+        assert callable_(entry, simple_job_factory(job_id="1", cluster="b", nodes=["node-a"])) is True
 
     def test_prefilter_inherits_file_sources(self):
         loader = self._load("""

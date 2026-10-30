@@ -1,0 +1,20 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Health-check pre-filter. Epilog lines carry the number of the job that they
+# ran for. The exclude_re patterns drop epilog lines tagged with another job's
+# number and keep the lines of the job under attribution. {job_number} is the
+# leading digits of the job id, so step and restart records (1234.1, 1234-0)
+# match their parent job. The inner (?!\d) stops 1234 from matching 12345 and
+# lets 1234 be followed by any non-digit, such as ":" or "_".
+# Rule packs can add tag formats in their own [prefilter].exclude_re; the lists merge.
+
+author  = "NVIDIA Attribution team"
+sources = ["HEALTH_CHECK"]
+
+[prefilter]
+exclude = ["laso", "prolog"]
+exclude_re = [
+    'epilog_(?!{job_number}(?!\d))\d+',
+    '\[EPILOG\] <JobID:(?!{job_number}(?!\d))\d+>',
+]
