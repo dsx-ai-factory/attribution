@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import json
+import re
 from typing import NotRequired, TypedDict
 
 from loguru import logger
@@ -12,6 +13,7 @@ from attribution_blueprint.connectors.metrics.promql.client import (
     re2_escape,
 )
 from attribution_blueprint.connectors.metrics.promql.templates import TEMPLATES
+from attribution_blueprint.exceptions import MCAError
 from attribution_blueprint.types import (
     ExecutionContext,
     Observation,
@@ -25,6 +27,7 @@ DEFAULT_NODE_LABEL = "net_host_name"
 DEFAULT_CLUSTER_LABEL = "s_cluster"
 DEFAULT_COMPONENT_LABEL = "device"
 _NS = 10**9  # PromQL sample times are unix seconds; `ts` is nanoseconds
+_LABEL_IDENTIFIER = re.compile(r"[a-zA-Z_][a-zA-Z0-9_]*")
 
 
 class PrometheusMetricEntry(TypedDict):
@@ -103,6 +106,9 @@ class PromQLMetricsConnector:
     ):
         if source not in templates:
             raise ValueError(f"no templates registered for source {source}")
+        for setting, label in (("node_label", node_label), ("cluster_label", cluster_label)):
+            if not isinstance(label, str) or not _LABEL_IDENTIFIER.fullmatch(label):
+                raise MCAError(f"promql.{setting}={label!r} must match [a-zA-Z_][a-zA-Z0-9_]*")
         self._source = source
         self._templates = templates[source]
         self._endpoint = endpoint.rstrip("/")
