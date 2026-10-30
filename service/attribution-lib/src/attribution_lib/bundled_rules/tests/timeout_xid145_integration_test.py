@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""End-to-end coverage for Slurm timeout XID-145 cascade handling."""
+"""End-to-end coverage for teardown evidence after an external job termination."""
 
 from datetime import UTC, datetime, timedelta
 
@@ -211,3 +211,176 @@ def test_timeout_cascades_and_unused_xid_leave_only_timeout_failure(
     xid108_node = result.bad_nodes_attr.my_bad_nodes["test-node-bravo"].attributions
     assert "XID-108-NVLINK_REMOTE_TRANSLATION_ERROR" not in xid108_node
     assert xid108_node._data["XID-108-NVLINK_REMOTE_TRANSLATION_ERROR"].has_interesting()
+
+
+def test_preempted_teardown_xids_finish_as_pass(
+    request,
+    event_manager,
+    simple_job_factory,
+    timezone,
+):
+    """XIDs logged while a preempted step tears down leave Pass and no bad node."""
+    job_start = datetime(2024, 1, 1, 10, 0, tzinfo=timezone)
+    job_end = job_start + timedelta(minutes=60)
+    step_end = job_end - timedelta(seconds=19)
+    job_info = simple_job_factory(
+        job_id="test-job-preempted",
+        state="PREEMPTED",
+        start_timestamp=int(job_start.timestamp()),
+        end_timestamp=int(job_end.timestamp()),
+        nodes=["node01", "node02", "node03", "node04"],
+        time_limit=120,
+        exit_code_signal=0,
+        scheduler=Scheduler.SLURM,
+    )._replace(interest_end_time=step_end)
+    xid_timestamp_ns = int((job_end - timedelta(seconds=20, milliseconds=600)).timestamp() * 1_000_000_000)
+
+    syslog = InboundObservation(
+        context=InboundContext(
+            time_interval=TimeInterval(job_info.job_start_time, job_info.job_end_time),
+            source=ObservationSource.SYSLOG,
+            format=ObservationFormat.ENTRY_TIMESERIES,
+            timezone=timezone,
+        ),
+        lines=[
+            make_syslog_entry(
+                body=(
+                    "NVRM: Xid (PCI:0000:01:00): 145, pid=5678, name=python, "
+                    "RLW_RXPIPE Nonfatal XC0 i0 Link 00 "
+                    "(0x04080006 0x00000008 0x00000000 0x00000000 0x00000000 0x00000000)"
+                ),
+                node="node03",
+                timestamp_ns=xid_timestamp_ns,
+            ),
+            make_syslog_entry(
+                body=(
+                    "NVRM: Xid (PCI:0000:01:00): 137, pid=5678, name=python, "
+                    "RLW_RXPIPE interrupt hit on link 0 on GPU0: PRIV Error"
+                ),
+                node="node03",
+                timestamp_ns=xid_timestamp_ns + 20_000,
+            ),
+        ],
+    )
+
+    stream = event_manager.create_stream(request.node.name)
+    attributor = Attributor.new(stream, job_info)
+    attributor.ingest(syslog)
+
+    result = attributor.attribute()
+
+    outcome = result.outcome_attr.value()
+    assert outcome.outcome == "Pass"
+    assert outcome.root_cause_symptom == "SLURM preempted"
+    node_symptoms = result.bad_nodes_attr.my_bad_nodes["node03"].attributions
+    assert not node_symptoms.has_bad()
+    assert node_symptoms._data["XID-145-RLW_RXPIPE-8"].has_interesting()
+
+
+def test_post_cancel_ib_errors_not_infra(
+    request,
+    event_manager,
+    simple_job_factory,
+    timezone,
+):
+    """IB errors logged after a user cancel ended the job do not make it an infra failure."""
+    job_start = datetime(2024, 1, 1, 10, 0, tzinfo=timezone)
+    job_end = job_start + timedelta(minutes=60)
+    job_info = simple_job_factory(
+        job_id="test-job-cancelled",
+        state="CANCELLED",
+        start_timestamp=int(job_start.timestamp()),
+        end_timestamp=int(job_end.timestamp()),
+        nodes=["node01", "node02"],
+        time_limit=120,
+        exit_code_signal=0,
+        scheduler=Scheduler.SLURM,
+    )._replace(cancelled_by="user-a")
+    ib_timestamp_ns = int((job_end + timedelta(seconds=60)).timestamp() * 1_000_000_000)
+
+    applog = InboundObservation(
+        context=InboundContext(
+            time_interval=TimeInterval(job_info.job_start_time, job_end + timedelta(minutes=5)),
+            source=ObservationSource.APPLOG,
+            format=ObservationFormat.ENTRY_TIMESERIES,
+            timezone=timezone,
+        ),
+        lines=[
+            make_applog_entry(
+                body="0: NCCL WARN NET/IB : Got completion with error 12, opcode 0, len 0, vendor err 129",
+                hostname="node02",
+                timestamp_ns=ib_timestamp_ns,
+            )
+        ],
+    )
+
+    stream = event_manager.create_stream(request.node.name)
+    attributor = Attributor.new(stream, job_info)
+    attributor.ingest(applog)
+
+    result = attributor.attribute()
+
+    assert result.outcome_attr.value().outcome != "Fail InfraHW"
+    ib_error = "IB Error-12 Vendor-129 (IBV_WC_RETRY_EXC_ERR)"
+    assert ib_error not in result.symptoms
+    assert result.symptoms._data[ib_error].has_interesting()
+    assert not result.bad_nodes_attr.my_bad_nodes["node02"].has_bad()
+
+
+def test_post_cancel_exception_block_is_user_cancel(
+    request,
+    event_manager,
+    simple_job_factory,
+    timezone,
+):
+    """An NCCL exception block logged after a user cancel leaves the cancel as the cause.
+
+    PyTorch prints the exception text on lines without a timestamp. They sit
+    below the timed NCCL warning that opened the block, so they are teardown too.
+    """
+    job_start = datetime(2024, 1, 1, 10, 0, tzinfo=timezone)
+    job_end = job_start + timedelta(minutes=60)
+    job_info = simple_job_factory(
+        job_id="test-job-cancelled-block",
+        state="CANCELLED",
+        start_timestamp=int(job_start.timestamp()),
+        end_timestamp=int(job_end.timestamp()),
+        nodes=["node01", "node02"],
+        time_limit=120,
+        exit_code_signal=0,
+        scheduler=Scheduler.SLURM,
+    )._replace(cancelled_by="user-a")
+    ib_timestamp_ns = int((job_end + timedelta(seconds=60)).timestamp() * 1_000_000_000)
+    untimed_lines = [
+        "0: ncclRemoteError: A call failed possibly due to a network error or a remote process exiting prematurely.",
+        "0: Last error:",
+        "0: NET/IB: Got completion from peer 192.0.2.2<1234> with status=IBV_WC_RETRY_EXC_ERR(12) "
+        "opcode=UNKNOWN_OPCODE(65386) vendor_err=129  localGid ::ffff:192.0.2.1 remoteGids::ffff:192.0.2.2 hca mlx5_0",
+    ]
+
+    applog = InboundObservation(
+        context=InboundContext(
+            time_interval=TimeInterval(job_info.job_start_time, job_end + timedelta(minutes=5)),
+            source=ObservationSource.APPLOG,
+            format=ObservationFormat.ENTRY_TIMESERIES,
+            timezone=timezone,
+        ),
+        lines=[
+            make_applog_entry(
+                body="0: NCCL WARN NET/IB : Got completion with error 12, opcode 0, len 0, vendor err 129",
+                hostname="node02",
+                timestamp_ns=ib_timestamp_ns,
+            ),
+            *({"ts": None, "resources": None, "body": body} for body in untimed_lines),
+        ],
+    )
+
+    stream = event_manager.create_stream(request.node.name)
+    attributor = Attributor.new(stream, job_info)
+    attributor.ingest(applog)
+
+    result = attributor.attribute()
+
+    assert result.outcome_attr.value().outcome == "Cancelled by User"
+    assert "ncclRemoteError" not in result.symptoms
+    assert result.symptoms._data["ncclRemoteError"].has_interesting()
