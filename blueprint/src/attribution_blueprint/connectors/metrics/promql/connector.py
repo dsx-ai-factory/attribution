@@ -80,7 +80,7 @@ def _timeseries_entry(sample: PrometheusMetricEntry) -> TimeseriesEntry:
 
 
 class PromQLMetricsConnector:
-    """Collector that fetches one Source from a PromQL backend (Mimir, Prometheus, Cortex).
+    """Collector for a Prometheus-compatible backend, including VictoriaMetrics.
 
     Each instance handles exactly one Source. For multiple Sources from the same
     backend, instantiate per Source — failure isolation lives at the instance
@@ -98,6 +98,8 @@ class PromQLMetricsConnector:
         templates: dict[Source, dict[str, str]] = TEMPLATES,
         timeout_seconds: float = 60.0,
         step_seconds: int = DEFAULT_STEP_SECONDS,
+        node_label: str = DEFAULT_NODE_LABEL,
+        cluster_label: str = DEFAULT_CLUSTER_LABEL,
     ):
         if source not in templates:
             raise ValueError(f"no templates registered for source {source}")
@@ -105,6 +107,8 @@ class PromQLMetricsConnector:
         self._templates = templates[source]
         self._endpoint = endpoint.rstrip("/")
         self._cluster = cluster
+        self._node_label = node_label
+        self._cluster_label = cluster_label
         self._timeout = timeout_seconds
         self._step = step_seconds
         self._auth = auth
@@ -133,14 +137,20 @@ class PromQLMetricsConnector:
         start_s = int(start.timestamp())
         end_s = int(end.timestamp())
         samples: list[PrometheusMetricEntry] = []
-        # Each node lands inside a PromQL `=~ "..."` regex on net_host_name,
+        # Each node lands inside a PromQL `=~ "..."` regex on the node label,
         # so regex metacharacters in hostnames would silently broaden the
         # match. Escape only RE2 metacharacters so common hyphenated hostnames
         # don't produce invalid regexes.
         nodes_regex = "|".join(re2_escape(n) for n in nodes)
         for name, tmpl in self._templates.items():
             try:
-                query = tmpl.format(name=name, cluster=self._cluster, nodes=nodes_regex)
+                query = tmpl.format(
+                    name=name,
+                    cluster=self._cluster,
+                    nodes=nodes_regex,
+                    node_label=self._node_label,
+                    cluster_label=self._cluster_label,
+                )
             except KeyError as e:
                 logger.warning(f"promql template {name!r} missing kwarg {e}; skipping")
                 continue
@@ -169,17 +179,17 @@ class PromQLMetricsConnector:
         out: list[PrometheusMetricEntry] = []
         for series in result:
             labels = series.get("metric", {}) or {}
-            node = labels.get(DEFAULT_NODE_LABEL)
+            node = labels.get(self._node_label)
             if not node:
                 # A node_metrics entry must declare its node; the service never
                 # parses one out of a metric body. Aggregations that drop
-                # net_host_name are unattributable; skip rather than emit
+                # the node label are unattributable; skip rather than emit
                 # unscoped points.
                 continue
-            # Templates that aggregate (e.g. `max by (net_host_name) (...)`)
-            # drop s_cluster, so fall back to the connector's configured
+            # Templates that aggregate (e.g. `max by (<node label>) (...)`)
+            # drop the cluster label, so fall back to the configured
             # cluster — the value is known either way.
-            cluster = labels.get(DEFAULT_CLUSTER_LABEL) or self._cluster
+            cluster = labels.get(self._cluster_label) or self._cluster
             component = labels.get(DEFAULT_COMPONENT_LABEL)
             for ts, val in series.get("values", []) or []:
                 try:

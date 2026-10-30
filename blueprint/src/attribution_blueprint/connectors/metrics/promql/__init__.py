@@ -6,6 +6,8 @@ from typing import Any
 from attribution_blueprint import mca_registry as _registry
 from attribution_blueprint.connectors.auth import Auth, build_auth
 from attribution_blueprint.connectors.metrics.promql.connector import (
+    DEFAULT_CLUSTER_LABEL,
+    DEFAULT_NODE_LABEL,
     PromQLMetricsConnector,
 )
 from attribution_blueprint.connectors.metrics.promql.templates import TEMPLATES
@@ -41,6 +43,8 @@ def _build(spec: dict, ctx: dict) -> PromQLMetricsConnector:
         endpoint=endpoint,
         auth=auth,
         cluster=cluster,
+        node_label=spec.get("node_label", DEFAULT_NODE_LABEL),
+        cluster_label=spec.get("cluster_label", DEFAULT_CLUSTER_LABEL),
         source=source,
         templates=templates,
         timeout_seconds=timeout,
@@ -55,6 +59,8 @@ _registry.register_component(
     schema={
         "endpoint": _PARAM,
         "cluster": _PARAM,
+        "node_label": _PARAM,
+        "cluster_label": _PARAM,
         "timeout_seconds": _PARAM,
         "step_seconds": _PARAM,
         "auth": {
