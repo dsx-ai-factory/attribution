@@ -92,7 +92,8 @@ class BodyFallbacks:
     - both: the timestamp is read from the body, else the entry is dropped
 
     `year_fallback` only matters for year-less formats (`[E1231 23:57:09 ...]`): its year is used,
-    and a parsed date after it rolls back a year. None (job end unknown) means current year.
+    and a parsed date more than half a year after it rolls back a year. None (job end unknown)
+    means current year.
     """
 
     parse_node: bool = False
@@ -159,6 +160,9 @@ class EntrySourceBase(ABC, Generic[E, T_co]):
     def make_line_base(self, pos: int, line: E) -> T_co: ...
 
 
+_YEAR_ROLLBACK_AFTER_JOB_END = timedelta(days=182)
+
+
 def _extract_timestamp_from_pytorch_format(
     line: str, timezone: Optional[ZoneInfo] = None, job_end_time: Optional[datetime] = None
 ) -> Optional[datetime]:
@@ -179,8 +183,9 @@ def _extract_timestamp_from_pytorch_format(
         # - If no job_end_time, fall back to current year (legacy behavior)
         if job_end_time is not None:
             dt = datetime(job_end_time.year, month, day, hour, minute, second, tzinfo=timezone)
-            if dt > job_end_time:
-                # If the job finished in the following year but the log entry is from the prior year, adjust to the previous year
+            # Processes keep logging for a short time after the job ends, so only a date
+            # far after the end means the job finished in the following year.
+            if dt - job_end_time > _YEAR_ROLLBACK_AFTER_JOB_END:
                 dt = dt.replace(year=dt.year - 1)
         else:
             dt = datetime(datetime.now().year, month, day, hour, minute, second, tzinfo=timezone)
