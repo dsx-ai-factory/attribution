@@ -27,7 +27,10 @@ def serve_api(
                 status, body = 200, {"status": "live"}
             elif parsed.path == "/readyz":
                 ready = state.ready()
-                status, body = (200 if ready else 503), {"status": "ready" if ready else "not-ready"}
+                status, body = (200 if ready else 503), {
+                    "status": "ready" if ready else "not-ready",
+                    "disabledWatches": state.disabled_watch_status(),
+                }
             elif parsed.path == "/v1/placements":
                 query = parse_qs(parsed.query)
                 requested_namespace = (query.get("namespace") or [""])[0]

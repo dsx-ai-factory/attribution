@@ -102,6 +102,15 @@ def _history_observation(
     )
 
 
+def _capture(store: SQLitePlacementStore, observation: ResourceObservation) -> ObservationAppendResult:
+    return store.capture_observation(
+        observation,
+        source_name="pods",
+        placement=None,
+        advance_checkpoint=False,
+    ).observation
+
+
 def test_resource_observation_preserves_controller_owner_reference():
     observation = ResourceObservation.from_resource(
         {
@@ -227,7 +236,9 @@ def test_deleted_capture_rolls_back_observation_and_placement_with_marker(tmp_pa
     with pytest.raises(sqlite3.IntegrityError, match="synthetic deletion marker failure"):
         store.capture_observation(
             observation,
+            source_name="pods",
             placement=record,
+            advance_checkpoint=True,
             mark_deleted=True,
         )
 
@@ -363,8 +374,8 @@ def test_observation_journal_is_append_only_and_survives_reopen(tmp_path):
         status={"phase": "Running"},
     )
 
-    assert store.append_observation(initial) == ObservationAppendResult.APPENDED
-    assert store.append_observation(updated) == ObservationAppendResult.APPENDED
+    assert _capture(store, initial) == ObservationAppendResult.APPENDED
+    assert _capture(store, updated) == ObservationAppendResult.APPENDED
 
     reopened = SQLitePlacementStore(str(path))
     assert reopened.list_observations_for_uid("cluster-a", "team-a", "pod-uid-1") == [
@@ -430,7 +441,7 @@ def test_expired_workload_prunes_its_complete_controller_history(tmp_path):
         ),
     ]
     for observation in observations:
-        store.append_observation(observation)
+        _capture(store, observation)
 
     SQLitePlacementStore(str(path), retention_days=1)
 
@@ -452,7 +463,8 @@ def test_old_active_workload_history_is_retained(tmp_path):
         status={"conditions": [{"type": "Admitted", "status": "True"}]},
     )
 
-    store.append_observation(workload)
+    _capture(store, workload)
+    store.prune_expired()
 
     assert store.list_observations_for_uid(
         "cluster-a",
@@ -505,8 +517,8 @@ def test_newer_active_workload_protects_owner_group_from_late_old_terminal(
     )
 
     # Simulate delayed delivery: the expired incarnation is inserted last.
-    store.append_observation(active)
-    store.append_observation(expired)
+    _capture(store, active)
+    _capture(store, expired)
 
     reopened = SQLitePlacementStore(str(path), retention_days=1)
 
@@ -572,7 +584,7 @@ def test_expired_non_workload_histories_are_pruned(tmp_path):
         ),
     ]
     for observation in observations:
-        store.append_observation(observation)
+        _capture(store, observation)
 
     SQLitePlacementStore(str(path), retention_days=1)
 
@@ -596,7 +608,7 @@ def test_observation_schema_adds_selected_metadata_to_existing_journal(tmp_path)
         }
     )
 
-    assert store.append_observation(observation) == ObservationAppendResult.APPENDED
+    assert _capture(store, observation) == ObservationAppendResult.APPENDED
     assert store.list_observations_for_uid("cluster-a", "team-a", "pod-uid-1") == [observation]
     with sqlite3.connect(path) as connection:
         assert connection.execute("PRAGMA user_version").fetchone()[0] == 4
@@ -611,8 +623,8 @@ def test_replayed_resource_version_is_deduplicated(tmp_path):
         observed_at="2026-10-14T00:01:00Z",
     )
 
-    assert store.append_observation(initial) == ObservationAppendResult.APPENDED
-    assert store.append_observation(replayed) == ObservationAppendResult.DUPLICATE
+    assert _capture(store, initial) == ObservationAppendResult.APPENDED
+    assert _capture(store, replayed) == ObservationAppendResult.DUPLICATE
     assert store.list_observations_for_uid("cluster-a", "team-a", "pod-uid-1") == [initial]
 
 
@@ -640,15 +652,15 @@ def test_replayed_resource_version_accepts_additive_projection(tmp_path):
         },
     )
 
-    assert store.append_observation(initial) == ObservationAppendResult.APPENDED
+    assert _capture(store, initial) == ObservationAppendResult.APPENDED
     with sqlite3.connect(path) as connection:
         original = connection.execute(
             "SELECT id, observed_at FROM resource_observation"
         ).fetchone()
 
-    assert store.append_observation(expanded) == ObservationAppendResult.UPDATED
+    assert _capture(store, expanded) == ObservationAppendResult.UPDATED
     # Replaying an older projection after upgrade keeps the richer durable row.
-    assert store.append_observation(initial) == ObservationAppendResult.DUPLICATE
+    assert _capture(store, initial) == ObservationAppendResult.DUPLICATE
 
     [stored] = store.list_observations_for_uid(
         "cluster-a",
@@ -672,10 +684,10 @@ def test_changed_payload_for_same_resource_version_is_rejected(tmp_path):
     initial = _observation(status={"phase": "Pending"})
     conflicting = replace(initial, status={"phase": "Running"})
 
-    store.append_observation(initial)
+    _capture(store, initial)
 
     with pytest.raises(ObservationConflictError, match="changed during replay"):
-        store.append_observation(conflicting)
+        _capture(store, conflicting)
 
 
 def test_changed_owners_for_same_resource_version_are_rejected(tmp_path):
@@ -695,26 +707,199 @@ def test_changed_owners_for_same_resource_version_are_rejected(tmp_path):
         ),
     )
 
-    store.append_observation(initial)
+    _capture(store, initial)
 
     with pytest.raises(ObservationConflictError, match="changed during replay"):
-        store.append_observation(conflicting)
+        _capture(store, conflicting)
 
 
 def test_observations_are_queryable_by_controller_owner(tmp_path):
     store = SQLitePlacementStore(str(tmp_path / "placements.db"))
     observation = _observation(status={"phase": "Running"})
 
-    store.append_observation(observation)
+    _capture(store, observation)
 
     assert store.list_observations_for_owner("cluster-a", "team-a", "job-uid-1") == [
         observation
     ]
 
 
+def test_latest_observations_are_queryable_by_resource_kind(tmp_path):
+    store = SQLitePlacementStore(str(tmp_path / "placements.db"))
+    initial = _observation(status={"phase": "Pending"})
+    updated = _observation(
+        resource_version="2",
+        event_type="MODIFIED",
+        status={"phase": "Running"},
+    )
+    _capture(store, initial)
+    _capture(store, updated)
+
+    assert store.list_latest_observations_for_kind(
+        "cluster-a",
+        "team-a",
+        "Pod",
+    ) == [updated]
+
+
 def test_observation_journal_does_not_change_placement_view(tmp_path):
     store = SQLitePlacementStore(str(tmp_path / "placements.db"))
 
-    store.append_observation(_observation(status={"phase": "Running"}))
+    _capture(store, _observation(status={"phase": "Running"}))
 
     assert store.get_by_pod_uid("pod-uid-1") is None
+
+
+def test_watch_coverage_and_gaps_survive_reopen(tmp_path):
+    path = tmp_path / "placements.db"
+    store = SQLitePlacementStore(str(path))
+    store.complete_watch_list(
+        cluster_id="cluster-a",
+        namespace="team-a",
+        source_name="pods",
+        api_version="v1",
+        kind="Pod",
+        resource_version="10",
+        completed_at="2026-10-14T00:00:00Z",
+        gap_id=None,
+    )
+    gap_id = store.begin_coverage_gap(
+        cluster_id="cluster-a",
+        namespace="team-a",
+        source_name="pods",
+        api_version="v1",
+        kind="Pod",
+        reason="WATCH_SOURCE_CHANGED",
+        start_resource_version="10",
+        started_at="2026-10-13T23:59:30Z",
+        detected_at="2026-10-14T00:00:00Z",
+    )
+    store.complete_watch_list(
+        cluster_id="cluster-a",
+        namespace="team-a",
+        source_name="pods",
+        api_version="v1",
+        kind="Pod",
+        resource_version="20",
+        completed_at="2026-10-14T00:01:00Z",
+        gap_id=gap_id,
+    )
+
+    reopened = SQLitePlacementStore(str(path))
+    coverage = reopened.get_watch_coverage("cluster-a", "team-a", "pods")
+    assert coverage is not None
+    assert coverage.coverage_started_at == "2026-10-14T00:00:00Z"
+    assert coverage.resource_version == "20"
+    assert coverage.checkpointed_at == "2026-10-14T00:01:00Z"
+    [gap] = reopened.list_coverage_gaps("cluster-a", "team-a")
+    assert gap.reason == "WATCH_SOURCE_CHANGED"
+    assert gap.start_resource_version == "10"
+    assert gap.started_at == "2026-10-13T23:59:30Z"
+    assert gap.detected_at == "2026-10-14T00:00:00Z"
+    assert gap.end_resource_version == "20"
+    assert gap.recovered_at == "2026-10-14T00:01:00Z"
+
+
+def test_history_pruning_advances_coverage_boundary(tmp_path):
+    store = SQLitePlacementStore(
+        str(tmp_path / "placements.db"),
+        retention_days=1,
+    )
+    old = datetime.now(timezone.utc) - timedelta(days=2)
+    store.complete_watch_list(
+        cluster_id="cluster-a",
+        namespace="team-a",
+        source_name="pods",
+        api_version="v1",
+        kind="Pod",
+        resource_version="10",
+        completed_at=old.isoformat(),
+        gap_id=None,
+    )
+
+    # Pruning is now periodic, not a side effect of ordinary reads/writes.
+    store.prune_expired()
+
+    coverage = store.get_watch_coverage("cluster-a", "team-a", "pods")
+    assert coverage is not None
+    boundary = datetime.fromisoformat(coverage.coverage_started_at).replace(
+        tzinfo=timezone.utc
+    )
+    assert boundary >= datetime.now(timezone.utc) - timedelta(days=1, seconds=5)
+
+
+def test_coverage_gap_migration_uses_detection_time_for_existing_rows(tmp_path):
+    path = tmp_path / "placements.db"
+    with sqlite3.connect(path) as connection:
+        connection.execute(
+            """
+            CREATE TABLE coverage_gap (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                cluster_id TEXT NOT NULL,
+                namespace TEXT NOT NULL,
+                source_name TEXT NOT NULL,
+                api_version TEXT NOT NULL,
+                kind TEXT NOT NULL,
+                reason TEXT NOT NULL,
+                start_resource_version TEXT NOT NULL,
+                detected_at TEXT NOT NULL,
+                end_resource_version TEXT,
+                recovered_at TEXT
+            )
+            """
+        )
+        connection.execute(
+            """
+            INSERT INTO coverage_gap(
+                cluster_id, namespace, source_name, api_version, kind,
+                reason, start_resource_version, detected_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "cluster-a",
+                "team-a",
+                "pods",
+                "v1",
+                "Pod",
+                "RESOURCE_VERSION_EXPIRED",
+                "10",
+                "2026-10-14T00:00:00Z",
+            ),
+        )
+
+    store = SQLitePlacementStore(str(path))
+
+    [gap] = store.list_coverage_gaps("cluster-a", "team-a")
+    assert gap.started_at == gap.detected_at
+    with sqlite3.connect(path) as connection:
+        assert connection.execute("PRAGMA user_version").fetchone()[0] == 4
+
+
+def test_atomic_capture_does_not_advance_checkpoint_when_placement_conflicts(tmp_path):
+    store = SQLitePlacementStore(str(tmp_path / "placements.db"))
+    store.complete_watch_list(
+        cluster_id="cluster-a",
+        namespace="team-a",
+        source_name="pods",
+        api_version="v1",
+        kind="Pod",
+        resource_version="10",
+        completed_at="2026-10-14T00:00:00Z",
+        gap_id=None,
+    )
+    store.create(_record(associated=False))
+    observation = _observation(resource_version="11", event_type="MODIFIED")
+    conflicting_placement = replace(_record(associated=False), node_name="node-b")
+
+    with pytest.raises(PlacementConflictError):
+        store.capture_observation(
+            observation,
+            source_name="pods",
+            placement=conflicting_placement,
+            advance_checkpoint=True,
+        )
+
+    assert store.list_observations_for_uid("cluster-a", "team-a", "pod-uid-1") == []
+    coverage = store.get_watch_coverage("cluster-a", "team-a", "pods")
+    assert coverage is not None
+    assert coverage.resource_version == "10"

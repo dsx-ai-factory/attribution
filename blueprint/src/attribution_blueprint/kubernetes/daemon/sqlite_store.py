@@ -12,9 +12,12 @@ from datetime import datetime
 from pathlib import Path
 
 from attribution_blueprint.kubernetes.daemon.models import (
+    CoverageGap,
+    CoverageGapReason,
     OwnerReference,
     PlacementRecord,
     ResourceObservation,
+    WatchCoverage,
 )
 from attribution_blueprint.kubernetes.daemon.store import (
     CaptureResult,
@@ -81,6 +84,33 @@ CREATE TABLE IF NOT EXISTS observation_owner_reference (
 );
 CREATE INDEX IF NOT EXISTS observation_owner_identity
     ON observation_owner_reference(owner_uid, observation_id);
+CREATE TABLE IF NOT EXISTS watch_coverage (
+    cluster_id TEXT NOT NULL,
+    namespace TEXT NOT NULL,
+    source_name TEXT NOT NULL,
+    api_version TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    coverage_started_at TEXT NOT NULL,
+    resource_version TEXT NOT NULL,
+    checkpointed_at TEXT NOT NULL,
+    PRIMARY KEY(cluster_id, namespace, source_name)
+);
+CREATE TABLE IF NOT EXISTS coverage_gap (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    cluster_id TEXT NOT NULL,
+    namespace TEXT NOT NULL,
+    source_name TEXT NOT NULL,
+    api_version TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    reason TEXT NOT NULL,
+    start_resource_version TEXT NOT NULL,
+    started_at TEXT NOT NULL,
+    detected_at TEXT NOT NULL,
+    end_resource_version TEXT,
+    recovered_at TEXT
+);
+CREATE INDEX IF NOT EXISTS coverage_gap_scope
+    ON coverage_gap(cluster_id, namespace, detected_at);
 """
 
 
@@ -109,6 +139,7 @@ class SQLitePlacementStore:
         with self._connection() as connection:
             connection.executescript(_SCHEMA)
             self._migrate_observation_schema(connection)
+            self._migrate_coverage_gap_schema(connection)
             connection.execute("PRAGMA user_version = 4")
             self._prune_expired(connection)
 
@@ -133,12 +164,10 @@ class SQLitePlacementStore:
     def create(self, record: PlacementRecord) -> CreateResult:
         with self._connection() as connection:
             connection.execute("BEGIN IMMEDIATE")
-            self._prune_expired(connection)
             return self._create(connection, record)
 
     def get_by_pod_uid(self, pod_uid: str) -> PlacementRecord | None:
         with self._connection() as connection:
-            self._prune_expired(connection)
             row = connection.execute(
                 "SELECT raw_json FROM placement_record WHERE pod_uid = ?",
                 (pod_uid,),
@@ -147,7 +176,6 @@ class SQLitePlacementStore:
 
     def list_for_resource(self, namespace: str, resource_uid: str) -> list[PlacementRecord]:
         with self._connection() as connection:
-            self._prune_expired(connection)
             rows = connection.execute(
                 """
                 SELECT record.raw_json
@@ -172,7 +200,6 @@ class SQLitePlacementStore:
                 """,
                 (pod_uid,),
             )
-            self._prune_expired(connection)
 
     def reconcile_active_pods(
         self,
@@ -199,20 +226,14 @@ class SQLitePlacementStore:
                 """,
                 (namespace,),
             )
-            self._prune_expired(connection)
-
-    def append_observation(self, observation: ResourceObservation) -> ObservationAppendResult:
-        with self._connection() as connection:
-            connection.execute("BEGIN IMMEDIATE")
-            result = self._append_observation(connection, observation)
-            self._prune_expired(connection)
-        return result
 
     def capture_observation(
         self,
         observation: ResourceObservation,
         *,
+        source_name: str,
         placement: PlacementRecord | None,
+        advance_checkpoint: bool,
         mark_deleted: bool = False,
     ) -> CaptureResult:
         if mark_deleted and placement is None:
@@ -230,7 +251,15 @@ class SQLitePlacementStore:
                     """,
                     (placement.pod_uid,),
                 )
-            self._prune_expired(connection)
+            if advance_checkpoint:
+                self._mark_watch_checkpoint(
+                    connection,
+                    cluster_id=observation.cluster_id,
+                    namespace=observation.namespace,
+                    source_name=source_name,
+                    resource_version=observation.resource_version,
+                    checkpointed_at=observation.observed_at,
+                )
             return CaptureResult(observation_result, placement_result)
 
     def list_observations_for_uid(
@@ -240,7 +269,6 @@ class SQLitePlacementStore:
         uid: str,
     ) -> list[ResourceObservation]:
         with self._connection() as connection:
-            self._prune_expired(connection)
             rows = connection.execute(
                 """
                 SELECT *
@@ -259,7 +287,6 @@ class SQLitePlacementStore:
         owner_uid: str,
     ) -> list[ResourceObservation]:
         with self._connection() as connection:
-            self._prune_expired(connection)
             rows = connection.execute(
                 """
                 SELECT observation.*
@@ -274,6 +301,217 @@ class SQLitePlacementStore:
                 (cluster_id, namespace, owner_uid),
             ).fetchall()
         return [_observation_from_row(row) for row in rows]
+
+    def list_latest_observations_for_kind(
+        self,
+        cluster_id: str,
+        namespace: str,
+        kind: str,
+    ) -> list[ResourceObservation]:
+        with self._connect() as connection:
+            rows = connection.execute(
+                """
+                WITH latest AS (
+                    SELECT uid, MAX(id) AS observation_id
+                    FROM resource_observation
+                    WHERE cluster_id = ? AND namespace = ? AND kind = ?
+                    GROUP BY uid
+                )
+                SELECT observation.*
+                FROM resource_observation AS observation
+                JOIN latest ON latest.observation_id = observation.id
+                ORDER BY observation.id
+                """,
+                (cluster_id, namespace, kind),
+            ).fetchall()
+        return [_observation_from_row(row) for row in rows]
+
+    def get_watch_coverage(
+        self,
+        cluster_id: str,
+        namespace: str,
+        source_name: str,
+    ) -> WatchCoverage | None:
+        with self._connection() as connection:
+            row = connection.execute(
+                """
+                SELECT *
+                FROM watch_coverage
+                WHERE cluster_id = ? AND namespace = ? AND source_name = ?
+                """,
+                (cluster_id, namespace, source_name),
+            ).fetchone()
+        return _watch_coverage_from_row(row) if row else None
+
+    def begin_coverage_gap(
+        self,
+        *,
+        cluster_id: str,
+        namespace: str,
+        source_name: str,
+        api_version: str,
+        kind: str,
+        reason: CoverageGapReason,
+        start_resource_version: str,
+        started_at: str,
+        detected_at: str,
+    ) -> int:
+        with self._connection() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            existing = connection.execute(
+                """
+                SELECT id
+                FROM coverage_gap
+                WHERE cluster_id = ? AND namespace = ? AND source_name = ?
+                  AND recovered_at IS NULL
+                ORDER BY id DESC
+                LIMIT 1
+                """,
+                (cluster_id, namespace, source_name),
+            ).fetchone()
+            if existing:
+                return int(existing["id"])
+            cursor = connection.execute(
+                """
+                INSERT INTO coverage_gap(
+                    cluster_id, namespace, source_name, api_version, kind,
+                    reason, start_resource_version, started_at, detected_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    cluster_id,
+                    namespace,
+                    source_name,
+                    api_version,
+                    kind,
+                    reason,
+                    start_resource_version,
+                    started_at,
+                    detected_at,
+                ),
+            )
+            return int(cursor.lastrowid)
+
+    def complete_watch_list(
+        self,
+        *,
+        cluster_id: str,
+        namespace: str,
+        source_name: str,
+        api_version: str,
+        kind: str,
+        resource_version: str,
+        completed_at: str,
+        gap_id: int | None,
+    ) -> None:
+        with self._connection() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            connection.execute(
+                """
+                INSERT INTO watch_coverage(
+                    cluster_id, namespace, source_name, api_version, kind,
+                    coverage_started_at, resource_version, checkpointed_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(cluster_id, namespace, source_name) DO UPDATE SET
+                    api_version = excluded.api_version,
+                    kind = excluded.kind,
+                    resource_version = excluded.resource_version,
+                    checkpointed_at = excluded.checkpointed_at
+                """,
+                (
+                    cluster_id,
+                    namespace,
+                    source_name,
+                    api_version,
+                    kind,
+                    completed_at,
+                    resource_version,
+                    completed_at,
+                ),
+            )
+            if gap_id is not None:
+                cursor = connection.execute(
+                    """
+                    UPDATE coverage_gap
+                    SET end_resource_version = ?, recovered_at = ?
+                    WHERE id = ? AND cluster_id = ? AND namespace = ?
+                      AND source_name = ? AND recovered_at IS NULL
+                    """,
+                    (
+                        resource_version,
+                        completed_at,
+                        gap_id,
+                        cluster_id,
+                        namespace,
+                        source_name,
+                    ),
+                )
+                if cursor.rowcount != 1:
+                    raise RuntimeError(f"coverage gap {gap_id} is missing or already completed")
+
+    def mark_watch_checkpoint(
+        self,
+        *,
+        cluster_id: str,
+        namespace: str,
+        source_name: str,
+        resource_version: str,
+        checkpointed_at: str,
+    ) -> None:
+        with self._connection() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            self._mark_watch_checkpoint(
+                connection,
+                cluster_id=cluster_id,
+                namespace=namespace,
+                source_name=source_name,
+                resource_version=resource_version,
+                checkpointed_at=checkpointed_at,
+            )
+
+    def list_coverage_gaps(
+        self,
+        cluster_id: str,
+        namespace: str,
+    ) -> list[CoverageGap]:
+        with self._connection() as connection:
+            rows = connection.execute(
+                """
+                SELECT *
+                FROM coverage_gap
+                WHERE cluster_id = ? AND namespace = ?
+                ORDER BY id
+                """,
+                (cluster_id, namespace),
+            ).fetchall()
+        return [_coverage_gap_from_row(row) for row in rows]
+
+    @staticmethod
+    def _mark_watch_checkpoint(
+        connection: sqlite3.Connection,
+        *,
+        cluster_id: str,
+        namespace: str,
+        source_name: str,
+        resource_version: str,
+        checkpointed_at: str,
+    ) -> None:
+        cursor = connection.execute(
+            """
+            UPDATE watch_coverage
+            SET resource_version = ?, checkpointed_at = ?
+            WHERE cluster_id = ? AND namespace = ? AND source_name = ?
+            """,
+            (
+                resource_version,
+                checkpointed_at,
+                cluster_id,
+                namespace,
+                source_name,
+            ),
+        )
+        if cursor.rowcount != 1:
+            raise RuntimeError(f"watch coverage for source {source_name!r} is not initialized")
 
     def _create(
         self,
@@ -467,12 +705,40 @@ class SQLitePlacementStore:
     def _migrate_observation_schema(connection: sqlite3.Connection) -> None:
         columns = {
             row["name"]
-            for row in connection.execute("PRAGMA table_info(resource_observation)").fetchall()
+            for row in connection.execute(
+                "PRAGMA table_info(resource_observation)"
+            ).fetchall()
         }
         if "selected_metadata_json" not in columns:
             connection.execute(
                 "ALTER TABLE resource_observation ADD COLUMN selected_metadata_json TEXT"
             )
+
+    @staticmethod
+    def _migrate_coverage_gap_schema(connection: sqlite3.Connection) -> None:
+        columns = {
+            row["name"]
+            for row in connection.execute(
+                "PRAGMA table_info(coverage_gap)"
+            ).fetchall()
+        }
+        if "started_at" not in columns:
+            connection.execute(
+                "ALTER TABLE coverage_gap ADD COLUMN started_at TEXT"
+            )
+            connection.execute(
+                """
+                UPDATE coverage_gap
+                SET started_at = detected_at
+                WHERE started_at IS NULL
+                """
+            )
+
+    def prune_expired(self) -> None:
+        """Run the retention sweep once, in its own transaction."""
+        with self._connection() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            self._prune_expired(connection)
 
     def _prune_expired(self, connection: sqlite3.Connection) -> None:
         connection.execute(
@@ -571,6 +837,15 @@ class SQLitePlacementStore:
                     namespace,
                 ),
             )
+        cutoff = f"-{self.retention_days} days"
+        connection.execute(
+            """
+            UPDATE watch_coverage
+            SET coverage_started_at = datetime('now', ?)
+            WHERE datetime(coverage_started_at) < datetime('now', ?)
+            """,
+            (cutoff, cutoff),
+        )
 
 
 def _controller_uid(row: sqlite3.Row) -> str | None:
@@ -774,3 +1049,33 @@ def _merge_source_timestamp(
         )
     except ValueError as error:
         raise ValueError("source timestamp is not ISO-8601") from error
+
+
+def _watch_coverage_from_row(row: sqlite3.Row) -> WatchCoverage:
+    return WatchCoverage(
+        cluster_id=row["cluster_id"],
+        source_name=row["source_name"],
+        api_version=row["api_version"],
+        kind=row["kind"],
+        namespace=row["namespace"],
+        coverage_started_at=row["coverage_started_at"],
+        resource_version=row["resource_version"],
+        checkpointed_at=row["checkpointed_at"],
+    )
+
+
+def _coverage_gap_from_row(row: sqlite3.Row) -> CoverageGap:
+    return CoverageGap(
+        id=row["id"],
+        cluster_id=row["cluster_id"],
+        source_name=row["source_name"],
+        api_version=row["api_version"],
+        kind=row["kind"],
+        namespace=row["namespace"],
+        reason=row["reason"],
+        start_resource_version=row["start_resource_version"],
+        started_at=row["started_at"],
+        detected_at=row["detected_at"],
+        end_resource_version=row["end_resource_version"],
+        recovered_at=row["recovered_at"],
+    )

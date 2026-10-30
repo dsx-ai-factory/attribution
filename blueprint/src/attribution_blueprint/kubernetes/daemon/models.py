@@ -33,6 +33,7 @@ class ResourceIdentity:
 
 
 ObservationEventType = Literal["SNAPSHOT", "ADDED", "MODIFIED", "DELETED"]
+CoverageGapReason = Literal["RESOURCE_VERSION_EXPIRED", "WATCH_SOURCE_CHANGED"]
 
 
 @dataclass(frozen=True)
@@ -42,6 +43,34 @@ class OwnerReference:
     name: str
     uid: str
     controller: bool
+
+
+@dataclass(frozen=True)
+class WatchCoverage:
+    cluster_id: str
+    source_name: str
+    api_version: str
+    kind: str
+    namespace: str
+    coverage_started_at: str
+    resource_version: str
+    checkpointed_at: str
+
+
+@dataclass(frozen=True)
+class CoverageGap:
+    id: int
+    cluster_id: str
+    source_name: str
+    api_version: str
+    kind: str
+    namespace: str
+    reason: CoverageGapReason
+    start_resource_version: str
+    started_at: str
+    detected_at: str
+    end_resource_version: str | None
+    recovered_at: str | None
 
 
 @dataclass(frozen=True)
