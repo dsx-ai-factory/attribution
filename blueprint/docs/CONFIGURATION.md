@@ -908,15 +908,57 @@ Fields:
 | ----------------- | -------- | ----------------------------------------------------------------------------------------------------------------------- |
 | `endpoint`        | Yes      | Prometheus-compatible HTTP API base URL.                                                                                |
 | `cluster`         | Yes      | Cluster label value used by bundled PromQL templates.                                                                   |
+| `node_label`      | No       | Label containing node names, used in queries and results. Defaults to `net_host_name`.                                   |
+| `cluster_label`   | No       | Label containing the cluster name, used in queries and results. Defaults to `s_cluster`.                                |
 | `auth.type`       | No       | Optional. If present, `token` or `mtls`; same auth fields as Loki. Omit the `auth` block for unauthenticated endpoints. |
 | `step_seconds`    | No       | Query step size. Defaults to `60`.                                                                                      |
 | `timeout_seconds` | No       | HTTP timeout. Defaults to `60.0`.                                                                                       |
 | `queries`         | No       | Custom named PromQL templates. These extend the bundled templates and override bundled templates with the same name.    |
 
 
-The bundled PromQL templates expect labels such as `s_cluster` and `net_host_name`. If your metrics use different labels, override the relevant query templates.
+Both `node_label` and `cluster_label` must match `^[a-zA-Z_][a-zA-Z0-9_]*$` (unquoted PromQL label names).
 
-Each template may use `{name}` (the template's own name), `{cluster}`, and `{nodes}` (a regex alternation of the context's node names). Literal `{` and `}` in PromQL label selectors must be doubled (`{{`, `}}`).
+The bundled PromQL templates use the configured node and cluster labels. Returned
+series must retain the node label. If an aggregation drops the cluster label,
+the connector uses the configured `cluster` value for the observation.
+
+Each template may use `{name}` (the template's own name), `{cluster}` (the
+configured cluster value), `{nodes}` (a regex alternation of the context's node
+names), `{node_label}`, and `{cluster_label}` (the configured label names).
+Literal `{` and `}` in PromQL label selectors must be doubled (`{{`, `}}`).
+Existing custom queries with literal label names still work; use the label
+placeholders when a query should follow the configured mapping. For example:
+
+```toml
+[metrics.node_metrics.promql.queries]
+up = 'max by ({node_label}) ({name}{{{cluster_label}="{cluster}", {node_label}=~"{nodes}"}}) == 0'
+```
+
+### Using VictoriaMetrics
+
+VictoriaMetrics exposes the same `/api/v1/query_range` API as Prometheus, so use
+the `promql` connector and the base URL of its query endpoint (for a single-node
+deployment, `http://localhost:8428`). No separate client is needed. Omit the
+`auth` block for a no-auth deployment. To map different metric labels:
+
+```toml
+[metrics.node_metrics]
+component = "promql"
+
+[metrics.node_metrics.promql]
+endpoint = "http://localhost:8428"
+cluster = "example-cluster"
+node_label = "hostname"
+cluster_label = "cluster"
+```
+
+The same mapping is available through
+`--connector metrics node_metrics promql node_label hostname` and
+`--connector metrics node_metrics promql cluster_label cluster` (or
+`NVAB_METRICS_NODE_METRICS_PROMQL_NODE_LABEL` and
+`NVAB_METRICS_NODE_METRICS_PROMQL_CLUSTER_LABEL`). See the complete
+[VictoriaMetrics example](../examples/victoriametrics.toml), which uses a static
+workload context; adjust its nodes and time window to match your data.
 
 ## Environment Variables
 

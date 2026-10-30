@@ -1,0 +1,29 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+[attribution]
+service_url = "http://localhost:8000"
+
+[eca]
+component = "static"
+
+[eca.static]
+id = "1000001"
+nodes = ["node-01", "node-02"]
+start_time = "2026-05-01T12:00:00+00:00"
+end_time = "2026-05-01T12:02:00+00:00"
+state = "FAILED"
+
+[metrics.node_metrics]
+component = "promql"
+
+# No auth block: the local VictoriaMetrics deployment is unauthenticated.
+[metrics.node_metrics.promql]
+endpoint = "http://localhost:8428"
+cluster = "example-cluster"
+node_label = "hostname"
+cluster_label = "cluster"
+step_seconds = 60
+
+[output.console]
+component = "stdout"
