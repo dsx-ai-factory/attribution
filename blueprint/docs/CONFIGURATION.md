@@ -916,6 +916,8 @@ Fields:
 | `queries`         | No       | Custom named PromQL templates. These extend the bundled templates and override bundled templates with the same name.    |
 
 
+Both `node_label` and `cluster_label` must match `^[a-zA-Z_][a-zA-Z0-9_]*$` (unquoted PromQL label names).
+
 The bundled PromQL templates use the configured node and cluster labels. Returned
 series must retain the node label. If an aggregation drops the cluster label,
 the connector uses the configured `cluster` value for the observation.

@@ -11,6 +11,7 @@ import pytest
 from attribution_blueprint.config import load_config
 from attribution_blueprint.connectors.metrics.promql import PromQLMetricsConnector
 from attribution_blueprint.connectors.metrics.promql.templates import TEMPLATES
+from attribution_blueprint.exceptions import MCAError
 from attribution_blueprint.mca import (
     build_config,
     deep_merge,
@@ -23,6 +24,27 @@ from attribution_blueprint.types import Source
 FIXTURE = Path(__file__).with_name("query_range.json")
 EXAMPLE = Path(__file__).resolve().parents[4] / "examples" / "victoriametrics.toml"
 LABELS = [("net_host_name", "s_cluster"), ("hostname", "cluster")]
+
+
+@pytest.mark.parametrize("setting", ["node_label", "cluster_label"])
+@pytest.mark.parametrize("label", ["host.name", "", "1host", "host-name", "host\n", None])
+@pytest.mark.parametrize("surface", ["constructor", "config"])
+def test_invalid_label_names(setting, label, surface):
+    with pytest.raises(MCAError, match=rf"promql\.{setting}=.*must match"):
+        if surface == "constructor":
+            PromQLMetricsConnector(endpoint="http://localhost:8428", cluster="example-cluster", **{setting: label})
+        else:
+            settings = load_toml(EXAMPLE)
+            settings["metrics"]["node_metrics"]["promql"][setting] = label
+            build_config(settings)
+
+
+@pytest.mark.parametrize("setting", ["node_label", "cluster_label"])
+@pytest.mark.parametrize("label", ["hostname", "_host", "Host_01"])
+def test_valid_label_names(setting, label):
+    settings = load_toml(EXAMPLE)
+    settings["metrics"]["node_metrics"]["promql"][setting] = label
+    assert len(build_config(settings).metrics_connectors) == 1
 
 
 @pytest.fixture
