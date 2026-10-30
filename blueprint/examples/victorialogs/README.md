@@ -25,7 +25,7 @@ docker build -f blueprint/docker/Dockerfile \
   -t attribution-blueprint-web:local .
 mkdir -p .attribution-victorialogs
 docker run -d --rm --name attribution-blueprint-web-local \
-  -e ATTRIBUTION_DB=/data/attributions.db \
+  -e ATTRIBUTION_DB=/data/victorialogs-output.db \
   -p 127.0.0.1:8000:8000 -p 127.0.0.1:8080:8080 \
   -v "$PWD/.attribution-victorialogs:/data" \
   attribution-blueprint-web:local
