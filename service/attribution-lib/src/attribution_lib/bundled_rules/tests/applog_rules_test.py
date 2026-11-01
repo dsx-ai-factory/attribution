@@ -355,6 +355,15 @@ class TestIBPairRules:
         assert bad_pair_events[0]["payload"]["remote_dev_ip"] == "198.51.100.30"
         assert "mlx5_4" in bad_pair_events[0]["payload"]["local_device"]
 
+    def test_ibv_modify_qp_failed_remote_gid_excludes_ansi_color_code(self, app_tst_bldr, big_jobinfo):
+        """Ray colors relayed output, so a color code can follow the remote GID directly."""
+        data = [
+            "Call to ibv_modify_qp failed with 101 Network is unreachable, on dev mlx5_1:1, curr state INIT, next state RTR, local GID index 3, local GID 2001:db8:1::10, remote GID 2001:db8:2::20\x1b[32m"
+        ]
+        result = app_tst_bldr(big_jobinfo, data)
+        events = self._get_events_by_type(result.event_stream, "Attribution.node.bad_peers")
+        assert [e["payload"]["peer"] for e in events] == ["2001:db8:2::20"]
+
     def test_ibv_modify_qp_failed_partial_fallback(self, app_tst_bldr, big_jobinfo):
         data = [
             "Call to ibv_modify_qp failed with 22 Invalid argument, on dev mlx5_0:1, curr state INIT, next state RTR, local GID index 3, local GID 192.0.2.40, remote GID ::ffff:198.51.100.30"

@@ -79,7 +79,7 @@ derived_rules       = ["Irrecoverable NET/IB communicator error"]
 
 [[extractor]]
 name                = "Call to ibv_modify_qp failed"
-match_re            = 'Call to ibv_modify_qp failed with (?P<error_code>\d+) .* on dev (?P<local_hca>[^,\s]+).*local GID index \d+, local GID (?P<local_gid>[^,\s]+), remote GID (?P<remote_gid>[^,\s\n]+)'
+match_re            = 'Call to ibv_modify_qp failed with (?P<error_code>\d+) .* on dev (?P<local_hca>[^,\s]+).*local GID index \d+, local GID (?P<local_gid>[^,\s]+), remote GID (?P<remote_gid>[^,\s\x1b]+)'
 processor           = "applog:Call to ibv_modify_qp failed"
 derived_rules       = ["Call to ibv_modify_qp failed"]
 
