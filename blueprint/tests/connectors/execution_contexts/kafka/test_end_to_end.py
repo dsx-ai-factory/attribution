@@ -13,7 +13,6 @@ The test creates and deletes its own topic; it never uses an existing topic.
 """
 
 import json
-import os
 import sqlite3
 from datetime import datetime
 from pathlib import Path
@@ -34,37 +33,21 @@ FIXTURE = Path(__file__).parents[3] / "fixtures" / "kafka_completion_events.json
 XID_SYMPTOM = "XID-79-GPU_HAS_FALLEN_OFF_THE_BUS"
 
 
-@pytest.fixture
-def kafka_topic():
-    brokers = os.environ.get("ATTRIBUTION_TEST_KAFKA_BOOTSTRAP_SERVERS")
-    service_url = os.environ.get("ATTRIBUTION_TEST_SERVICE_URL")
-    if not brokers or not service_url:
-        pytest.skip(
-            "set ATTRIBUTION_TEST_KAFKA_BOOTSTRAP_SERVERS and ATTRIBUTION_TEST_SERVICE_URL to disposable services"
-        )
-
-    # Missing the extra is a failure when integration testing was requested.
-    from confluent_kafka.admin import AdminClient, NewTopic
-
-    admin = AdminClient({"bootstrap.servers": brokers, "socket.timeout.ms": 10000})
-    topic = f"blueprint-completion-contract-{uuid4().hex}"
-    admin.create_topics([NewTopic(topic, num_partitions=1, replication_factor=1)], request_timeout=15)[topic].result(20)
-    try:
-        yield brokers, service_url, topic
-    finally:
-        admin.delete_topics([topic], request_timeout=15)[topic].result(20)
-
-
+@pytest.mark.parametrize("encoding", ["structured", "binary"])
+@pytest.mark.parametrize("multiple_failed_nodes", [False, True])
 @pytest.mark.parametrize("cancelled_by", ["", "example-operator"])
-def test_full_completion_event_reaches_service_and_sqlite(kafka_topic, tmp_path, monkeypatch, cancelled_by):
-    from confluent_kafka import Producer
-
+def test_full_completion_event_reaches_service_and_sqlite(
+    kafka_topic, tmp_path, monkeypatch, cancelled_by, encoding, multiple_failed_nodes, publish_event
+):
     brokers, service_url, topic = kafka_topic
     event = json.loads(FIXTURE.read_text())[0]
     event["id"] = str(uuid4())
     data = event["data"]
     data["id"] = data["job_id"] = f"job-{uuid4().hex}"
     data["cancelled_by"] = cancelled_by
+    if multiple_failed_nodes:
+        data["failed_nodes"] = list(reversed(data["nodes"]))
+    evidence_node = min(data["failed_nodes"])
     event["subject"] = f"jobs/{data['id']}"
     # Optional envelope attribute from the completion-event contract.
     event["dataschema"] = "https://example.com/schemas/job-completed-v1.json"
@@ -92,16 +75,7 @@ def test_full_completion_event_reaches_service_and_sqlite(kafka_topic, tmp_path,
         "pod_names",
         "pod_nodes",
     }
-    delivery_errors = []
-
-    def delivered(error, message):
-        if error is not None:
-            delivery_errors.append(str(error))
-
-    producer = Producer({"bootstrap.servers": brokers})
-    producer.produce(topic, key=data["job_id"], value=json.dumps(event).encode(), on_delivery=delivered)
-    assert producer.flush(15) == 0
-    assert delivery_errors == []
+    publish_event(event, encoding=encoding)
 
     # Real local-file collection and a real hardware symptom inside the
     # event's time window prove the Service performs attribution on its nodes.
@@ -111,7 +85,7 @@ def test_full_completion_event_reaches_service_and_sqlite(kafka_topic, tmp_path,
             {
                 "body": "NVRM: Xid (PCI:0000:01:00): 79, GPU has fallen off the bus.",
                 "ts": int(datetime.fromisoformat("2026-10-21T17:38:12+00:00").timestamp()) * 1_000_000_000,
-                "resources": [{"kind": "node", "hostname": data["failed_nodes"][0]}],
+                "resources": [{"kind": "node", "hostname": evidence_node}],
             }
         )
         + "\n"
@@ -197,7 +171,7 @@ def test_full_completion_event_reaches_service_and_sqlite(kafka_topic, tmp_path,
     result = json.loads(runs[0]["raw_result_json"])
     assert result == results[0]
     assert XID_SYMPTOM in result["symptoms"]
-    assert json.loads(runs[0]["responsible_nodes_json"]) == data["failed_nodes"]
+    assert json.loads(runs[0]["responsible_nodes_json"]) == [evidence_node]
     assert any(report["status"] == "ok" for report in result["connector_reports"])
     assert result["observation_context"]
 

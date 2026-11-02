@@ -32,6 +32,7 @@ def _consumer_config(spec: dict) -> dict:
         "bootstrap.servers": str(spec["bootstrap_servers"]),
         "group.id": str(spec["group_id"]),
         "enable.auto.commit": False,
+        "enable.partition.eof": True,
         "auto.offset.reset": auto_offset_reset,
     }
 
@@ -67,8 +68,10 @@ def _build(spec: dict, ctx: dict) -> KafkaExecutionContextAdapter:
     poll_timeout = _coerce_float(spec.get("poll_timeout_seconds", 5.0), "eca.kafka.poll_timeout_seconds")
     max_transient_errors = _coerce_int(spec.get("max_transient_errors", 3), "eca.kafka.max_transient_errors")
     assignment_timeout = _coerce_float(
-        spec.get("assignment_timeout_seconds", 30.0), "eca.kafka.assignment_timeout_seconds"
+        spec.get("assignment_timeout_seconds", 60.0), "eca.kafka.assignment_timeout_seconds"
     )
+
+    fetch_timeout = _coerce_float(spec.get("fetch_timeout_seconds", 60.0), "eca.kafka.fetch_timeout_seconds")
 
     try:
         from confluent_kafka import Consumer, TopicPartition
@@ -86,6 +89,7 @@ def _build(spec: dict, ctx: dict) -> KafkaExecutionContextAdapter:
             max_messages=max_messages,
             poll_timeout_seconds=poll_timeout,
             assignment_timeout_seconds=assignment_timeout,
+            fetch_timeout_seconds=fetch_timeout,
             max_transient_errors=max_transient_errors,
         )
     except ValueError as exc:
@@ -115,6 +119,8 @@ _registry.register_component(
         "poll_timeout_seconds": _PARAM,
         # How long to wait for the consumer group to assign partitions.
         "assignment_timeout_seconds": _PARAM,
+        # Maximum wait without progress while assigned partitions have unread data.
+        "fetch_timeout_seconds": _PARAM,
         # Retriable consumer errors tolerated per run before it fails.
         "max_transient_errors": _PARAM,
         "security_protocol": _PARAM,

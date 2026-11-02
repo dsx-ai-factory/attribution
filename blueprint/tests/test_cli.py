@@ -2031,3 +2031,22 @@ def test_only_attributed_summaries_count_as_evidence_verdicts(mocker, non_verdic
         )
     else:
         warning.assert_not_called()
+
+
+def test_incomplete_discovery_returns_failure_even_after_output_succeeds(
+    patched_pipeline,
+    clean_env,
+    monkeypatch,
+):
+    from types import SimpleNamespace
+
+    build = cli.build_config
+
+    def incomplete_config(merged):
+        config = build(merged)
+        config.execution_context_adapters[:] = [SimpleNamespace(discovery_incomplete=True)]
+        return config
+
+    monkeypatch.setattr(cli, "build_config", incomplete_config)
+    assert cli.main(["--connector", "eca", "slurm", "ids", "1"]) == 1
+    patched_pipeline.return_value.analyze.assert_called_once()

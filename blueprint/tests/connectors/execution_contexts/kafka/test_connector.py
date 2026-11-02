@@ -84,6 +84,12 @@ class FakeConsumer:
 
     def __init__(self, script, unassigned_polls=0, partitions=(0,), commit_errors=(), commit_raises=False):
         self._script = list(script)
+        self._positions = {}
+        self._highs = {}
+        for message in self._script:
+            if isinstance(message, FakeMessage) and message.error() is None:
+                partition = message.partition()
+                self._highs[partition] = max(self._highs.get(partition, 0), message.offset() + 1)
         self._unassigned_polls = unassigned_polls
         self.partitions = set(partitions)
         self._commit_errors = set(commit_errors)
@@ -102,7 +108,10 @@ class FakeConsumer:
         self.polls += 1
         while self._script and callable(self._script[0]):
             self._script.pop(0)(self)
-        return self._script.pop(0) if self._script else None
+        message = self._script.pop(0) if self._script else None
+        if message is not None and message.error() is None:
+            self._positions[message.partition()] = message.offset() + 1
+        return message
 
     def assignment(self):
         if self.polls <= self._unassigned_polls:
@@ -114,12 +123,22 @@ class FakeConsumer:
         if self._commit_raises:
             raise RuntimeError("coordinator unavailable")
         self.commits.append({tp.partition: tp.offset for tp in offsets})
-        return [
-            TP(tp.topic, tp.partition, tp.offset, "commit failed" if tp.partition in self._commit_errors else None)
-            for tp in offsets
-        ]
+        if any(tp.partition in self._commit_errors for tp in offsets):
+            # Match the native synchronous client: a failed partition can
+            # raise, including when other partitions in a mixed call committed.
+            raise RuntimeError("partition commit failed")
+        return [TP(tp.topic, tp.partition, tp.offset) for tp in offsets]
+
+    def position(self, partitions):
+        return [TP(tp.topic, tp.partition, self._positions.get(tp.partition, -1001)) for tp in partitions]
+
+    def get_watermark_offsets(self, tp, *, timeout, cached):
+        assert timeout > 0
+        assert cached is False
+        return 0, self._highs.get(tp.partition, 0)
 
     def seek(self, tp):
+        self._positions[tp.partition] = tp.offset
         self.seeks.append((tp.partition, tp.offset))
 
     def close(self):
@@ -349,7 +368,7 @@ def test_commits_explicit_offsets_per_partition():
     )
 
     assert [ctx["id"] for ctx in eca.discover()] == ["job-a1", "job-b7"]
-    assert consumer.commits == [{0: 8, 1: 1}]
+    assert consumer.commits == [{0: 8}, {1: 1}]
 
 
 def test_revoked_partition_is_committed_before_release():
@@ -413,11 +432,18 @@ def test_partial_commit_failure_drops_and_rewinds_that_partition():
     assert consumer.seeks == [(0, 3)]
 
 
-def test_commit_exception_raises():
-    eca, _ = _make_eca(_structured(_events()), commit_raises=True)
+def test_commit_exception_raises_and_revoke_cannot_commit_aborted_batch():
+    eca, consumer = _make_eca(_structured(_events()), commit_raises=True)
 
     with pytest.raises(KafkaConsumerError, match="offset commit failed"):
         eca.discover()
+    assert consumer.seeks == [(0, 0)]
+
+    consumer._commit_raises = False
+    # Invoke the callback the real Kafka consumer calls during close.
+    consumer.on_revoke(consumer, [TP(TOPIC, 0)])
+    eca.close()
+    assert consumer.commits == []
 
 
 def test_defaults_when_optional_fields_absent():
@@ -480,6 +506,7 @@ def test_consumer_closed_when_adapter_is_collected():
         ("max_messages", 0),
         ("poll_timeout_seconds", 0),
         ("assignment_timeout_seconds", -1),
+        ("fetch_timeout_seconds", 0),
         ("max_transient_errors", -1),
     ],
 )
@@ -518,3 +545,74 @@ def test_build_rejects_unknown_sasl_mechanism():
     }
     with pytest.raises(MCAError, match="sasl_mechanism"):
         build_kafka(spec, {})
+
+
+def test_empty_polls_do_not_end_discovery_before_partition_end():
+    eca, consumer = _make_eca([None, None, *_structured(_events())], poll_timeout_seconds=0.0001)
+
+    assert [ctx["id"] for ctx in eca.discover()] == ["job-a1", "job-b7"]
+    assert consumer.polls == 5
+
+
+def test_unread_partition_times_out_instead_of_returning_empty(monkeypatch):
+    eca, consumer = _make_eca([], fetch_timeout_seconds=0.01)
+    consumer._highs[0] = 1
+    tick = iter(range(1000))
+    monkeypatch.setattr(
+        "attribution_blueprint.connectors.execution_contexts.kafka.connector.time.monotonic",
+        lambda: next(tick) / 100,
+    )
+
+    with pytest.raises(KafkaConsumerError, match="unread records"):
+        eca.discover()
+    assert consumer.commits == []
+
+
+def test_discovery_counters_surface_filtered_and_malformed_events():
+    other = _events()[0]
+    other["type"] = "com.example.job.completed.v2"
+    eca, consumer = _make_eca([*_structured([other]), FakeMessage(b"not json", 1)])
+
+    assert eca.discover() == []
+    assert eca.last_discovery_stats["consumed"] == 2
+    assert eca.last_discovery_stats["filtered"] == 1
+    assert eca.last_discovery_stats["malformed"] == 1
+    assert eca.last_discovery_stats["returned"] == 0
+    assert eca.last_unmatched_event_types == {"com.example.job.completed.v2": 1}
+    assert eca.discovery_incomplete is True
+    assert consumer.commits == [{0: 2}]
+
+
+def test_partial_commit_failure_is_reported_but_keeps_successful_contexts():
+    eca, consumer = _make_eca(
+        [*_structured(_events()[:1], partition=0), *_structured(_events()[1:], partition=1)],
+        partitions=(0, 1),
+        commit_errors={0},
+    )
+
+    assert [ctx["id"] for ctx in eca.discover()] == ["job-b7"]
+    assert consumer.commits == [{0: 1}, {1: 1}]
+    assert eca.last_discovery_stats["commit_failed_partitions"] == 1
+    assert eca.discovery_incomplete is True
+
+
+def test_discovery_counters_reset_between_batches():
+    eca, _ = _make_eca(_structured([_events()[0], _events()[0]]))
+    assert len(eca.discover()) == 1
+    assert eca.last_discovery_stats["duplicates"] == 1
+    assert eca.discover() == []
+    assert not any(eca.last_discovery_stats.values())
+    assert eca.discovery_incomplete is False
+
+
+def test_partition_eof_can_confirm_committed_end_without_data_position():
+    class EndOfPartition(FakeError):
+        def name(self):
+            return "_PARTITION_EOF"
+
+    eca, consumer = _make_eca([FakeMessage(None, 3, error=EndOfPartition("end"))])
+    consumer._highs[0] = 3
+
+    assert eca.discover() == []
+    assert consumer.commits == []
+    assert eca.last_discovery_stats["consumed"] == 0

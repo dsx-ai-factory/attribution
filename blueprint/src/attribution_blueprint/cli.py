@@ -297,6 +297,14 @@ def _run_config(
     if aggregate_runs is not None:
         aggregate_runs.append((stats, summaries))
     _write_run_summary(stats, summaries)
+    # Kafka can return a successful subset after a partition commit fails,
+    # or no contexts when every event has an unexpected schema/type. Keep
+    # processing returned contexts, then surface the incomplete discovery.
+    if any(getattr(adapter, "discovery_incomplete", False) is True for adapter in config.execution_context_adapters):
+        logger.error(
+            "attribution run incomplete: execution-context discovery reported filtered-only events or commit failures"
+        )
+        return 1
     if attempted > 0 and succeeded == 0:
         logger.error(f"attribution run failed: 0/{attempted} contexts succeeded")
         return 1

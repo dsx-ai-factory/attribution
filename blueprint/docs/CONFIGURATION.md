@@ -518,17 +518,45 @@ treats the scheduler as unknown.
 ### `[eca.kafka]`
 
 Reads job-completion CloudEvents from a Kafka topic instead of querying a
-scheduler. Each run consumes the events published since the last run of the
-same `group_id`. Install the `kafka` extra (`confluent-kafka`).
+scheduler. Each run resumes from its `group_id`'s committed offsets; a new
+group starts according to `auto_offset_reset`. Install the `kafka` extra
+(`confluent-kafka`).
 
 Delivery is best effort. Offsets are committed when discovery returns, before
 attribution runs, so an event is lost if its attribution then fails (for
 example, the service is unreachable) or the process dies mid-run. To replay,
-reset the group's offsets with your Kafka tooling. A partition revoked or lost
-during a run, or whose commit fails, is left uncommitted and its events are
-redelivered on a later run. Fatal or non-retriable consumer errors, more than
-`max_transient_errors` retriable ones, a failed commit, or no partition
-assignment within `assignment_timeout_seconds` fail the run.
+reset the group's offsets with your Kafka tooling.
+
+During a normal rebalance, pending offsets for revoked partitions are committed
+before release, and their successfully committed contexts remain in the batch.
+Lost partitions are not committed, and their contexts are dropped. Each partition
+is committed independently because the native Kafka client can raise on a mixed
+commit after other partitions have already committed. Failed partitions' contexts
+are dropped and still-owned partitions are rewound to their first uncommitted
+record. A commit error may mean the broker applied the offset but its reply was
+lost; redelivery after restart is therefore not guaranteed. Failed discovery
+calls clear pending commits before cleanup and rewind still-owned uncommitted
+records, allowing the same adapter to retry without skipping them.
+
+A single empty poll does not mean the topic is drained. Discovery compares
+consumer positions and partition EOF notifications with broker end offsets for
+every assigned partition, including consumers already at their committed end. It waits
+up to `fetch_timeout_seconds` without progress while unread records remain.
+`poll_timeout_seconds` only controls individual polls. Failure to query the end
+offsets, exhausted assignment/fetch waits, fatal or non-retriable consumer errors,
+and more than `max_transient_errors` retriable errors fail discovery.
+
+Every call logs a discovery summary. The adapter exposes `last_discovery_stats`
+with `consumed`, `accepted`, `filtered`, `malformed`, `duplicates`, `returned`,
+`commit_failed_partitions`, and `dropped_partitions` counts, plus
+`last_unmatched_event_types` containing filtered type counts. Filtered events are
+still committed; their types and counts are logged as a warning. The CLI exits 1
+when a nonempty batch has filtered events but no accepted events, so a schema/type
+change cannot silently appear successful. Mixed batches still process accepted
+events and show the filter counts. If any partition commit fails, successfully
+committed contexts are processed but the CLI exits 1; if none can be returned,
+discovery raises. Library callers can inspect `discovery_incomplete` to detect
+these conditions. Diagnostics reset at the beginning of each discovery call.
 
 The event `data` object uses ExecutionContext field names: `id`, `start_time`,
 `end_time` (with UTC offset) and a non-empty `nodes` list are required;
@@ -568,8 +596,9 @@ sasl_password_env = "KAFKA_PASSWORD"
 | `scheduler`                  | No                | `kafka`     | Scheduler identity for events whose data has no `scheduler`.                             |
 | `workload_type`              | No                | empty       | Workload type sent to the service.                                                       |
 | `max_messages`               | No                | `500`       | Maximum messages read per run.                                                           |
-| `poll_timeout_seconds`       | No                | `5`         | Idle time after which the topic is treated as drained.                                   |
-| `assignment_timeout_seconds` | No                | `30`        | How long to wait for the group to assign partitions before the run fails.                |
+| `poll_timeout_seconds`       | No                | `5`         | Timeout for an individual poll; end offsets determine whether the batch is drained.      |
+| `assignment_timeout_seconds` | No                | `60`        | Maximum unassigned wait before the run fails; exceeds the default 45 s session timeout.  |
+| `fetch_timeout_seconds`      | No                | `60`        | Maximum wait without progress while assigned partitions still have unread records.       |
 | `max_transient_errors`       | No                | `3`         | Retriable consumer errors tolerated per run before it fails.                             |
 | `security_protocol`          | No                | `PLAINTEXT` | `PLAINTEXT`, `SSL`, `SASL_PLAINTEXT`, or `SASL_SSL`.                                     |
 | `sasl_mechanism`             | With `SASL_*`     | none        | `PLAIN`, `SCRAM-SHA-256`, or `SCRAM-SHA-512`.                                            |
