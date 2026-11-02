@@ -405,7 +405,10 @@ def test_failure_after_revoke_commits_nothing_past_unreturned_records():
     assert consumer.commits == [{0: 4}]
 
 
-def test_failed_bookmark_commit_does_not_fail_discovery():
+def test_failed_bookmark_commit_marks_discovery_incomplete():
+    # The revoked records are still reread by the next owner, but without the
+    # bookmark a new `latest` group could skip them, so the run must not look
+    # complete.
     eca, consumer = _make_eca(
         [*_structured(_events()[:1], partition=0), revoke(0), *_structured(_events()[1:], partition=1)],
         partitions=(0, 1),
@@ -413,7 +416,26 @@ def test_failed_bookmark_commit_does_not_fail_discovery():
     )
 
     assert [ctx["id"] for ctx in eca.discover()] == ["job-b7"]
-    assert eca.discovery_incomplete is False
+    assert eca.discovery_incomplete is True
+    assert eca.last_discovery_stats["commit_failed_partitions"] == 1
+
+
+def test_bookmark_partition_error_result_marks_discovery_incomplete():
+    eca, consumer = _make_eca(
+        [*_structured(_events()[:1], partition=0), revoke(0), *_structured(_events()[1:], partition=1)],
+        partitions=(0, 1),
+    )
+    commit = consumer.commit
+
+    def commit_with_partition_error(*, offsets, asynchronous):
+        if offsets[0].partition == 0:
+            return [TP(TOPIC, 0, offsets[0].offset, error="not coordinator")]
+        return commit(offsets=offsets, asynchronous=asynchronous)
+
+    consumer.commit = commit_with_partition_error
+
+    assert [ctx["id"] for ctx in eca.discover()] == ["job-b7"]
+    assert eca.discovery_incomplete is True
 
 
 def test_lost_partition_is_dropped_and_not_committed():

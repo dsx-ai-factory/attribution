@@ -563,7 +563,8 @@ when a nonempty batch has filtered events but no accepted events, so a schema/ty
 change cannot silently appear successful. Mixed batches still process accepted
 events and show the filter counts. If any partition commit fails, successfully
 committed contexts are processed but the CLI exits 1; if none can be returned,
-discovery raises. Library callers can inspect `discovery_incomplete` to detect
+discovery raises. A revoked partition whose starting-point commit fails is also
+counted in `commit_failed_partitions` and makes the CLI exit 1. Library callers can inspect `discovery_incomplete` to detect
 these conditions. Diagnostics reset at the beginning of each discovery call.
 
 The event `data` object uses ExecutionContext field names: `id`, `start_time`,

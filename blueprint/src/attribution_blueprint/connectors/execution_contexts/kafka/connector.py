@@ -232,6 +232,9 @@ class KafkaExecutionContextAdapter:
         self.last_unmatched_event_types: dict[str, int] = {}
         self.discovery_incomplete = False
         self._commit_failures: set[PartitionKey] = set()
+        # Revoke bookmarks that did not commit: nothing is dropped for them,
+        # but the run is reported incomplete.
+        self._bookmark_failures: set[PartitionKey] = set()
         self._end_offsets: dict[PartitionKey, int] = {}
         # Per-batch state, also touched by the rebalance callbacks that run
         # inside `poll`: first uncommitted and next offset per partition, and
@@ -251,6 +254,7 @@ class KafkaExecutionContextAdapter:
         self._batch = []
         self._released = 0
         self._commit_failures = set()
+        self._bookmark_failures = set()
         self._end_offsets = {}
         self.last_discovery_stats = dict.fromkeys(
             (
@@ -270,7 +274,7 @@ class KafkaExecutionContextAdapter:
         try:
             contexts = self._discover_batch()
             self.last_discovery_stats["returned"] = len(contexts)
-            self.discovery_incomplete = bool(self._commit_failures) or (
+            self.discovery_incomplete = bool(self._commit_failures or self._bookmark_failures) or (
                 self.last_discovery_stats["filtered"] > 0 and self.last_discovery_stats["accepted"] == 0
             )
             return contexts
@@ -279,7 +283,7 @@ class KafkaExecutionContextAdapter:
             self._abandon_batch()
             raise
         finally:
-            self.last_discovery_stats["commit_failed_partitions"] = len(self._commit_failures)
+            self.last_discovery_stats["commit_failed_partitions"] = len(self._commit_failures | self._bookmark_failures)
             logger.info(f"kafka ECA: discovery summary {self.last_discovery_stats}")
             if self.last_unmatched_event_types:
                 logger.warning(
@@ -456,11 +460,18 @@ class KafkaExecutionContextAdapter:
             self._first.pop(key, None)
 
     def _bookmark(self, offsets: dict[PartitionKey, int]) -> None:
-        """Best-effort commit of first unreturned offsets; skips nothing."""
+        """Commit first unfinished offsets; skips nothing. A failure is recorded
+        so the run is reported incomplete: without the bookmark, a group with
+        no prior commit that resets to `latest` could skip these records."""
         for (topic, partition), offset in sorted(offsets.items()):
             try:
-                self._consumer.commit(offsets=[self._topic_partition(topic, partition, offset)], asynchronous=False)
+                results = self._consumer.commit(
+                    offsets=[self._topic_partition(topic, partition, offset)], asynchronous=False
+                )
+                if not results or any(getattr(tp, "error", None) is not None for tp in results):
+                    raise KafkaConsumerError("commit returned no successful partition result")
             except Exception as exc:
+                self._bookmark_failures.add((topic, partition))
                 logger.warning(f"kafka ECA: cannot commit {topic}[{partition}] at offset {offset} on revoke: {exc}")
 
     def _commit(self, offsets: dict[PartitionKey, int]) -> set[PartitionKey]:
