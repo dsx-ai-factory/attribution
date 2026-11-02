@@ -2843,6 +2843,29 @@ class TestExternalTerminationCascade:
 
         assert self._run_rxpipe_at(stream, obs_ctx, ji, job_end + offset) is demoted
 
+    def test_teardown_rxpipe_keeps_earlier_cascade_failure_on_other_node(self, stream, obs_ctx):
+        """A cascade symptom logged before the teardown is an independent failure and stays bad."""
+        job_end = _DEFAULT_START + timedelta(minutes=60)
+        ji = _slurm_job_info(state="PREEMPTED", job_end_time=job_end)
+        earlier_source = _make_source(obs_ctx, job_end - timedelta(minutes=10), datum="earlier failure", line_num=1)
+        rxpipe_source = _make_source(obs_ctx, job_end - timedelta(seconds=5), datum="teardown RXPIPE", line_num=2)
+        earlier = ("XID-145-RLW_SRC_TRACK-8", "cudaErrorLaunchFailure")
+        symptoms = SymptomSet()
+        bad_nodes = JobNodeAttributions()
+        for symptom in earlier:
+            symptoms.add(SourceSet(symptom).add(earlier_source))
+            bad_nodes.add(["node01"], SourceSet(symptom).add(earlier_source))
+        symptoms.add(SourceSet(self._RXPIPE).add(rxpipe_source))
+        bad_nodes.add(["node02"], SourceSet(self._RXPIPE).add(rxpipe_source))
+
+        _run(stream, ji, symptoms, bad_nodes)
+
+        assert self._RXPIPE not in symptoms
+        assert not bad_nodes["node02"].has_bad()
+        for symptom in earlier:
+            assert symptom in symptoms
+            assert symptom in bad_nodes["node01"].attributions
+
     def test_failed_job_with_stale_step_timeout_keeps_pre_end_xid(self, stream, obs_ctx):
         """A step timeout far from the job end does not open the pre-end window of a failed job."""
         job_end = _DEFAULT_START + timedelta(minutes=60)

@@ -38,6 +38,8 @@ from attribution_lib.rules import (
     refiner_def,
 )
 from attribution_lib.bundled_rules.common.scrub_helpers import (
+    XID_145_CASCADE_SYMPTOMS,
+    XID_145_RXPIPE_CASCADE_SYMPTOMS,
     clean_bad_nodes_of_cascaded_symptoms,
     filter_cascade_symptoms_symptomset,
     filter_xid_145_cascade_symptoms,
@@ -1484,8 +1486,22 @@ def external_termination_cascade(context: RefinerContext):
 
     # Preserve the existing XID-145 cascade cleanup while RXPIPE is still bad;
     # post-outcome filtering cannot detect the trigger after it is demoted here.
-    if _XID145_RXPIPE_SYMPTOM in symptoms and any(is_teardown(s) for s in symptoms[_XID145_RXPIPE_SYMPTOM]):
-        filter_xid_145_cascade_symptoms(symptoms, my_bad_nodes)
+    # A cascade symptom logged before the first teardown RXPIPE did not come from
+    # it, so it is an independent failure and the cleanup must not remove it.
+    rxpipe_sources = symptoms[_XID145_RXPIPE_SYMPTOM] if _XID145_RXPIPE_SYMPTOM in symptoms else ()
+    rxpipe_times = [t for s in rxpipe_sources if is_teardown(s) and (t := placed_time(s)) is not None]
+    if len(rxpipe_times) > 0:
+        first_rxpipe = min(rxpipe_times)
+        cascades = (*XID_145_CASCADE_SYMPTOMS, *XID_145_RXPIPE_CASCADE_SYMPTOMS)
+        earlier_cascade = any(
+            (source_time := placed_time(source)) is not None and source_time < first_rxpipe and not is_teardown(source)
+            for group in groups
+            for symptom, sources in group.items()
+            if any(cascade in symptom for cascade in cascades)
+            for source in sources
+        )
+        if earlier_cascade is False:
+            filter_xid_145_cascade_symptoms(symptoms, my_bad_nodes)
 
     for group in groups:
         for symptom, sources in list(group.items()):
