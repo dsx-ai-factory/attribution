@@ -10,6 +10,7 @@ from loguru import logger
 from attribution_blueprint.connectors.auth import Auth
 from attribution_blueprint.connectors.metrics.promql.client import (
     PrometheusClient,
+    promql_string_content,
     re2_escape,
 )
 from attribution_blueprint.connectors.metrics.promql.templates import TEMPLATES
@@ -146,8 +147,11 @@ class PromQLMetricsConnector:
         # Each node lands inside a PromQL `=~ "..."` regex on the node label,
         # so regex metacharacters in hostnames would silently broaden the
         # match. Escape only RE2 metacharacters so common hyphenated hostnames
-        # don't produce invalid regexes.
-        nodes_regex = "|".join(re2_escape(n) for n in nodes)
+        # don't produce invalid regexes. Templates place `{nodes}` inside a
+        # double-quoted string literal, so the regex's backslashes must be
+        # escaped again: a bare `\.` is an invalid string escape and the query
+        # is rejected with HTTP 400.
+        nodes_regex = promql_string_content("|".join(re2_escape(n) for n in nodes))
         for name, tmpl in self._templates.items():
             try:
                 query = tmpl.format(

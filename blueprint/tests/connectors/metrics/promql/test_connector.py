@@ -76,7 +76,7 @@ def test_node_regex_does_not_backslash_escape_hyphens(mocker):
     query = post.call_args.kwargs["data"]["query"]
     assert "\\-" not in query
     assert "example-node-014" in query
-    assert "host\\.example\\.com" in query
+    assert r"host\\.example\\.com" in query
 
 
 def test_uses_seconds_for_time_window(mocker):
@@ -321,8 +321,9 @@ def test_node_names_are_regex_escaped(mocker):
     _, kwargs = post.call_args
     # `.` and `[`, `]` must be escaped; the pipe between alternates stays.
     query = kwargs["data"]["query"]
-    assert r"host\.example\.com" in query
-    assert r"host\[01\]\.cluster" in query
+    # The regex sits inside a double-quoted PromQL string, so each regex
+    # backslash is itself escaped (`\\.`); a bare `\.` is rejected by the server.
+    assert r'net_host_name=~"host\\.example\\.com|host\\[01\\]\\.cluster"' in query
     # Plain pipe-join (which would let "hostXexample-com" match) must NOT appear.
     assert "host.example.com|host[01].cluster" not in query
 

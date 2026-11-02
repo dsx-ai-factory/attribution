@@ -924,7 +924,8 @@ the connector uses the configured `cluster` value for the observation.
 
 Each template may use `{name}` (the template's own name), `{cluster}` (the
 configured cluster value), `{nodes}` (a regex alternation of the context's node
-names), `{node_label}`, and `{cluster_label}` (the configured label names).
+names, escaped for use inside a double-quoted string such as `=~"{nodes}"`),
+`{node_label}`, and `{cluster_label}` (the configured label names).
 Literal `{` and `}` in PromQL label selectors must be doubled (`{{`, `}}`).
 Existing custom queries with literal label names still work; use the label
 placeholders when a query should follow the configured mapping. For example:
