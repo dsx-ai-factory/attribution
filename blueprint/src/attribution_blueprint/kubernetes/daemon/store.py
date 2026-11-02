@@ -106,6 +106,7 @@ class ObservationJournal(Protocol):
         resource_version: str,
         completed_at: str,
         gap_id: int | None,
+        active_resource_uids: set[str] | None = None,
     ) -> None: ...
 
     def mark_watch_checkpoint(

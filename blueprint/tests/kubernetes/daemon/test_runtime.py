@@ -11,6 +11,7 @@ import pytest
 from attribution_blueprint.kubernetes.daemon.models import (
     PlacementRecord,
     ResourceIdentity,
+    ResourceObservation,
 )
 from attribution_blueprint.kubernetes.daemon.resolvers import ResolutionPending
 from attribution_blueprint.kubernetes.daemon.runtime import (
@@ -689,10 +690,10 @@ def test_reassigned_owner_refreshes_controller_reference_for_later_fallback(tmp_
     reassigned["metadata"]["ownerReferences"][0]["uid"] = "job-uid-2"
     reassigned["metadata"]["resourceVersion"] = "2"
 
-    assert daemon._capture(_PodWatchSource(), reassigned, "MODIFIED") is True
+    assert daemon._capture(_PodWatchSource(), reassigned, "SNAPSHOT") is True
     daemon._record(reassigned)
     pending = {**reassigned, "metadata": {**reassigned["metadata"], "resourceVersion": "3"}}
-    assert daemon._capture(_PodWatchSource(), pending, "MODIFIED") is True
+    assert daemon._capture(_PodWatchSource(), pending, "SNAPSHOT") is True
     daemon._record(pending)
 
     stored = store.get_by_pod_uid("pod-uid-1")
@@ -876,7 +877,13 @@ def test_failed_capture_preserves_earlier_queued_generation(tmp_path, mocker):
 def test_stale_event_still_persists_failure_and_deletion_evidence(tmp_path):
     path = tmp_path / "placements.db"
     store = SQLitePlacementStore(str(path))
-    daemon = KubernetesDaemon(core_api=None, store=store, namespace="team-a")
+    _initialize_pod_coverage(store)
+    daemon = KubernetesDaemon(
+        core_api=None,
+        store=store,
+        namespace="team-a",
+        cluster_id="cluster-a",
+    )
     pod = _pod()
     pod["status"]["reason"] = "NodeLost"
 
@@ -1267,7 +1274,7 @@ def test_newer_pod_event_waits_instead_of_racing_the_in_flight_attempt(tmp_path)
     reassigned = _pod()
     reassigned["metadata"]["ownerReferences"][0]["uid"] = "job-uid-2"
     reassigned["metadata"]["resourceVersion"] = "2"
-    assert daemon._capture(_PodWatchSource(), reassigned, "MODIFIED") is True
+    assert daemon._capture(_PodWatchSource(), reassigned, "SNAPSHOT") is True
 
     # The newer snapshot is queued for this Pod UID, but no worker may start
     # it while the older attempt is still in flight.
@@ -1535,6 +1542,53 @@ def test_watch_records_snapshots_updates_and_deletions(tmp_path):
     assert coverage is not None
     assert coverage.resource_version == "12"
     assert daemon.health.initial_list_complete is True
+
+
+def test_complete_watch_relist_marks_missing_resource_absent(tmp_path):
+    store = SQLitePlacementStore(str(tmp_path / "placements.db"))
+    retained = ResourceObservation(
+        cluster_id="cluster-a",
+        api_version="kueue.x-k8s.io/v1beta1",
+        kind="Workload",
+        namespace="team-a",
+        name="trainer",
+        uid="workload-uid-1",
+        resource_version="9",
+        event_type="MODIFIED",
+        observed_at="2026-10-14T00:00:00Z",
+        status={"conditions": [{"type": "Admitted", "status": "True"}]},
+    )
+    store.capture_observation(
+        retained,
+        source_name="workloads",
+        placement=None,
+        advance_checkpoint=False,
+    )
+    source = _FinitePodWatchSource([], [])
+    source.name = "workloads"
+    source.api_version = retained.api_version
+    source.kind = retained.kind
+    daemon = KubernetesDaemon(
+        core_api=None,
+        store=store,
+        namespace="team-a",
+        cluster_id="cluster-a",
+        watch_sources=(source,),
+    )
+    source.daemon = daemon
+
+    daemon._watch_source(source)
+
+    history = store.list_observations_for_uid(
+        "cluster-a",
+        "team-a",
+        retained.uid,
+    )
+    assert [observation.event_type for observation in history] == [
+        "MODIFIED",
+        "DELETED",
+    ]
+    assert (history[-1].selected_metadata or {}).get("deletionTimestamp") is None
 
 
 def test_watch_replays_failed_write_from_last_persisted_resource_version(tmp_path):

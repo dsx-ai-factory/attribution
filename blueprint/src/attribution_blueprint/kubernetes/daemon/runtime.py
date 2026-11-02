@@ -210,6 +210,11 @@ class KubernetesDaemon:
                         resource_version=listed_resource_version,
                         completed_at=completed_at,
                         gap_id=gap_id,
+                        active_resource_uids={
+                            uid
+                            for resource in resources
+                            if (uid := (resource.get("metadata") or {}).get("uid"))
+                        },
                     )
                     gap_id = None
                     pending_gap_reason = None
@@ -247,7 +252,6 @@ class KubernetesDaemon:
                     pending_gap_reason = "RESOURCE_VERSION_EXPIRED"
                     pending_gap_resource_version = resource_version
                     resource_version = None
-                    self._mark_initial_list_incomplete(source.name)
                     continue
                 if error.status == 404 and source.kind == "JobSet":
                     logger.warning(
@@ -330,11 +334,6 @@ class KubernetesDaemon:
         with self._initial_lists_lock:
             self._initial_lists_complete.discard(source_name)
             self.health.update(initial_list_complete=False)
-
-    def _mark_initial_list_incomplete(self, source_name: str) -> None:
-        with self._initial_lists_lock:
-            self._initial_lists_complete.discard(source_name)
-        self.health.update(initial_list_complete=False)
 
     def _mark_watch_checkpoint(
         self,

@@ -403,9 +403,21 @@ class SQLitePlacementStore:
         resource_version: str,
         completed_at: str,
         gap_id: int | None,
+        active_resource_uids: set[str] | None = None,
     ) -> None:
         with self._connection() as connection:
             connection.execute("BEGIN IMMEDIATE")
+            if active_resource_uids is not None:
+                self._mark_absent_resources(
+                    connection,
+                    cluster_id=cluster_id,
+                    namespace=namespace,
+                    api_version=api_version,
+                    kind=kind,
+                    active_resource_uids=active_resource_uids,
+                    resource_version=resource_version,
+                    observed_at=completed_at,
+                )
             connection.execute(
                 """
                 INSERT INTO watch_coverage(
@@ -448,6 +460,49 @@ class SQLitePlacementStore:
                 )
                 if cursor.rowcount != 1:
                     raise RuntimeError(f"coverage gap {gap_id} is missing or already completed")
+
+    def _mark_absent_resources(
+        self,
+        connection: sqlite3.Connection,
+        *,
+        cluster_id: str,
+        namespace: str,
+        api_version: str,
+        kind: str,
+        active_resource_uids: set[str],
+        resource_version: str,
+        observed_at: str,
+    ) -> None:
+        rows = connection.execute(
+            """
+            WITH latest AS (
+                SELECT uid, MAX(id) AS observation_id
+                FROM resource_observation
+                WHERE cluster_id = ? AND namespace = ?
+                  AND api_version = ? AND kind = ?
+                GROUP BY uid
+            )
+            SELECT observation.*
+            FROM resource_observation AS observation
+            JOIN latest ON latest.observation_id = observation.id
+            """,
+            (cluster_id, namespace, api_version, kind),
+        ).fetchall()
+        for row in rows:
+            latest = _observation_from_row(row)
+            if latest.uid in active_resource_uids or latest.event_type == "DELETED":
+                continue
+            # Relist absence proves retirement, but not the exact deletion time.
+            # Preserve source metadata so consumers only use a real deletionTimestamp.
+            self._append_observation(
+                connection,
+                replace(
+                    latest,
+                    resource_version=f"{resource_version}:relist-absence",
+                    event_type="DELETED",
+                    observed_at=observed_at,
+                ),
+            )
 
     def mark_watch_checkpoint(
         self,

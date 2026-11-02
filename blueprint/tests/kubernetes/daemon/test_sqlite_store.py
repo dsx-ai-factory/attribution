@@ -488,8 +488,8 @@ def test_active_root_controller_protects_expired_workload_group(tmp_path):
             ]
         },
     )
-    store.append_observation(controller)
-    store.append_observation(workload)
+    _capture(store, controller)
+    _capture(store, workload)
 
     reopened = SQLitePlacementStore(str(path), retention_days=1)
 
@@ -548,8 +548,8 @@ def test_recently_completed_root_protects_expired_workload_group(tmp_path):
             ]
         },
     )
-    store.append_observation(controller)
-    store.append_observation(workload)
+    _capture(store, controller)
+    _capture(store, workload)
 
     reopened = SQLitePlacementStore(str(path), retention_days=1)
 
@@ -619,7 +619,7 @@ def test_expired_owner_preserves_history_reassigned_to_active_owner(tmp_path):
         active_job,
         reassigned_pod,
     ):
-        store.append_observation(observation)
+        _capture(store, observation)
 
     reopened = SQLitePlacementStore(str(path), retention_days=1)
 
@@ -680,7 +680,7 @@ def test_recent_terminal_without_terminal_timestamp_uses_observation_time(
             "startTime": old_start,
         },
     )
-    store.append_observation(pod)
+    _capture(store, pod)
 
     reopened = SQLitePlacementStore(str(path), retention_days=1)
 
@@ -689,6 +689,62 @@ def test_recent_terminal_without_terminal_timestamp_uses_observation_time(
         "team-a",
         pod.uid,
     ) == [pod]
+
+
+def test_complete_relist_expires_absent_active_workload_history(tmp_path):
+    store = SQLitePlacementStore(str(tmp_path / "placements.db"), retention_days=1)
+    old = (datetime.now(timezone.utc) - timedelta(days=2)).isoformat()
+    active = _history_observation(
+        kind="Workload",
+        name="active-workload",
+        uid="active-workload-uid",
+        observed_at=old,
+        status={"conditions": [{"type": "Admitted", "status": "True"}]},
+    )
+    absent = replace(
+        active,
+        name="absent-workload",
+        uid="absent-workload-uid",
+    )
+    _capture(store, active)
+    _capture(store, absent)
+
+    store.complete_watch_list(
+        cluster_id="cluster-a",
+        namespace="team-a",
+        source_name="workloads",
+        api_version="v1",
+        kind="Workload",
+        resource_version="10",
+        completed_at=old,
+        gap_id=None,
+        active_resource_uids={active.uid},
+    )
+
+    absent_history = store.list_observations_for_uid(
+        "cluster-a",
+        "team-a",
+        absent.uid,
+    )
+    assert [observation.event_type for observation in absent_history] == [
+        "MODIFIED",
+        "DELETED",
+    ]
+    assert absent_history[-1].observed_at == old
+    assert (absent_history[-1].selected_metadata or {}).get("deletionTimestamp") is None
+
+    store.prune_expired()
+
+    assert store.list_observations_for_uid(
+        "cluster-a",
+        "team-a",
+        active.uid,
+    ) == [active]
+    assert store.list_observations_for_uid(
+        "cluster-a",
+        "team-a",
+        absent.uid,
+    ) == []
 
 
 def test_newer_active_workload_protects_owner_group_from_late_old_terminal(
