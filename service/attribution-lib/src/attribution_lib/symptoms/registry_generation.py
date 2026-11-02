@@ -310,10 +310,7 @@ class GeneratedSymptomRegistry:
         normalized_symptoms = sorted(symptoms)
         # Supersede only outcome mappings; retain symptoms and their evidence.
         superseded_mappings: set[str] = set()
-        if any(
-            symptom in normalized_symptoms
-            for symptom in ("detected bad NIC state", "irisc not responding", "Corroborated local HCA command failure")
-        ):
+        if any(symptom in normalized_symptoms for symptom in ("detected bad NIC state", "irisc not responding")):
             superseded_mappings.update(
                 (
                     "Call to ibv_modify_qp failed",
@@ -322,13 +319,6 @@ class GeneratedSymptomRegistry:
                     "Call to ibv_modify_qp failed: eno 22 invalid argument",
                     "Call to ibv_modify_qp failed: eno 11 resource unavailable",
                     "ibv_open_device failed",
-                )
-            )
-        if "Corroborated local HCA command failure" in normalized_symptoms:
-            superseded_mappings.update(
-                (
-                    "Local HCA command failure (ibv_modify_qp eno 11)",
-                    "Local HCA command failure (ibv_modify_qp eno 110)",
                 )
             )
         for tier_index, mapping_list in enumerate(self.outcome_rules):

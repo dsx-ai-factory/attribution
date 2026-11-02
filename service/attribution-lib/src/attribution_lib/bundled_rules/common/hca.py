@@ -204,7 +204,7 @@ def attribute_local_hca_failures(context: RefinerContext) -> None:
     for verbs in by_device.values():
         for sources in verbs.values():
             sources.sort(key=lambda source: source.time)
-    corroborating_sources = []
+    consumed_sources = []
     for command in commands:
         symptom = command_symptom(command.verb, command.errno)
         proof = []
@@ -236,9 +236,10 @@ def attribute_local_hca_failures(context: RefinerContext) -> None:
             for matched_symptom, source in corroboration:
                 combined.add(source)
                 if matched_symptom in _NIC_SYSLOG:
-                    corroborating_sources.append((command.node, matched_symptom, source))
+                    consumed_sources.append((command.node, matched_symptom, source))
             nodes.add([command.node], combined)
-    # Demote only proofs consumed by the compound, after all commands have been
-    # examined. Independent nodes, episodes and outcomes remain available.
-    for node, symptom, source in corroborating_sources:
+            consumed_sources.append((command.node, symptom, command.source))
+    # Demote only command and syslog sources used by the compound, after all
+    # commands have been examined. Other nodes, devices and episodes stay selected.
+    for node, symptom, source in consumed_sources:
         nodes[node].attributions[symptom].discard_selected(SourceSet(symptom).add(source))

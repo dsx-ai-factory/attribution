@@ -202,7 +202,10 @@ def test_device_less_wrapper_needs_unambiguous_same_thread_anchor(run, ambiguous
 def test_irisc_corroboration_requires_same_device_and_time(run, device, offset, qualified):
     log = "mlx5_core 0000:03:00.3: Health issue observed, irisc not responding, severity(3) ERROR:"
     result, _ = run([(verb("ibv_reg_mr", device=device), 0)], [("node-a", log, offset)])
-    assert any("ibv_reg_mr eno 11" in s for s in exported(result)[0]["node-a"]) == qualified
+    bad, interesting = exported(result)
+    assert ("Corroborated local HCA command failure" in bad["node-a"]) == qualified
+    assert "Local HCA command failure (ibv_reg_mr eno 11)" in interesting["node-a"]
+    assert "Local HCA command failure (ibv_reg_mr eno 11)" not in bad["node-a"]
 
 
 def test_health_compromised_is_not_corroboration(run):
@@ -277,7 +280,10 @@ def test_initialization_corroboration_requires_complete_same_pci_diagnosis(
         [(verb("ibv_reg_mr", device="0000:03:00.3"), end_offset - 1)],
         [("node-a", first, end_offset + 1), ("node-a", second, end_offset + second_offset)],
     )
-    assert any("ibv_reg_mr eno 11" in s for s in exported(result)[0].get("node-a", set())) == qualified
+    bad, interesting = exported(result)
+    assert ("Corroborated local HCA command failure" in bad.get("node-a", set())) == qualified
+    assert "Local HCA command failure (ibv_reg_mr eno 11)" in interesting["node-a"]
+    assert "Local HCA command failure (ibv_reg_mr eno 11)" not in bad.get("node-a", set())
 
 
 def test_single_initialization_message_is_not_corroboration(run, job):
@@ -295,6 +301,58 @@ def test_corroborated_local_failure_has_known_nic_classification(run, errno):
     assert outcome.outcome == "Fail InfraHW"
     assert outcome.hw_cause == "Known HW Cause - Node (NIC)"
     assert outcome.root_cause_symptom == "Corroborated local HCA command failure"
+
+
+@pytest.mark.parametrize("errno", [11, 110])
+@pytest.mark.parametrize("reverse", [False, True])
+@pytest.mark.parametrize(
+    "other_node,other_device,offset",
+    [
+        ("node-b", "0000:03:00.3", 0),
+        ("node-a", "0000:04:00.3", 0),
+        ("node-a", "0000:03:00.3", 302),
+    ],
+)
+def test_compound_only_supersedes_its_qp_sources(run, graphs, errno, reverse, other_node, other_device, offset):
+    """Keep independent QP evidence across nodes, devices and failure episodes."""
+    matched = modify(errno, "N/A", "N/A", "0000:03:00.3")
+    independent = modify(errno, "N/A", "N/A", other_device).replace("node-a:123:456", f"{other_node}:789:987")
+    baseline, _ = run([(independent, offset)])
+    lines = [(matched, 0), (independent, offset)]
+    if reverse:
+        lines.reverse()
+    log = "mlx5_core 0000:03:00.3: Health issue observed, irisc not responding, severity(3) ERROR:"
+    result, stream = run(lines, [("node-a", log, 1)])
+    assert result.outcome_attr.value() == baseline.outcome_attr.value()
+    bad, interesting = exported(result)
+    symptom = f"Local HCA command failure (ibv_modify_qp eno {errno})"
+    compound = "Corroborated local HCA command failure"
+    assert compound in bad["node-a"]
+    assert symptom in bad[other_node]
+    assert symptom in interesting["node-a"]
+    nodes = result.bad_nodes_attr.my_bad_nodes
+    assert {source.datum for source in nodes[other_node].attributions[symptom]} == {independent}
+    assert {source.datum for source in nodes["node-a"].attributions[compound]} == {matched, log}
+    assert matched in {source.datum for source in nodes["node-a"].attributions[symptom].all_sources()}
+    graph = json.dumps(graphs[stream.ctx_id])
+    assert matched in graph and independent in graph
+
+
+@pytest.mark.parametrize("errno", [11, 110])
+def test_matched_qp_is_preserved_as_compound_evidence(run, graphs, errno):
+    """Replace only the corroborated command's selected symptom, retaining provenance."""
+    line = modify(errno, "N/A", "N/A", "0000:03:00.3")
+    log = "mlx5_core 0000:03:00.3: Health issue observed, irisc not responding, severity(3) ERROR:"
+    result, stream = run([(line, 0)], [("node-a", log, 1)])
+    assert result.outcome_attr.value().root_cause_symptom == "Corroborated local HCA command failure"
+    assert result.outcome_attr.value().hw_cause == "Known HW Cause - Node (NIC)"
+    bad, interesting = exported(result)
+    symptom = f"Local HCA command failure (ibv_modify_qp eno {errno})"
+    assert symptom not in bad["node-a"]
+    assert symptom in interesting["node-a"]
+    group = result.bad_nodes_attr.my_bad_nodes["node-a"].attributions
+    assert {source.datum for source in group["Corroborated local HCA command failure"]} == {line, log}
+    assert line in json.dumps(graphs[stream.ctx_id])
 
 
 def test_standalone_nic_diagnosis_keeps_existing_classification(run):
