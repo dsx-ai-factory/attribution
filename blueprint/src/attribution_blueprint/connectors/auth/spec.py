@@ -9,22 +9,22 @@ from attribution_blueprint.connectors.auth.token import TokenAuth
 from attribution_blueprint.exceptions import MCAError
 
 
-def build_auth(spec: dict, component: str) -> Auth:
+def build_auth(spec: dict, config_path: str) -> Auth:
     atype = spec.get("type")
     if atype == "token":
         env_name = spec.get("token_env")
         if not env_name:
-            raise MCAError(f"{component}.auth type=token requires token_env")
+            raise MCAError(f"{config_path}.auth type=token requires token_env")
         if env_name not in os.environ:
             raise MCAError(f"auth.token_env references unset environment variable: {env_name}")
         return TokenAuth(token=os.environ[env_name], org_id=spec.get("org_id"))
     if atype == "mtls":
         if not spec.get("cert_path") or not spec.get("key_path"):
-            raise MCAError(f"{component}.auth type=mtls requires cert_path and key_path")
+            raise MCAError(f"{config_path}.auth type=mtls requires cert_path and key_path")
         return MTLSAuth(
             cert_path=spec["cert_path"],
             key_path=spec["key_path"],
             ca_cert_path=spec.get("ca_cert_path"),
             org_id=spec.get("org_id"),
         )
-    raise MCAError(f"unknown auth type: {atype!r}")
+    raise MCAError(f"unknown {config_path}.auth type: {atype!r}")

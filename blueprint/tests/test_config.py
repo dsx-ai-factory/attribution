@@ -8,6 +8,8 @@ import pytest
 
 from attribution_blueprint.config import load_config
 from attribution_blueprint.connectors.attribution import AttributionConnector
+from attribution_blueprint.connectors.execution_contexts.kubernetes_daemon import build_kubernetes_daemon_client
+from attribution_blueprint.connectors.execution_contexts.kueue import _build_prometheus_metrics
 from attribution_blueprint.connectors.execution_contexts.slurm import SlurmExecutionContextAdapter
 from attribution_blueprint.connectors.outputs.sqlite import SQLiteOutput
 from attribution_blueprint.connectors.outputs.stdout import StdoutOutput
@@ -273,8 +275,28 @@ def test_loki_unknown_auth_type_raises(tmp_path):
         '[log.syslog.loki]\nendpoint = "https://loki.example"\n'
         '[log.syslog.loki.auth]\ntype = "smoke-signal"\n'
     )
-    with pytest.raises(MCAError, match="auth type"):
+    with pytest.raises(MCAError, match=r"unknown loki\.auth type: 'smoke-signal'"):
         load_config(p)
+
+
+@pytest.mark.parametrize("config_path", ["eca.kueue.kubernetes_daemon", "eca.kueue.prometheus_metrics"])
+@pytest.mark.parametrize(
+    ("auth", "message"),
+    [
+        ({"type": "token"}, "{config_path}.auth type=token requires token_env"),
+        ({"type": "mtls"}, "{config_path}.auth type=mtls requires cert_path and key_path"),
+        ({"type": "smoke-signal"}, "unknown {config_path}.auth type: 'smoke-signal'"),
+        ({}, "unknown {config_path}.auth type: None"),
+    ],
+)
+def test_eca_auth_errors_include_config_path(config_path, auth, message):
+    spec = {"endpoint": "http://example.invalid", "auth": auth}
+    with pytest.raises(MCAError) as error:
+        if config_path.endswith("kubernetes_daemon"):
+            build_kubernetes_daemon_client(spec, config_path=config_path)
+        else:
+            _build_prometheus_metrics(spec)
+    assert str(error.value) == message.format(config_path=config_path)
 
 
 def test_sqlite_output(tmp_path):

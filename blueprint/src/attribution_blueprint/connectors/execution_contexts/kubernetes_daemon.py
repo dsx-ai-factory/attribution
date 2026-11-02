@@ -3,9 +3,7 @@
 
 from __future__ import annotations
 
-import os
-
-from attribution_blueprint.connectors.auth import MTLSAuth, TokenAuth
+from attribution_blueprint.connectors.auth import build_auth
 from attribution_blueprint.exceptions import MCAError
 from attribution_blueprint.kubernetes.daemon.client import KubernetesDaemonClient
 
@@ -20,29 +18,8 @@ def build_kubernetes_daemon_client(
     if not endpoint:
         raise MCAError(f"{config_path} requires endpoint")
 
-    auth = None
     auth_spec = spec.get("auth")
-    if auth_spec is not None:
-        auth_type = auth_spec.get("type")
-        auth_path = f"{config_path}.auth"
-        if auth_type == "token":
-            env_name = auth_spec.get("token_env")
-            if not env_name:
-                raise MCAError(f"{auth_path} type=token requires token_env")
-            if env_name not in os.environ:
-                raise MCAError(f"auth.token_env references unset environment variable: {env_name}")
-            auth = TokenAuth(token=os.environ[env_name], org_id=auth_spec.get("org_id"))
-        elif auth_type == "mtls":
-            if not auth_spec.get("cert_path") or not auth_spec.get("key_path"):
-                raise MCAError(f"{auth_path} type=mtls requires cert_path and key_path")
-            auth = MTLSAuth(
-                cert_path=auth_spec["cert_path"],
-                key_path=auth_spec["key_path"],
-                ca_cert_path=auth_spec.get("ca_cert_path"),
-                org_id=auth_spec.get("org_id"),
-            )
-        else:
-            raise MCAError(f"unknown KubernetesDaemon auth type: {auth_type!r}")
+    auth = build_auth(auth_spec, config_path) if auth_spec is not None else None
 
     timeout_value = spec.get("timeout_seconds", 10.0)
     try:
