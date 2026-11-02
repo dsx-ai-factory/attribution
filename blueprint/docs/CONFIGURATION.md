@@ -107,7 +107,7 @@ timeout_seconds = 60
 
 | Field             | Required             | Default                     | Meaning                                                                                                             |
 | ----------------- | -------------------- | --------------------------- | ------------------------------------------------------------------------------------------------------------------- |
-| `[eca].component` | No                   | `slurm`                     | Selects the execution context adapter: `slurm`, `kueue`, `kai`, or `static`. Defaults to `slurm` when unset.        |
+| `[eca].component` | No                   | `slurm`                     | Selects the execution context adapter: `slurm`, `kueue`, `kai`, `static`, or `kafka`. Defaults to `slurm` when unset.|
 | `sacct_path`      | No                   | `sacct`                     | Path to the `sacct` binary. Use an absolute path if `sacct` is not on `PATH`.                                       |
 | `cluster_tz`      | Strongly recommended | blueprint host fixed offset | IANA timezone for the SLURM controller, used to anchor naive `sacct` timestamps and preserve regional/DST identity. |
 | `ids`             | Per run              | none                        | Comma-separated job IDs. Usually pass this by CLI, not TOML.                                                        |
@@ -514,6 +514,68 @@ Scheduler identity comes from the execution context's `scheduler` value, which
 Blueprint sends as `workload.scheduler` when it is a supported scheduler
 (`slurm` or `kueue`). Other values, such as `static`, are omitted and the service
 treats the scheduler as unknown.
+
+### `[eca.kafka]`
+
+Reads job-completion CloudEvents from a Kafka topic instead of querying a
+scheduler. Each run consumes the events published since the last run of the
+same `group_id`. Install the `kafka` extra (`confluent-kafka`).
+
+Delivery is best effort. Offsets are committed when discovery returns, before
+attribution runs, so an event is lost if its attribution then fails (for
+example, the service is unreachable) or the process dies mid-run. To replay,
+reset the group's offsets with your Kafka tooling. A partition revoked or lost
+during a run, or whose commit fails, is left uncommitted and its events are
+redelivered on a later run. Fatal or non-retriable consumer errors, more than
+`max_transient_errors` retriable ones, a failed commit, or no partition
+assignment within `assignment_timeout_seconds` fail the run.
+
+The event `data` object uses ExecutionContext field names: `id`, `start_time`,
+`end_time` (with UTC offset) and a non-empty `nodes` list are required;
+`job_id`, `attempt_id`, `scheduler`, `state`, `name`, `user_name`,
+`workload_framework`, `timezone`, `time_limit`, `gpu_count`, `cancelled_by`,
+`failed_nodes`, `namespace`, `pod_names` and `pod_nodes` are optional. See
+`tests/fixtures/kafka_completion_events.json`. Send `timezone` as an IANA key
+whenever the timestamps' UTC offset is not a whole hour or the job crosses a
+DST change; events the service could not place in a timezone are skipped.
+Malformed events are logged and skipped; repeated events for the same
+`(scheduler, job_id, attempt_id)` in one run are dropped. A repeat in a later
+run is attributed again, and the SQLite output records it as another run of the
+same attempt. `ids` and time-range selectors are not supported.
+
+```toml
+[eca]
+component = "kafka"
+
+[eca.kafka]
+bootstrap_servers = "broker-1:9092,broker-2:9092"
+topic = "job-completions"
+group_id = "attribution"
+event_types = ["com.example.job.completed.v1"]
+security_protocol = "SASL_SSL"
+sasl_mechanism = "SCRAM-SHA-512"
+sasl_username_env = "KAFKA_USERNAME"
+sasl_password_env = "KAFKA_PASSWORD"
+```
+
+| Field                        | Required          | Default     | Meaning                                                                                  |
+| ---------------------------- | ----------------- | ----------- | ---------------------------------------------------------------------------------------- |
+| `bootstrap_servers`          | Yes               | none        | Comma-separated `host:port` list.                                                        |
+| `topic`                      | Yes               | none        | Topic carrying the completion events.                                                    |
+| `group_id`                   | Yes               | none        | Consumer group. Offsets are tracked per group.                                           |
+| `auto_offset_reset`          | No                | `earliest`  | Where a new group starts: `earliest` or `latest`.                                        |
+| `event_types`                | No                | all types   | CloudEvent `type` values to accept.                                                      |
+| `scheduler`                  | No                | `kafka`     | Scheduler identity for events whose data has no `scheduler`.                             |
+| `workload_type`              | No                | empty       | Workload type sent to the service.                                                       |
+| `max_messages`               | No                | `500`       | Maximum messages read per run.                                                           |
+| `poll_timeout_seconds`       | No                | `5`         | Idle time after which the topic is treated as drained.                                   |
+| `assignment_timeout_seconds` | No                | `30`        | How long to wait for the group to assign partitions before the run fails.                |
+| `max_transient_errors`       | No                | `3`         | Retriable consumer errors tolerated per run before it fails.                             |
+| `security_protocol`          | No                | `PLAINTEXT` | `PLAINTEXT`, `SSL`, `SASL_PLAINTEXT`, or `SASL_SSL`.                                     |
+| `sasl_mechanism`             | With `SASL_*`     | none        | `PLAIN`, `SCRAM-SHA-256`, or `SCRAM-SHA-512`.                                            |
+| `sasl_username_env`          | With `SASL_*`     | none        | Environment variable holding the SASL username.                                          |
+| `sasl_password_env`          | With `SASL_*`     | none        | Environment variable holding the SASL password.                                          |
+| `ssl_ca_location`            | No                | system CAs  | CA bundle for `SSL` / `SASL_SSL`.                                                        |
 
 ### `[workload]`
 
