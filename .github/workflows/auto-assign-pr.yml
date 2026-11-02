@@ -94,7 +94,7 @@ jobs:
     steps:
       # A failed DM is retried with "Re-run failed jobs", which reuses the
       # assignment job's output instead of picking again.
-      - uses: dsx-ai-factory/dsx-github-actions/.github/actions/slack-notify@79ee22291ed2c112fdc492d086ea40ed162bb7e1 # v1.25.1
+      - uses: dsx-ai-factory/dsx-github-actions/.github/actions/slack-notify@803f81b0431a6814ffffc68172e272485fbc18c9 # v1.27.3
         with:
           slack-bot-token: ${{ secrets.SLACK_BOT_TOKEN }}
           channel-id: ${{ matrix.message.channel }}
