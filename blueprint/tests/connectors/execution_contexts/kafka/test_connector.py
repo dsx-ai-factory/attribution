@@ -5,12 +5,14 @@ import copy
 import json
 from datetime import datetime, timezone
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 import pytest
 
 from attribution_blueprint.connectors.execution_contexts.kafka import (
     KafkaExecutionContextAdapter,
     _build as build_kafka,
+    connector as connector_module,
 )
 from attribution_blueprint.connectors.execution_contexts.kafka.connector import KafkaConsumerError
 from attribution_blueprint.exceptions import MCAError
@@ -626,3 +628,23 @@ def test_partition_eof_can_confirm_committed_end_without_data_position():
     assert eca.discover() == []
     assert consumer.commits == []
     assert eca.last_discovery_stats["consumed"] == 0
+
+
+@pytest.mark.parametrize("error", [IsADirectoryError(21, "Is a directory"), OSError(63, "File name too long")])
+def test_timezone_lookup_os_error_skips_event(monkeypatch, error):
+    # With the tzdata package installed, ZoneInfo raises OSError subclasses
+    # for directory names ("America") or overlong keys instead of
+    # ZoneInfoNotFoundError. Such an event must be skipped, not block the topic.
+    def zone_info(key):
+        if key == "America":
+            raise error
+        return ZoneInfo(key)
+
+    monkeypatch.setattr(connector_module, "ZoneInfo", zone_info)
+    bad = _events()[0]
+    bad["data"]["timezone"] = "America"
+    eca, consumer = _make_eca(_structured([bad, _events()[1]]))
+
+    assert [ctx["id"] for ctx in eca.discover()] == ["job-b7"]
+    assert consumer.commits == [{0: 2}]
+    assert eca.last_discovery_stats["malformed"] == 1

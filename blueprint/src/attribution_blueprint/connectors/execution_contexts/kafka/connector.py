@@ -602,7 +602,9 @@ def _context_from_data(
     if timezone is not None and timezone != "":
         try:
             ctx["timezone"] = ZoneInfo(str(timezone)).key
-        except (ZoneInfoNotFoundError, ValueError) as exc:
+        # With the tzdata package, a directory name ("America") or an overlong
+        # key raises an OSError subclass instead of ZoneInfoNotFoundError.
+        except (ZoneInfoNotFoundError, ValueError, OSError) as exc:
             raise EventError(f"CloudEvent {event_id} timezone {timezone!r} is not an IANA key") from exc
 
     # The service needs an IANA zone; reject now what the orchestrator would
