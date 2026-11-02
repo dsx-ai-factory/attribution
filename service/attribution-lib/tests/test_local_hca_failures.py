@@ -577,6 +577,46 @@ def test_unmapped_address_is_pair_evidence_not_node_identity(run):
 
 
 @pytest.mark.parametrize("errno", [22, 110])
+@pytest.mark.parametrize("mapped", [False, True])
+@pytest.mark.parametrize(
+    "local_gid,remote_gid,local_ip,remote_ip,pair_type",
+    [
+        ("::ffff:192.0.2.1", "::ffff:192.0.2.99", "192.0.2.1", "192.0.2.99", "complete"),
+        ("N/A", "::ffff:192.0.2.99", None, "192.0.2.99", "partial"),
+        ("192.0.2.1", "192.0.2.99", "192.0.2.1", "192.0.2.99", "partial"),
+        ("2001:db8:1::10", "2001:db8:2::20", "2001:db8:1::10", "2001:db8:2::20", "partial"),
+        ("::ffff:192.0.2.1", "N/A", "192.0.2.1", None, "partial"),
+    ],
+)
+def test_qp_pair_preserves_addresses_separately_from_blame(
+    run, graphs, errno, mapped, local_gid, remote_gid, local_ip, remote_ip, pair_type
+):
+    """Retain endpoint evidence even when addresses cannot identify a node."""
+    mapping = {remote_ip: "node-b"} if mapped and remote_ip is not None else {}
+    line = modify(errno, local=local_gid, remote=remote_gid)
+    result, stream = run([(line, 0)], mapping=mapping)
+    pair = events(stream, f"Application.bad_pair.{pair_type}")[0]
+    expected_peer = "node-b" if mapping else remote_ip
+    assert pair[2]["remote_node"] == expected_peer
+    assert pair[2].get("local_dev_ip") == local_ip
+    assert pair[2].get("remote_dev_ip") == remote_ip
+    assert pair[3].datum == line
+    report = ast.literal_eval(result.collectors["bad_pairs"])
+    assert report["dst_node"] == expected_peer
+    assert report.get("src_ip") == local_ip
+    assert report.get("dst_ip") == remote_ip
+    assert report["src_device"] == "mlx5_4:1"
+    bad, interesting = exported(result)
+    assert set(bad) | set(interesting) <= {"node-a", "node-b"}
+    if not mapping:
+        assert set(bad) == {"node-a"}
+    graph = json.dumps(graphs[stream.ctx_id])
+    assert line in graph
+    if remote_ip is not None:
+        assert remote_ip in graph
+
+
+@pytest.mark.parametrize("errno", [22, 110])
 def test_unidentified_emitter_never_blames_resolved_peer(event_manager, obs_data, job, request, errno):
     stream = event_manager.create_stream(request.node.name)
     line = "Last error: " + modify(errno, local="N/A").split("NCCL WARN ", 1)[1]

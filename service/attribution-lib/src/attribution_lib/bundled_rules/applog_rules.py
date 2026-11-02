@@ -14,6 +14,7 @@ eliminating the need for applog_to_symptom.py and the dynamic dictionary buildin
 import json
 import re
 from datetime import datetime
+from ipaddress import ip_address
 from pathlib import Path
 from typing import Dict, List, Literal, Optional
 
@@ -491,7 +492,10 @@ def ibv_modify_qp_failed_event(
     local_gid, remote_gid = groups["local_gid"], groups["remote_gid"]
     remote_ip = remote_gid[7:] if remote_gid.startswith("::ffff:") else remote_gid
 
-    peer_node = normalize_network_hostname(get_hostname(remote_ip)) if remote_gid != "N/A" else None
+    pair_peer = get_hostname(remote_ip) if remote_gid != "N/A" else None
+    peer_node = normalize_network_hostname(pair_peer) if pair_peer is not None else None
+    # Pair reports retain unmapped addresses; fault attribution requires a name.
+    pair_peer = peer_node or pair_peer
 
     msg = f"Call to ibv_modify_qp failed: eno {error_code}"
     if error_code == 11:
@@ -542,7 +546,7 @@ def ibv_modify_qp_failed_event(
     if local_dev_ip and remote_dev_ip:
         bad_pair_payload = {
             "local_node": node,
-            "remote_node": peer_node,
+            "remote_node": pair_peer,
             "local_dev_ip": local_dev_ip,
             "local_device": groups.get("local_hca"),
             "remote_dev_ip": remote_dev_ip,
@@ -557,9 +561,15 @@ def ibv_modify_qp_failed_event(
     else:
         bad_pair_payload = {
             "local_node": node,
-            "remote_node": peer_node,
+            "remote_node": pair_peer,
             "local_device": groups.get("local_hca"),
         }
+        for field, gid in (("local_dev_ip", local_gid), ("remote_dev_ip", remote_gid)):
+            try:
+                address = ip_address(gid)
+            except ValueError:
+                continue
+            bad_pair_payload[field] = str(getattr(address, "ipv4_mapped", None) or address)
         events.append(
             EventTriple(
                 type="Application.bad_pair.partial",
