@@ -733,6 +733,12 @@ class TestTimestampExtraction:
             pytest.param(
                 "[E1231 23:59:00.000 ProcessGroupNCCL.cpp:2174] msg", (2027, 1, 1, 0, 5, 0), 2026, id="prior_year"
             ),
+            pytest.param(
+                "[E702 00:00:00.000 ProcessGroupNCCL.cpp:2174] msg", (2026, 1, 1, 0, 0, 0), 2026, id="at_threshold"
+            ),
+            pytest.param(
+                "[E702 00:00:01.000 ProcessGroupNCCL.cpp:2174] msg", (2026, 1, 1, 0, 0, 0), 2025, id="past_threshold"
+            ),
         ],
     )
     def test_pytorch_format_year_from_job_end(self, timezone, line, job_end, expected_year):

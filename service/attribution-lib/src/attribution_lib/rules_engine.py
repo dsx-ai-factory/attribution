@@ -54,6 +54,10 @@ from attribution_lib.rule_types.observation import ObservationProcessor
 from attribution_lib.symptoms.declarations import SymptomDeclaration
 from attribution_lib.symptoms.predicate_registry import SymptomPredicate
 
+# Bump when extraction output changes without an extractor rule change, such as a
+# fix to timestamp parsing, so that cached events are extracted again.
+_EXTRACTION_VERSION = "2"
+
 
 @dataclass(frozen=True, slots=True)
 class RuleDeclarations:
@@ -188,7 +192,7 @@ class RuleEngine:
         TODO: evolve into a versioned scheme that can detect compatible vs breaking
         rule changes (e.g. additive rules could reuse existing cache + incremental extract).
         """
-        h = hashlib.sha256()
+        h = hashlib.sha256(_EXTRACTION_VERSION.encode())
         for contribution in sorted(c for e in self._engines if len(c := e.extractor_hash_contribution()) > 0):
             h.update(contribution.encode())
         return h.hexdigest()

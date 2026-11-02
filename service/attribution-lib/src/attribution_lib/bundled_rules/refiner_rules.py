@@ -1398,11 +1398,15 @@ def external_termination_cascade(context: RefinerContext):
     raw_state = job_info.state if job_info.state is not None else ""
     state = raw_state.partition(" ")[0].rstrip("+").upper()
     timed_out = state == "TIMEOUT" or "Cancelled by Timeout" in symptoms
-    scheduler_stop = state == "PREEMPTED" or timed_out
     markers = [marker for marker in _TERMINATION_MARKERS if marker in symptoms]
     cancellation = job_info.attributed_cancellation
-    if not scheduler_stop and state not in ("CANCELLED", "REQUEUED") and len(markers) == 0 and cancellation is None:
+    if state not in ("PREEMPTED", "TIMEOUT", "CANCELLED", "REQUEUED") and len(markers) == 0 and cancellation is None:
         return
+    # A timed timeout marker far from the job end belongs to a step, so only the job
+    # state or an untimed marker says that the scheduler stopped the whole job.
+    scheduler_stop = state in ("PREEMPTED", "TIMEOUT") or (
+        "Cancelled by Timeout" in symptoms and any(source.time is None for source in symptoms["Cancelled by Timeout"])
+    )
 
     # A marker far from the job end belongs to something else, such as a step
     # cancelled while the job kept running.
@@ -1476,7 +1480,7 @@ def external_termination_cascade(context: RefinerContext):
             return (
                 job_end_time - _SCHEDULER_STOP_BEFORE_END <= source_time <= job_end_time + _EXTERNAL_TERMINATION_WINDOW
             )
-        return job_end_time < source_time <= job_end_time + _EXTERNAL_TERMINATION_WINDOW
+        return job_end_time <= source_time <= job_end_time + _EXTERNAL_TERMINATION_WINDOW
 
     # Preserve the existing XID-145 cascade cleanup while RXPIPE is still bad;
     # post-outcome filtering cannot detect the trigger after it is demoted here.

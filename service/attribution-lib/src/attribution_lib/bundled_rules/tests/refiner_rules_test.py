@@ -2833,13 +2833,32 @@ class TestExternalTerminationCascade:
         _run(stream, ji, symptoms, bad_nodes)
         return self._RXPIPE not in bad_nodes["node01"].attributions
 
-    @pytest.mark.parametrize(("offset", "demoted"), [(timedelta(seconds=110), True), (timedelta(seconds=151), False)])
+    @pytest.mark.parametrize(
+        ("offset", "demoted"), [(timedelta(0), True), (timedelta(seconds=110), True), (timedelta(seconds=151), False)]
+    )
     def test_cancelled_teardown_covers_kill_wait(self, stream, obs_ctx, offset, demoted):
         """Teardown until 150 s after a cancel counts, which covers a 120 s KillWait."""
         job_end = _DEFAULT_START + timedelta(minutes=60)
         ji = _slurm_job_info(state="CANCELLED", job_end_time=job_end, cancelled_by="user-a")
 
         assert self._run_rxpipe_at(stream, obs_ctx, ji, job_end + offset) is demoted
+
+    def test_failed_job_with_stale_step_timeout_keeps_pre_end_xid(self, stream, obs_ctx):
+        """A step timeout far from the job end does not open the pre-end window of a failed job."""
+        job_end = _DEFAULT_START + timedelta(minutes=60)
+        ji = _slurm_job_info(state="FAILED", job_end_time=job_end)
+        marker_source = _make_source(obs_ctx, job_end - timedelta(minutes=30), datum="DUE TO TIME LIMIT", line_num=1)
+        xid_source = _make_source(obs_ctx, job_end - timedelta(seconds=60), datum="terminal RXPIPE", line_num=2)
+        symptoms = SymptomSet()
+        symptoms.add(SourceSet("Cancelled by Timeout").add(marker_source))
+        symptoms.add(SourceSet(self._RXPIPE).add(xid_source))
+        bad_nodes = JobNodeAttributions()
+        bad_nodes.add(["node01"], SourceSet(self._RXPIPE).add(xid_source))
+
+        _run(stream, ji, symptoms, bad_nodes)
+
+        assert self._RXPIPE in symptoms
+        assert self._RXPIPE in bad_nodes["node01"].attributions
 
     @pytest.mark.parametrize(("offset", "demoted"), [(timedelta(seconds=30), True), (timedelta(seconds=-10), False)])
     def test_timeout_uses_time_limit_as_termination_time(self, stream, obs_ctx, offset, demoted):
