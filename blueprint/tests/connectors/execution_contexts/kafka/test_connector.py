@@ -371,25 +371,32 @@ def test_commits_explicit_offsets_per_partition():
     assert consumer.commits == [{0: 8}, {1: 1}]
 
 
-def test_revoked_partition_is_committed_before_release():
+def test_revoked_partition_is_dropped_and_not_committed():
     eca, consumer = _make_eca(
         [*_structured(_events()[:1], partition=0), revoke(0), *_structured(_events()[1:], partition=1)],
         partitions=(0, 1),
-    )
-
-    assert [ctx["id"] for ctx in eca.discover()] == ["job-a1", "job-b7"]
-    assert consumer.commits == [{0: 1}, {1: 1}]
-
-
-def test_revoked_partition_with_failed_commit_is_dropped():
-    eca, consumer = _make_eca(
-        [*_structured(_events()[:1], partition=0), revoke(0), *_structured(_events()[1:], partition=1)],
-        partitions=(0, 1),
-        commit_errors={0},
     )
 
     assert [ctx["id"] for ctx in eca.discover()] == ["job-b7"]
+    assert consumer.commits == [{1: 1}]
     assert consumer.seeks == []  # no longer owned; the new owner rereads it
+
+
+def test_failure_after_revoke_commits_nothing():
+    # A revoke followed by a failing discover must not leave the revoked
+    # partition's records committed but never returned.
+    eca, consumer = _make_eca(
+        [
+            *_structured(_events()[:1], partition=0),
+            revoke(0),
+            FakeMessage(None, 0, partition=1, error=FakeError("topic authorization failed")),
+        ],
+        partitions=(0, 1),
+    )
+
+    with pytest.raises(KafkaConsumerError, match="topic authorization failed"):
+        eca.discover()
+    assert consumer.commits == []
 
 
 def test_lost_partition_is_dropped_and_not_committed():
@@ -402,23 +409,26 @@ def test_lost_partition_is_dropped_and_not_committed():
     assert consumer.commits == [{1: 1}]
 
 
-def test_reassigned_dropped_partition_is_ignored_and_rewound():
+@pytest.mark.parametrize("release", [lose, revoke])
+def test_reassigned_partition_is_reread_from_last_commit(release):
+    # An eager rebalance revokes every partition and may hand one back; the
+    # consumer then fetches it again from the last commit.
     def reassign(consumer):
         consumer.partitions.add(0)
 
-    first, later = _events()
     eca, consumer = _make_eca(
         [
-            *_structured([first], partition=0, first_offset=4),
-            lose(0),
+            *_structured(_events()[:1], partition=0, first_offset=4),
+            release(0),
             reassign,
-            *_structured([later], partition=0, first_offset=4),
+            *_structured(_events()[:1], partition=0, first_offset=4),
         ],
     )
 
-    assert eca.discover() == []
-    assert consumer.commits == []
-    assert consumer.seeks == [(0, 4)]
+    assert [ctx["id"] for ctx in eca.discover()] == ["job-a1"]
+    assert consumer.commits == [{0: 5}]
+    assert consumer.seeks == []
+    assert eca.last_discovery_stats["duplicates"] == 0
 
 
 def test_partial_commit_failure_drops_and_rewinds_that_partition():

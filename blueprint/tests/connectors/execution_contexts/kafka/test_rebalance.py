@@ -17,7 +17,7 @@ from attribution_blueprint.connectors.execution_contexts.kafka.connector import 
 pytestmark = pytest.mark.integration
 
 
-def test_live_rebalance_commits_before_revoke_without_duplicate_or_missing_events(
+def test_live_rebalance_drops_revoked_partition_without_duplicate_or_missing_events(
     kafka_spec,
     completion_event,
     publish_event,
@@ -25,6 +25,7 @@ def test_live_rebalance_commits_before_revoke_without_duplicate_or_missing_event
     from confluent_kafka import Consumer, TopicPartition
 
     expected = set()
+    partition_of = {}
     for partition in range(2):
         for index in range(2):
             event = copy.deepcopy(completion_event)
@@ -34,6 +35,7 @@ def test_live_rebalance_commits_before_revoke_without_duplicate_or_missing_event
             event["data"]["job_id"] += suffix
             event["subject"] = f"jobs/{event['data']['id']}"
             expected.add(event["id"])
+            partition_of[event["id"]] = partition
             publish_event(event, partition=partition)
 
     first_read = Event()
@@ -121,15 +123,13 @@ def test_live_rebalance_commits_before_revoke_without_duplicate_or_missing_event
             second, second_assignment = future.result(timeout=35)
 
         assert rebalanced.is_set()
-        # The callback must have committed already-delivered records before
-        # releasing their partitions, rather than relying on the final commit.
+        # Revocation must not commit: records read from a revoked partition
+        # are dropped and reread by the partition's next owner.
         relevant = [item for item in observed.revocations if item[0] and item[1]]
         assert relevant
-        for revoked, delivered, commits in relevant:
-            committed = {partition: offset for commit in commits for partition, offset in commit.items()}
-            for partition, offset in delivered:
-                if partition in revoked:
-                    assert committed[partition] >= offset + 1
+        assert all(commits == [] for _, _, commits in relevant)
+        assert {partition_of[ctx["event_id"]] for ctx in first} <= first_assignment
+        assert {partition_of[ctx["event_id"]] for ctx in second} <= second_assignment
         assert len(first_assignment) == len(second_assignment) == 1
         assert first_assignment.isdisjoint(second_assignment)
         actual = [ctx["event_id"] for ctx in first + second]

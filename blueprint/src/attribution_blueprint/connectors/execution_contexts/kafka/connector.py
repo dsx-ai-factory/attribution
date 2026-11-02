@@ -162,10 +162,10 @@ class KafkaExecutionContextAdapter:
     `assignment_timeout_seconds`. Exhausting either wait raises.
 
     Each partition is committed independently: the native client's mixed
-    commit can raise after other partitions already committed. Normal revoke
-    callbacks commit their pending offsets before releasing partitions and
-    retain successfully committed contexts. Lost partitions are not committed.
-    Lost or failed partitions are dropped from the batch; still-owned ones are
+    commit can raise after other partitions already committed. Revoked and
+    lost partitions are not committed: their contexts are removed from the
+    batch and the next owner (possibly this consumer) rereads them from the
+    last commit, so only contexts that `discover` returns are ever committed. Failed partitions are also dropped; still-owned ones are
     rewound. Commit errors can have an uncertain broker outcome, so redelivery
     after a process restart is not guaranteed. A failed discover clears pending
     commits before cleanup and rewinds still-owned uncommitted records.
@@ -243,6 +243,8 @@ class KafkaExecutionContextAdapter:
         self._first = {}
         self._pending = {}
         self._dropped = {}
+        self._batch = []
+        self._released = 0
         self._commit_failures = set()
         self._end_offsets = {}
         self.last_discovery_stats = dict.fromkeys(
@@ -305,7 +307,6 @@ class KafkaExecutionContextAdapter:
                 logger.warning(f"kafka ECA: close after aborted batch failed: {close_exc}")
 
     def _discover_batch(self) -> list[KafkaExecutionContext]:
-        batch: list[tuple[PartitionKey, KafkaExecutionContext]] = []
         consumed = 0
         transient_errors = 0
         assignment_deadline = time.monotonic() + self._assignment_timeout_seconds
@@ -363,12 +364,13 @@ class KafkaExecutionContextAdapter:
                 continue
             if ctx is not None:
                 self.last_discovery_stats["accepted"] += 1
-                batch.append((key, ctx))
+                self._batch.append((key, ctx))
 
         self._drop(self._commit(self._pending))
         self._pending = {}
-        contexts = self._dedupe(batch)
-        self.last_discovery_stats["dropped_partitions"] = len(self._dropped)
+        contexts = self._dedupe(self._batch)
+        self._batch = []
+        self.last_discovery_stats["dropped_partitions"] = len(self._dropped) + self._released
         if self._commit_failures and not contexts:
             raise KafkaConsumerError(f"kafka ECA: offset commit failed for {sorted(self._commit_failures)}")
         if self._dropped:
@@ -418,24 +420,28 @@ class KafkaExecutionContextAdapter:
         self._close_consumer()
 
     def _on_revoke(self, consumer: Any, partitions: list[Any]) -> None:
-        revoked = {(tp.topic, tp.partition) for tp in partitions}
-        for key in revoked:
-            self._end_offsets.pop(key, None)
-        offsets = {key: offset for key, offset in self._pending.items() if key in revoked}
-        self._drop(self._commit(offsets))
-        for key in offsets:
-            del self._pending[key]
-            self._first.pop(key, None)
+        # Do not commit on revoke: a later failure in this discover() would
+        # discard the batch after its offsets were committed. Releasing keeps
+        # the invariant that only returned contexts are ever committed; the
+        # partition's next owner, possibly this consumer after an eager
+        # rebalance, rereads its records from the last commit.
+        self._release(partitions, "revoked")
 
     def _on_lost(self, consumer: Any, partitions: list[Any]) -> None:
+        self._release(partitions, "lost")
+
+    def _release(self, partitions: list[Any], reason: str) -> None:
         keys = {(tp.topic, tp.partition) for tp in partitions}
         for key in keys:
             self._end_offsets.pop(key, None)
-        lost = keys & self._pending.keys()
-        for topic, partition in sorted(lost):
-            logger.warning(f"kafka ECA: lost {topic}[{partition}]; its events will be redelivered")
-        self._drop(lost)
-        for key in lost:
+        released = keys & self._pending.keys()
+        for topic, partition in sorted(released):
+            logger.info(f"kafka ECA: {reason} {topic}[{partition}]; its uncommitted events will be reread")
+        # Not marked dropped: a reassigned partition restarts from its last
+        # commit, so this batch can reread the same records.
+        self._batch = [(key, ctx) for key, ctx in self._batch if key not in released]
+        self._released += len(released)
+        for key in released:
             del self._pending[key]
             self._first.pop(key, None)
 
