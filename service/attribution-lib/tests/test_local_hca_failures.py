@@ -428,6 +428,42 @@ def test_unknown_errno_is_not_reinterpreted_from_error_text(run):
     assert not any("Local HCA" in s for values in exported(result)[0].values() for s in values)
 
 
+@pytest.mark.parametrize("name", ["ibv_query_qp", "ibv_create_cq", "ibv_reg_mr", "ibv_dereg_mr"])
+@pytest.mark.parametrize("errno", [11, 110, 125])
+@pytest.mark.parametrize("error", ["error {errno}", "{errno}", "error 999 errno {errno}"])
+def test_numeric_command_errors_retain_local_evidence(run, name, errno, error):
+    """Recognize numeric spellings without bypassing the resource-limit guard."""
+    line = f"node-a:123:456 [0] NCCL WARN Call to {name} failed with {error.format(errno=errno)} on dev mlx5_4"
+    result, stream = run([(line, 0)])
+    commands = events(stream, "Application.hca.command_failure")
+    assert len(commands) == 1
+    assert commands[0][2]["errno"] == errno
+    assert commands[0][2]["node"] == "node-a"
+    assert commands[0][3].datum == line
+    bad, interesting = exported(result)
+    guarded = errno == 11 and name in {"ibv_create_cq", "ibv_reg_mr"}
+    selected = interesting if guarded else bad
+    assert f"Local HCA command failure ({name} eno {errno})" in selected["node-a"]
+    if guarded:
+        assert not bad
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        "error 999 Connection timed out",
+        "error 999 Resource temporarily unavailable",
+        "110 errno 999 Connection timed out",
+    ],
+)
+def test_unsupported_numeric_errno_does_not_fall_back_to_text(run, error):
+    """An explicit unsupported errno must not be replaced by a text inference."""
+    line = f"node-a:123:456 [0] NCCL WARN Call to ibv_query_qp failed with {error} on dev mlx5_4"
+    result, stream = run([(line, 0)])
+    assert not events(stream, "Application.hca.command_failure")
+    assert not exported(result)[0]
+
+
 @pytest.mark.parametrize(
     "line",
     [

@@ -2931,11 +2931,12 @@ outcome_symptom(
 )
 
 # Only a local command failure plus independent corroboration establishes the
-# stronger NIC diagnosis. Standalone syslog diagnoses retain their mappings.
+# stronger NIC diagnosis. Independent causes retain precedence; outcome
+# selection supersedes only secondary command and device-open mappings.
 outcome_symptom(
     "Corroborated local HCA command failure",
     outcome="Fail InfraHW",
-    priority=OutcomePriority.HIGH_HW,
+    priority=OutcomePriority.LOW,
     doc="local-hca-command-failure",
     hw_cause="Known HW Cause - Node (NIC)",
 )

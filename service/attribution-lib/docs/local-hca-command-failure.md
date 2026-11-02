@@ -51,7 +51,10 @@ not bypass the resource-limit guard.
 The compound uses the existing `DetectBadNicState` result instead of repeating
 its initialization-message correlation. Consumed syslog sources remain
 interesting evidence. CSP sources remain selected. Other nodes and independent
-failures remain intact.
+failures remain intact. Independent diagnoses such as node reboot, page
+retirement and RDMA fabric flap retain their existing outcome precedence over
+the compound; only secondary command and device-open outcome mappings are
+superseded.
 Standalone NIC syslog diagnoses retain their existing `Fail InfraSW` mappings.
 Additional syslog command-timeout rules and provider collection changes are
 separate work. A local command error does not by itself prove a physical

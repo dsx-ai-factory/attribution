@@ -1122,6 +1122,48 @@ def test_bad_nic_state_outcome_metadata():
     assert match.hw_cause == "NIC firmware initialization failure"
 
 
+@pytest.mark.parametrize(
+    "independent",
+    ["Node unexpectedly rebooted", "Page Retirement", "RDMA fabric flap"],
+)
+@pytest.mark.parametrize(
+    "secondary",
+    [None, "Local HCA command failure (ibv_modify_qp eno 11)", "Local HCA command failure (ibv_modify_qp eno 110)"],
+)
+def test_corroborated_hca_preserves_independent_outcomes(independent, secondary):
+    """A NIC compound must retain existing independent root-cause precedence."""
+    registry = _load_committed_registry()
+    baseline = registry.outcome_for([independent])
+    symptoms = [independent, "Corroborated local HCA command failure"]
+    if secondary is not None:
+        symptoms.append(secondary)
+    for ordered in (symptoms, list(reversed(symptoms))):
+        assert registry.outcome_for(ordered) == baseline
+
+
+@pytest.mark.parametrize(
+    "secondary",
+    [
+        "Local HCA command failure (ibv_query_qp eno 110)",
+        "Local HCA command failure (ibv_modify_qp eno 11)",
+        "Local HCA command failure (ibv_modify_qp eno 110)",
+        "Call to ibv_modify_qp failed: eno 110 timeout",
+        "Call to ibv_modify_qp failed: eno 22 invalid argument",
+        "ibv_open_device failed",
+    ],
+)
+def test_corroborated_hca_supersedes_secondary_outcomes(secondary):
+    """Lowering compound priority must preserve its known-NIC diagnosis."""
+    registry = _load_committed_registry()
+    compound = "Corroborated local HCA command failure"
+    for ordered in ([secondary, compound], [compound, secondary]):
+        match = registry.outcome_for(ordered)
+        assert match is not None
+        assert match.symptom == compound
+        assert match.outcome == "Fail InfraHW"
+        assert match.hw_cause == "Known HW Cause - Node (NIC)"
+
+
 @pytest.mark.parametrize("symptom", ["NV_ERR_RESET_REQUIRED", "NV_ERR_RESET_REQUIRED kernel_channel.c"])
 def test_gpu_reset_outcome_retains_documentation(symptom: str) -> None:
     """Check that GPU-reset variants retain their declared documentation.

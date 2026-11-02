@@ -19,7 +19,8 @@ from attribution_lib.sources import Source, SourceSet
 from attribution_lib.utils import NCCL_HOST_PID_TID_REGEX, _leading_explicit_applog_rank
 
 _DEVICE_RE = re.compile(r"\b(?:mlx5_\d+|[0-9a-fA-F]{4}:[0-9a-fA-F]{2}:[0-9a-fA-F]{2}\.[0-7])\b")
-_ERRNO_RE = re.compile(r"\berrno\s+(\d+)\b|^\s*(\d+)\b")
+_ERRNO_RE = re.compile(r"\berrno\s+(\d+)\b")
+_LEADING_ERRNO_RE = re.compile(r"^\s*(?:error\s+)?(\d+)\b")
 _WINDOW = timedelta(minutes=5)
 _NIC_SYSLOG = {"irisc not responding", "detected bad NIC state"}
 # Provider connectors own instance identity, lifecycle checks and event mapping.
@@ -30,9 +31,9 @@ _COMPOUND = "Corroborated local HCA command failure"
 
 def parse_command_errno(error: str) -> int | None:
     """Read numeric errno first; accept known text-only NCCL wrapper variants."""
-    match = _ERRNO_RE.search(error)
+    match = _ERRNO_RE.search(error) or _LEADING_ERRNO_RE.match(error)
     if match:
-        return int(match[1] or match[2])
+        return int(match[1])
     if "Resource temporarily unavailable" in error:
         return 11
     if "Connection timed out" in error:
