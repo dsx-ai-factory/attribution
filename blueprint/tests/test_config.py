@@ -493,7 +493,7 @@ def test_victorialogs_token_auth_from_toml(monkeypatch, tmp_path):
         (
             '[log.syslog.victorialogs]\nendpoint = "http://127.0.0.1:9428"\n'
             '[log.syslog.victorialogs.auth]\ntype = "unknown"\n',
-            "unknown auth type",
+            r"unknown (victorialogs\.)?auth type",
         ),
         (
             '[log.syslog.victorialogs]\nendpoint = "http://127.0.0.1:9428"\nlimit = 0\n',
