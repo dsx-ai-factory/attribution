@@ -490,7 +490,20 @@ def ibv_modify_qp_failed_event(
     node = command_source_node(node, source, ctx)
     error_code = int(groups["error_code"])
     local_gid, remote_gid = groups["local_gid"], groups["remote_gid"]
-    remote_ip = remote_gid[7:] if remote_gid.startswith("::ffff:") else remote_gid
+    addresses = {}
+    for endpoint, gid in (("local", local_gid), ("remote", remote_gid)):
+        try:
+            addresses[endpoint] = ip_address(gid)
+        except ValueError:
+            continue
+    mapped_gids = len(addresses) == 2 and all(
+        getattr(address, "ipv4_mapped", None) is not None for address in addresses.values()
+    )
+    pair_ips = {
+        f"{endpoint}_dev_ip": str(getattr(address, "ipv4_mapped", None) or address)
+        for endpoint, address in addresses.items()
+    }
+    remote_ip = pair_ips.get("remote_dev_ip", remote_gid)
 
     pair_peer = get_hostname(remote_ip) if remote_gid != "N/A" else None
     peer_node = normalize_network_hostname(pair_peer) if pair_peer is not None else None
@@ -502,7 +515,7 @@ def ibv_modify_qp_failed_event(
         msg += " resource unavailable"
     elif error_code == 22:
         msg += " invalid argument"
-        if not all("::ffff:" in gid for gid in [local_gid, remote_gid]):
+        if not mapped_gids:
             msg += "(Mismatched GID)"
     elif error_code == 110:
         msg += " timeout"
@@ -512,7 +525,7 @@ def ibv_modify_qp_failed_event(
 
     # Only the errno-22 variant with two IPv4-mapped GIDs establishes a
     # local-side fault. Keep mismatched-GID and resolved timeout behavior.
-    local_argument_error = error_code == 22 and all(gid.startswith("::ffff:") for gid in (local_gid, remote_gid))
+    local_argument_error = error_code == 22 and mapped_gids
     unresolved_peer = peer_node is None
     local_command_error = error_code in {11, 110, 125} and unresolved_peer
     configuration_error = "(Overwrite NCCL parameters)" in msg
@@ -539,44 +552,20 @@ def ibv_modify_qp_failed_event(
             )
         )
 
-    # Try to create complete bad_pair event with all fields
-    local_dev_ip = local_gid[7:] if local_gid.startswith("::ffff:") else None
-    remote_dev_ip = remote_gid[7:] if remote_gid.startswith("::ffff:") else None
-
-    if local_dev_ip and remote_dev_ip:
-        bad_pair_payload = {
-            "local_node": node,
-            "remote_node": pair_peer,
-            "local_dev_ip": local_dev_ip,
-            "local_device": groups.get("local_hca"),
-            "remote_dev_ip": remote_dev_ip,
-        }
-        events.append(
-            EventTriple(
-                type="Application.bad_pair.complete",
-                payload=bad_pair_payload,
-                source=source.derived(rule="Call to ibv_modify_qp failed"),
-            )
+    # Keep complete-pair semantics for two mapped GIDs, retaining any available
+    # canonical addresses in partial reports as well.
+    events.append(
+        EventTriple(
+            type="Application.bad_pair.complete" if mapped_gids else "Application.bad_pair.partial",
+            payload={
+                "local_node": node,
+                "remote_node": pair_peer,
+                "local_device": groups.get("local_hca"),
+                **pair_ips,
+            },
+            source=source.derived(rule="Call to ibv_modify_qp failed"),
         )
-    else:
-        bad_pair_payload = {
-            "local_node": node,
-            "remote_node": pair_peer,
-            "local_device": groups.get("local_hca"),
-        }
-        for field, gid in (("local_dev_ip", local_gid), ("remote_dev_ip", remote_gid)):
-            try:
-                address = ip_address(gid)
-            except ValueError:
-                continue
-            bad_pair_payload[field] = str(getattr(address, "ipv4_mapped", None) or address)
-        events.append(
-            EventTriple(
-                type="Application.bad_pair.partial",
-                payload=bad_pair_payload,
-                source=source.derived(rule="Call to ibv_modify_qp failed"),
-            )
-        )
+    )
     return events
 
 

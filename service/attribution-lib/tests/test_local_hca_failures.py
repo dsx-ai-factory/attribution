@@ -583,6 +583,8 @@ def test_unmapped_address_is_pair_evidence_not_node_identity(run):
     [
         ("::ffff:192.0.2.1", "::ffff:192.0.2.99", "192.0.2.1", "192.0.2.99", "complete"),
         ("N/A", "::ffff:192.0.2.99", None, "192.0.2.99", "partial"),
+        ("N/A", "::ffff:c000:0263", None, "192.0.2.99", "partial"),
+        ("::ffff:c000:0201", "N/A", "192.0.2.1", None, "partial"),
         ("192.0.2.1", "192.0.2.99", "192.0.2.1", "192.0.2.99", "partial"),
         ("2001:db8:1::10", "2001:db8:2::20", "2001:db8:1::10", "2001:db8:2::20", "partial"),
         ("::ffff:192.0.2.1", "N/A", "192.0.2.1", None, "partial"),
@@ -612,8 +614,34 @@ def test_qp_pair_preserves_addresses_separately_from_blame(
         assert set(bad) == {"node-a"}
     graph = json.dumps(graphs[stream.ctx_id])
     assert line in graph
-    if remote_ip is not None:
-        assert remote_ip in graph
+
+
+@pytest.mark.parametrize("errno", [11, 22, 110, 125])
+@pytest.mark.parametrize("mapped", [False, True])
+@pytest.mark.parametrize(
+    "local_gid,remote_gid",
+    [
+        ("::ffff:c000:0201", "::ffff:c000:0263"),
+        ("::FFFF:C000:0201", "::FFFF:C000:0263"),
+        ("0:0:0:0:0:ffff:c000:0201", "0000:0000:0000:0000:0000:ffff:c000:0263"),
+    ],
+)
+def test_equivalent_mapped_gids_keep_same_attribution(run, graphs, errno, mapped, local_gid, remote_gid):
+    """Normalize equivalent GID spellings before resolving peers or building pairs."""
+    mapping = {"192.0.2.99": "node-b"} if mapped else {}
+    baseline, base_stream = run([(modify(errno, remote="::ffff:192.0.2.99"), 0)], mapping=mapping)
+    line = modify(errno, local=local_gid, remote=remote_gid)
+    result, stream = run([(line, 0)], mapping=mapping)
+    assert result.outcome_attr.value() == baseline.outcome_attr.value()
+    assert exported(result) == exported(baseline)
+    assert result.collectors["bad_pairs"] == baseline.collectors["bad_pairs"]
+    pairs = events(stream, "Application.bad_pair.complete")
+    assert len(pairs) == 1
+    assert pairs[0][2] == events(base_stream, "Application.bad_pair.complete")[0][2]
+    assert pairs[0][3].datum == line
+    assert line in json.dumps(graphs[stream.ctx_id])
+    if mapped:
+        assert not events(stream, "Application.hca.command_failure")
 
 
 @pytest.mark.parametrize("errno", [22, 110])

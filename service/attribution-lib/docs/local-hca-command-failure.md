@@ -72,6 +72,8 @@ reads the address field that follows. Unknown emitters remain interesting
 evidence without a hardware verdict. Pair reports preserve a mapped remote
 hostname or fall back to its unmapped address. Available IPv4 and IPv6 addresses
 remain in the pair's IP fields even when the opposite endpoint is unavailable.
+GIDs are parsed before peer lookup and pair construction, so hexadecimal,
+expanded and dotted IPv4-mapped spellings resolve to the same IPv4 address.
 These address fallbacks do not create bad or interesting node identities.
 Local command candidates use the existing after-MFU demotion filter, including
 its timestamp comparison and line-number fallback. Only surviving candidates
