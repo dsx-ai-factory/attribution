@@ -356,6 +356,23 @@ class TestIBPairRules:
         assert bad_pair_events[0]["payload"]["remote_dev_ip"] == "198.51.100.30"
         assert "mlx5_4" in bad_pair_events[0]["payload"]["local_device"]
 
+    @pytest.mark.parametrize("gid_index", [3, -1])
+    @pytest.mark.parametrize("prefix", ["", "host-9ad02e1b:123:456 [0] "])
+    def test_ibv_modify_qp_failed_remote_gid_excludes_ansi_color_code(
+        self, app_tst_bldr, big_jobinfo, gid_index, prefix
+    ):
+        """Ray colors relayed output, so a color code can follow the remote GID directly."""
+        data = [
+            f"{prefix}Call to ibv_modify_qp failed with 101 Network is unreachable, on dev mlx5_1:1, curr state INIT, next state RTR, local GID index {gid_index}, local GID 2001:db8:1::10, remote GID 2001:db8:2::20\x1b[32m"
+        ]
+        with hostname_mapping({"2001:db8:2::20": "host-a222193a"}):
+            result = app_tst_bldr(big_jobinfo, data)
+        event_type = "Attribution.node.bad_peers" if prefix else "Attribution.node.interesting_peers"
+        events = self._get_events_by_type(result.event_stream, event_type)
+        assert [e["payload"]["peer"] for e in events] == ["host-a222193a"]
+        if not prefix:
+            assert not self._get_events_by_type(result.event_stream, "Attribution.node.bad_peers")
+
     def test_ibv_modify_qp_failed_partial_fallback(self, app_tst_bldr, big_jobinfo):
         data = [
             "Call to ibv_modify_qp failed with 22 Invalid argument, on dev mlx5_0:1, curr state INIT, next state RTR, local GID index 3, local GID 192.0.2.40, remote GID ::ffff:198.51.100.30"
