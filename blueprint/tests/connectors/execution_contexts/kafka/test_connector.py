@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import copy
+import errno
 import json
 from datetime import datetime, timezone
 from pathlib import Path
@@ -373,23 +374,26 @@ def test_commits_explicit_offsets_per_partition():
     assert consumer.commits == [{0: 8}, {1: 1}]
 
 
-def test_revoked_partition_is_dropped_and_not_committed():
+def test_revoked_partition_is_released_with_a_bookmark_commit():
+    # The revoked partition's contexts are not returned; its first unreturned
+    # offset is committed so the next owner starts there, even for a new
+    # group whose reset policy is `latest`.
     eca, consumer = _make_eca(
         [*_structured(_events()[:1], partition=0), revoke(0), *_structured(_events()[1:], partition=1)],
         partitions=(0, 1),
     )
 
     assert [ctx["id"] for ctx in eca.discover()] == ["job-b7"]
-    assert consumer.commits == [{1: 1}]
+    assert consumer.commits == [{0: 0}, {1: 1}]
     assert consumer.seeks == []  # no longer owned; the new owner rereads it
 
 
-def test_failure_after_revoke_commits_nothing():
+def test_failure_after_revoke_commits_nothing_past_unreturned_records():
     # A revoke followed by a failing discover must not leave the revoked
     # partition's records committed but never returned.
     eca, consumer = _make_eca(
         [
-            *_structured(_events()[:1], partition=0),
+            *_structured(_events(), partition=0, first_offset=4),
             revoke(0),
             FakeMessage(None, 0, partition=1, error=FakeError("topic authorization failed")),
         ],
@@ -398,7 +402,18 @@ def test_failure_after_revoke_commits_nothing():
 
     with pytest.raises(KafkaConsumerError, match="topic authorization failed"):
         eca.discover()
-    assert consumer.commits == []
+    assert consumer.commits == [{0: 4}]
+
+
+def test_failed_bookmark_commit_does_not_fail_discovery():
+    eca, consumer = _make_eca(
+        [*_structured(_events()[:1], partition=0), revoke(0), *_structured(_events()[1:], partition=1)],
+        partitions=(0, 1),
+        commit_errors={0},
+    )
+
+    assert [ctx["id"] for ctx in eca.discover()] == ["job-b7"]
+    assert eca.discovery_incomplete is False
 
 
 def test_lost_partition_is_dropped_and_not_committed():
@@ -411,8 +426,8 @@ def test_lost_partition_is_dropped_and_not_committed():
     assert consumer.commits == [{1: 1}]
 
 
-@pytest.mark.parametrize("release", [lose, revoke])
-def test_reassigned_partition_is_reread_from_last_commit(release):
+@pytest.mark.parametrize("release, commits", [(lose, [{0: 5}]), (revoke, [{0: 4}, {0: 5}])])
+def test_reassigned_partition_is_reread_from_last_commit(release, commits):
     # An eager rebalance revokes every partition and may hand one back; the
     # consumer then fetches it again from the last commit.
     def reassign(consumer):
@@ -428,7 +443,7 @@ def test_reassigned_partition_is_reread_from_last_commit(release):
     )
 
     assert [ctx["id"] for ctx in eca.discover()] == ["job-a1"]
-    assert consumer.commits == [{0: 5}]
+    assert consumer.commits == commits
     assert consumer.seeks == []
     assert eca.last_discovery_stats["duplicates"] == 0
 
@@ -630,7 +645,9 @@ def test_partition_eof_can_confirm_committed_end_without_data_position():
     assert eca.last_discovery_stats["consumed"] == 0
 
 
-@pytest.mark.parametrize("error", [IsADirectoryError(21, "Is a directory"), OSError(63, "File name too long")])
+@pytest.mark.parametrize(
+    "error", [IsADirectoryError(errno.EISDIR, "Is a directory"), OSError(errno.ENAMETOOLONG, "File name too long")]
+)
 def test_timezone_lookup_os_error_skips_event(monkeypatch, error):
     # With the tzdata package installed, ZoneInfo raises OSError subclasses
     # for directory names ("America") or overlong keys instead of
@@ -648,3 +665,30 @@ def test_timezone_lookup_os_error_skips_event(monkeypatch, error):
     assert [ctx["id"] for ctx in eca.discover()] == ["job-b7"]
     assert consumer.commits == [{0: 2}]
     assert eca.last_discovery_stats["malformed"] == 1
+
+
+@pytest.mark.parametrize("error", [OSError(errno.EIO, "I/O error"), PermissionError(errno.EACCES, "Permission denied")])
+def test_timezone_read_failure_fails_discovery_without_commit(monkeypatch, error):
+    # A host problem reading a valid zone file is not a malformed event:
+    # fail the run uncommitted so the event is retried.
+    def zone_info(key):
+        if key == "America/Los_Angeles":
+            raise error
+        return ZoneInfo(key)
+
+    monkeypatch.setattr(connector_module, "ZoneInfo", zone_info)
+    eca, consumer = _make_eca(_structured(_events()))
+
+    with pytest.raises(KafkaConsumerError, match="cannot read timezone"):
+        eca.discover()
+    assert consumer.commits == []
+
+
+def test_revoke_after_successful_discover_does_not_move_commit_backwards():
+    # close() triggers a revoke after the batch committed; re-committing the
+    # batch's first offset there would make the next run reprocess it.
+    eca, consumer = _make_eca(_structured(_events(), first_offset=4))
+
+    assert len(eca.discover()) == 2
+    consumer.on_revoke(consumer, [TP(TOPIC, 0)])
+    assert consumer.commits == [{0: 6}]

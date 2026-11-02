@@ -527,10 +527,13 @@ attribution runs, so an event is lost if its attribution then fails (for
 example, the service is unreachable) or the process dies mid-run. To replay,
 reset the group's offsets with your Kafka tooling.
 
-During a rebalance, revoked and lost partitions are not committed: their
-contexts are removed from the batch and the partition's next owner, possibly the
-same consumer, rereads them from the last commit, so only events that discovery
-returns are ever committed. Each partition
+During a rebalance, revoked and lost partitions' contexts are removed from the
+batch and the partition's next owner, possibly the same consumer, rereads them,
+so no offset past an event that discovery did not return is ever committed. A
+revoked partition commits its first unreturned offset as the next owner's
+starting point. A lost partition (the consumer missed its session timeout)
+cannot be committed; with `auto_offset_reset = "latest"` and no earlier commit
+for the group, its unread events can be skipped. Each partition
 is committed independently because the native Kafka client can raise on a mixed
 commit after other partitions have already committed. Failed partitions' contexts
 are dropped and still-owned partitions are rewound to their first uncommitted

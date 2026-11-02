@@ -29,8 +29,8 @@ The live tests cover:
   operator-cancelled, and timed-out jobs, without log evidence. Timeout-only
   jobs with a known wall-clock limit follow the existing Service policy of
   returning Pass; without that limit, the timeout fallback remains Fail User.
-- Two consumers joining the same group during a batch: revoked partitions are
-  dropped without a commit, and no records are missing or duplicated.
+- Two consumers joining the same group during a batch: a revoke never commits
+  past an unreturned record, and no records are missing or duplicated.
 - CLI exit code 1 and the documented absence of replay after Service or SQLite
   output failure.
 - An unreachable broker and preservation of uncommitted records after a commit

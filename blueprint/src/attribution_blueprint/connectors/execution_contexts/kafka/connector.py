@@ -44,6 +44,7 @@ a topic cannot be queried by job or time.
 
 from __future__ import annotations
 
+import errno
 import json
 import time
 import weakref
@@ -163,9 +164,11 @@ class KafkaExecutionContextAdapter:
 
     Each partition is committed independently: the native client's mixed
     commit can raise after other partitions already committed. Revoked and
-    lost partitions are not committed: their contexts are removed from the
-    batch and the next owner (possibly this consumer) rereads them from the
-    last commit, so only contexts that `discover` returns are ever committed. Failed partitions are also dropped; still-owned ones are
+    lost partitions' contexts are removed from the batch and the next owner
+    (possibly this consumer) rereads them, so no offset past an unreturned
+    context is ever committed. A revoke commits the first unreturned offset
+    as a starting point; a lost partition cannot be committed, so with
+    `auto_offset_reset=latest` and no prior commit its records can be skipped. Failed partitions are also dropped; still-owned ones are
     rewound. Commit errors can have an uncertain broker outcome, so redelivery
     after a process restart is not guaranteed. A failed discover clears pending
     commits before cleanup and rewinds still-owned uncommitted records.
@@ -368,6 +371,7 @@ class KafkaExecutionContextAdapter:
 
         self._drop(self._commit(self._pending))
         self._pending = {}
+        self._first = {}
         contexts = self._dedupe(self._batch)
         self._batch = []
         self.last_discovery_stats["dropped_partitions"] = len(self._dropped) + self._released
@@ -420,11 +424,15 @@ class KafkaExecutionContextAdapter:
         self._close_consumer()
 
     def _on_revoke(self, consumer: Any, partitions: list[Any]) -> None:
-        # Do not commit on revoke: a later failure in this discover() would
-        # discard the batch after its offsets were committed. Releasing keeps
-        # the invariant that only returned contexts are ever committed; the
-        # partition's next owner, possibly this consumer after an eager
-        # rebalance, rereads its records from the last commit.
+        # Never commit past the revoked partitions' unreturned records: a later
+        # failure in this discover() would discard them after their offsets
+        # were committed. Commit their first unreturned offset instead, so the
+        # next owner (possibly this consumer after an eager rebalance) rereads
+        # them even when the group has no prior commit and resets to `latest`.
+        revoked = {(tp.topic, tp.partition) for tp in partitions}
+        # Only partitions with uncommitted records: after a batch commits (or
+        # during close()), the batch's first offsets are behind the commit.
+        self._bookmark({key: self._first[key] for key in self._pending if key in revoked})
         self._release(partitions, "revoked")
 
     def _on_lost(self, consumer: Any, partitions: list[Any]) -> None:
@@ -444,6 +452,14 @@ class KafkaExecutionContextAdapter:
         for key in released:
             del self._pending[key]
             self._first.pop(key, None)
+
+    def _bookmark(self, offsets: dict[PartitionKey, int]) -> None:
+        """Best-effort commit of first unreturned offsets; skips nothing."""
+        for (topic, partition), offset in sorted(offsets.items()):
+            try:
+                self._consumer.commit(offsets=[self._topic_partition(topic, partition, offset)], asynchronous=False)
+            except Exception as exc:
+                logger.warning(f"kafka ECA: cannot commit {topic}[{partition}] at offset {offset} on revoke: {exc}")
 
     def _commit(self, offsets: dict[PartitionKey, int]) -> set[PartitionKey]:
         """Commit partitions independently; native mixed commits can raise
@@ -602,10 +618,19 @@ def _context_from_data(
     if timezone is not None and timezone != "":
         try:
             ctx["timezone"] = ZoneInfo(str(timezone)).key
-        # With the tzdata package, a directory name ("America") or an overlong
-        # key raises an OSError subclass instead of ZoneInfoNotFoundError.
-        except (ZoneInfoNotFoundError, ValueError, OSError) as exc:
+        except (ZoneInfoNotFoundError, ValueError) as exc:
             raise EventError(f"CloudEvent {event_id} timezone {timezone!r} is not an IANA key") from exc
+        except OSError as exc:
+            # With the tzdata package, a directory name ("America") or an
+            # overlong key raises these instead of ZoneInfoNotFoundError. Any
+            # other OSError is a host problem with a possibly valid key: fail
+            # the run uncommitted so the event is retried, not skipped.
+            if isinstance(exc, (IsADirectoryError, NotADirectoryError, FileNotFoundError)) or exc.errno in (
+                errno.ENAMETOOLONG,
+                errno.EINVAL,
+            ):
+                raise EventError(f"CloudEvent {event_id} timezone {timezone!r} is not an IANA key") from exc
+            raise KafkaConsumerError(f"kafka ECA: cannot read timezone {timezone!r}: {exc}") from exc
 
     # The service needs an IANA zone; reject now what the orchestrator would
     # reject after the offset is committed (e.g. +05:30 without `timezone`).

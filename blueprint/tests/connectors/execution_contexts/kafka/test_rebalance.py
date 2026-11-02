@@ -123,11 +123,14 @@ def test_live_rebalance_drops_revoked_partition_without_duplicate_or_missing_eve
             second, second_assignment = future.result(timeout=35)
 
         assert rebalanced.is_set()
-        # Revocation must not commit: records read from a revoked partition
-        # are dropped and reread by the partition's next owner.
+        # Revocation may only commit a starting point: never past a record
+        # read from the revoked partition, which its next owner rereads.
         relevant = [item for item in observed.revocations if item[0] and item[1]]
         assert relevant
-        assert all(commits == [] for _, _, commits in relevant)
+        for _, delivered, commits in relevant:
+            for commit in commits:
+                for partition, offset in commit.items():
+                    assert offset <= min(o for p, o in delivered if p == partition)
         assert {partition_of[ctx["event_id"]] for ctx in first} <= first_assignment
         assert {partition_of[ctx["event_id"]] for ctx in second} <= second_assignment
         assert len(first_assignment) == len(second_assignment) == 1
