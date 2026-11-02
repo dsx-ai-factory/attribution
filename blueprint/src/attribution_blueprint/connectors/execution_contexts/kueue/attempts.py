@@ -71,6 +71,7 @@ def attempts_from_workload_history(
     *,
     workload_name: str,
     now: datetime,
+    retain_requeued_evictions: bool = True,
 ) -> list[WorkloadAttempt]:
     """Split retained Workload/JobSet history into attributable executions."""
     observations = history.get("observations") or []
@@ -80,7 +81,10 @@ def attempts_from_workload_history(
         if item.get("kind") == "Workload" and (item.get("metadata") or {}).get("name") == workload_name
     )
     restart_starts = _restart_starts(observations)
-    terminals = _terminal_events(observations)
+    terminals = _terminal_events(
+        observations,
+        retain_requeued_evictions=retain_requeued_evictions,
+    )
     pod_events = _pod_events(observations)
     job_events = {
         uid: timeline[-1]
@@ -264,6 +268,7 @@ def attempts_from_live_resources(
         history,
         workload_name=workload_name,
         now=now,
+        retain_requeued_evictions=False,
     )
     return attempts[-1:]
 
@@ -439,7 +444,11 @@ def _starts(admissions: list[dict], restarts: dict[str, str]) -> list[dict]:
     return starts
 
 
-def _terminal_events(observations: list[dict]) -> list[dict]:
+def _terminal_events(
+    observations: list[dict],
+    *,
+    retain_requeued_evictions: bool,
+) -> list[dict]:
     events = []
     for observation in observations:
         kind = observation.get("kind")
@@ -461,7 +470,8 @@ def _terminal_events(observations: list[dict]) -> list[dict]:
             condition_type = condition.get("type")
             transition = condition.get("lastTransitionTime")
             if (
-                kind == "Workload"
+                not retain_requeued_evictions
+                and kind == "Workload"
                 and condition_type == "Evicted"
                 and requeued_at is not None
                 and transition is not None

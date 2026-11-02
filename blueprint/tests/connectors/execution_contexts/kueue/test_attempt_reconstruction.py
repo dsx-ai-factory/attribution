@@ -151,6 +151,29 @@ def _condition(
     return condition
 
 
+def _workload_history_observation(
+    resource_version: str,
+    observed_at: str,
+    conditions: list[dict],
+    *,
+    owner_references: list[dict] | None = None,
+) -> dict:
+    return {
+        "apiVersion": "kueue.x-k8s.io/v1beta1",
+        "kind": "Workload",
+        "metadata": {
+            "namespace": "team-a",
+            "name": "training-workload",
+            "uid": "workload-uid",
+            "resourceVersion": resource_version,
+            "ownerReferences": owner_references or [],
+        },
+        "eventType": "MODIFIED",
+        "observedAt": observed_at,
+        "status": {"conditions": conditions},
+    }
+
+
 def _capture(store: SQLitePlacementStore, observation: ResourceObservation) -> None:
     store.capture_observation(
         observation,
@@ -444,6 +467,48 @@ def test_retained_jobset_retries_flow_as_distinct_execution_contexts(
     assert output.write.call_count == 2
 
 
+def test_requeued_workload_preserves_preemption_while_waiting_for_readmission():
+    history = {
+        "namespace": "team-a",
+        "observations": [
+            _workload_history_observation(
+                "1",
+                "2026-10-14T10:00:00Z",
+                [_condition("Admitted", "2026-10-14T10:00:00Z")],
+            ),
+            _workload_history_observation(
+                "2",
+                "2026-10-14T10:31:00Z",
+                [
+                    _condition(
+                        "Evicted",
+                        "2026-10-14T10:30:00Z",
+                        reason="Preempted",
+                    ),
+                    _condition("Requeued", "2026-10-14T10:31:00Z"),
+                ],
+            ),
+        ],
+    }
+
+    [attempt] = attempts_from_workload_history(
+        history,
+        now=datetime(2026, 10, 14, 12, 0, tzinfo=timezone.utc),
+        workload_name="training-workload",
+    )
+    context = _context_from_history_attempt(attempt, [], {})
+
+    assert context["state"] == "PREEMPTED"
+    assert context["end_time"] == datetime(
+        2026,
+        10,
+        14,
+        10,
+        30,
+        tzinfo=timezone.utc,
+    )
+
+
 def test_scheduler_readmission_creates_a_new_attempt():
     owner_reference = {
         "apiVersion": "jobset.x-k8s.io/v1alpha2",
@@ -453,35 +518,16 @@ def test_scheduler_readmission_creates_a_new_attempt():
         "controller": True,
     }
 
-    def workload_observation(
-        resource_version: str,
-        observed_at: str,
-        conditions: list[dict],
-    ) -> dict:
-        return {
-            "apiVersion": "kueue.x-k8s.io/v1beta1",
-            "kind": "Workload",
-            "metadata": {
-                "namespace": "team-a",
-                "name": "training-workload",
-                "uid": "workload-uid",
-                "resourceVersion": resource_version,
-                "ownerReferences": [owner_reference],
-            },
-            "eventType": "MODIFIED",
-            "observedAt": observed_at,
-            "status": {"conditions": conditions},
-        }
-
     history = {
         "namespace": "team-a",
         "observations": [
-            workload_observation(
+            _workload_history_observation(
                 "1",
                 "2026-10-14T10:00:00Z",
                 [_condition("Admitted", "2026-10-14T10:00:00Z")],
+                owner_references=[owner_reference],
             ),
-            workload_observation(
+            _workload_history_observation(
                 "2",
                 "2026-10-14T10:30:00Z",
                 [
@@ -489,15 +535,18 @@ def test_scheduler_readmission_creates_a_new_attempt():
                         "Evicted",
                         "2026-10-14T10:30:00Z",
                         reason="Preempted",
-                    )
+                    ),
+                    _condition("Requeued", "2026-10-14T10:31:00Z"),
                 ],
+                owner_references=[owner_reference],
             ),
-            workload_observation(
+            _workload_history_observation(
                 "3",
                 "2026-10-14T11:00:00Z",
                 [_condition("Admitted", "2026-10-14T11:00:00Z")],
+                owner_references=[owner_reference],
             ),
-            workload_observation(
+            _workload_history_observation(
                 "4",
                 "2026-10-14T12:00:00Z",
                 [
@@ -507,6 +556,7 @@ def test_scheduler_readmission_creates_a_new_attempt():
                         reason="Succeeded",
                     )
                 ],
+                owner_references=[owner_reference],
             ),
         ],
     }
