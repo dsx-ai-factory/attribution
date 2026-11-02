@@ -72,6 +72,19 @@ def get_clean_bad_nodes(my_bad_nodes: JobNodeAttributions, cluster: str) -> JobN
     return my_bad_nodes
 
 
+XID_145_CASCADE_SYMPTOMS = (
+    "cudaErrorLaunchFailure",
+    "cudaErrorNvlinkUncorrectable",
+    "XID-45-PREEMPTIVE_REMOVAL",
+    "NV_ERR_INVALID_STATE",
+)
+# RXPIPE-8 is treated as the primary symptom; SRC_TRACK variants are cascaded noise.
+XID_145_RXPIPE_CASCADE_SYMPTOMS = (
+    "XID-145-RLW_SRC_TRACK-4",
+    "XID-145-RLW_SRC_TRACK-8",
+)
+
+
 def filter_xid_145_cascade_symptoms(
     symptoms: SymptomSet[str], my_bad_nodes: Optional[JobNodeAttributions] = None
 ) -> None:
@@ -85,20 +98,9 @@ def filter_xid_145_cascade_symptoms(
         symptoms: SymptomSet to filter (modified in place)
         my_bad_nodes: Per-node attributions to filter (modified in place)
     """
-    cascade_symptoms_to_filter = [
-        "cudaErrorLaunchFailure",
-        "cudaErrorNvlinkUncorrectable",
-        "XID-45-PREEMPTIVE_REMOVAL",
-        "NV_ERR_INVALID_STATE",
-    ]
-    # RXPIPE-8 is treated as the primary symptom; SRC_TRACK variants are cascaded noise.
+    cascade_symptoms_to_filter = list(XID_145_CASCADE_SYMPTOMS)
     if "XID-145-RLW_RXPIPE-8" in symptoms:
-        cascade_symptoms_to_filter.extend(
-            [
-                "XID-145-RLW_SRC_TRACK-4",
-                "XID-145-RLW_SRC_TRACK-8",
-            ]
-        )
+        cascade_symptoms_to_filter.extend(XID_145_RXPIPE_CASCADE_SYMPTOMS)
 
     # Find symptoms to discard
     symptoms_to_discard = []

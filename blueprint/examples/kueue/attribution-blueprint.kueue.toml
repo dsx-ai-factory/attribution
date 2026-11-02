@@ -23,13 +23,13 @@ kubeconfig = "/CHANGE_ME_PATH/kubeconfig"
 context = "CHANGE_ME_KUBECTL_CONTEXT"
 namespace = "CHANGE_ME_NAMESPACE"
 timeout_seconds = 60
-# Read durable Pod placement when the optional recorder is installed.
+# Read durable Pod placement when kubernetes-daemon is installed.
 placement_records_enabled = false
 
-# Set placement_records_enabled = true when enabling this recorder client.
+# Set placement_records_enabled = true when enabling this daemon client.
 #
-# [eca.kueue.placement_recorder]
-# endpoint = "http://attribution-pod-placement-recorder.CHANGE_ME_NAMESPACE.svc:8080"
+# [eca.kueue.kubernetes_daemon]
+# endpoint = "http://attribution-kubernetes-daemon.CHANGE_ME_NAMESPACE.svc:8080"
 # timeout_seconds = 10
 
 # [eca.kueue.prometheus_metrics]

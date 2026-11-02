@@ -3,36 +3,12 @@
 
 from __future__ import annotations
 
-from enum import Enum
 from typing import Protocol
 
 from attribution_blueprint.connectors.execution_contexts.kueue.pod_placement.models import (
     PlacementQuery,
-    PlacementRecord,
     PodPlacement,
 )
-
-
-class CreateResult(str, Enum):
-    CREATED = "created"
-    DUPLICATE = "duplicate"
-    # An existing record's mutable `node_failure_reason` was patched. Unlike
-    # DUPLICATE, this means the store's copy changed.
-    UPDATED = "updated"
-
-
-class PlacementConflictError(RuntimeError):
-    pass
-
-
-class PlacementReader(Protocol):
-    def list_for_workload(self, namespace: str, workload_uid: str) -> list[PlacementRecord]: ...
-
-
-class PlacementStore(PlacementReader, Protocol):
-    def get_by_pod_uid(self, pod_uid: str) -> PlacementRecord | None: ...
-
-    def create(self, record: PlacementRecord) -> CreateResult: ...
 
 
 class PlacementResolver(Protocol):

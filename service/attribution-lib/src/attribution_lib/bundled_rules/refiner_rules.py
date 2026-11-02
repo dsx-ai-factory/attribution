@@ -7,7 +7,8 @@
 # at the desired position. Priorities are computed automatically.
 
 import re
-from datetime import timedelta
+from bisect import bisect_left
+from datetime import datetime, timedelta
 from typing import Optional
 
 from common.refiner_helpers import (
@@ -20,9 +21,14 @@ from attribution_lib.events import BAD_PAIR_EVENT_TYPES, EventStream, sql_placeh
 from attribution_lib.failed_node_provenance import FailedNodeResolution
 from common.megatron import get_pytorch_timeout_minutes
 from attribution_lib.hooks import multihooks, singlehooks
-from attribution_lib.job_info import NVRX_TAG, JobInfo, Scheduler
+from attribution_lib.job_info import NVRX_TAG, JobInfo
 from attribution_lib.node_not_responding_provenance import NodeNotRespondingProvenance
-from attribution_lib.bundled_rules.common.outcome_helpers import apply_user_cancellation_reclassification
+from attribution_lib.observation import Context as ObservationContext
+from attribution_lib.observation.inbound import Source as ObsSource
+from attribution_lib.bundled_rules.common.outcome_helpers import (
+    KUBERNETES_SCHEDULER_TYPES,
+    apply_user_cancellation_reclassification,
+)
 from attribution_lib.outcome import OutcomeAttribution
 from attribution_lib.rules import (
     FilterPriority,
@@ -32,6 +38,8 @@ from attribution_lib.rules import (
     refiner_def,
 )
 from attribution_lib.bundled_rules.common.scrub_helpers import (
+    XID_145_CASCADE_SYMPTOMS,
+    XID_145_RXPIPE_CASCADE_SYMPTOMS,
     clean_bad_nodes_of_cascaded_symptoms,
     filter_cascade_symptoms_symptomset,
     filter_xid_145_cascade_symptoms,
@@ -112,9 +120,10 @@ _REFINER_ORDER = [
     "WatchdogGpuCascadeCleanup",
     "CudaXidCascades",
     "ConnectionClosedCascade",
+    "NvrxFailureUserCauseCascade",
     "XidGenericCleanup",
     "Xid145RxpipePrivErrCascade",
-    "SlurmTimeoutXid145Cascade",
+    "ExternalTerminationCascade",
     "NodeOfflineXid145Cascade",
     "PmixCleanup",
     "NSConnectionLost",
@@ -392,16 +401,41 @@ _CONNECTION_CLOSED_TRIGGERS = [
     "cudaError out of memory",
 ]
 
+# Specific application errors that explain why NVRx detected a failure.
+_NVRX_FAILURE_USER_CAUSES = (
+    "Python Exception: AssertionError: batch size not divisible",
+    "Python Exception: argparse unrecognized arguments",
+    "Python Exception: ValueError: module grids do not cover every rank",
+    "Python Exception: ValueError: num-experts not divisible",
+    "Python Exception: RuntimeError: pinned activation buffer budget exceeded",
+    "Python Exception: FileNotFoundError: checkpoint iteration not found",
+    "Bad Token",
+)
+
 _XID145_RXPIPE_SYMPTOM = "XID-145-RLW_RXPIPE-8"
-_XID145_MULTICATEGORY_SYMPTOM = "XID-145-MultiCategory"
-# In the regression fixture, RXPIPE was 33.5 s before job_end and 62.7 s after
-# the timeout marker. A 90 s bound adds about 27 s of scheduler
-# and log-delivery headroom beyond the larger observed separation.
-_SLURM_TIMEOUT_XID145_WINDOW = timedelta(seconds=90)
-# Timeout and XID timestamps come from separate log streams. Allow 1 s for
-# timestamp precision and clock skew, rather than making the full 90 s window
-# symmetric and potentially suppressing a genuine pre-timeout XID.
-_SLURM_TIMEOUT_XID145_CLOCK_SKEW = timedelta(seconds=1)
+# Slurm sends SIGKILL KillWait after SIGTERM, and KillWait was 120 s on every
+# cluster measured. Teardown evidence can arrive until then, plus 30 s for log
+# delivery.
+_EXTERNAL_TERMINATION_WINDOW = timedelta(seconds=150)
+# Termination and XID timestamps come from separate log streams. Allow 1 s for
+# timestamp precision and clock skew, rather than a wider window before the
+# termination that could suppress a genuine pre-termination XID.
+_EXTERNAL_TERMINATION_CLOCK_SKEW = timedelta(seconds=1)
+# Slurm records the end of a preempted or timed-out job when its processes exit,
+# which is at most KillWait after the SIGTERM when there is no grace time. Only
+# used when the SIGTERM time itself is unknown.
+_SCHEDULER_STOP_BEFORE_END = timedelta(seconds=120)
+# Normalized cancellation symptoms whose source time, when known, is the time
+# the scheduler or an operator stopped the job.
+_TERMINATION_MARKERS = (
+    "Cancelled by Timeout",
+    "Cancelled by user",
+    "Cancelled by root",
+    "Cancelled by cluster operators",
+)
+# Only log streams that the dying processes and drivers write to carry teardown
+# noise. Health-check, CSP and metric evidence is collected independently.
+_TEARDOWN_OBS_SOURCES = frozenset({ObsSource.APPLOG, ObsSource.SYSLOG})
 _XID94_CONTAINED_ERROR_SYMPTOMS = frozenset(
     {
         "XID-94-CONTAINED_ERROR",
@@ -428,6 +462,7 @@ _IB_CLEANUP_SKIP_SYMPTOMS = frozenset({_XID145_RXPIPE_SYMPTOM, "XID-137-NVLINK_P
 _KERNEL_CRASH_SYMPTOMS = frozenset(
     {
         "kernel panic",
+        "kernel soft lockup",
         "kernel oops",
         "kernel invalid memory access",
     }
@@ -860,10 +895,9 @@ def detect_bad_nic_state(context: RefinerContext):
 
 # Raw-keyword promotion rules
 
-# Kueue terminal results remain authoritative when pod/node evidence has
-# already expired. Other scheduler types retain the historical zero-node
-# behavior until that contract is changed separately.
-_KUEUE_ALLOWED_ZERO_NODE_STATES = frozenset(
+# Kubernetes scheduler terminal results remain authoritative when
+# pod/node evidence has expired.
+_KUBERNETES_ALLOWED_ZERO_NODE_STATES = frozenset(
     {"EVICTED", "COMPLETED", "FAILED", "TIMEOUT", "NODE_FAIL", "PREEMPTED", "REQUEUED"}
 )
 
@@ -881,12 +915,15 @@ def job_state_fallback(context: RefinerContext):
     if symptoms is None or job_info is None:
         return
     if len(job_info.nodes) == 0 and job_info.attributed_cancellation is None:
-        if job_info.scheduler is not Scheduler.KUEUE or job_info.state not in _KUEUE_ALLOWED_ZERO_NODE_STATES:
+        if (
+            job_info.scheduler not in KUBERNETES_SCHEDULER_TYPES
+            or job_info.state not in _KUBERNETES_ALLOWED_ZERO_NODE_STATES
+        ):
             symptoms.discard_all()
             symptoms.add(job_info.source_value("Job didn't start", None, "none assigned"))
             return
     if job_info.state == "RUNNING" and job_info.attributed_cancellation is None:
-        if job_info.scheduler is not Scheduler.KUEUE:
+        if job_info.scheduler not in KUBERNETES_SCHEDULER_TYPES:
             symptoms.discard_all()
         if not symptoms:
             symptoms.add(job_info.source_value("running without error", None, "no symptoms; status says running"))
@@ -1103,7 +1140,7 @@ def _add_kueue_scheduler_node_failure(job_info: JobInfo, symptoms: SymptomSet) -
     """
     if (
         job_info.state == "NODE_FAIL"
-        and job_info.scheduler is Scheduler.KUEUE
+        and job_info.scheduler in KUBERNETES_SCHEDULER_TYPES
         and not job_info.failed_node
         and len(job_info.nodes) != 1
     ):
@@ -1313,17 +1350,37 @@ def xid145_rxpipe_priv_err_cascade(context: RefinerContext):
 
 
 @refiner_def(
-    name="SlurmTimeoutXid145Cascade",
+    name="ExternalTerminationCascade",
     author="NVIDIA Attribution team",
-    priority=_priority("SlurmTimeoutXid145Cascade"),
+    priority=_priority("ExternalTerminationCascade"),
 )
-def slurm_timeout_xid145_cascade(context: RefinerContext):
-    """Discard terminal RXPIPE-8 errors caused by Slurm time-limit teardown.
+def external_termination_cascade(context: RefinerContext):
+    """Demote log evidence written while the scheduler tore the job down.
 
-    Slurm terminates every task when an allocation exceeds its time limit. A
-    peer task can then report RXPIPE-8 while its shared memory is being torn
-    down. In that narrow case, both the detailed symptom and its temporary
-    outcome-classification symptom are cascades rather than root causes.
+    Preemption, cancellation, requeue and the time limit all send SIGTERM to
+    every task. The dying processes and drivers can then log errors, such as
+    RXPIPE-8 while shared memory is torn down, that are consequences of the
+    termination rather than its cause. Those application-log and syslog
+    sources stay as interesting evidence instead of bad evidence.
+
+    A source counts as teardown in one of these windows:
+
+    - When a termination time is known, from 1 s before to 150 s after it. A
+      termination time is a timed cancellation marker or an attributed
+      cancellation within 150 s of the job end, or else, for a job that timed
+      out, its start plus its time limit.
+    - Otherwise, for a preempted or timed-out job, from 120 s before to 150 s
+      after the job end, because Slurm records that end when the processes
+      exit.
+    - Otherwise, from the job end to 150 s after it. A cancel is often a
+      reaction to a real failure just before it, so nothing before the end
+      counts.
+
+    A log line without its own timestamp takes the time of the nearest timed
+    line above it in the same log, and stays bad when there is none.
+
+    Exit codes such as 143 do not count as an external stop: launchers also
+    send SIGTERM to surviving ranks after a genuine rank failure.
     """
     symptoms = context.symptoms
     my_bad_nodes = context.my_bad_nodes
@@ -1333,53 +1390,124 @@ def slurm_timeout_xid145_cascade(context: RefinerContext):
         symptoms is None
         or my_bad_nodes is None
         or job_info is None
-        or job_info.scheduler is Scheduler.KUEUE
+        or job_info.scheduler in KUBERNETES_SCHEDULER_TYPES
         or job_info.job_end_time is None
-        or "Cancelled by Timeout" not in symptoms
-        or _XID145_RXPIPE_SYMPTOM not in symptoms
     ):
         return
+    job_end_time = job_info.job_end_time
 
-    timeout_times = {source.time for source in symptoms["Cancelled by Timeout"] if source.time is not None}
-
-    def is_timeout_teardown(source: Source) -> bool:
-        if source.time is None:
-            return False
-        if abs(job_info.job_end_time - source.time) > _SLURM_TIMEOUT_XID145_WINDOW:
-            return False
-        return len(timeout_times) == 0 or any(
-            timeout_time - _SLURM_TIMEOUT_XID145_CLOCK_SKEW
-            <= source.time
-            <= timeout_time + _SLURM_TIMEOUT_XID145_WINDOW
-            for timeout_time in timeout_times
-        )
-
-    terminal_rxpipe_sources = {source for source in symptoms[_XID145_RXPIPE_SYMPTOM] if is_timeout_teardown(source)}
-    if len(terminal_rxpipe_sources) == 0:
+    # Raw Slurm states can carry decorations such as "CANCELLED by 0" or "CANCELLED+".
+    raw_state = job_info.state if job_info.state is not None else ""
+    state = raw_state.partition(" ")[0].rstrip("+").upper()
+    timed_out = state == "TIMEOUT" or "Cancelled by Timeout" in symptoms
+    markers = [marker for marker in _TERMINATION_MARKERS if marker in symptoms]
+    cancellation = job_info.attributed_cancellation
+    if state not in ("PREEMPTED", "TIMEOUT", "CANCELLED", "REQUEUED") and len(markers) == 0 and cancellation is None:
         return
+    # A timed timeout marker far from the job end belongs to a step, so only the job
+    # state or an untimed marker says that the scheduler stopped the whole job.
+    scheduler_stop = state in ("PREEMPTED", "TIMEOUT") or (
+        "Cancelled by Timeout" in symptoms and any(source.time is None for source in symptoms["Cancelled by Timeout"])
+    )
+
+    # A marker far from the job end belongs to something else, such as a step
+    # cancelled while the job kept running.
+    candidate_times = {source.time for marker in markers for source in symptoms[marker] if source.time is not None}
+    if cancellation is not None:
+        candidate_times.add(cancellation.source.time)
+    termination_times = {
+        candidate for candidate in candidate_times if abs(job_end_time - candidate) <= _EXTERNAL_TERMINATION_WINDOW
+    }
+    # Slurm stops a timed-out job at its start plus its time limit.
+    if len(termination_times) == 0 and timed_out is True and job_info.time_limit is not None:
+        limit_time = job_info.job_start_time + timedelta(minutes=job_info.time_limit)
+        if abs(job_end_time - limit_time) <= _EXTERNAL_TERMINATION_WINDOW:
+            termination_times.add(limit_time)
+
+    # Job-level symptoms were aggregated before refiners ran, and DagCascadePruning
+    # later rebuilds them from the per-node groups, so demote in both places.
+    groups = [symptoms, *(group for _node, group in my_bad_nodes.symptom_groups())]
+
+    # Some log lines carry no timestamp, such as the "Last error:" line that repeats
+    # an NCCL warning inside a PyTorch exception. Such a line is placed at the time
+    # of the nearest timed line above it in the same log. Interesting sources count
+    # too, so lines that earlier rules demoted still place the lines below them.
+    timed_lines: dict[ObservationContext, list[tuple[int, datetime]]] = {}
+    for group in groups:
+        for _symptom, sources in group.all_items():
+            for source in sources.all_sources():
+                if (
+                    source.time is not None
+                    and source.line_num is not None
+                    and source.source_context.source in _TEARDOWN_OBS_SOURCES
+                ):
+                    timed_lines.setdefault(source.source_context, []).append((source.line_num, source.time))
+    for entries in timed_lines.values():
+        entries.sort(key=lambda entry: entry[0])
+
+    def placed_time(source: Source) -> Optional[datetime]:
+        """Return the time of a source, or of the nearest timed line above it.
+
+        Args:
+            source: The source to place.
+
+        Returns:
+            The source's own time, else the time of the nearest timed log line
+            above it in the same log, else None.
+        """
+        if source.time is not None:
+            return source.time
+        entries = timed_lines.get(source.source_context)
+        if entries is None or source.line_num is None:
+            return None
+        index = bisect_left(entries, source.line_num, key=lambda entry: entry[0])
+        if index == 0:
+            return None
+        return entries[index - 1][1]
+
+    def is_teardown(source: Source) -> bool:
+        if source.source_context.source not in _TEARDOWN_OBS_SOURCES:
+            return False
+        source_time = placed_time(source)
+        if source_time is None:
+            return False
+        if len(termination_times) > 0:
+            return any(
+                termination_time - _EXTERNAL_TERMINATION_CLOCK_SKEW
+                <= source_time
+                <= termination_time + _EXTERNAL_TERMINATION_WINDOW
+                for termination_time in termination_times
+            )
+        if scheduler_stop is True:
+            return (
+                job_end_time - _SCHEDULER_STOP_BEFORE_END <= source_time <= job_end_time + _EXTERNAL_TERMINATION_WINDOW
+            )
+        return job_end_time <= source_time <= job_end_time + _EXTERNAL_TERMINATION_WINDOW
 
     # Preserve the existing XID-145 cascade cleanup while RXPIPE is still bad;
     # post-outcome filtering cannot detect the trigger after it is demoted here.
-    filter_xid_145_cascade_symptoms(symptoms, my_bad_nodes)
-    symptoms[_XID145_RXPIPE_SYMPTOM].discard_selected(terminal_rxpipe_sources)
+    # A cascade symptom logged before the first teardown RXPIPE did not come from
+    # it, so it is an independent failure and the cleanup must not remove it.
+    rxpipe_sources = symptoms[_XID145_RXPIPE_SYMPTOM] if _XID145_RXPIPE_SYMPTOM in symptoms else ()
+    rxpipe_times = [t for s in rxpipe_sources if is_teardown(s) and (t := placed_time(s)) is not None]
+    if len(rxpipe_times) > 0:
+        first_rxpipe = min(rxpipe_times)
+        cascades = (*XID_145_CASCADE_SYMPTOMS, *XID_145_RXPIPE_CASCADE_SYMPTOMS)
+        earlier_cascade = any(
+            (source_time := placed_time(source)) is not None and source_time < first_rxpipe and not is_teardown(source)
+            for group in groups
+            for symptom, sources in group.items()
+            if any(cascade in symptom for cascade in cascades)
+            for source in sources
+        )
+        if earlier_cascade is False:
+            filter_xid_145_cascade_symptoms(symptoms, my_bad_nodes)
 
-    if _XID145_MULTICATEGORY_SYMPTOM in symptoms:
-        dynamic_sources = symptoms[_XID145_MULTICATEGORY_SYMPTOM]
-        paired_sources = terminal_rxpipe_sources.intersection(dynamic_sources)
-        dynamic_sources.discard_selected(paired_sources)
-
-    for _node, node_group in my_bad_nodes.items():
-        node_symptoms = node_group.attributions
-        if _XID145_RXPIPE_SYMPTOM not in node_symptoms:
-            continue
-        node_terminal_sources = {
-            source for source in node_symptoms[_XID145_RXPIPE_SYMPTOM] if is_timeout_teardown(source)
-        }
-        node_symptoms[_XID145_RXPIPE_SYMPTOM].discard_selected(node_terminal_sources)
-        if _XID145_MULTICATEGORY_SYMPTOM in node_symptoms:
-            dynamic_sources = node_symptoms[_XID145_MULTICATEGORY_SYMPTOM]
-            paired_sources = node_terminal_sources.intersection(dynamic_sources)
-            dynamic_sources.discard_selected(paired_sources)
+    for group in groups:
+        for symptom, sources in list(group.items()):
+            if symptom.startswith("Cancelled "):
+                continue
+            sources.discard_selected({source for source in sources if is_teardown(source)})
 
 
 @refiner_def(
@@ -1820,6 +1948,30 @@ def connection_closed_cascade(context: RefinerContext):
         _remove_connection_closed_cascade(symptoms, my_bad_nodes)
 
 
+@refiner_def(
+    name="NvrxFailureUserCauseCascade",
+    author="NVIDIA Attribution team",
+    priority=_priority("NvrxFailureUserCauseCascade"),
+)
+def nvrx_failure_user_cause_cascade(context: RefinerContext):
+    """Discard NVRx detected failure when a specific application error explains it.
+
+    The application error can come from any rank, so the discard applies to the
+    job-level symptoms and to every node.
+    """
+    symptoms = context.symptoms
+    my_bad_nodes = context.my_bad_nodes
+    if symptoms is None:
+        return
+    if not any(cause in symptoms for cause in _NVRX_FAILURE_USER_CAUSES):
+        return
+    symptoms.discard("NVRx detected failure")
+    if my_bad_nodes is None:
+        return
+    for _node, errors in my_bad_nodes.symptom_groups():
+        errors.discard("NVRx detected failure")
+
+
 @refiner_def(name="XidGenericCleanup", author="NVIDIA Attribution team", priority=_priority("XidGenericCleanup"))
 def xid_generic_cleanup(context: RefinerContext):
     """When specific XID/ECC/Row Remap is present, discard generic symptoms."""
@@ -1987,7 +2139,8 @@ def last_resort_symptoms(context: RefinerContext):
         elif job_info.state == "REQUEUED":
             symptoms.add(job_info.source_value("Job requeued", job_info.state, "last resort; slurm status"))
         elif job_info.state == "EVICTED":
-            # eviction reason preserved in `kueue_state`; empty symptom set resolves to Incomplete Info
+            # Native eviction reason is preserved in raw scheduler context;
+            # an empty symptom set resolves to Incomplete Info.
             pass
         elif job_info.state != "RUNNING":
             symptoms.add(job_info.source_value("job failed", job_info.state, "last resort; slurm status"))
@@ -2132,7 +2285,10 @@ _SYMPTOMS_TO_CHECK = [
 def xid149_and_nvlink_filtering(context: RefinerContext):
     """XID-149 priority filtering and nvlink symptom cleanup.
 
-    Priority: XID-149.4 > XID-149.10 > other XID-149.x > XID-149.0
+    Overall Priority: XID-149.4 > XID-149.10 > other XID-149.x > XID-149.0
+    
+    Exceptions:
+    - XID-149.21 survives XID-149.4
     """
     symptoms = context.symptoms
     my_bad_nodes = context.my_bad_nodes
@@ -2148,9 +2304,9 @@ def xid149_and_nvlink_filtering(context: RefinerContext):
         has_xid_149_0 = any("XID-149.0-" in sym for sym in xid_149_symptoms)
 
         if has_xid_149_4:
-            # If XID-149.4 is seen, discard all other XID-149 symptoms
+            # If XID-149.4 is seen, discard all other XID-149 symptoms except 149.21
             for sym in xid_149_symptoms:
-                if "XID-149.4-" not in sym:
+                if not sym.startswith(("XID-149.4-", "XID-149.21-")):
                     symptoms.discard(sym)
         elif has_xid_149_10:
             # If XID-149.10 is seen, discard all other XID-149 symptoms
@@ -2169,6 +2325,7 @@ def xid149_and_nvlink_filtering(context: RefinerContext):
                 [
                     "XID-149.4-NETIR_LINK_DOWN-ALIGNMENT_LOSS-0",
                     "XID-149.10-NETIR_LINK_DOWN-PHY_LAYER_RETRANSMIT_TIMEOUT-0",
+                    "XID-149.21-NETIR_LINK_DOWN-RECEIEVED_TS1-0",
                     "effective_ber_high",
                     "plr_tx_bw_loss_high",
                     "hist15_high",
@@ -2479,16 +2636,16 @@ def outcome_reclassification_refiner(context: RefinerContext):
     nvrx_exit_fields = (job_info.exit_code, job_info.exit_code_signal)
     is_nvrx = NVRX_TAG in job_info.tags
     nvrx_failed = is_nvrx and any(v is not None and v != 0 for v in nvrx_exit_fields)
-    kueue_has_only_preemption_fallback = all(
+    has_only_preemption_fallback = all(
         symptom == "job failed" for symptom in attribution_result.symptoms.symptoms()
     )
 
-    # Kueue preemption must not mask evidence-backed failures. Other scheduler
-    # types retain their historical PREEMPTED reclassification behavior.
+    # Kubernetes scheduler preemption must not mask evidence-backed
+    # failures. Other scheduler types retain their original behavior.
     if (
         job_info.attributed_cancellation is None
         and not nvrx_failed
-        and (job_info.scheduler is not Scheduler.KUEUE or kueue_has_only_preemption_fallback)
+        and (job_info.scheduler not in KUBERNETES_SCHEDULER_TYPES or has_only_preemption_fallback)
         and job_info.state is not None
         and job_info.state.upper() == "PREEMPTED"
     ):

@@ -54,6 +54,13 @@ expected_symptom = "Connection reset by peer"
 expected_rule = "socketProgressOpt"
 
 [[cases]]
+description = "socket progress opt ignores self connection on fully qualified node"
+job_variant = "fqdn_self"
+line = "0: NCCL WARN socketProgressOpt: Call to recv from 127.0.0.1<28601> failed : Connection reset by peer"
+expect = "no_match"
+expected_node = "localhost"
+
+[[cases]]
 description = "ipv4 cannot be retrieved bad"
 job_variant = "named_hosts"
 line = "0: [W socket.cpp:558] [c10d] The IPv4 network addresses of (testnode0-001, 58773) cannot be retrieved (gai error: -2 - Name or service not known)"

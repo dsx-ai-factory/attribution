@@ -530,10 +530,12 @@ describe('VerdictView', () => {
     expect([...facts.querySelectorAll('dt')].map((term) => term.textContent))
       .toEqual(['Service detail', 'Rule', 'Root symptom time', 'Attempt UID', 'Pipeline', 'Service'])
     expect(facts.previousElementSibling).toBe(rootSymptom)
-    expect(verdict.getByText('Cloud operator guidance')).toBeTruthy()
-    expect(verdict.getByText('Drain the node.')).toBeTruthy()
+    expect(verdict.getByText('Tenant guidance')).toBeTruthy()
+    expect(verdict.queryByText('Cloud operator guidance')).toBeNull()
+    expect(verdict.queryByText('Drain the node.')).toBeNull()
     expect(verdict.getByText('xid-79').getAttribute('data-variant')).toBe('zinc-subtle')
-    expect(verdict.queryByText('Retry elsewhere.')).toBeNull()
+    expect(verdict.getByText('Retry elsewhere.')).toBeTruthy()
+    expect(verdict.getByText('Include when asking for help', { selector: 'dt' }).nextElementSibling?.textContent).toBe('run ID')
 
     // Matched lines are the recorded lines only, in their own section counted in its header:
     // the root line is marked, no level words or line numbers are added.
@@ -552,6 +554,9 @@ describe('VerdictView', () => {
     expect(mocks.clipboardWrite).toHaveBeenCalledTimes(2)
     // The verdict by the page's name for it (its badge's label), not a code in capitals.
     expect(mocks.clipboardWrite.mock.calls[0][0]).toMatch(/^\*Attribution escalation: Hardware failure · Xid79\*/)
+    expect(mocks.clipboardWrite.mock.calls[0][0]).toContain('**Include on escalation:**\n\nrun ID')
+    expect(mocks.clipboardWrite.mock.calls[0][0]).not.toContain('Drain the node.')
+    expect(mocks.clipboardWrite.mock.calls[0][0]).not.toContain('node ID')
     expect(mocks.clipboardWrite.mock.calls[1][0]).toBe(window.location.href)
 
     expect(screen.getByText('Export')).toBeTruthy()
@@ -565,11 +570,78 @@ describe('VerdictView', () => {
       ['verdict-team-job-att2-20260501-0102.log', 'text/plain'],
       ['verdict-team-job-att2-20260501-0102.md', 'text/markdown'],
     ])
+    expect(mocks.downloadBlob.mock.calls[3][1]).toBe(mocks.clipboardWrite.mock.calls[0][0])
 
     // Page actions cover the whole page; there is no shortcut for only the first responsible node.
     expect(screen.queryByRole('button', { name: /Other runs/ })).toBeNull()
     expect(mocks.nav).not.toHaveBeenCalled()
   })
+
+  it('displays and exports the same multiline tenant instructions without rendering HTML', async () => {
+    const action = '1. Check your application settings.\n2. Retry only your workload.\n3. Confirm the failed operation completes.'
+    const support = 'Include the NVIDIA Attribution diagnosis (verdict, symptom chain), job ID and available logs; you can ask for help with incomplete evidence.'
+    const markup = '<img src=x onerror=alert(1)>'
+    mocks.useSWR.mockReturnValue({
+      data: run({ diagnose: { ...run().diagnose!, action, supportDetails: [support, markup] } }),
+      isLoading: false,
+      error: undefined,
+    })
+    render(<MemoryRouter><VerdictView /></MemoryRouter>)
+
+    const verdict = within(screen.getByRole('region', { name: 'Verdict' }))
+    const actionValue = verdict.getByText('Action', { selector: 'dt' }).nextElementSibling!
+    expect(actionValue.textContent).toBe(action)
+    expect(actionValue.firstElementChild?.classList.contains('whitespace-pre-wrap')).toBe(true)
+    const supportValue = verdict.getByText('Include when asking for help', { selector: 'dt' }).nextElementSibling!
+    expect(supportValue.textContent).toBe(`${support}\n\n${markup}`)
+    expect(supportValue.querySelector('img')).toBeNull()
+    expect(verdict.queryByText('Drain the node.')).toBeNull()
+
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Copy evidence' })) })
+    fireEvent.click(screen.getByRole('button', { name: 'Download as Markdown' }))
+    const copied = mocks.clipboardWrite.mock.calls[0][0]
+    expect(copied).toContain(`**Recommended action:**\n\n${action}`)
+    expect(copied).toContain(support)
+    expect(copied).not.toContain('Cloud operator guidance')
+    expect(mocks.downloadBlob.mock.calls[0][1]).toBe(copied)
+    fireEvent.click(screen.getByRole('button', { name: 'Download as JSON' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Download as YAML' }))
+    const json = mocks.downloadBlob.mock.calls[1][1]
+    const yaml = mocks.downloadBlob.mock.calls[2][1]
+    expect(JSON.parse(json).tenant_guidance).toEqual({
+      summary: run().diagnose!.summary,
+      impact: run().diagnose!.impact,
+      action: actionValue.textContent,
+      support_details: [support, markup],
+    })
+    expect(yaml).toContain(`  action: ${JSON.stringify(action)}`)
+    expect(yaml).toContain(`    - ${JSON.stringify(support)}`)
+    expect(yaml).toContain(`    - ${JSON.stringify(markup)}`)
+    for (const serialized of [json, yaml]) {
+      expect(serialized).not.toContain('Drain the node.')
+      expect(serialized).not.toContain('node ID')
+      expect(serialized).not.toContain('operatorDiagnose')
+    }
+  })
+
+  it.each([undefined, { ...run().diagnose!, hasPersona: false }])(
+    'does not display operator guidance when tenant guidance is unavailable', (diagnose) => {
+      mocks.useSWR.mockReturnValue({ data: run({ diagnose }), isLoading: false, error: undefined })
+      render(<MemoryRouter><VerdictView /></MemoryRouter>)
+      expect(screen.queryByText('Tenant guidance')).toBeNull()
+      expect(screen.queryByText('Cloud operator guidance')).toBeNull()
+      expect(screen.queryByText('Drain the node.')).toBeNull()
+      expect(screen.queryByText('Retry elsewhere.')).toBeNull()
+      fireEvent.click(screen.getByRole('button', { name: 'Download as JSON' }))
+      fireEvent.click(screen.getByRole('button', { name: 'Download as YAML' }))
+      expect(JSON.parse(mocks.downloadBlob.mock.calls[0][1]).tenant_guidance).toBeNull()
+      expect(mocks.downloadBlob.mock.calls[1][1]).toContain('tenant_guidance: null')
+      for (const [, content] of mocks.downloadBlob.mock.calls) {
+        expect(content).not.toContain('Drain the node.')
+        expect(content).not.toContain('Retry elsewhere.')
+      }
+    },
+  )
 
   it('orders the sections and keeps the raw payloads folded but copyable', async () => {
     mocks.useParams.mockReturnValue({ id: 'run-1' })
@@ -682,6 +754,7 @@ describe('VerdictView', () => {
         user: '',
         pipeline: '',
         service: '',
+        diagnose: undefined,
         operatorDiagnose: undefined,
       }),
       isLoading: false,

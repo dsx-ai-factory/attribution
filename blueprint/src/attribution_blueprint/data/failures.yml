@@ -17429,3 +17429,55 @@ failures:
   severity: high
   verification: verified
   last_reviewed: 2026-10-20
+- id: jit-c-compilation-failure
+  title: Triton/Inductor JIT C-compilation failure
+  aliases:
+  - Triton/Inductor JIT C-compilation failure
+  category: application
+  likely_owner: ambiguous
+  summary: A C or C++ compiler invoked during Triton or Inductor just-in-time (JIT) compilation exited with an error; the compiler failure alone does not establish its underlying cause.
+  personas:
+    tenant_sre:
+      title: JIT C compilation failed
+      summary: Just-in-time (JIT) compilation could not build a C or C++ component needed by the workload.
+      impact: The affected operation cannot continue with the generated component. Other processes may report cleanup errors afterward.
+      action: >-
+        Read the compiler diagnostics preceding the exception and preserve the failed command and traceback; for PyTorch/Inductor workloads, refer to the linked torch.compile troubleshooting guide for your installed PyTorch version, or use your installed Triton version's guidance for standalone Triton.
+        If the diagnostics identify a configuration or dependency issue you can change, apply the supported correction and rerun the affected operation once in an isolated test with the failing compilation path still enabled (Inductor or direct Triton), confirming that compilation and execution both complete.
+        If the test still fails, the cause remains unclear, or you cannot change the application environment, stop repeated retries and contact the person or team responsible for your application.
+        If resolving the reported error requires host access you do not have, contact your cluster administrator or cloud provider with the available evidence.
+      support_details: >-
+        Include the NVIDIA Attribution diagnosis (verdict, symptom chain, and source logs) when available, compiler diagnostics, and a sanitized command and traceback.
+        Record the compiler and framework versions, job identifier and time, available rank/node mapping, and any attempted correction and test result.
+        If the compiler diagnostics report filesystem errors, such as a read-only filesystem or no space left on the device, include those messages and ask your cluster administrator or cloud provider to collect any needed host logs you cannot access.
+        State which evidence is missing; do not delay asking for help because the diagnosis or restricted logs are unavailable.
+  technical_details: >-
+    Detection requires a CalledProcessError for a supported compiler command returning a positive nonzero exit status, with an
+    InductorError wrapper or a site-packages/triton/ or dist-packages/triton/ path in the command.
+    Supported executable names are gcc, g++, cc, c++, clang, and clang++, optionally with a target prefix such as aarch64-linux-gnu-, a numeric version suffix, or both.
+    The InductorError wrapper accepts CalledProcessError with or without the subprocess prefix and does not require a Triton package path.
+    Ordinary compilation messages and unrelated subprocess failures do not establish this symptom.
+    The specific compiler error takes priority over generic NVIDIA Resiliency Extension (NVRx) failure context,
+    with outcome Fail MultiCategory because the underlying cause is not established by the compiler error alone. Filesystem corruption or another
+    higher-priority infrastructure symptom retains precedence. A remote-peer closure attributed to the same node is secondary;
+    both original source lines remain in the decision graph. Preserve the compilation error as observed evidence;
+    it does not by itself prove filesystem corruption, a hardware defect, or why an NVRx cycle ended.
+  signals:
+  - kind: log
+    pattern: 'InductorError: CalledProcessError: Command'
+    note: Requires a supported C/C++ compiler command and a positive nonzero exit status in the same exception line; no Triton package path is required.
+  - kind: log
+    pattern: 'InductorError: subprocess.CalledProcessError: Command'
+    note: Requires a supported C/C++ compiler command and a positive nonzero exit status in the same exception line; no Triton package path is required.
+  - kind: log
+    pattern: 'subprocess.CalledProcessError: Command'
+    note: Without an InductorError wrapper, requires a supported C/C++ compiler command, a site-packages/triton/ or dist-packages/triton/ path, and a positive nonzero exit status in the same exception line.
+  related:
+  - python-exception
+  references:
+  - title: Python CalledProcessError
+    url: https://docs.python.org/3/library/subprocess.html#subprocess.CalledProcessError
+  - title: PyTorch torch.compile troubleshooting (Inductor workloads)
+    url: https://docs.pytorch.org/docs/stable/user_guide/torch_compiler/torch.compiler_troubleshooting.html
+  verification: draft
+  last_reviewed: 2026-10-21

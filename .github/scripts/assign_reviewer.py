@@ -2,10 +2,11 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Keep one primary reviewer on each ready pull request.
+"""Keep one primary reviewer on each ready pull request, and a triager on outside issues.
 
-Run by .github/workflows/auto-assign-pr.yml. See
-.github/reviewer-assignment.md for the process this implements.
+Run by .github/workflows/auto-assign-pr.yml and
+.github/workflows/auto-assign-issue.yml. See .github/reviewer-assignment.md
+for the process this implements.
 
 Pull request events: once the PR is ready, pick one primary reviewer from
 the reviewer team and drop the team's CODEOWNERS request. A reviewer a person
@@ -13,18 +14,23 @@ requested wins over a random pick. When someone removes the primary before
 they review, pick a replacement. Each primary is recorded in a bot comment,
 and the bot never picks an earlier primary again.
 
-Schedule: post one comment per review round when the primary misses the
+Issue events: when a person outside the reviewer team opens an issue, assign
+a random team member to triage it. That is all the script does for issues:
+no comments, reminders, or Slack messages.
+
+Schedule (pull requests only): post one comment per review round when the primary misses the
 deadline. For a PR whose author is outside the reviewer team, also post once
 when the primary approves.
 
-Slack: the script writes the messages it wants sent to the ``messages`` step
+Slack (pull requests only): the script writes the messages it wants sent to the ``messages`` step
 output. The workflow sends each one with the shared dsx-github-actions
 slack-notify action. The primary hears about a new pick, a re-request, or an
 overdue round. On-call hears about PRs whose author is outside the reviewer
 team, and about PRs with no eligible reviewer.
 
 Environment:
-    GITHUB_TOKEN: Workflow token. Reads the PR, requests reviewers, comments.
+    GITHUB_TOKEN: Workflow token. Reads the PR or issue, requests reviewers,
+        assigns, comments.
     TEAM_TOKEN: Token that can read the reviewer team and remove its request.
     SLACK_USER_IDS: Optional JSON object that maps GitHub logins to Slack user IDs.
     ONCALL_SLACK: Optional JSON object with the on-call Slack ``channel`` ID and
@@ -48,6 +54,7 @@ from zoneinfo import ZoneInfo
 API_URL = "https://api.github.com"
 BOT_LOGIN = "github-actions[bot]"
 REVIEWER_TEAM = "attribution"
+MAINTAINER_TEAM = "attribution-maintainer"
 # Never picked as primary: Ajay Hotchandani and Felix Abecassis.
 EXCLUDED_REVIEWERS = {"ajaymh", "flx42"}
 PRIMARY_MARKER = re.compile(r"<!-- primary-reviewer: ([A-Za-z0-9-]+) -->")
@@ -152,17 +159,17 @@ def by_person(event: dict[str, Any]) -> bool:
     return login(event.get("actor")) not in {None, BOT_LOGIN}
 
 
-def outside_team(pr: dict[str, Any], team: list[dict[str, Any]]) -> bool:
-    """Return True when a person outside the reviewer team opened the PR.
+def outside_team(pr_or_issue: dict[str, Any], team: list[dict[str, Any]]) -> bool:
+    """Return True when a person outside the reviewer team opened the PR or issue.
 
     Args:
-        pr: Pull request object.
+        pr_or_issue: Pull request or issue object.
         team: Reviewer team members.
 
     Returns:
         True for a non-bot author who is not a team member.
     """
-    author = pr["user"]
+    author = pr_or_issue["user"]
     return author.get("type") != "Bot" and author["login"] not in {member["login"] for member in team}
 
 
@@ -472,7 +479,7 @@ def assign(token: str, team_token: str, repo: str, event: dict[str, Any]) -> lis
     pr = github(token, f"/repos/{repo}/pulls/{number}")
     if pr["state"] != "open":
         return messages
-    team = github_pages(team_token, f"/orgs/{repo.split('/')[0]}/teams/{REVIEWER_TEAM}/members")
+    team = github_pages(team_token, f"/orgs/{repo.split('/')[0]}/teams/{MAINTAINER_TEAM}/members")
     # Drafts included: on-call owns the PR before automated reviews finish.
     if event["action"] == "opened" and outside_team(pr, team) is True:
         queue_oncall(
@@ -539,6 +546,28 @@ def assign(token: str, team_token: str, repo: str, event: dict[str, Any]) -> lis
     return messages
 
 
+def triage_issue(token: str, team_token: str, repo: str, event: dict[str, Any]) -> None:
+    """Assign a random team member to triage an issue from outside the team.
+
+    Args:
+        token: Workflow token.
+        team_token: Token that can read the reviewer team.
+        repo: owner/name.
+        event: Issue event payload.
+    """
+    number = event["issue"]["number"]
+    issue = github(token, f"/repos/{repo}/issues/{number}")
+    team = github_pages(team_token, f"/orgs/{repo.split('/')[0]}/teams/{MAINTAINER_TEAM}/members")
+    # An existing assignee means a person or an earlier run already handled it.
+    if outside_team(issue, team) is False or len(issue["assignees"]) > 0:
+        return
+    pool = sorted({member["login"] for member in team if member["type"] == "User"} - EXCLUDED_REVIEWERS)
+    if len(pool) == 0:
+        raise LookupError("No eligible triager")
+    triager = random.Random().choice(pool)
+    github(token, f"/repos/{repo}/issues/{number}/assignees", "POST", {"assignees": [triager]})
+
+
 def remind(token: str, team_token: str, repo: str) -> tuple[bool, list[dict[str, str]]]:
     """Post overdue and approval comments on every open pull request.
 
@@ -553,7 +582,7 @@ def remind(token: str, team_token: str, repo: str) -> tuple[bool, list[dict[str,
     now = datetime.now(REVIEW_TIMEZONE)
     failed = False
     messages: list[dict[str, str]] = []
-    team = github_pages(team_token, f"/orgs/{repo.split('/')[0]}/teams/{REVIEWER_TEAM}/members")
+    team = github_pages(team_token, f"/orgs/{repo.split('/')[0]}/teams/{MAINTAINER_TEAM}/members")
     for pr in github_pages(token, f"/repos/{repo}/pulls?state=open"):
         try:
             timeline = github_pages(token, f"/repos/{repo}/issues/{pr['number']}/timeline")
@@ -582,7 +611,7 @@ def remind(token: str, team_token: str, repo: str) -> tuple[bool, list[dict[str,
 
 
 def main() -> int:
-    """Handle one pull request event or the hourly schedule.
+    """Handle one pull request event, one issue event, or the hourly schedule.
 
     Returns:
         Process exit status.
@@ -593,7 +622,12 @@ def main() -> int:
         failed, messages = remind(token, os.environ["TEAM_TOKEN"], repo)
     else:
         event = json.loads(Path(os.environ["GITHUB_EVENT_PATH"]).read_text(encoding="utf-8"))
-        failed, messages = False, assign(token, os.environ["TEAM_TOKEN"], repo, event)
+        failed = False
+        if os.environ["GITHUB_EVENT_NAME"] == "issues":
+            triage_issue(token, os.environ["TEAM_TOKEN"], repo, event)
+            messages = []
+        else:
+            messages = assign(token, os.environ["TEAM_TOKEN"], repo, event)
     with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
         output.write(f"messages={json.dumps(messages)}\n")
     return int(failed)

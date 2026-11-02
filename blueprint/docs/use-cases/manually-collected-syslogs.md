@@ -38,6 +38,30 @@ How `.jsonl` files are read is in
 [Pre-shaped entries](../CONFIGURATION.md#pre-shaped-entries). The rest of this
 page covers raw syslog files, for when that is all you have.
 
+## What to Collect
+
+Collect the system journal for each workload node, from roughly five minutes
+before the workload started to five minutes after it ended. The Service trims
+lines to the execution-context window, so extra margin is harmless:
+
+```bash
+journalctl -o short-iso --since "<start - 5m>" --until "<end + 5m>"
+```
+
+The journal already contains kernel lines, so a separate `dmesg` capture is
+optional. `dmesg` alone covers only kernel lines and its buffer wraps on a busy
+node, so prefer the journal when it is available.
+
+| Log source | Why it matters |
+|---|---|
+| Kernel (`journalctl -k` or `dmesg`) | GPU driver errors such as Xid and SXid, NVLink and NVSwitch faults, kernel panics and lockups, OOM kills, storage errors, NIC link and firmware failures |
+| systemd and systemd-logind | Reboots, shutdowns, and GPU service stops that explain why a node disappeared mid-job |
+| NVIDIA Fabric Manager and IMEX | Lost connection to a GPU or peer node on NVSwitch systems |
+| kubelet (Kubernetes only) | Containers killed for exceeding memory limits |
+
+No single source is required. Missing sources only narrow what attribution
+can see.
+
 ## Required Directory Structure
 
 Create one child directory per workload node. Put the files collected from a

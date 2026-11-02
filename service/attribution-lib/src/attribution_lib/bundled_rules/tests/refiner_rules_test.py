@@ -3,6 +3,7 @@
 
 """Tests for refiner rules."""
 
+from dataclasses import replace
 from datetime import datetime, timedelta
 from unittest.mock import patch
 from zoneinfo import ZoneInfo
@@ -1058,10 +1059,12 @@ class TestIBSymptomCleanup:
         """Cancelled by Timeout does NOT discard IB when job is under time limit."""
         # Job ran for 30 minutes, time_limit is 60 minutes
         ji = default_job_info(state="TIMEOUT", job_end_time=_DEFAULT_START + timedelta(minutes=30), time_limit=60)
+        # Keep the IB error outside the termination teardown window.
         symptoms = _make_symptoms(
             obs_ctx,
             "Cancelled by Timeout",
             "IB Error-12 (IBV_WC_RETRY_EXC_ERR)",
+            source_time=_DEFAULT_START + timedelta(minutes=20),
         )
         bad_nodes = _make_bad_nodes(obs_ctx, {})
 
@@ -1205,28 +1208,33 @@ class TestIBSymptomCleanup:
     "classification",
     [None, "InfraHW", "InfraSW", "MultiCategory", "Undetermined"],
 )
-def test_kernel_panic_precedes_xid145(stream, obs_ctx, xid_node, classification):
-    """Select kernel panic while preserving same-node or peer XID evidence.
+@pytest.mark.parametrize(
+    "kernel_crash",
+    ["kernel panic", "kernel soft lockup", "kernel oops", "kernel invalid memory access"],
+)
+def test_kernel_crash_precedes_xid145(stream, obs_ctx, xid_node, classification, kernel_crash):
+    """Select a kernel crash while preserving same-node or peer XID evidence.
 
     Args:
         stream: Event stream used by refiners.
         obs_ctx: Synthetic evidence context.
         xid_node: Node reporting the XID.
         classification: Optional XID-145 classification marker.
+        kernel_crash: Kernel crash symptom on node01.
     """
     xid = "XID-145-RLW_RXPIPE-8"
     xid_symptoms = [xid]
     if classification is not None:
         xid_symptoms.append(f"XID-145-{classification}")
-    node_symptoms = {"node01": ["kernel panic"]}
+    node_symptoms = {"node01": [kernel_crash]}
     node_symptoms.setdefault(xid_node, []).extend(xid_symptoms)
-    symptoms = _make_symptoms(obs_ctx, "kernel panic", *xid_symptoms)
+    symptoms = _make_symptoms(obs_ctx, kernel_crash, *xid_symptoms)
     bad_nodes = _make_bad_nodes(obs_ctx, node_symptoms)
 
     _run(stream, _job_info_with(nodes=["node01", "node02"]), symptoms, bad_nodes)
     outcome = calculate_outcome(symptoms).value()
 
-    assert outcome.root_cause_symptom == "kernel panic"
+    assert outcome.root_cause_symptom == kernel_crash
     assert outcome.outcome == "Fail InfraSW"
     assert xid in symptoms
     assert xid in bad_nodes[xid_node].attributions
@@ -1239,7 +1247,9 @@ class TestKernelCrashIbCascadeCleanup:
     def two_node_job(self):
         return _job_info_with(nodes=["node01", "node02"])
 
-    @pytest.mark.parametrize("crash_symptom", ["kernel panic", "kernel oops", "kernel invalid memory access"])
+    @pytest.mark.parametrize(
+        "crash_symptom", ["kernel panic", "kernel soft lockup", "kernel oops", "kernel invalid memory access"]
+    )
     def test_peer_kernel_crash_discards_ib_error_12(self, stream, obs_ctx, two_node_job, crash_symptom):
         """Every kernel crash type makes a peer's IB Error-12 a cascade."""
         ib12 = "IB Error-12 (IBV_WC_RETRY_EXC_ERR)"
@@ -1327,17 +1337,6 @@ class TestKernelCrashIbCascadeCleanup:
         assert ib12 in symptoms
         assert ib12 in bad_nodes["node01"].attributions
         assert ib12 not in bad_nodes["node02"].attributions
-
-    def test_soft_lockup_does_not_trigger_peer_cleanup(self, stream, obs_ctx, two_node_job):
-        """A soft lockup is not one of the kernel crash signals."""
-        ib12 = "IB Error-12 (IBV_WC_RETRY_EXC_ERR)"
-        symptoms = _make_symptoms(obs_ctx, "kernel soft lockup", ib12)
-        bad_nodes = _make_bad_nodes(obs_ctx, {"node01": ["kernel soft lockup"], "node02": [ib12]})
-
-        _run(stream, two_node_job, symptoms, bad_nodes)
-
-        assert ib12 in symptoms
-        assert ib12 in bad_nodes["node02"].attributions
 
     def test_peer_without_error_12_is_unchanged(self, stream, obs_ctx, two_node_job):
         """A peer carrying only another IB error does not trigger cleanup."""
@@ -1430,8 +1429,9 @@ class TestSlurmStateSymptoms:
         else:
             assert "Cancelled by cluster operators" not in symptoms
 
-    def test_requeued_state_with_no_nodes_remains_incomplete(self, stream, obs_ctx):
-        ji = _job_info_with(state="REQUEUED", nodes=[], scheduler=Scheduler.KUEUE)
+    @pytest.mark.parametrize("scheduler", [Scheduler.KUEUE, Scheduler.KAI])
+    def test_requeued_state_with_no_nodes_remains_incomplete(self, stream, obs_ctx, scheduler):
+        ji = _job_info_with(state="REQUEUED", nodes=[], scheduler=scheduler)
         symptoms = _make_symptoms(obs_ctx)
 
         _run(stream, ji, symptoms)
@@ -1440,12 +1440,13 @@ class TestSlurmStateSymptoms:
         assert "Job didn't start" not in symptoms
         assert calculate_outcome(symptoms).value().outcome == "Incomplete Info"
 
-    def test_kueue_eviction_without_evidence_remains_incomplete(self, stream, obs_ctx):
+    @pytest.mark.parametrize("scheduler", [Scheduler.KUEUE, Scheduler.KAI])
+    def test_queue_scheduler_eviction_without_evidence_remains_incomplete(self, stream, obs_ctx, scheduler):
         # The Kueue connector normalizes every eviction reason with no
         # dedicated service state (queue stopped, admission check failed,
         # pods-ready timeout, deactivated, ...) to the single EVICTED value;
         # rules never see the raw per-reason string.
-        ji = _job_info_with(state="EVICTED", nodes=[], scheduler=Scheduler.KUEUE)
+        ji = _job_info_with(state="EVICTED", nodes=[], scheduler=scheduler)
         symptoms = _make_symptoms(obs_ctx)
 
         _run(stream, ji, symptoms)
@@ -1453,8 +1454,9 @@ class TestSlurmStateSymptoms:
         assert not symptoms
         assert calculate_outcome(symptoms).value().outcome == "Incomplete Info"
 
-    def test_kueue_eviction_preserves_real_failure_evidence(self, stream, obs_ctx):
-        ji = _job_info_with(state="EVICTED", nodes=[], scheduler=Scheduler.KUEUE)
+    @pytest.mark.parametrize("scheduler", [Scheduler.KUEUE, Scheduler.KAI])
+    def test_queue_scheduler_eviction_preserves_real_failure_evidence(self, stream, obs_ctx, scheduler):
+        ji = _job_info_with(state="EVICTED", nodes=[], scheduler=scheduler)
         symptoms = _make_symptoms(obs_ctx, "Python Exception")
 
         _run(stream, ji, symptoms)
@@ -1462,11 +1464,12 @@ class TestSlurmStateSymptoms:
         assert "Python Exception" in symptoms
         assert calculate_outcome(symptoms).value().outcome == "Fail User"
 
-    def test_node_fail_without_specific_node_uses_scheduler_evidence(self, stream, obs_ctx):
+    @pytest.mark.parametrize("scheduler", [Scheduler.KUEUE, Scheduler.KAI])
+    def test_node_fail_without_specific_node_uses_scheduler_evidence(self, stream, obs_ctx, scheduler):
         ji = _job_info_with(
             state="NODE_FAIL",
             nodes=["node01", "node02"],
-            scheduler=Scheduler.KUEUE,
+            scheduler=scheduler,
         )._replace(failed_node=None)
         symptoms = _make_symptoms(obs_ctx)
 
@@ -2108,7 +2111,7 @@ class TestXid145RxpipePrivErrCascade:
         assert other_xid137 in symptoms
 
 
-class TestSlurmTimeoutXid145Cascade:
+class TestExternalTerminationCascade:
     _RXPIPE = "XID-145-RLW_RXPIPE-8"
     _DYNAMIC = "XID-145-MultiCategory"
 
@@ -2138,13 +2141,14 @@ class TestSlurmTimeoutXid145Cascade:
         assert bad_nodes["node01"].attributions._data[self._RXPIPE].has_interesting()
         assert bad_nodes["node01"].attributions._data[self._DYNAMIC].has_interesting()
 
-    def test_kueue_timeout_does_not_apply_slurm_teardown_cascade(self, stream, obs_ctx):
+    @pytest.mark.parametrize("scheduler", [Scheduler.KUEUE, Scheduler.KAI])
+    def test_queue_scheduler_timeout_does_not_apply_slurm_teardown_cascade(self, stream, obs_ctx, scheduler):
         job_end = _DEFAULT_START + timedelta(minutes=60, seconds=5)
         ji = default_job_info(
             state="TIMEOUT",
             job_end_time=job_end,
             time_limit=60,
-            scheduler=Scheduler.KUEUE,
+            scheduler=scheduler,
         )
         source_time = job_end - timedelta(seconds=1)
         symptoms = _make_symptoms(
@@ -2275,8 +2279,8 @@ class TestSlurmTimeoutXid145Cascade:
         ("include_timeout", "event_offset"),
         [
             (False, timedelta(seconds=-1)),
-            (True, timedelta(seconds=-91)),
-            (True, timedelta(seconds=91)),
+            (True, timedelta(seconds=-2)),
+            (True, timedelta(seconds=151)),
         ],
     )
     def test_rxpipe_kept_without_all_timeout_cascade_evidence(
@@ -2290,8 +2294,13 @@ class TestSlurmTimeoutXid145Cascade:
         job_end = _DEFAULT_START + timedelta(minutes=60, seconds=5)
         ji = _slurm_job_info(state="CANCELLED", job_end_time=job_end, time_limit=60)
         source_time = job_end + event_offset
-        names = (["Cancelled by Timeout"] if include_timeout else []) + [self._RXPIPE, self._DYNAMIC]
-        symptoms = _make_symptoms(obs_ctx, *names, source_time=source_time)
+        symptoms = _make_symptoms(obs_ctx, self._RXPIPE, self._DYNAMIC, source_time=source_time)
+        if include_timeout:
+            symptoms.add(
+                SourceSet("Cancelled by Timeout").add(
+                    _make_source(obs_ctx, job_end, datum="DUE TO TIME LIMIT", line_num=2)
+                )
+            )
         bad_nodes = _make_bad_nodes(
             obs_ctx,
             {"node01": [self._RXPIPE, self._DYNAMIC]},
@@ -2363,9 +2372,11 @@ class TestSlurmTimeoutXid145Cascade:
             datum="earlier timeout marker",
             line_num=1,
         )
+        # The stale marker is ignored, so the time limit (the job end here) is the
+        # termination time. The XID comes before it.
         rxpipe_source = _make_source(
             obs_ctx,
-            job_end - timedelta(seconds=1),
+            job_end - timedelta(seconds=10),
             datum="terminal RXPIPE",
             line_num=2,
         )
@@ -2389,8 +2400,8 @@ class TestSlurmTimeoutXid145Cascade:
         [
             (-timedelta(seconds=30), -timedelta(seconds=1), True),
             (-timedelta(seconds=30), -timedelta(seconds=1, microseconds=1), False),
-            (-timedelta(seconds=90), timedelta(seconds=90), True),
-            (-timedelta(seconds=90), timedelta(seconds=90, microseconds=1), False),
+            (-timedelta(seconds=90), timedelta(seconds=150), True),
+            (-timedelta(seconds=90), timedelta(seconds=150, microseconds=1), False),
         ],
     )
     def test_timed_timeout_correlation_boundaries(
@@ -2401,7 +2412,7 @@ class TestSlurmTimeoutXid145Cascade:
         xid_from_timeout,
         should_demote,
     ):
-        """Timed markers allow 1 s clock skew before and 90 s teardown after."""
+        """Timed markers allow 1 s clock skew before and 150 s teardown after."""
         job_end = _DEFAULT_START + timedelta(minutes=60)
         ji = _slurm_job_info(state="CANCELLED", job_end_time=job_end, time_limit=60)
         timeout_time = job_end + timeout_from_job_end
@@ -2474,8 +2485,8 @@ class TestSlurmTimeoutXid145Cascade:
         assert self._RXPIPE not in bad_nodes["node02"].attributions
         assert self._DYNAMIC not in bad_nodes["node02"].attributions
 
-    def test_other_multicategory_source_is_preserved(self, stream, obs_ctx):
-        """Only the dynamic classification paired to RXPIPE is a timeout cascade."""
+    def test_other_terminal_sources_demoted(self, stream, obs_ctx):
+        """Every teardown source is demoted, not only the one paired to RXPIPE."""
         job_end = _DEFAULT_START + timedelta(minutes=60)
         ji = _slurm_job_info(state="CANCELLED", job_end_time=job_end, time_limit=60)
         rxpipe_source = _make_source(
@@ -2501,12 +2512,13 @@ class TestSlurmTimeoutXid145Cascade:
 
         _run(stream, ji, symptoms, bad_nodes)
 
-        assert self._RXPIPE not in symptoms
-        assert set(symptoms[self._DYNAMIC]) == {other_xid_source}
-        assert set(bad_nodes["node01"].attributions[self._DYNAMIC]) == {other_xid_source}
+        assert set(symptoms.symptoms()) == {"Cancelled by Timeout"}
+        assert set(symptoms._data[self._DYNAMIC].all_sources()) == {rxpipe_source, other_xid_source}
+        assert not bad_nodes["node01"].has_bad()
+        assert bad_nodes["node01"].attributions._data[self._DYNAMIC].has_interesting()
 
-    def test_other_xid145_variant_kept_for_terminal_timeout(self, stream, obs_ctx):
-        """The exception is exact and must not broaden to other XID-145 variants."""
+    def test_terminal_non_rxpipe_xid_demoted(self, stream, obs_ctx):
+        """Teardown handling covers every symptom, not only RXPIPE-8."""
         job_end = _DEFAULT_START + timedelta(minutes=60, seconds=5)
         ji = _slurm_job_info(state="CANCELLED", job_end_time=job_end, time_limit=60)
         source_time = job_end - timedelta(seconds=1)
@@ -2525,10 +2537,367 @@ class TestSlurmTimeoutXid145Cascade:
 
         _run(stream, ji, symptoms, bad_nodes)
 
-        assert "XID-145-RLW_SRC_TRACK-8" in symptoms
-        assert self._DYNAMIC in symptoms
-        assert "XID-145-RLW_SRC_TRACK-8" in bad_nodes["node01"].attributions
-        assert self._DYNAMIC in bad_nodes["node01"].attributions
+        assert set(symptoms.symptoms()) == {"Cancelled by Timeout"}
+        assert symptoms._data["XID-145-RLW_SRC_TRACK-8"].has_interesting()
+        assert not bad_nodes["node01"].has_bad()
+        assert bad_nodes["node01"].attributions._data["XID-145-RLW_SRC_TRACK-8"].has_interesting()
+
+    @staticmethod
+    def _final_result(stream, ji, symptoms, bad_nodes) -> AttributionResult:
+        """Run pre-outcome refiners, the outcome, and post-outcome refiners.
+
+        Args:
+            stream: Event stream for the job.
+            ji: JobInfo for the job.
+            symptoms: Job-level symptoms, refined in place.
+            bad_nodes: Per-node attributions, refined in place.
+
+        Returns:
+            The attribution result after post-outcome refiners.
+        """
+        _run(stream, ji, symptoms, bad_nodes)
+        result = AttributionResult(event_stream=stream, bad_nodes_attr=CalcBadNodesAttributionResult())
+        result.symptoms.update(symptoms)
+        result.outcome_attr = calculate_outcome(result.symptoms)
+        _run_post_outcome(
+            stream,
+            ji,
+            result.symptoms,
+            outcome=result.outcome_attr,
+            cancelled_by=ji.cancelled_by,
+            attribution_result=result,
+            my_bad_nodes=bad_nodes,
+        )
+        return result
+
+    def test_preempted_rxpipe_before_step_end_demoted(self, stream, obs_ctx):
+        """A preempted step's teardown RXPIPE leaves a Pass with no bad node."""
+        job_end = _DEFAULT_START + timedelta(minutes=60)
+        step_end = job_end - timedelta(seconds=19)
+        ji = _slurm_job_info(state="PREEMPTED", job_end_time=job_end, time_limit=120)._replace(
+            interest_end_time=step_end
+        )
+        source_time = step_end - timedelta(seconds=1, milliseconds=600)
+        symptoms = _make_symptoms(obs_ctx, self._RXPIPE, self._DYNAMIC, source_time=source_time)
+        bad_nodes = _make_bad_nodes(obs_ctx, {"node01": [self._RXPIPE, self._DYNAMIC]}, source_time=source_time)
+
+        result = self._final_result(stream, ji, symptoms, bad_nodes)
+
+        assert self._RXPIPE not in symptoms
+        assert self._DYNAMIC not in symptoms
+        assert not bad_nodes["node01"].has_bad()
+        assert bad_nodes["node01"].attributions._data[self._RXPIPE].has_interesting()
+        assert result.outcome_attr.value().outcome == "Pass"
+        assert result.outcome_attr.value().root_cause_symptom == "SLURM preempted"
+
+    def test_cancelled_at_marker_demotes_later_xids(self, stream, obs_ctx):
+        """A timed cancel marker demotes later evidence and keeps earlier evidence."""
+        job_end = _DEFAULT_START + timedelta(minutes=60)
+        ji = _slurm_job_info(state="CANCELLED", job_end_time=job_end, cancelled_by="user-a")
+        cancel_time = job_end - timedelta(seconds=30)
+        marker_source = _make_source(obs_ctx, cancel_time, datum="CANCELLED AT", line_num=1)
+        early_source = _make_source(obs_ctx, cancel_time - timedelta(seconds=30), datum="early XID", line_num=2)
+        late_source = _make_source(obs_ctx, cancel_time + timedelta(seconds=5), datum="late XID", line_num=3)
+        xid = "XID-94-CONTAINED_ERROR"
+        symptoms = SymptomSet()
+        symptoms.add(SourceSet("Cancelled by user").add(marker_source))
+        symptoms.add(SourceSet(xid).add(early_source).add(late_source))
+        bad_nodes = JobNodeAttributions()
+        bad_nodes.add(["node01"], SourceSet(xid).add(late_source))
+        bad_nodes.add(["node02"], SourceSet(xid).add(early_source))
+
+        _run(stream, ji, symptoms, bad_nodes)
+
+        assert set(symptoms[xid]) == {early_source}
+        assert not bad_nodes["node01"].has_bad()
+        assert bad_nodes["node01"].attributions._data[xid].has_interesting()
+        assert set(bad_nodes["node02"].attributions[xid]) == {early_source}
+
+    def test_user_cancel_20min_after_xid79_stays_infra(self, stream, obs_ctx):
+        """A user cancel long after a GPU failure must not hide the failure."""
+        job_end = _DEFAULT_START + timedelta(minutes=60)
+        ji = _slurm_job_info(state="CANCELLED", job_end_time=job_end, cancelled_by="user-a")
+        xid = "XID-79-GPU_HAS_FALLEN_OFF_THE_BUS"
+        xid_source = _make_source(obs_ctx, job_end - timedelta(minutes=20), datum="XID 79", line_num=1)
+        marker_source = _make_source(obs_ctx, job_end - timedelta(seconds=2), datum="CANCELLED AT", line_num=2)
+        symptoms = SymptomSet()
+        symptoms.add(SourceSet(xid).add(xid_source))
+        symptoms.add(SourceSet("Cancelled by user").add(marker_source))
+        bad_nodes = JobNodeAttributions()
+        bad_nodes.add(["node01"], SourceSet(xid).add(xid_source))
+
+        result = self._final_result(stream, ji, symptoms, bad_nodes)
+
+        assert xid in bad_nodes["node01"].attributions
+        assert result.outcome_attr.value().outcome == "Fail InfraHW"
+
+    @pytest.mark.parametrize("state", ["CANCELLED", "CANCELLED by 0", "REQUEUED"])
+    def test_cancelled_without_anchor_keeps_pre_end_xid(self, stream, obs_ctx, state):
+        """Without a termination time, a cancel or requeue keeps evidence before the job end."""
+        job_end = _DEFAULT_START + timedelta(minutes=60)
+        ji = _slurm_job_info(state=state, job_end_time=job_end)
+        source_time = job_end - timedelta(seconds=30)
+        symptoms = _make_symptoms(obs_ctx, self._RXPIPE, source_time=source_time)
+        bad_nodes = _make_bad_nodes(obs_ctx, {"node01": [self._RXPIPE]}, source_time=source_time)
+
+        _run(stream, ji, symptoms, bad_nodes)
+
+        assert self._RXPIPE in symptoms
+        assert self._RXPIPE in bad_nodes["node01"].attributions
+
+    @pytest.mark.parametrize("state", ["CANCELLED", "CANCELLED by 0", "REQUEUED"])
+    def test_cancelled_without_anchor_demotes_post_end_evidence(self, stream, obs_ctx, state):
+        """Without a termination time, evidence logged after the job end is teardown."""
+        job_end = _DEFAULT_START + timedelta(minutes=60)
+        ji = _slurm_job_info(state=state, job_end_time=job_end, cancelled_by="user-a")
+        ib_error = "IB Error-12 Vendor-129"
+        source_time = job_end + timedelta(seconds=60)
+        symptoms = _make_symptoms(obs_ctx, ib_error, source_time=source_time)
+        bad_nodes = _make_bad_nodes(obs_ctx, {"node01": [ib_error]}, source_time=source_time)
+
+        _run(stream, ji, symptoms, bad_nodes)
+
+        assert ib_error not in symptoms
+        assert symptoms._data[ib_error].has_interesting()
+        assert not bad_nodes["node01"].has_bad()
+
+    @pytest.mark.parametrize("obs_source", [ObsSource.HEALTH_CHECK, ObsSource.CSP_EVENT])
+    def test_health_check_and_csp_sources_not_demoted(self, stream, obs_ctx, obs_source):
+        """Evidence collected independently of the dying job stays bad."""
+        job_end = _DEFAULT_START + timedelta(minutes=60)
+        ji = _slurm_job_info(state="PREEMPTED", job_end_time=job_end)
+        independent_ctx = replace(obs_ctx, source=obs_source, id=Id(998))
+        stream.register_observation_context(independent_ctx)
+        independent_source = _make_source(independent_ctx, job_end + timedelta(seconds=10), datum="epilog")
+        log_source = _make_source(obs_ctx, job_end - timedelta(seconds=5), datum="teardown XID", line_num=2)
+        symptoms = SymptomSet()
+        symptoms.add(SourceSet(self._RXPIPE).add(independent_source).add(log_source))
+        bad_nodes = JobNodeAttributions()
+        bad_nodes.add(["node01"], SourceSet(self._RXPIPE).add(independent_source).add(log_source))
+
+        _run(stream, ji, symptoms, bad_nodes)
+
+        assert set(symptoms[self._RXPIPE]) == {independent_source}
+        assert set(bad_nodes["node01"].attributions[self._RXPIPE]) == {independent_source}
+
+    def test_job_level_nodeless_symptom_demoted(self, stream, obs_ctx):
+        """Teardown evidence that names no node is demoted too."""
+        job_end = _DEFAULT_START + timedelta(minutes=60)
+        ji = _slurm_job_info(state="PREEMPTED", job_end_time=job_end)
+        source_time = job_end - timedelta(seconds=5)
+        symptoms = _make_symptoms(obs_ctx, self._RXPIPE, source_time=source_time)
+        bad_nodes = JobNodeAttributions()
+        bad_nodes.job_level.add(SourceSet(self._RXPIPE).add(_make_source(obs_ctx, source_time)))
+
+        _run(stream, ji, symptoms, bad_nodes)
+
+        assert self._RXPIPE not in symptoms
+        assert not bad_nodes.job_level.has_bad()
+        assert bad_nodes.job_level.has_interesting()
+
+    @staticmethod
+    def _untimed_source(obs_ctx, datum: str, line_num: int) -> Source:
+        """Create a log source without a timestamp, such as a continuation line.
+
+        Args:
+            obs_ctx: Observation context of the source.
+            datum: Log text of the source.
+            line_num: Line number of the source.
+
+        Returns:
+            A Source with no time.
+        """
+        return Source(
+            source_context=obs_ctx,
+            line_num=line_num,
+            datum=datum,
+            time=None,
+            resources=AllJobResources,
+            rule="test",
+        )
+
+    _IB_ERROR = "IB Error-12 Vendor-129 (IBV_WC_RETRY_EXC_ERR)"
+    _NCCL_REMOTE = "ncclRemoteError"
+    _JOB_END = _DEFAULT_START + timedelta(minutes=60)
+
+    def _cancelled_job_with_lines(self, timed_source, untimed_source):
+        """Build a user-cancelled job with one timed IB line and one untimed NCCL line.
+
+        Args:
+            timed_source: Timed IB error source, also recorded on node01.
+            untimed_source: Untimed ncclRemoteError source, recorded without a node.
+
+        Returns:
+            The job info, the job-level symptoms, and the per-node attributions.
+        """
+        ji = _slurm_job_info(state="CANCELLED", job_end_time=self._JOB_END, cancelled_by="user-a")
+        symptoms = SymptomSet()
+        symptoms.add(SourceSet(self._IB_ERROR).add(timed_source))
+        symptoms.add(SourceSet(self._NCCL_REMOTE).add(untimed_source))
+        bad_nodes = JobNodeAttributions()
+        bad_nodes.add(["node01"], SourceSet(self._IB_ERROR).add(timed_source))
+        bad_nodes.job_level.add(SourceSet(self._NCCL_REMOTE).add(untimed_source))
+        return ji, symptoms, bad_nodes
+
+    def test_untimed_line_below_teardown_line_demoted(self, stream, obs_ctx):
+        """An untimed line below a teardown line in the same log is teardown too."""
+        timed_source = _make_source(obs_ctx, self._JOB_END + timedelta(seconds=60), datum="NCCL WARN", line_num=10)
+        untimed_source = self._untimed_source(obs_ctx, "ncclRemoteError: A call failed", line_num=12)
+        ji, symptoms, bad_nodes = self._cancelled_job_with_lines(timed_source, untimed_source)
+
+        _run(stream, ji, symptoms, bad_nodes)
+
+        assert self._IB_ERROR not in symptoms
+        assert self._NCCL_REMOTE not in symptoms
+        assert not bad_nodes["node01"].has_bad()
+        assert not bad_nodes.job_level.has_bad()
+
+    def test_untimed_line_above_first_timed_line_kept(self, stream, obs_ctx):
+        """An untimed line with no timed line above it cannot be placed and stays bad."""
+        timed_source = _make_source(obs_ctx, self._JOB_END + timedelta(seconds=60), datum="NCCL WARN", line_num=10)
+        untimed_source = self._untimed_source(obs_ctx, "ncclRemoteError: A call failed", line_num=5)
+        ji, symptoms, bad_nodes = self._cancelled_job_with_lines(timed_source, untimed_source)
+
+        _run(stream, ji, symptoms, bad_nodes)
+
+        assert self._IB_ERROR not in symptoms
+        assert set(symptoms[self._NCCL_REMOTE]) == {untimed_source}
+        assert set(bad_nodes.job_level[self._NCCL_REMOTE]) == {untimed_source}
+
+    def test_untimed_line_below_pre_end_line_kept(self, stream, obs_ctx):
+        """An untimed line placed before the end of a cancelled job stays bad."""
+        timed_source = _make_source(obs_ctx, self._JOB_END - timedelta(seconds=30), datum="NCCL WARN", line_num=10)
+        untimed_source = self._untimed_source(obs_ctx, "ncclRemoteError: A call failed", line_num=12)
+        ji, symptoms, bad_nodes = self._cancelled_job_with_lines(timed_source, untimed_source)
+
+        _run(stream, ji, symptoms, bad_nodes)
+
+        assert set(symptoms[self._IB_ERROR]) == {timed_source}
+        assert set(symptoms[self._NCCL_REMOTE]) == {untimed_source}
+        assert set(bad_nodes.job_level[self._NCCL_REMOTE]) == {untimed_source}
+
+    def test_untimed_line_not_placed_by_other_file(self, stream, obs_ctx):
+        """A timed line in another log does not place an untimed line."""
+        other_ctx = replace(obs_ctx, id=Id(998))
+        stream.register_observation_context(other_ctx)
+        timed_source = _make_source(obs_ctx, self._JOB_END + timedelta(seconds=60), datum="NCCL WARN", line_num=10)
+        untimed_source = self._untimed_source(other_ctx, "ncclRemoteError: A call failed", line_num=12)
+        ji, symptoms, bad_nodes = self._cancelled_job_with_lines(timed_source, untimed_source)
+
+        _run(stream, ji, symptoms, bad_nodes)
+
+        assert self._IB_ERROR not in symptoms
+        assert set(symptoms[self._NCCL_REMOTE]) == {untimed_source}
+
+    def test_cancellation_markers_not_demoted(self, stream, obs_ctx):
+        """The termination markers are the reason for the teardown and stay bad."""
+        job_end = _DEFAULT_START + timedelta(minutes=60)
+        # A zero signal keeps the last-resort fallback from replacing the lone marker.
+        ji = _slurm_job_info(state="CANCELLED", job_end_time=job_end, cancelled_by="user-a", exit_code_signal=0)
+        source_time = job_end - timedelta(seconds=1)
+        symptoms = _make_symptoms(obs_ctx, "Cancelled by user", source_time=source_time)
+        bad_nodes = _make_bad_nodes(obs_ctx, {"node01": ["Cancelled by user"]}, source_time=source_time)
+
+        _run(stream, ji, symptoms, bad_nodes)
+
+        assert "Cancelled by user" in symptoms
+        assert "Cancelled by user" in bad_nodes["node01"].attributions
+
+    def test_exit_143_alone_does_not_trigger(self, stream, obs_ctx):
+        """A SIGTERM exit code alone is not proof that the scheduler stopped the job."""
+        job_end = _DEFAULT_START + timedelta(minutes=60)
+        ji = _slurm_job_info(state="FAILED", job_end_time=job_end, exit_code=143)
+        source_time = job_end - timedelta(seconds=5)
+        symptoms = _make_symptoms(obs_ctx, self._RXPIPE, source_time=source_time)
+        bad_nodes = _make_bad_nodes(obs_ctx, {"node01": [self._RXPIPE]}, source_time=source_time)
+
+        _run(stream, ji, symptoms, bad_nodes)
+
+        assert self._RXPIPE in symptoms
+        assert self._RXPIPE in bad_nodes["node01"].attributions
+
+    def _run_rxpipe_at(self, stream, obs_ctx, ji, source_time) -> bool:
+        """Run the refiners on one RXPIPE source and report whether it was demoted.
+
+        Args:
+            stream: Event stream for the job.
+            obs_ctx: Observation context of the source.
+            ji: JobInfo for the job.
+            source_time: Time of the RXPIPE source.
+
+        Returns:
+            True when the RXPIPE source is no longer bad on node01.
+        """
+        symptoms = _make_symptoms(obs_ctx, self._RXPIPE, source_time=source_time)
+        bad_nodes = _make_bad_nodes(obs_ctx, {"node01": [self._RXPIPE]}, source_time=source_time)
+        _run(stream, ji, symptoms, bad_nodes)
+        return self._RXPIPE not in bad_nodes["node01"].attributions
+
+    @pytest.mark.parametrize(
+        ("offset", "demoted"), [(timedelta(0), True), (timedelta(seconds=110), True), (timedelta(seconds=151), False)]
+    )
+    def test_cancelled_teardown_covers_kill_wait(self, stream, obs_ctx, offset, demoted):
+        """Teardown until 150 s after a cancel counts, which covers a 120 s KillWait."""
+        job_end = _DEFAULT_START + timedelta(minutes=60)
+        ji = _slurm_job_info(state="CANCELLED", job_end_time=job_end, cancelled_by="user-a")
+
+        assert self._run_rxpipe_at(stream, obs_ctx, ji, job_end + offset) is demoted
+
+    def test_teardown_rxpipe_keeps_earlier_cascade_failure_on_other_node(self, stream, obs_ctx):
+        """A cascade symptom logged before the teardown is an independent failure and stays bad."""
+        job_end = _DEFAULT_START + timedelta(minutes=60)
+        ji = _slurm_job_info(state="PREEMPTED", job_end_time=job_end)
+        earlier_source = _make_source(obs_ctx, job_end - timedelta(minutes=10), datum="earlier failure", line_num=1)
+        rxpipe_source = _make_source(obs_ctx, job_end - timedelta(seconds=5), datum="teardown RXPIPE", line_num=2)
+        earlier = ("XID-145-RLW_SRC_TRACK-8", "cudaErrorLaunchFailure")
+        symptoms = SymptomSet()
+        bad_nodes = JobNodeAttributions()
+        for symptom in earlier:
+            symptoms.add(SourceSet(symptom).add(earlier_source))
+            bad_nodes.add(["node01"], SourceSet(symptom).add(earlier_source))
+        symptoms.add(SourceSet(self._RXPIPE).add(rxpipe_source))
+        bad_nodes.add(["node02"], SourceSet(self._RXPIPE).add(rxpipe_source))
+
+        _run(stream, ji, symptoms, bad_nodes)
+
+        assert self._RXPIPE not in symptoms
+        assert not bad_nodes["node02"].has_bad()
+        for symptom in earlier:
+            assert symptom in symptoms
+            assert symptom in bad_nodes["node01"].attributions
+
+    def test_failed_job_with_stale_step_timeout_keeps_pre_end_xid(self, stream, obs_ctx):
+        """A step timeout far from the job end does not open the pre-end window of a failed job."""
+        job_end = _DEFAULT_START + timedelta(minutes=60)
+        ji = _slurm_job_info(state="FAILED", job_end_time=job_end)
+        marker_source = _make_source(obs_ctx, job_end - timedelta(minutes=30), datum="DUE TO TIME LIMIT", line_num=1)
+        xid_source = _make_source(obs_ctx, job_end - timedelta(seconds=60), datum="terminal RXPIPE", line_num=2)
+        symptoms = SymptomSet()
+        symptoms.add(SourceSet("Cancelled by Timeout").add(marker_source))
+        symptoms.add(SourceSet(self._RXPIPE).add(xid_source))
+        bad_nodes = JobNodeAttributions()
+        bad_nodes.add(["node01"], SourceSet(self._RXPIPE).add(xid_source))
+
+        _run(stream, ji, symptoms, bad_nodes)
+
+        assert self._RXPIPE in symptoms
+        assert self._RXPIPE in bad_nodes["node01"].attributions
+
+    @pytest.mark.parametrize(("offset", "demoted"), [(timedelta(seconds=30), True), (timedelta(seconds=-10), False)])
+    def test_timeout_uses_time_limit_as_termination_time(self, stream, obs_ctx, offset, demoted):
+        """Without a marker, a timed-out job was stopped at its start plus its time limit."""
+        limit_time = _DEFAULT_START + timedelta(minutes=60)
+        ji = _slurm_job_info(state="TIMEOUT", job_end_time=limit_time + timedelta(seconds=15), time_limit=60)
+
+        assert self._run_rxpipe_at(stream, obs_ctx, ji, limit_time + offset) is demoted
+
+    @pytest.mark.parametrize(("offset", "demoted"), [(timedelta(seconds=-110), True), (timedelta(seconds=-121), False)])
+    def test_preempted_without_termination_time_reaches_back_kill_wait(self, stream, obs_ctx, offset, demoted):
+        """A preempted job's end follows its SIGTERM by up to KillWait, so earlier teardown counts."""
+        job_end = _DEFAULT_START + timedelta(minutes=60)
+        ji = _slurm_job_info(state="PREEMPTED", job_end_time=job_end)
+
+        assert self._run_rxpipe_at(stream, obs_ctx, ji, job_end + offset) is demoted
 
 
 class TestSimpleSymptomCascades:
@@ -3450,8 +3819,9 @@ class TestNodeFailureNfsCleanup:
 
 
 class TestLastResortSymptoms:
-    def test_empty_symptoms_completed_job(self, stream, obs_ctx):
-        ji = _job_info_with(state="COMPLETED", scheduler=Scheduler.KUEUE)
+    @pytest.mark.parametrize("scheduler", [Scheduler.KUEUE, Scheduler.KAI])
+    def test_empty_symptoms_completed_job(self, stream, obs_ctx, scheduler):
+        ji = _job_info_with(state="COMPLETED", scheduler=scheduler)
         symptoms = _make_symptoms(obs_ctx)
         _run(stream, ji, symptoms)
         assert "the process completes" in symptoms
@@ -3472,8 +3842,9 @@ class TestLastResortSymptoms:
         assert "Cancelled by user" not in symptoms
         assert "job failed" not in symptoms
 
-    def test_empty_symptoms_unknown_state(self, stream, obs_ctx):
-        ji = _job_info_with(state="OUT_OF_MEMORY", scheduler=Scheduler.KUEUE)
+    @pytest.mark.parametrize("scheduler", [Scheduler.KUEUE, Scheduler.KAI])
+    def test_empty_symptoms_unknown_state(self, stream, obs_ctx, scheduler):
+        ji = _job_info_with(state="OUT_OF_MEMORY", scheduler=scheduler)
         symptoms = _make_symptoms(obs_ctx)
         _run(stream, ji, symptoms)
         assert "job failed" in symptoms
@@ -3767,11 +4138,12 @@ class TestExtractJobMetadataFallback:
 
 
 class TestXid149AndNvlinkFiltering:
-    def test_xid149_4_discards_others(self, stream, obs_ctx, job_info):
+    def test_xid149_4_discards_others_except_149_21(self, stream, obs_ctx, job_info):
         symptoms = _make_symptoms(
             obs_ctx,
             "XID-149.4-NETIR_LINK_DOWN-ALIGNMENT_LOSS-0",
             "XID-149.10-NETIR_LINK_DOWN-PHY_LAYER_RETRANSMIT_TIMEOUT-0",
+            "XID-149.21-NETIR_LINK_DOWN-RECEIEVED_TS1-0",
             "XID-149.0-GENERIC-0",
         )
         bad_nodes = _make_bad_nodes(
@@ -3780,12 +4152,15 @@ class TestXid149AndNvlinkFiltering:
                 "node01": [
                     "XID-149.4-NETIR_LINK_DOWN-ALIGNMENT_LOSS-0",
                     "XID-149.10-NETIR_LINK_DOWN-PHY_LAYER_RETRANSMIT_TIMEOUT-0",
+                    "XID-149.21-NETIR_LINK_DOWN-RECEIEVED_TS1-0",
                     "effective_ber_high",
                 ],
             },
         )
         _run(stream, job_info, symptoms, bad_nodes)
         assert "XID-149.4-NETIR_LINK_DOWN-ALIGNMENT_LOSS-0" in symptoms
+        assert "XID-149.21-NETIR_LINK_DOWN-RECEIEVED_TS1-0" in symptoms
+        assert "XID-149.21-NETIR_LINK_DOWN-RECEIEVED_TS1-0" in bad_nodes["node01"].attributions
         assert "XID-149.10-NETIR_LINK_DOWN-PHY_LAYER_RETRANSMIT_TIMEOUT-0" not in symptoms
         assert "XID-149.0-GENERIC-0" not in symptoms
 
@@ -4366,8 +4741,9 @@ class TestFilterFatalXidNoise:
 
 
 class TestOutcomeReclassification:
-    def test_preempted_reclassified_to_pass(self, stream, obs_ctx):
-        ji = _job_info_with(state="PREEMPTED", scheduler=Scheduler.KUEUE)
+    @pytest.mark.parametrize("scheduler", [Scheduler.KUEUE, Scheduler.KAI])
+    def test_preempted_reclassified_to_pass(self, stream, obs_ctx, scheduler):
+        ji = _job_info_with(state="PREEMPTED", scheduler=scheduler)
         bad_nodes_result = CalcBadNodesAttributionResult()
         result = AttributionResult(event_stream=stream, bad_nodes_attr=bad_nodes_result)
         result.outcome_attr = _make_outcome("Fail User")
@@ -4377,12 +4753,14 @@ class TestOutcomeReclassification:
         # pass vacuously regardless of whether that check is implemented
         # correctly.
         symptoms = _make_symptoms(obs_ctx, "job failed")
+        result.symptoms.update(symptoms)
         _run_post_outcome(stream, ji, symptoms, outcome=result.outcome_attr, attribution_result=result)
         assert result.outcome_attr.value().outcome == "Pass"
         assert result.outcome_attr.value().root_cause_symptom == "SLURM preempted"
 
-    def test_preempted_does_not_override_failure_evidence(self, stream, obs_ctx):
-        ji = _job_info_with(state="PREEMPTED", scheduler=Scheduler.KUEUE)
+    @pytest.mark.parametrize("scheduler", [Scheduler.KUEUE, Scheduler.KAI])
+    def test_preempted_does_not_override_failure_evidence(self, stream, obs_ctx, scheduler):
+        ji = _job_info_with(state="PREEMPTED", scheduler=scheduler)
         result = AttributionResult(event_stream=stream, bad_nodes_attr=CalcBadNodesAttributionResult())
         symptoms = _make_symptoms(obs_ctx, "XID-94-CONTAINED_ERROR")
         result.symptoms.update(symptoms)
@@ -4409,12 +4787,13 @@ class TestOutcomeReclassification:
 
         assert result.outcome_attr.value().outcome == "Pass"
 
-    def test_timeout_only_reclassified_to_pass(self, stream, obs_ctx):
+    @pytest.mark.parametrize("scheduler", [Scheduler.KUEUE, Scheduler.KAI])
+    def test_timeout_only_reclassified_to_pass(self, stream, obs_ctx, scheduler):
         ji = _job_info_with(
             state="TIMEOUT",
             cancelled_by="Timeout",
             time_limit=3600,
-            scheduler=Scheduler.KUEUE,
+            scheduler=scheduler,
         )
         bad_nodes_result = CalcBadNodesAttributionResult()
         result = AttributionResult(event_stream=stream, bad_nodes_attr=bad_nodes_result)

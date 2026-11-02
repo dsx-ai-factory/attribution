@@ -35,17 +35,6 @@ from attribution_lib.utils import get_hostname
 from test_support.helpers import create_source_set, make_node_to_ranks
 
 
-def test_attribute_rejects_kai_until_supported(simple_job_factory):
-    """KAI is a recognized identity, but attribution has no KAI rules yet."""
-    with pytest.raises(NotImplementedError, match="kai"):
-        core.attribute(
-            event_stream=None,  # type: ignore[arg-type]
-            job_info=simple_job_factory(scheduler=Scheduler.KAI),
-            bad_node_result=None,  # type: ignore[arg-type]
-            extract_job_metadata_from_logfile=False,
-        )
-
-
 def test_setup_rules_without_mapping_clears_previous_mapping(monkeypatch):
     """A forced reconfiguration must not retain inventory from an earlier run."""
     for attribute in ("initialized", "node_domain_resolver", "_rules_engine", "_symptom_registry"):
@@ -209,13 +198,14 @@ class TestNeverRanJob:
 
         assert list(result.symptoms()) == ["Job didn't start"]
 
-    def test_kueue_terminal_failed_job_without_node_evidence_reports_failure(
-        self, event_stream, simple_job_factory
+    @pytest.mark.parametrize("scheduler", [Scheduler.KUEUE, Scheduler.KAI])
+    def test_queue_scheduler_terminal_failed_job_without_node_evidence_reports_failure(
+        self, event_stream, simple_job_factory, scheduler
     ):
         job_info = simple_job_factory(
             node_to_ranks={},
             state="FAILED",
-            scheduler=Scheduler.KUEUE,
+            scheduler=scheduler,
         )
 
         result = calculate_symptoms(
@@ -273,11 +263,12 @@ class TestRunningJob:
 
         assert "running without error" in result
 
-    def test_kueue_running_job_preserves_node_symptoms(
-        self, event_stream, simple_job_factory, source_set_factory
+    @pytest.mark.parametrize("scheduler", [Scheduler.KUEUE, Scheduler.KAI])
+    def test_queue_scheduler_running_job_preserves_node_symptoms(
+        self, event_stream, simple_job_factory, source_set_factory, scheduler
     ):
-        """A running Kueue workload must not hide collected failure evidence."""
-        job_info = simple_job_factory(state="RUNNING", scheduler=Scheduler.KUEUE)
+        """A running queue-scheduler workload must not hide failure evidence."""
+        job_info = simple_job_factory(state="RUNNING", scheduler=scheduler)
         bad_nodes = JobNodeAttributions()
         bad_nodes.add("test-node-001", source_set_factory("XID-95-UNCONTAINED_ERROR"))
 
@@ -1963,19 +1954,21 @@ class TestSingleNodeNodeFail:
         )
         assert "" not in my_bad_nodes.attributions
 
-    def test_kueue_nodefail_uses_slurm_symptom_and_provenance(
-        self, event_stream, simple_job_factory
+    @pytest.mark.parametrize("scheduler", [Scheduler.KUEUE, Scheduler.KAI])
+    def test_queue_scheduler_nodefail_uses_slurm_symptom_and_provenance(
+        self, event_stream, simple_job_factory, scheduler
     ):
-        """Kueue uses the same "slurm" symptom/provenance as every other
-        scheduler: a scheduler-specific string here would need to be added
-        to every existing cascade_discards/pattern list that already
-        references "Node failure reported by slurm", which is easy to miss.
+        """Queue schedulers reuse the existing "slurm" symptom/provenance.
+
+        A scheduler-specific string would need to be added to every existing
+        cascade_discards/pattern list that references
+        "Node failure reported by slurm", which is easy to miss.
         """
         job_info = simple_job_factory(
             state="NODE_FAIL",
             nodes=["node-a", "node-b"],
             failed_node="node-b",
-            scheduler=Scheduler.KUEUE,
+            scheduler=scheduler,
         )
 
         my_bad_nodes = self._attributed_bad_nodes(event_stream, job_info)

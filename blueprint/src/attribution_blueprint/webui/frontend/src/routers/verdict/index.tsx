@@ -236,17 +236,20 @@ function verdictFacts(run: RunDetail): DescriptionListItem[] {
   ]
 }
 
-function OperatorGuidance({ card }: { card: PersonaDiagnose }) {
+function TenantGuidance({ card }: { card: PersonaDiagnose }) {
   const lines: DescriptionListItem[] = [
     { key: 'summary', label: 'Summary', value: card.summary },
     { key: 'impact', label: 'Impact', value: card.impact },
     { key: 'action', label: 'Action', value: card.action },
-    { key: 'include', label: 'Include', value: card.supportDetails.join(', ') },
-  ].filter((line) => line.value !== '')
+    { key: 'include', label: 'Include when asking for help', value: card.supportDetails.join('\n\n') },
+  ].filter((line) => line.value !== '').map((line) => ({
+    ...line,
+    value: <div className="whitespace-pre-wrap">{line.value}</div>,
+  }))
   return (
     <CardContent className="flex flex-col gap-2 border-t">
       <div className="flex flex-wrap items-center gap-2">
-        <h3 className={subtitle}>Cloud operator guidance</h3>
+        <h3 className={subtitle}>Tenant guidance</h3>
         {card.catalogId && <Badge variant="zinc-subtle" size="wrap"><Identifier>{card.catalogId}</Identifier></Badge>}
       </div>
       {lines.length > 0 && <DescriptionList items={lines} />}
@@ -293,7 +296,7 @@ function VerdictCard({ run }: { run: RunDetail }) {
   const rootSymptom = run.attribution.rootSymptom.state === 'available'
     ? run.attribution.rootSymptom.data.symptom
     : run.rootSymptom.symptom
-  const guidance = run.operatorDiagnose?.hasPersona === true ? run.operatorDiagnose : null
+  const guidance = run.diagnose?.hasPersona === true ? run.diagnose : null
   return (
     <Card asChild>
       <section aria-label="Verdict">
@@ -317,7 +320,7 @@ function VerdictCard({ run }: { run: RunDetail }) {
             : <p className="text-foreground-muted">Root symptom not recorded</p>}
           <DescriptionList items={verdictFacts(run)} />
         </CardContent>
-        {guidance && <OperatorGuidance card={guidance} />}
+        {guidance && <TenantGuidance card={guidance} />}
       </section>
     </Card>
   )

@@ -54,7 +54,9 @@ def fake_github(monkeypatch: pytest.MonkeyPatch, pull: dict, timeline: list[dict
 
     monkeypatch.setattr(ar, "github", github)
     monkeypatch.setattr(
-        ar, "github_pages", lambda token, path: timeline if "timeline" in path else TEAM if "teams" in path else [pull]
+        ar,
+        "github_pages",
+        lambda token, path: timeline if "timeline" in path else TEAM if ar.MAINTAINER_TEAM in path else [pull],
     )
     monkeypatch.setenv("SLACK_USER_IDS", '{"author": "UA", "alice": "U1", "bob": "U2", "carol": "U3"}')
     monkeypatch.setenv("ONCALL_SLACK", '{"channel": "CHAN", "group": "S1"}')
@@ -357,6 +359,47 @@ def test_outside_pr_opened_tags_oncall(monkeypatch: pytest.MonkeyPatch) -> None:
     bot["user"]["type"] = "Bot"
     fake_github(monkeypatch, bot, [])
     assert ar.assign("t", "t", "o/r", opened) == []
+
+
+def test_outside_issue_gets_team_triager(monkeypatch: pytest.MonkeyPatch) -> None:
+    """An issue from outside the team gets a team triager. A team issue or an assigned one does not."""
+    opened = {"action": "opened", "issue": {"number": 7}}
+    calls: list[tuple[str, str, dict | None]] = []
+    issue = pr(author="outsider") | {"assignees": []}
+
+    def github(token: str, path: str, method: str = "GET", payload: dict | None = None) -> dict:
+        calls.append((method, path, payload))
+        return issue
+
+    fake_github(monkeypatch, issue, [])
+    monkeypatch.setattr(ar, "github", github)
+    ar.triage_issue("t", "t", "o/r", opened)
+    method, path, payload = calls[-1]
+    assert (method, path) == ("POST", "/repos/o/r/issues/7/assignees")
+    assert payload["assignees"][0] in {"author", "alice", "bob", "carol"}
+    calls.clear()
+    issue = pr() | {"assignees": []}
+    ar.triage_issue("t", "t", "o/r", opened)
+    assert [method for method, _, _ in calls] == ["GET"]
+    calls.clear()
+    issue = pr(author="outsider") | {"assignees": [{"login": "alice"}]}
+    ar.triage_issue("t", "t", "o/r", opened)
+    assert [method for method, _, _ in calls] == ["GET"]
+
+
+def test_maintainer_team_sets_outside_authors_and_primaries(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A non-maintainer is an outside author, and only a maintainer becomes primary."""
+    opened = {"action": "opened", "pull_request": {"number": 7}, "sender": {"login": "alice"}}
+    fake_github(monkeypatch, pr(author="alice"), [])
+    monkeypatch.setattr(
+        ar,
+        "github_pages",
+        lambda token, path: [] if "timeline" in path else TEAM[3:] if ar.MAINTAINER_TEAM in path else TEAM,
+    )
+    assert [(m["channel"], m["text"].splitlines()[0]) for m in ar.assign("t", "t", "o/r", opened)] == [
+        ("CHAN", "<!subteam^S1> New pull request from alice: fix: thing"),
+        ("U3", "You are the primary reviewer: fix: thing"),
+    ]
 
 
 def test_no_eligible_reviewer_asks_oncall(monkeypatch: pytest.MonkeyPatch) -> None:

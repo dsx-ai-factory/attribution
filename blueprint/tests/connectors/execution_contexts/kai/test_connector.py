@@ -12,6 +12,7 @@ from attribution_blueprint.connectors.execution_contexts.kai import KaiExecution
 from attribution_blueprint.connectors.execution_contexts.kai.connector import _resolve_owner
 from attribution_blueprint.connectors.execution_contexts.kubernetes_client import KubernetesClientError
 from attribution_blueprint.exceptions import MCAError
+from attribution_blueprint.kubernetes.daemon.models import PlacementRecord
 
 FIXTURES = Path(__file__).parent.parent.parent.parent / "fixtures"
 PODGROUPS = json.loads((FIXTURES / "kai_podgroups.json").read_text())
@@ -89,20 +90,34 @@ def _pod(
     return {"metadata": meta, "spec": spec, "status": status}
 
 
-def _job(name, uid, completed=None, failed_at=None, namespace="team-alpha", jobset=None):
+def _job(
+    name,
+    uid,
+    completed=None,
+    failed_at=None,
+    namespace="team-alpha",
+    reason=None,
+    suspended=False,
+    jobset=None,
+    deadline_seconds=None,
+):
     status = {}
     if completed:
         status["completionTime"] = completed
     if failed_at:
-        status["conditions"] = [{"type": "Failed", "status": "True", "lastTransitionTime": failed_at}]
+        failed = {"type": "Failed", "status": "True", "lastTransitionTime": failed_at}
+        if reason:
+            failed["reason"] = reason
+        status["conditions"] = [failed]
+    if suspended:
+        status["conditions"] = [{"type": "Suspended", "status": "True"}]
     metadata = {"name": name, "namespace": namespace, "uid": uid}
     if jobset is not None:
         jobset_name, jobset_uid = jobset
         metadata["labels"] = {"jobset.sigs.k8s.io/jobset-name": jobset_name}
-        metadata["ownerReferences"] = [
-            {"kind": "JobSet", "name": jobset_name, "uid": jobset_uid, "controller": True}
-        ]
-    return {"metadata": metadata, "status": status}
+        metadata["ownerReferences"] = [{"kind": "JobSet", "name": jobset_name, "uid": jobset_uid, "controller": True}]
+    spec = {"activeDeadlineSeconds": deadline_seconds} if deadline_seconds is not None else {}
+    return {"metadata": metadata, "spec": spec, "status": status}
 
 
 def _jobset(name, uid, completed_at=None, failed_at=None, namespace="team-alpha"):
@@ -261,13 +276,203 @@ def test_current_crd_shape_emits_incarnation_keyed_context(mocker, warnings):
     assert ctx["pod_nodes"] == {"train-mnist-0": "node005", "train-mnist-1": "node006"}
 
 
-def test_context_carries_no_state(mocker):
+def test_context_does_not_claim_a_failed_node(mocker):
     _wire_kubectl(mocker, PODGROUPS["items"], PODS["items"])
 
     [ctx] = KaiExecutionContextAdapter().discover_by_ids(["team-alpha/pg-train-mnist-1a2b3c4d"])
 
-    assert "state" not in ctx
     assert "failed_node" not in ctx
+
+
+@pytest.mark.parametrize(
+    "owner, state, owner_state",
+    [
+        (_job("pg-a-job", "uid-job-uid-pg-a", completed="2026-05-01T13:00:00Z"), "COMPLETED", "Complete"),
+        (_job("pg-a-job", "uid-job-uid-pg-a", failed_at="2026-05-01T12:45:00Z"), "FAILED", "Failed"),
+        (
+            _job("pg-a-job", "uid-job-uid-pg-a", failed_at="2026-05-01T12:45:00Z", reason="BackoffLimitExceeded"),
+            "FAILED",
+            "Failed:BackoffLimitExceeded",
+        ),
+        (
+            _job("pg-a-job", "uid-job-uid-pg-a", failed_at="2026-05-01T12:45:00Z", reason="DeadlineExceeded"),
+            "TIMEOUT",
+            "Failed:DeadlineExceeded",
+        ),
+        (_job("pg-a-job", "uid-job-uid-pg-a"), "RUNNING", "Active"),
+        (_job("pg-a-job", "uid-job-uid-pg-a", suspended=True), "RUNNING", "Suspended"),
+    ],
+    ids=["completed", "failed", "backoff-limit", "deadline", "active", "suspended"],
+)
+def test_job_owner_state(mocker, owner, state, owner_state):
+    _wire_kubectl(mocker, [_podgroup()], [], [owner])
+
+    [ctx] = KaiExecutionContextAdapter().discover_by_ids(["team-alpha/pg-a"])
+
+    assert ctx["state"] == state
+    assert ctx["owner_state"] == owner_state
+
+
+def test_job_deadline_is_forwarded_in_minutes(mocker):
+    owner = _job(
+        "pg-a-job",
+        "uid-job-uid-pg-a",
+        failed_at="2026-05-01T12:45:00Z",
+        reason="DeadlineExceeded",
+        deadline_seconds=30,
+    )
+    _wire_kubectl(mocker, [_podgroup()], [], [owner])
+
+    [ctx] = KaiExecutionContextAdapter().discover_by_ids(["team-alpha/pg-a"])
+
+    assert ctx["state"] == "TIMEOUT"
+    assert ctx["time_limit"] == 1
+
+
+@pytest.mark.parametrize(
+    "owner, state, owner_state",
+    [
+        (_jobset("pg-a-job", "uid-job-uid-pg-a", completed_at="2026-05-01T13:00:00Z"), "COMPLETED", "Completed"),
+        (_jobset("pg-a-job", "uid-job-uid-pg-a", failed_at="2026-05-01T12:45:00Z"), "FAILED", "Failed"),
+        (_jobset("pg-a-job", "uid-job-uid-pg-a"), "RUNNING", "Active"),
+    ],
+    ids=["completed", "failed", "active"],
+)
+def test_jobset_owner_state(mocker, owner, state, owner_state):
+    _wire_kubectl(mocker, [_podgroup(owner_kind="JobSet")], [], jobsets=[owner])
+
+    [ctx] = KaiExecutionContextAdapter().discover_by_ids(["team-alpha/pg-a"])
+
+    assert ctx["state"] == state
+    assert ctx["owner_state"] == owner_state
+
+
+def test_failed_jobset_reports_the_failed_reason(mocker):
+    jobset = _jobset("pg-a-job", "uid-job-uid-pg-a", failed_at="2026-05-01T12:45:00Z")
+    jobset["status"]["conditions"][0]["reason"] = "ReachedMaxRestarts"
+    _wire_kubectl(mocker, [_podgroup(owner_kind="JobSet")], [], jobsets=[jobset])
+
+    [ctx] = KaiExecutionContextAdapter().discover_by_ids(["team-alpha/pg-a"])
+
+    assert ctx["state"] == "FAILED"
+    assert ctx["owner_state"] == "Failed:ReachedMaxRestarts"
+
+
+def test_jobset_uses_verified_child_deadline_and_failure_reason(mocker):
+    jobset = _jobset("pg-a-job", "uid-job-uid-pg-a", failed_at="2026-05-01T12:45:00Z")
+    jobset["status"]["conditions"][0]["reason"] = "ReachedMaxRestarts"
+    children = [
+        _job(
+            "worker-0",
+            "uid-worker-0",
+            failed_at="2026-05-01T12:40:00Z",
+            reason="DeadlineExceeded",
+            jobset=("pg-a-job", "uid-job-uid-pg-a"),
+            deadline_seconds=90,
+        ),
+        _job(
+            "worker-1",
+            "uid-worker-1",
+            jobset=("pg-a-job", "uid-job-uid-pg-a"),
+            deadline_seconds=300,
+        ),
+        _job(
+            "stale-worker",
+            "uid-stale",
+            failed_at="2026-05-01T12:30:00Z",
+            reason="BackoffLimitExceeded",
+            jobset=("pg-a-job", "old-jobset-uid"),
+            deadline_seconds=30,
+        ),
+    ]
+    _wire_kubectl(mocker, [_podgroup(owner_kind="JobSet")], [], children, [jobset])
+
+    [ctx] = KaiExecutionContextAdapter().discover_by_ids(["team-alpha/pg-a"])
+
+    assert ctx["state"] == "TIMEOUT"
+    assert ctx["owner_state"] == "Failed:ReachedMaxRestarts"
+    assert ctx["time_limit"] == 2
+
+
+def _lost_pod(name, node):
+    pod = _pod(name, node=node, controller=("Job", "uid-job-uid-pg-a"))
+    pod["status"]["reason"] = "NodeLost"
+    return pod
+
+
+@pytest.mark.parametrize(
+    "owner, state",
+    [
+        (_job("pg-a-job", "uid-job-uid-pg-a"), "NODE_FAIL"),
+        (_job("pg-a-job", "uid-job-uid-pg-a", failed_at="2026-05-01T12:45:00Z"), "NODE_FAIL"),
+        (_job("pg-a-job", "uid-job-uid-pg-a", completed="2026-05-01T13:00:00Z"), "COMPLETED"),
+    ],
+    ids=["active", "failed", "completed"],
+)
+def test_node_loss_on_a_member_pod_sets_node_fail(mocker, owner, state):
+    pods = [_lost_pod("a-0", "node002"), _lost_pod("a-1", "node001")]
+    _wire_kubectl(mocker, [_podgroup()], pods, [owner])
+
+    [ctx] = KaiExecutionContextAdapter().discover_by_ids(["team-alpha/pg-a"])
+
+    assert ctx["state"] == state
+    if state == "NODE_FAIL":
+        assert ctx["failed_node"] == "node001"
+    else:
+        assert "failed_node" not in ctx
+
+
+def test_healthy_pods_leave_no_failed_node(mocker):
+    pod = _pod("a-0", controller=("Job", "uid-job-uid-pg-a"))
+    _wire_kubectl(mocker, [_podgroup()], [pod], [_job("pg-a-job", "uid-job-uid-pg-a")])
+
+    [ctx] = KaiExecutionContextAdapter().discover_by_ids(["team-alpha/pg-a"])
+
+    assert "failed_node" not in ctx
+
+
+def test_podgc_disruption_sets_node_fail(mocker):
+    pod = _pod("a-0", controller=("Job", "uid-job-uid-pg-a"))
+    pod["status"]["conditions"] = [
+        {
+            "type": "DisruptionTarget",
+            "status": "True",
+            "reason": "DeletionByPodGC",
+            "lastTransitionTime": "2026-05-01T12:30:00Z",
+        }
+    ]
+    _wire_kubectl(mocker, [_podgroup()], [pod], [_job("pg-a-job", "uid-job-uid-pg-a")])
+
+    [ctx] = KaiExecutionContextAdapter().discover_by_ids(["team-alpha/pg-a"])
+
+    assert ctx["state"] == "NODE_FAIL"
+    assert ctx["failed_node"] == "node001"
+
+
+def test_node_loss_on_a_stale_jobset_pod_is_ignored(mocker):
+    pg = _podgroup(owner_kind="JobSet")
+    jobs = [
+        _job("current", "uid-current", jobset=("pg-a-job", "uid-job-uid-pg-a")),
+        _job("stale", "uid-stale", jobset=("pg-a-job", "uid-old-jobset")),
+    ]
+    stale = _pod("stale-0", node="node009", controller=("Job", "uid-stale"))
+    stale["status"]["reason"] = "NodeLost"
+    pods = [_pod("current-0", controller=("Job", "uid-current")), stale]
+    _wire_kubectl(mocker, [pg], pods, jobs=jobs)
+
+    [ctx] = KaiExecutionContextAdapter().discover_by_ids(["team-alpha/pg-a"])
+
+    assert ctx["state"] == "RUNNING"
+    assert "failed_node" not in ctx
+
+
+def test_surviving_pods_do_not_change_the_owner_state(mocker):
+    pod = _pod("a-0", controller=("Job", "uid-job-uid-pg-a"))
+    _wire_kubectl(mocker, [_podgroup()], [pod], [_job("pg-a-job", "uid-job-uid-pg-a")])
+
+    [ctx] = KaiExecutionContextAdapter().discover_by_ids(["team-alpha/pg-a"])
+
+    assert ctx["state"] == "RUNNING"
 
 
 def test_current_status_is_preserved_raw(mocker):
@@ -285,7 +490,7 @@ def test_removed_status_fields_are_ignored(mocker):
 
     [ctx] = KaiExecutionContextAdapter().discover_by_ids(["team-alpha/pg-a"])
 
-    assert "state" not in ctx
+    assert ctx["state"] == "RUNNING"
     assert "scheduling_conditions" not in ctx
     assert "resources_status" not in ctx
 
@@ -677,6 +882,49 @@ def test_time_range_keeps_only_intersecting_podgroups(mocker):
     assert [c["id"] for c in contexts] == ["uid-in"]
 
 
+def test_time_range_skips_placement_reads_for_excluded_podgroups(mocker):
+    later = _podgroup(created="2026-05-03T12:00:00Z")
+    _wire_kubectl(
+        mocker,
+        [later],
+        [],
+        [_job("pg-a-job", "uid-job-uid-pg-a", completed="2026-05-03T13:00:00Z")],
+    )
+    reader = mocker.Mock()
+    reader.list_for_resource.side_effect = RuntimeError("must not be called")
+    adapter = KaiExecutionContextAdapter(
+        namespace="team-alpha",
+        placement_records_enabled=True,
+        placement_reader=reader,
+    )
+
+    assert adapter.discover_by_time_range(START, END) == []
+    reader.list_for_resource.assert_not_called()
+
+
+def test_time_range_nodelist_includes_retained_nodes(mocker):
+    _wire_kubectl(mocker, [_podgroup()], [], [_job("pg-a-job", "uid-job-uid-pg-a")])
+    reader = mocker.Mock()
+    reader.list_for_resource.return_value = [
+        PlacementRecord(
+            namespace="team-alpha",
+            pod_name="deleted-0",
+            pod_uid="pod-uid-deleted",
+            node_name="node009",
+            observed_at="2026-05-01T12:05:00Z",
+        )
+    ]
+    adapter = KaiExecutionContextAdapter(
+        namespace="team-alpha",
+        placement_records_enabled=True,
+        placement_reader=reader,
+    )
+
+    contexts = adapter.discover_by_time_range(START, END, nodelist=["node009"])
+
+    assert [context["id"] for context in contexts] == ["uid-pg-a"]
+
+
 def test_time_range_nodelist_filters_on_member_pod_nodes(mocker):
     a = _podgroup(name="pg-a", uid="uid-a")
     b = _podgroup(name="pg-b", uid="uid-b")
@@ -704,9 +952,7 @@ def test_pods_are_listed_once_per_namespace(mocker):
     ]
     fake = _wire_kubectl(mocker, pgs, [])
 
-    KaiExecutionContextAdapter().discover_by_ids(
-        ["team-alpha/pg-a", "team-alpha/pg-b", "team-beta/pg-c"]
-    )
+    KaiExecutionContextAdapter().discover_by_ids(["team-alpha/pg-a", "team-alpha/pg-b", "team-beta/pg-c"])
 
     pod_lists = [call for call in fake.calls if call["op"] == "list" and call["kind"] == "Pod"]
     assert len(pod_lists) == 2
@@ -799,6 +1045,86 @@ def test_denied_jobset_lookup_fails_the_pass(mocker):
         KaiExecutionContextAdapter().discover_by_ids(["team-alpha/pg-a"])
 
 
+def test_out_of_namespace_id_rejected_before_kubernetes_read_when_placement_records_enabled(mocker):
+    fake = _wire_kubectl(mocker, [_podgroup()], [])
+    adapter = KaiExecutionContextAdapter(
+        namespace="team-alpha",
+        placement_records_enabled=True,
+        placement_reader=mocker.Mock(),
+    )
+
+    with pytest.raises(ValueError, match="outside configured namespace"):
+        adapter.discover_by_ids(["team-beta/pg-a"])
+
+    assert fake.calls == []
+
+
+def test_daemon_placements_restore_deleted_pod_and_node_failure(mocker):
+    _wire_kubectl(mocker, [_podgroup()], [], [_job("pg-a-job", "uid-job-uid-pg-a")])
+    reader = mocker.Mock()
+    reader.list_for_resource.return_value = [
+        PlacementRecord(
+            namespace="team-alpha",
+            pod_name="deleted-0",
+            pod_uid="pod-uid-deleted",
+            node_name="node009",
+            observed_at="2026-05-01T12:05:00Z",
+            node_failure_reason="NodeLost",
+        )
+    ]
+    adapter = KaiExecutionContextAdapter(
+        placement_records_enabled=True,
+        placement_reader=reader,
+    )
+
+    [ctx] = adapter.discover_by_ids(["team-alpha/pg-a"])
+
+    reader.list_for_resource.assert_called_once_with("team-alpha", "uid-pg-a")
+    assert ctx["state"] == "NODE_FAIL"
+    assert ctx["failed_node"] == "node009"
+    assert ctx["nodes"] == ["node009"]
+    assert ctx["pod_names"] == ["deleted-0"]
+    assert ctx["pod_nodes"] == {"deleted-0": "node009"}
+    assert ctx["pod_placements"] == [
+        {
+            "pod_uid": "pod-uid-deleted",
+            "pod_name": "deleted-0",
+            "node_name": "node009",
+            "source": "kubernetes_daemon",
+        }
+    ]
+
+
+def test_retained_placement_does_not_overwrite_live_pod_name_mapping(mocker):
+    pod = _pod(
+        "trainer-0",
+        node="node-live",
+        controller=("Job", "uid-job-uid-pg-a"),
+    )
+    _wire_kubectl(mocker, [_podgroup()], [pod])
+    reader = mocker.Mock()
+    reader.list_for_resource.return_value = [
+        PlacementRecord(
+            namespace="team-alpha",
+            pod_name="trainer-0",
+            pod_uid="pod-uid-deleted",
+            node_name="node-old",
+            observed_at="2026-05-01T12:05:00Z",
+        )
+    ]
+    adapter = KaiExecutionContextAdapter(
+        placement_records_enabled=True,
+        placement_reader=reader,
+    )
+
+    [ctx] = adapter.discover_by_ids(["team-alpha/pg-a"])
+
+    assert ctx["pod_nodes"] == {"trainer-0": "node-live"}
+    assert {placement["pod_uid"] for placement in ctx["pod_placements"]} == {
+        "pod-uid-deleted",
+    }
+
+
 def test_denied_podgroup_lookup_fails_instead_of_skipping(mocker):
     fake = _wire_kubectl(mocker, [], [])
     fake.failures["PodGroup"] = KubernetesClientError("Forbidden")
@@ -829,3 +1155,43 @@ def test_builder_defaults_and_validation():
 
     with pytest.raises(MCAError, match="positive"):
         component.build({"timeout_seconds": 0}, ctx={"framework": "eca"})
+
+    with pytest.raises(MCAError, match="requires eca.kai.kubernetes_daemon"):
+        component.build(
+            {"namespace": "team-alpha", "placement_records_enabled": True},
+            ctx={"framework": "eca"},
+        )
+
+    with pytest.raises(MCAError, match="requires eca.kai.namespace"):
+        component.build(
+            {
+                "placement_records_enabled": True,
+                "kubernetes_daemon": {"endpoint": "http://daemon:8080"},
+            },
+            ctx={"framework": "eca"},
+        )
+
+
+def test_builder_coerces_cli_and_environment_boolean_strings():
+    component = mca_registry.get_component("eca", "kai")
+
+    disabled = component.build(
+        {"placement_records_enabled": "false"},
+        ctx={"framework": "eca"},
+    )
+    enabled = component.build(
+        {
+            "namespace": "team-alpha",
+            "placement_records_enabled": "true",
+            "kubernetes_daemon": {"endpoint": "http://daemon:8080"},
+        },
+        ctx={"framework": "eca"},
+    )
+
+    assert disabled.placement_records_enabled is False
+    assert enabled.placement_records_enabled is True
+    with pytest.raises(MCAError, match="must be a bool"):
+        component.build(
+            {"placement_records_enabled": "sometimes"},
+            ctx={"framework": "eca"},
+        )

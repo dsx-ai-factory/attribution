@@ -1,5 +1,10 @@
 # NVIDIA Attribution
 
+[![blueprint release](https://img.shields.io/badge/dynamic/regex?url=https%3A%2F%2Fapi.github.com%2Frepos%2Fdsx-ai-factory%2Fattribution%2Freleases&search=%22tag_name%22%3A+%3F%22blueprint-v%28%5B%5E%22%5D%2B%29%22&replace=v%241&label=blueprint)](https://github.com/dsx-ai-factory/attribution/releases?q=blueprint&expanded=true)
+[![service-app release](https://img.shields.io/badge/dynamic/regex?url=https%3A%2F%2Fapi.github.com%2Frepos%2Fdsx-ai-factory%2Fattribution%2Freleases&search=%22tag_name%22%3A+%3F%22service-app-v%28%5B%5E%22%5D%2B%29%22&replace=v%241&label=service-app)](https://github.com/dsx-ai-factory/attribution/releases?q=service-app&expanded=true)
+[![attribution-lib release](https://img.shields.io/badge/dynamic/regex?url=https%3A%2F%2Fapi.github.com%2Frepos%2Fdsx-ai-factory%2Fattribution%2Freleases&search=%22tag_name%22%3A+%3F%22attribution-lib-v%28%5B%5E%22%5D%2B%29%22&replace=v%241&label=attribution-lib)](https://github.com/dsx-ai-factory/attribution/releases?q=attribution-lib&expanded=true)
+[![Tests](https://github.com/dsx-ai-factory/attribution/actions/workflows/tests.yml/badge.svg?branch=main)](https://github.com/dsx-ai-factory/attribution/actions/workflows/tests.yml)
+
 **Open source · pre-1.0**
 
 NVIDIA Attribution is a service-plus-orchestrator that turns the raw symptoms of a failed GPU workload into one structured diagnosis with the symptom chain that produced it.
@@ -173,6 +178,8 @@ Without `--db`, the helper seeds and serves a demo database. Run it with `--help
 * Writing rules: [Add a New Extractor Rule](service/attribution-lib/docs/adding-a-rule.md)
 * Runnable release-bundle quickstart: [docs/quickstart.md](blueprint/docs/quickstart.md)
 * Blueprint configuration reference: [docs/CONFIGURATION.md](blueprint/docs/CONFIGURATION.md)
+* Bringing your own logs, the observation format every source accepts: [Observation Format](service/service-app/docs/api/observation-format.md)
+* Attributing from syslogs you collected yourself: [Manually Collected Syslogs](blueprint/docs/use-cases/manually-collected-syslogs.md)
 * Kueue example: [examples/kueue](blueprint/examples/kueue)
 * Attribution Service v2 REST walkthrough: [docs/rest-api.md](blueprint/docs/rest-api.md)
 * Static sample configs used by the quickstart: [examples/static/configs](blueprint/examples/static/configs)

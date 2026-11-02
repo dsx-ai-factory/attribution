@@ -1005,7 +1005,7 @@ outcome_symptom(
 outcome_symptom(
     "kernel invalid memory access",
     outcome="Fail InfraSW",
-    priority=OutcomePriority.MEDIUM_SW,
+    priority=OutcomePriority.HIGH_KERNEL_PANIC,
     doc="kernel-invalid-memory-access",
     # Same crash also prints the generic "Internal error: Oops"; keep this specific symptom.
     cascade_discards=(*NODE_FAILURE_CASCADE_TARGETS, "kernel oops"),
@@ -1014,7 +1014,7 @@ outcome_symptom(
 outcome_symptom(
     "kernel oops",
     outcome="Fail InfraSW",
-    priority=OutcomePriority.MEDIUM_SW,
+    priority=OutcomePriority.HIGH_KERNEL_PANIC,
     doc="kernel-oops",
     hw_cause="Kernel oops",
     cascade_discards=NODE_FAILURE_CASCADE_TARGETS,
@@ -1023,7 +1023,7 @@ outcome_symptom(
 outcome_symptom(
     "kernel soft lockup",
     outcome="Fail InfraSW",
-    priority=OutcomePriority.MEDIUM_SW,
+    priority=OutcomePriority.HIGH_KERNEL_PANIC,
     doc="kernel-soft-lockup",
     hw_cause="Kernel soft lockup",
     cascade_discards=NODE_FAILURE_CASCADE_TARGETS,
@@ -1448,6 +1448,55 @@ outcome_symptom(
     outcome="Fail User",
     priority=OutcomePriority.LOW,
     doc="python-exception",
+)
+
+# Concrete application configuration and runtime errors also outrank generic
+# NVRx failure context. Keep arguments, paths, and values in source evidence.
+outcome_symptom(
+    "Python Exception: argparse unrecognized arguments",
+    outcome="Fail User",
+    priority=OutcomePriority.LOW,
+    doc="python-exception",
+)
+
+outcome_symptom(
+    "Python Exception: ValueError: module grids do not cover every rank",
+    outcome="Fail User",
+    priority=OutcomePriority.LOW,
+    doc="python-exception",
+)
+
+outcome_symptom(
+    "Python Exception: ValueError: num-experts not divisible",
+    outcome="Fail User",
+    priority=OutcomePriority.LOW,
+    doc="python-exception",
+)
+
+outcome_symptom(
+    "Python Exception: RuntimeError: pinned activation buffer budget exceeded",
+    outcome="Fail User",
+    priority=OutcomePriority.LOW,
+    doc="python-exception",
+)
+
+outcome_symptom(
+    "Python Exception: FileNotFoundError: checkpoint iteration not found",
+    outcome="Fail User",
+    priority=OutcomePriority.LOW,
+    doc="python-exception",
+)
+
+# The compiler failure is specific evidence, but does not establish whether
+# application code, the toolchain, or node-local files caused it.
+# Prefer it over a peer closure attributed to the same node.
+outcome_symptom(
+    "Triton/Inductor JIT C-compilation failure",
+    outcome="Fail MultiCategory",
+    priority=OutcomePriority.LOW,
+    doc="jit-c-compilation-failure",
+    hw_cause="Underlying cause of JIT C-compilation failure is undetermined.",
+    cascade_discards=("Connection closed",),
 )
 
 outcome_symptom(

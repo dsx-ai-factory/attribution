@@ -98,33 +98,26 @@ def _catalog_entry_for_run(run: RunRow) -> dict | None:
 
 
 def _split_support_details(support_raw: Any) -> list[str]:
-    """Split catalog support details into bullet-friendly fragments.
+    """Normalize support details without splitting sentences or numbered steps.
 
     Args:
         support_raw: Raw ``support_details`` value from the catalog.
 
     Returns:
-        Non-empty support-detail fragments.
+        Non-empty support-detail strings, preserving punctuation and line breaks.
     """
-    if isinstance(support_raw, str) and support_raw != "":
-        support_bullets: list[str] = []
-        for chunk in support_raw.replace(";", ",").split(","):
-            piece = chunk.strip()
-            if piece != "":
-                support_bullets.append(piece)
-        return support_bullets
+    if isinstance(support_raw, str):
+        return [support_raw.strip()] if support_raw.strip() != "" else []
     if isinstance(support_raw, list):
-        return [str(s).strip() for s in support_raw if str(s).strip() != ""]
+        return [s.strip() for s in support_raw if isinstance(s, str) and s.strip() != ""]
     return []
 
 
 def diagnose_card(run: RunRow) -> dict[str, Any]:
-    """Assemble the persona-aware payload rendered in the Diagnose popover.
+    """Assemble tenant guidance for the verdict page and evidence export.
 
-    The popover surfaces tenant_sre fields (the SRE acts on these) plus an
-    "If you escalate, include" block sourced from cloud_operator.support_details
-    (the SRE bundles these for handoff). Returns the data shape the template
-    iterates, never raises.
+    Actions and escalation evidence both come from ``tenant_sre``. Never fall
+    back to operator guidance or internal notes when tenant fields are missing.
     """
     entry = _catalog_entry_for_run(run)
     verdict = (run.raw_result or {}).get("verdict") or {}
@@ -150,67 +143,15 @@ def diagnose_card(run: RunRow) -> dict[str, Any]:
 
     personas = entry.get("personas") or {}
     tenant = personas.get("tenant_sre") or {}
-    op = personas.get("cloud_operator") or {}
 
     return {
         "run_id": run.run_id,
-        "has_persona": True,
+        "has_persona": len(tenant) > 0,
         "title": tenant.get("title") or entry.get("title") or raw_symptom,
         "summary": tenant.get("summary") or entry.get("summary") or "",
         "impact": tenant.get("impact") or "",
         "action": tenant.get("action") or "",
-        "support_details": _split_support_details(op.get("support_details")),
-        "category": entry.get("category"),
-        "severity": entry.get("severity"),
-        "raw_symptom": raw_symptom,
-        "raw_line": raw_line,
-        "catalog_id": entry.get("id"),
-    }
-
-
-def operator_diagnose_card(run: RunRow) -> dict[str, Any]:
-    """Assemble the cloud-operator persona payload for verdict markdown.
-
-    Args:
-        run: Read-only web UI database row.
-
-    Returns:
-        A persona card dictionary using the same snake_case keys as
-        ``diagnose_card``.
-    """
-    entry = _catalog_entry_for_run(run)
-    verdict = (run.raw_result or {}).get("verdict") or {}
-    root = verdict.get("root_symptom") or {}
-    raw_symptom = root.get("symptom") or ""
-    raw_line = (root.get("source") or {}).get("line") or ""
-
-    if entry is None:
-        return {
-            "run_id": run.run_id,
-            "has_persona": False,
-            "title": raw_symptom or "Unclassified failure",
-            "summary": verdict.get("detail") or "",
-            "impact": "",
-            "action": "",
-            "support_details": [],
-            "category": None,
-            "severity": None,
-            "raw_symptom": raw_symptom,
-            "raw_line": raw_line,
-            "catalog_id": None,
-        }
-
-    personas = entry.get("personas") or {}
-    op = personas.get("cloud_operator") or {}
-
-    return {
-        "run_id": run.run_id,
-        "has_persona": len(op) > 0,
-        "title": op.get("title") or entry.get("title") or raw_symptom,
-        "summary": op.get("summary") or entry.get("summary") or "",
-        "impact": op.get("impact") or "",
-        "action": op.get("action") or "",
-        "support_details": _split_support_details(op.get("support_details")),
+        "support_details": _split_support_details(tenant.get("support_details")),
         "category": entry.get("category"),
         "severity": entry.get("severity"),
         "raw_symptom": raw_symptom,

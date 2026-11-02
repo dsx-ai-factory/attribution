@@ -1,0 +1,28 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+name: Assign Issue
+
+on:
+  issues:
+    types:
+      - opened
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  triage:
+    name: Assign Issue Triager
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+          sparse-checkout: .github/scripts
+      - name: Assign a triager to an issue from outside the team
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          TEAM_TOKEN: ${{ secrets.PR_ASSIGNER_TOKEN }}
+        run: python3 .github/scripts/assign_reviewer.py

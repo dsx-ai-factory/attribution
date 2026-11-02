@@ -16,7 +16,7 @@ from attribution_lib.bundled_rules.common.scrub_helpers import get_clean_bad_nod
 from attribution_lib.decision_trace_recorder import DecisionRecorder
 from attribution_lib.events import EventStream
 from attribution_lib.filter import run_post_outcome_refiners, run_pre_outcome_refiners, run_scrub_phase_refiners
-from attribution_lib.job_info import JobInfo, Scheduler
+from attribution_lib.job_info import JobInfo
 from attribution_lib.observation.inbound import Source as ObservationSource
 from attribution_lib.observation.processing import BodyFallbacks, EntrySourceBase
 from attribution_lib.outcome import (
@@ -337,11 +337,6 @@ def attribute(
     rule_params: Optional[Mapping[RuleId, RuleParameters]] = None,
     run_collectors: bool = False,
 ) -> AttributionResult:
-    # KAI is accepted on the wire, but no KAI rules or logic exist yet.
-    # Fail loudly rather than incorrectlyfallback to Slurm behavior.
-    if job_info.scheduler is Scheduler.KAI:
-        raise NotImplementedError("Attribution for scheduler 'kai' is not implemented yet")
-
     result = AttributionResult(event_stream=event_stream, bad_nodes_attr=bad_node_result)
 
     symp = calculate_symptoms(
