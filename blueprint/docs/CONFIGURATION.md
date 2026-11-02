@@ -527,20 +527,24 @@ attribution runs, so an event is lost if its attribution then fails (for
 example, the service is unreachable) or the process dies mid-run. To replay,
 reset the group's offsets with your Kafka tooling.
 
-During a rebalance, revoked and lost partitions' contexts are removed from the
-batch and the partition's next owner, possibly the same consumer, rereads them,
-so no offset past an event that discovery did not return is ever committed. A
-revoked partition commits its first unreturned offset as the next owner's
-starting point. A lost partition (the consumer missed its session timeout)
-cannot be committed; with `auto_offset_reset = "latest"` and no earlier commit
-for the group, its unread events can be skipped. Each partition
-is committed independently because the native Kafka client can raise on a mixed
-commit after other partitions have already committed. Failed partitions' contexts
-are dropped and still-owned partitions are rewound to their first uncommitted
-record. A commit error may mean the broker applied the offset but its reply was
-lost; redelivery after restart is therefore not guaranteed. Failed discovery
-calls clear pending commits before cleanup and rewind still-owned uncommitted
-records, allowing the same adapter to retry without skipping them.
+Offsets are committed only for events a discovery call finished handling:
+returned for attribution, or skipped as filtered, malformed or duplicate.
+Skipped events are not replayed. During a rebalance, revoked and lost
+partitions' events are removed from the batch and the partition's next owner,
+possibly the same consumer, rereads them. A revoked partition commits its first
+unfinished offset as the next owner's starting point. A lost partition (the
+consumer missed its session timeout) cannot be committed; with
+`auto_offset_reset = "latest"` and no earlier commit for the group, its unread
+events can be skipped.
+
+Each partition is committed independently because the native Kafka client can
+raise on a mixed commit after other partitions have already committed. Failed
+partitions' contexts are dropped and still-owned partitions are rewound to their
+first uncommitted record. A commit error may mean the broker applied the offset
+but its reply was lost; redelivery after restart is therefore not guaranteed.
+Failed discovery calls clear pending commits before cleanup and rewind
+still-owned uncommitted records, allowing the same adapter to retry without
+skipping them.
 
 A single empty poll does not mean the topic is drained. Discovery compares
 consumer positions and partition EOF notifications with broker end offsets for

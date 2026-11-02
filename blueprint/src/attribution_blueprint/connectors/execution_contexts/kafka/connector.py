@@ -162,14 +162,16 @@ class KafkaExecutionContextAdapter:
     without progress; an unassigned consumer waits up to
     `assignment_timeout_seconds`. Exhausting either wait raises.
 
-    Each partition is committed independently: the native client's mixed
-    commit can raise after other partitions already committed. Revoked and
-    lost partitions' contexts are removed from the batch and the next owner
-    (possibly this consumer) rereads them, so no offset past an unreturned
-    context is ever committed. A revoke commits the first unreturned offset
-    as a starting point; a lost partition cannot be committed, so with
-    `auto_offset_reset=latest` and no prior commit its records can be skipped. Failed partitions are also dropped; still-owned ones are
-    rewound. Commit errors can have an uncertain broker outcome, so redelivery
+    Offsets are committed only for records this `discover` call finished
+    handling: returned as contexts, or skipped as filtered, malformed or
+    duplicate (skipped records are not replayed). Each partition is committed
+    independently: the native client's mixed commit can raise after other
+    partitions already committed. Revoked and lost partitions' records are
+    removed from the batch and reread by the next owner (possibly this
+    consumer). A revoke commits the first unfinished offset as a starting
+    point; a lost partition cannot be committed, so with
+    `auto_offset_reset=latest` and no prior commit its records can be skipped.
+    Failed partitions are also dropped; still-owned ones are rewound. Commit errors can have an uncertain broker outcome, so redelivery
     after a process restart is not guaranteed. A failed discover clears pending
     commits before cleanup and rewinds still-owned uncommitted records.
 
@@ -424,9 +426,9 @@ class KafkaExecutionContextAdapter:
         self._close_consumer()
 
     def _on_revoke(self, consumer: Any, partitions: list[Any]) -> None:
-        # Never commit past the revoked partitions' unreturned records: a later
+        # Never commit past the revoked partitions' unfinished records: a later
         # failure in this discover() would discard them after their offsets
-        # were committed. Commit their first unreturned offset instead, so the
+        # were committed. Commit their first unfinished offset instead, so the
         # next owner (possibly this consumer after an eager rebalance) rereads
         # them even when the group has no prior commit and resets to `latest`.
         revoked = {(tp.topic, tp.partition) for tp in partitions}
