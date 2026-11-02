@@ -19,7 +19,7 @@ from attribution_blueprint.connectors.execution_contexts.kueue.connector import 
     KueueExecutionContextAdapter,
     _AttemptEvidence,
     _context_from_attempt_evidence,
-    _parse_workload,
+    _jobs_for_workload,
 )
 from attribution_blueprint.connectors.outputs.sqlite import SQLiteOutput
 from attribution_blueprint.kubernetes.daemon.client import KubernetesDaemonClient
@@ -35,6 +35,40 @@ from attribution_blueprint.kubernetes.daemon.sqlite_store import SQLitePlacement
 from attribution_blueprint.orchestrator import AttributionOrchestrator
 
 _RESTART_LABEL = "jobset.sigs.k8s.io/restart-attempt"
+
+
+def _context_from_live_resources(workload: dict, pods: list[dict], now: datetime) -> dict:
+    """Build one admitted context via the real evidence builder, the same
+    one `discover_by_ids`/`discover_by_time_range`/`_finalize` use for live
+    discovery."""
+    jobs = _jobs_for_workload(workload, {})
+    attempt = attempts_from_live_resources(workload, pods, jobs, now=now)[-1]
+    evidence = _AttemptEvidence(
+        attempts=[attempt],
+        workload=workload,
+        pods={uid: pod for pod in pods if (uid := (pod.get("metadata") or {}).get("uid")) and uid in attempt.pod_uids},
+        jobs={uid: job for job in jobs if (uid := (job.get("metadata") or {}).get("uid")) and uid in attempt.job_uids},
+    )
+    return _context_from_attempt_evidence(evidence)
+
+
+def _context_from_history_attempt(
+    attempt: WorkloadAttempt,
+    placements: list[PlacementRecord],
+    coverage: dict,
+) -> dict:
+    """Build one retained context via the real evidence builder, the same
+    one `_evidence_from_histories`/`_combine_attempt_evidence` feed into for
+    retained-history discovery."""
+    return _context_from_attempt_evidence(
+        _AttemptEvidence(
+            attempts=[attempt],
+            placements={
+                placement.pod_uid: placement for placement in placements if placement.pod_uid in attempt.pod_uids
+            },
+            retained_coverage=[coverage],
+        )
+    )
 
 
 def test_attempt_id_preserves_existing_canonical_hash():
@@ -483,7 +517,7 @@ def test_scheduler_readmission_creates_a_new_attempt():
         workload_name="training-workload",
     )
     contexts = [
-        KueueExecutionContextAdapter._context_from_history_attempt(
+        _context_from_history_attempt(
             attempt,
             [],
             {},
@@ -538,7 +572,7 @@ def test_scheduler_readmission_creates_a_new_attempt():
         "gaps": [],
         "disabledWatches": {},
     }
-    complete_context = KueueExecutionContextAdapter._context_from_history_attempt(
+    complete_context = _context_from_history_attempt(
         attempts[0],
         [],
         coverage,
@@ -552,7 +586,7 @@ def test_scheduler_readmission_creates_a_new_attempt():
             "recoveredAt": "2026-10-14T10:20:00Z",
         }
     ]
-    partial_context = KueueExecutionContextAdapter._context_from_history_attempt(
+    partial_context = _context_from_history_attempt(
         attempts[0],
         [],
         coverage,
@@ -950,7 +984,7 @@ def test_deadline_exceeded_outranks_generic_workload_failure():
         now=datetime(2026, 10, 14, 12, 0, tzinfo=timezone.utc),
         workload_name="training-workload",
     )
-    context = KueueExecutionContextAdapter._context_from_history_attempt(
+    context = _context_from_history_attempt(
         attempt,
         [],
         {},
@@ -1088,10 +1122,9 @@ def test_live_then_retained_discovery_writes_one_execution_context(tmp_path):
         "spec": {"nodeName": "node-a"},
         "status": {"startTime": "2026-10-14T10:01:00Z"},
     }
-    live = _parse_workload(
+    live = _context_from_live_resources(
         workload,
         [pod],
-        {},
         datetime(2026, 10, 14, 12, 0, tzinfo=timezone.utc),
     )
     assert live is not None
@@ -1111,7 +1144,7 @@ def test_live_then_retained_discovery_writes_one_execution_context(tmp_path):
         workload_name="training-workload",
         now=datetime(2026, 10, 14, 12, 0, tzinfo=timezone.utc),
     )
-    retained = KueueExecutionContextAdapter._context_from_history_attempt(
+    retained = _context_from_history_attempt(
         attempt,
         [],
         {},
@@ -1168,7 +1201,7 @@ def test_retained_node_loss_placement_restores_failed_node():
         node_failure_reason="NodeLost",
     )
 
-    context = KueueExecutionContextAdapter._context_from_history_attempt(
+    context = _context_from_history_attempt(
         attempt,
         [placement],
         {},
@@ -1177,6 +1210,51 @@ def test_retained_node_loss_placement_restores_failed_node():
     assert context["state"] == "NODE_FAIL"
     assert context["failed_node"] == "node-failed"
     assert context["nodes"] == ["node-failed"]
+
+
+def test_node_loss_pod_without_a_resolvable_node_name_still_reports_node_fail():
+    """Regression: a verified member Pod can report NodeLost with no
+    resolvable `spec.nodeName` (a relevant case for retained observations
+    that selected the failure reason but not the node binding). That must
+    still produce NODE_FAIL, not RUNNING — the state check cannot depend
+    on a node name being available."""
+    workload = {
+        "metadata": {
+            "name": "training-workload",
+            "namespace": "team-a",
+            "uid": "workload-uid",
+            "ownerReferences": [
+                {
+                    "kind": "Job",
+                    "name": "training",
+                    "uid": "job-uid",
+                    "controller": True,
+                }
+            ],
+        },
+        "status": {
+            "conditions": [_condition("Admitted", "2026-10-14T10:00:00Z")],
+        },
+    }
+    pod_without_node_name = {
+        "metadata": {
+            "name": "failed-pod",
+            "namespace": "team-a",
+            "uid": "pod-uid",
+            "creationTimestamp": "2026-10-14T10:01:00Z",
+            "labels": {"batch.kubernetes.io/controller-uid": "job-uid"},
+        },
+        "spec": {},
+        "status": {"reason": "NodeLost"},
+    }
+
+    context = _context_from_live_resources(
+        workload,
+        [pod_without_node_name],
+        datetime(2026, 10, 14, 11, tzinfo=timezone.utc),
+    )
+
+    assert context["state"] == "NODE_FAIL"
 
 
 def test_same_attempt_unions_retained_and_new_live_failure_evidence():

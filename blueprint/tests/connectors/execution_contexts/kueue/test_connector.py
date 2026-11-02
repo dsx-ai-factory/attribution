@@ -526,9 +526,7 @@ def test_live_owner_terminal_is_not_downgraded_by_running_workload(mocker):
     workloads = deepcopy(WORKLOADS)
     workload = workloads["items"][1]
     workload["status"]["conditions"] = [
-        condition
-        for condition in workload["status"]["conditions"]
-        if condition["type"] != "Finished"
+        condition for condition in workload["status"]["conditions"] if condition["type"] != "Finished"
     ]
     jobs = deepcopy(JOBS)
     jobs["items"][1]["status"] = {
@@ -548,9 +546,7 @@ def test_live_owner_terminal_is_not_downgraded_by_running_workload(mocker):
         jobs_payload=jobs,
     )
 
-    [ctx] = KueueExecutionContextAdapter().discover_by_ids(
-        ["team-alpha/job-llama-7b-pretrain-xyz77"]
-    )
+    [ctx] = KueueExecutionContextAdapter().discover_by_ids(["team-alpha/job-llama-7b-pretrain-xyz77"])
 
     assert ctx["state"] == "TIMEOUT"
     assert ctx["kueue_state"] == "FINISHED_FAILED"
@@ -1421,7 +1417,7 @@ def test_pods_filtered_by_batch_controller_uid_not_workload_uid_or_kueue_label(m
                 "metadata": {
                     "name": "p-batch-controller-uid",
                     "namespace": "team-alpha",
-                        "uid": "pod-batch-controller-uid",
+                    "uid": "pod-batch-controller-uid",
                     "labels": {
                         "batch.kubernetes.io/controller-uid": "JOB-UID-1",
                         "batch.kubernetes.io/job-name": "regr",
@@ -1436,7 +1432,7 @@ def test_pods_filtered_by_batch_controller_uid_not_workload_uid_or_kueue_label(m
                 "metadata": {
                     "name": "p-kueue-label-only",
                     "namespace": "team-alpha",
-                        "uid": "pod-kueue-label-only",
+                    "uid": "pod-kueue-label-only",
                     # Pod that ONLY carries the kueue label (with the owner
                     # job uid as value) - must NOT match, because pods
                     # don't actually carry this label in real clusters and
@@ -1452,7 +1448,7 @@ def test_pods_filtered_by_batch_controller_uid_not_workload_uid_or_kueue_label(m
                 "metadata": {
                     "name": "p-workload-uid",
                     "namespace": "team-alpha",
-                        "uid": "pod-workload-uid",
+                    "uid": "pod-workload-uid",
                     # batch label present but value is the Workload UID,
                     # not the owner Job UID - must NOT match.
                     "labels": {"batch.kubernetes.io/controller-uid": "WORKLOAD-UID-1"},
@@ -1686,7 +1682,7 @@ def test_collect_pod_evidence_rejects_unlabelled_and_mismatched_pods():
         },
     ]
     selector = (ns, "batch.kubernetes.io/controller-uid", "owner-A")
-    nodes, failed_node, _, _ = _collect_pod_evidence(pods, selector)
+    nodes, failed_node, _, _, _, _, _ = _collect_pod_evidence(pods, selector)
     assert nodes == ["n-good"]
     assert failed_node is None
 
@@ -1801,9 +1797,9 @@ def test_failed_node_is_deterministic_across_pod_orderings():
     pods_c = [_pod("n-b", 2), _pod("n-d", 0), _pod("n-a", 1), _pod("n-c", 137)]
 
     selector = (ns, "batch.kubernetes.io/controller-uid", "owner-A")
-    _, failed_a, _, _ = _collect_pod_evidence(pods_a, selector)
-    _, failed_b, _, _ = _collect_pod_evidence(pods_b, selector)
-    _, failed_c, _, _ = _collect_pod_evidence(pods_c, selector)
+    _, failed_a, _, _, _, _, _ = _collect_pod_evidence(pods_a, selector)
+    _, failed_b, _, _, _, _, _ = _collect_pod_evidence(pods_b, selector)
+    _, failed_c, _, _, _, _, _ = _collect_pod_evidence(pods_c, selector)
 
     assert failed_a == failed_b == failed_c == "n-a"
 
@@ -1827,9 +1823,33 @@ def test_collect_pod_evidence_prefers_node_loss_over_alphabetically_smaller_exit
     }
     selector = (ns, "batch.kubernetes.io/controller-uid", "owner-A")
 
-    _, failed_node, _, _ = _collect_pod_evidence([node_lost_pod, collateral_exit_pod], selector)
+    _, failed_node, _, _, _, _, _ = _collect_pod_evidence([node_lost_pod, collateral_exit_pod], selector)
 
     assert failed_node == "node-z"
+
+
+def test_collect_pod_evidence_reports_node_failure_without_a_resolvable_node_name():
+    """A verified Pod can report NodeLost with no resolvable `spec.nodeName`
+    (e.g. a retained observation that selected the failure reason but not
+    the node binding). `has_node_failure` must still be True even though
+    there's no node name to add to `node_loss_nodes` or pick as
+    `failed_node` — losing this signal would let a genuinely failed
+    attempt get reported as RUNNING."""
+    from attribution_blueprint.connectors.execution_contexts.kueue.connector import _collect_pod_evidence
+
+    ns = "team-a"
+    node_lost_pod_without_node_name = {
+        "metadata": {"namespace": ns, "labels": {"batch.kubernetes.io/controller-uid": "owner-A"}},
+        "spec": {},
+        "status": {"reason": "NodeLost"},
+    }
+    selector = (ns, "batch.kubernetes.io/controller-uid", "owner-A")
+
+    evidence = _collect_pod_evidence([node_lost_pod_without_node_name], selector)
+
+    assert evidence.has_node_failure is True
+    assert evidence.node_loss_nodes == frozenset()
+    assert evidence.failed_node is None
 
 
 def test_collect_pod_evidence_returns_empty_for_workload_with_no_owner_job():
@@ -1839,7 +1859,7 @@ def test_collect_pod_evidence_returns_empty_for_workload_with_no_owner_job():
     from attribution_blueprint.connectors.execution_contexts.kueue.connector import _collect_pod_evidence
 
     pods = [{"metadata": {"labels": {"batch.kubernetes.io/controller-uid": "anything"}}, "spec": {"nodeName": "n"}}]
-    assert _collect_pod_evidence(pods, None) == ([], None, [], {})
+    assert _collect_pod_evidence(pods, None) == ([], None, [], {}, [], frozenset(), False)
 
 
 def test_pod_nodes_maps_scheduled_pods_and_omits_unscheduled_ones():
@@ -1862,7 +1882,29 @@ def test_same_named_jobsets_in_two_namespaces_keep_separate_pod_evidence():
     """The pod list is pooled across workloads and the JobSet label is only
     unique per namespace, so pods must be scoped to the workload's namespace
     before matching or `pod_nodes` from one tenant overwrites the other's."""
-    from attribution_blueprint.connectors.execution_contexts.kueue.connector import _parse_workload
+    from attribution_blueprint.connectors.execution_contexts.kueue.attempts import attempts_from_live_resources
+    from attribution_blueprint.connectors.execution_contexts.kueue.connector import (
+        _AttemptEvidence,
+        _context_from_attempt_evidence,
+        _jobs_for_workload,
+    )
+
+    def _context_for(workload: dict, pods: list[dict], now: datetime) -> dict:
+        """Build one admitted context via the real discovery/evidence path,
+        the same one `discover_by_ids`/`discover_by_time_range` use."""
+        jobs = _jobs_for_workload(workload, {})
+        attempt = attempts_from_live_resources(workload, pods, jobs, now=now)[-1]
+        evidence = _AttemptEvidence(
+            attempts=[attempt],
+            workload=workload,
+            pods={
+                uid: pod for pod in pods if (uid := (pod.get("metadata") or {}).get("uid")) and uid in attempt.pod_uids
+            },
+            jobs={
+                uid: job for job in jobs if (uid := (job.get("metadata") or {}).get("uid")) and uid in attempt.job_uids
+            },
+        )
+        return _context_from_attempt_evidence(evidence)
 
     def _wl(ns: str) -> dict:
         return {
@@ -1908,8 +1950,8 @@ def test_same_named_jobsets_in_two_namespaces_keep_separate_pod_evidence():
 
     pods = [_pod("team-alpha", "node-a"), _pod("team-beta", "node-b")]
     now = datetime(2026, 5, 1, 13, 0, tzinfo=timezone.utc)
-    alpha = _parse_workload(_wl("team-alpha"), pods, {}, now=now)
-    beta = _parse_workload(_wl("team-beta"), pods, {}, now=now)
+    alpha = _context_for(_wl("team-alpha"), pods, now)
+    beta = _context_for(_wl("team-beta"), pods, now)
     assert alpha["nodes"] == ["node-a"] and alpha["pod_nodes"] == {"train-w-0-0": "node-a"}
     assert beta["nodes"] == ["node-b"] and beta["pod_nodes"] == {"train-w-0-0": "node-b"}
 
@@ -2394,6 +2436,7 @@ class TestMergePrometheusPlacements:
         ctx = {
             "namespace": "team-a",
             "workload_uid": "workload-uid-1",
+            "owner_job_uids": ["job-uid-1"],
             "nodes": [],
             "pod_names": [],
             "start_time": datetime(2026, 5, 1, tzinfo=timezone.utc),
@@ -2414,7 +2457,6 @@ class TestMergePrometheusPlacements:
 
         eca._merge_prometheus_placements_batched(
             [(self._workload(), self._context(nodes=["node-a"], pod_names=["pod-a"]))],
-            owner_jobs={},
         )
 
         resolver.placements_for_many.assert_called_once()
@@ -2429,7 +2471,6 @@ class TestMergePrometheusPlacements:
 
         eca._merge_prometheus_placements_batched(
             [(self._workload(), context)],
-            owner_jobs={},
         )
 
         resolver.placements_for_many.assert_not_called()
@@ -2453,7 +2494,7 @@ class TestMergePrometheusPlacements:
             ],
         )
 
-        eca._merge_prometheus_placements_batched([(workload, context)], owner_jobs={})
+        eca._merge_prometheus_placements_batched([(workload, context)])
 
         resolver.placements_for_many.assert_called_once()
 
@@ -2481,7 +2522,7 @@ class TestMergePrometheusPlacements:
             ],
         )
 
-        eca._merge_prometheus_placements_batched([(workload, context)], owner_jobs={})
+        eca._merge_prometheus_placements_batched([(workload, context)])
 
         resolver.placements_for_many.assert_called_once()
 
@@ -2500,36 +2541,25 @@ class TestMergePrometheusPlacements:
         workload = self._workload()
         context = self._context(nodes=nodes, pod_names=pod_names)
 
-        eca._merge_prometheus_placements_batched([(workload, context)], owner_jobs={})
+        eca._merge_prometheus_placements_batched([(workload, context)])
 
         query = resolver.placements_for_many.call_args.args[0][0]
         assert query.owner_job_uids == {"job-uid-1"}
 
     def test_jobset_queries_by_child_job_uids(self, mocker):
+        """`owner_job_uids` on the context already carries the exact set of
+        child Job UIDs a JobSet-owned Workload resolved to (populated by
+        `_context_from_attempt_evidence`); the batched query must forward
+        that set unchanged."""
         resolver = mocker.Mock()
         resolver.placements_for_many.return_value = {"workload-uid-1": []}
         eca = KueueExecutionContextAdapter(prometheus_placement_resolver=resolver)
         workload = self._workload(kind="JobSet", name="set-a", uid="jobset-uid-1")
-        owner_jobs = {
-            "team-a/set-a-workers-0": {
-                "metadata": {
-                    "namespace": "team-a",
-                    "uid": "child-job-uid-1",
-                    "labels": {"jobset.sigs.k8s.io/jobset-name": "set-a"},
-                    "ownerReferences": [{"kind": "JobSet", "name": "set-a", "uid": "jobset-uid-1", "controller": True}],
-                }
-            },
-            "team-a/set-a-workers-1": {
-                "metadata": {
-                    "namespace": "team-a",
-                    "uid": "child-job-uid-2",
-                    "labels": {"jobset.sigs.k8s.io/jobset-name": "set-a"},
-                    "ownerReferences": [{"kind": "JobSet", "name": "set-a", "uid": "jobset-uid-1", "controller": True}],
-                }
-            },
-        }
+        context = self._context(
+            owner_job_uids=["child-job-uid-1", "child-job-uid-2"],
+        )
 
-        eca._merge_prometheus_placements_batched([(workload, self._context())], owner_jobs)
+        eca._merge_prometheus_placements_batched([(workload, context)])
 
         query = resolver.placements_for_many.call_args.args[0][0]
         assert query.owner_job_uids == {
@@ -2558,15 +2588,14 @@ class TestMergePrometheusPlacements:
             ],
         }
         eca = KueueExecutionContextAdapter(prometheus_placement_resolver=resolver)
-        first = self._context()
-        second = self._context(workload_uid="workload-uid-2")
+        first = self._context(owner_job_uids=["job-uid-1"])
+        second = self._context(workload_uid="workload-uid-2", owner_job_uids=["job-uid-2"])
 
         eca._merge_prometheus_placements_batched(
             [
                 (self._workload(uid="job-uid-1"), first),
                 (self._workload(uid="job-uid-2"), second),
             ],
-            owner_jobs={},
         )
 
         resolver.placements_for_many.assert_called_once()
@@ -2600,7 +2629,7 @@ class TestMergePrometheusPlacements:
             ],
         )
 
-        eca._merge_prometheus_placements_batched([(workload, context)], owner_jobs={})
+        eca._merge_prometheus_placements_batched([(workload, context)])
 
         resolver.placements_for_many.assert_called_once()
         assert {p["pod_uid"] for p in context["pod_placements"]} == {"pod-uid-A", "pod-uid-B"}
@@ -2637,15 +2666,11 @@ class TestMergePrometheusPlacements:
 
         eca._merge_prometheus_placements_batched(
             [(self._workload(), context)],
-            owner_jobs={},
         )
 
         assert context["nodes"] == ["node-current"]
         assert context["pod_names"] == ["current-pod"]
-        assert {
-            placement["pod_uid"]
-            for placement in context["pod_placements"]
-        } == {"current-pod-uid"}
+        assert {placement["pod_uid"] for placement in context["pod_placements"]} == {"current-pod-uid"}
 
 
 class TestPlacementReader:
