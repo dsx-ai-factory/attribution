@@ -101,14 +101,15 @@ If your Node.js installation does not include Corepack, follow the
 Corepack or pnpm 10.11.0 directly.
 
 The full gate also needs Python **3.14.6** on the host, even when Docker is
-available. This is the version used for all Python suites in CI. The Library
-and Blueprint declare Python 3.11+ support, but that minimum is not sufficient
-for the Service.
+available. This is the Service's pinned runtime in
+[`service/service-app/.python-version`](service/service-app/.python-version)
+and the version used for all Python suites in CI. The Library and Blueprint
+declare Python 3.11+ support, but that minimum is not sufficient for the Service.
 
 Install the pinned runtime and select it for this shell, as CI does:
 
 ```bash
-export UV_PYTHON=3.14.6
+export UV_PYTHON="$(cat service/service-app/.python-version)"
 uv python install "$UV_PYTHON"
 uv run --no-project --python "$UV_PYTHON" python --version
 ```
