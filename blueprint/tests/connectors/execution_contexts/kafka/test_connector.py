@@ -704,8 +704,9 @@ def test_timezone_read_failure_fails_discovery_without_commit(monkeypatch, error
     monkeypatch.setattr(events_module, "ZoneInfo", zone_info)
     eca, consumer = _make_eca(_structured(_events()))
 
-    with pytest.raises(KafkaConsumerError, match="cannot read timezone"):
+    with pytest.raises(OSError) as caught:
         eca.discover()
+    assert caught.value is error
     assert consumer.commits == []
 
 
@@ -802,3 +803,41 @@ def test_closed_adapter_rejects_discovery():
     eca.close()
     with pytest.raises(KafkaConsumerError, match="closed"):
         eca.discover()
+
+
+def test_native_commit_failure_keeps_successful_partition():
+    native = pytest.importorskip("confluent_kafka")
+    eca, consumer = _make_eca(
+        [*_structured(_events()[:1], partition=0), *_structured(_events()[1:], partition=1)],
+        partitions=(0, 1),
+        consumer_error=native.KafkaException,
+    )
+    commit = consumer.commit
+
+    def fail_one_partition(*, offsets, asynchronous):
+        if offsets[0].partition == 0:
+            raise native.KafkaException(native.KafkaError(native.KafkaError._TIMED_OUT))
+        return commit(offsets=offsets, asynchronous=asynchronous)
+
+    consumer.commit = fail_one_partition
+    assert [ctx["id"] for ctx in eca.discover()] == ["job-b7"]
+    assert consumer.seeks == [(0, 0)]
+    assert eca.discovery_incomplete is True
+
+
+def test_native_poll_failure_rewinds_and_propagates_original_error():
+    native = pytest.importorskip("confluent_kafka")
+    error = native.KafkaException(native.KafkaError(native.KafkaError._TRANSPORT))
+
+    def fail_after_read(consumer):
+        raise error
+
+    eca, consumer = _make_eca(
+        [*_structured(_events()[:1]), fail_after_read],
+        consumer_error=native.KafkaException,
+    )
+    with pytest.raises(native.KafkaException) as caught:
+        eca.discover()
+    assert caught.value is error
+    assert consumer.commits == []
+    assert consumer.seeks == [(0, 0)]

@@ -4,7 +4,6 @@
 import os
 
 from attribution_blueprint import mca_registry as _registry
-from attribution_blueprint.connectors.execution_contexts.kafka.client import KafkaConsumerClient
 from attribution_blueprint.connectors.execution_contexts.kafka.connector import (
     KafkaExecutionContext,
     KafkaExecutionContextAdapter,
@@ -76,13 +75,14 @@ def _build(spec: dict, ctx: dict) -> KafkaExecutionContextAdapter:
     fetch_timeout = _coerce_float(spec.get("fetch_timeout_seconds", 60.0), "eca.kafka.fetch_timeout_seconds")
 
     try:
-        from confluent_kafka import Consumer, TopicPartition
+        from confluent_kafka import Consumer, KafkaException, TopicPartition
     except ImportError as exc:
         raise MCAError("eca.kafka requires the kafka extra: install nvidia-attribution-blueprint[kafka]") from exc
     consumer = Consumer(config)
     try:
         return KafkaExecutionContextAdapter(
-            consumer=KafkaConsumerClient(consumer),
+            consumer=consumer,
+            consumer_error=KafkaException,
             topic=str(spec["topic"]),
             topic_partition=TopicPartition,
             event_types=event_types,

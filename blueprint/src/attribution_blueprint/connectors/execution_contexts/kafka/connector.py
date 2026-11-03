@@ -4,7 +4,7 @@
 """Kafka execution-context input, with commits at the discovery boundary.
 
 Like other execution-context adapters, discover() returns normalized contexts.
-CloudEvent decoding lives in events.py; client.py isolates native Kafka errors.
+CloudEvent decoding lives in events.py; batch.py names per-call state.
 The adapter coordinates one batch and the rebalance callbacks invoked by poll.
 
 Delivery is best effort: successful partitions commit before contexts reach
@@ -17,7 +17,7 @@ from __future__ import annotations
 import time
 import weakref
 from datetime import datetime
-from typing import Any, Callable
+from typing import TYPE_CHECKING, Any, Callable
 
 from loguru import logger
 
@@ -26,17 +26,19 @@ from attribution_blueprint.connectors.execution_contexts.kafka.batch import (
     PartitionKey,
     PollWait,
 )
-from attribution_blueprint.connectors.execution_contexts.kafka.client import (
-    KafkaConsumer,
-    KafkaConsumerError,
-    KafkaMessage,
-)
 from attribution_blueprint.connectors.execution_contexts.kafka.events import (
     EventError,
     KafkaExecutionContext,
     _context_from_data,
     _read_cloudevent,
 )
+
+if TYPE_CHECKING:
+    from confluent_kafka import Consumer, Message
+
+
+class KafkaConsumerError(RuntimeError):
+    """Discovery failed or only a subset of the batch can be returned."""
 
 
 class KafkaExecutionContextAdapter:
@@ -60,9 +62,10 @@ class KafkaExecutionContextAdapter:
     def __init__(
         self,
         *,
-        consumer: KafkaConsumer,
+        consumer: Consumer,
         topic: str,
         topic_partition: Callable[[str, int, int], Any],
+        consumer_error: type[Exception] = KafkaConsumerError,
         event_types: list[str] | None = None,
         scheduler: str = "kafka",
         workload_type: str = "",
@@ -74,25 +77,27 @@ class KafkaExecutionContextAdapter:
     ) -> None:
         """Validate batch limits and subscribe the supplied consumer once.
 
-        consumer implements the operational-error contract in client.py; the
-        native factory supplies KafkaConsumerClient. topic_partition builds
-        the client-specific offset objects. No records are polled here.
+        The factory supplies the native Consumer, TopicPartition constructor,
+        and KafkaException type. Tests can inject a consumer with the same
+        methods and a specific operational exception. Other errors propagate.
         """
         if not topic:
             raise ValueError("kafka ECA: topic is required")
-        if max_messages <= 0:
-            raise ValueError(f"kafka ECA: max_messages must be positive, got {max_messages}")
-        if poll_timeout_seconds <= 0:
-            raise ValueError(f"kafka ECA: poll_timeout_seconds must be positive, got {poll_timeout_seconds}")
-        if assignment_timeout_seconds < 0:
-            raise ValueError(
-                f"kafka ECA: assignment_timeout_seconds must be non-negative, got {assignment_timeout_seconds}"
-            )
-        if fetch_timeout_seconds <= 0:
-            raise ValueError(f"kafka ECA: fetch_timeout_seconds must be positive, got {fetch_timeout_seconds}")
-        if max_transient_errors < 0:
-            raise ValueError(f"kafka ECA: max_transient_errors must be non-negative, got {max_transient_errors}")
+        for name, value in (
+            ("max_messages", max_messages),
+            ("poll_timeout_seconds", poll_timeout_seconds),
+            ("fetch_timeout_seconds", fetch_timeout_seconds),
+        ):
+            if value <= 0:
+                raise ValueError(f"kafka ECA: {name} must be positive, got {value}")
+        for name, value in (
+            ("assignment_timeout_seconds", assignment_timeout_seconds),
+            ("max_transient_errors", max_transient_errors),
+        ):
+            if value < 0:
+                raise ValueError(f"kafka ECA: {name} must be non-negative, got {value}")
         self._consumer = consumer
+        self._consumer_errors = (KafkaConsumerError, consumer_error)
         self._topic_partition = topic_partition
         self._event_types = frozenset(event_types or ())
         self._scheduler = scheduler
@@ -113,12 +118,11 @@ class KafkaExecutionContextAdapter:
         consumer.subscribe([topic], on_revoke=_weak(self._on_revoke), on_lost=_weak(self._on_lost))
 
     def discover(self) -> list[KafkaExecutionContext]:
-        """Read, commit, and return one batch; never hide unexpected exceptions.
+        """Read and commit one batch before returning its contexts.
 
-        Malformed/filtered/duplicate records are intentionally acknowledged.
-        A failed discovery rewinds uncommitted owned records before re-raising.
-        The sole broad handler exists to clean up even on cancellation; it
-        always re-raises. Completed partition commits cannot be rolled back.
+        Invalid, filtered, and duplicate events are intentionally acknowledged.
+        Failure or cancellation rewinds uncommitted records and re-raises;
+        successful partition commits cannot be rolled back.
         """
         if self._closed:
             raise KafkaConsumerError("kafka ECA: consumer is closed; create a new adapter")
@@ -134,7 +138,7 @@ class KafkaExecutionContextAdapter:
             self.discovery_incomplete = True
             # Detach before cleanup: close() may invoke on_revoke.
             self._batch = None
-            self._abandon_batch(batch)
+            self._rewind_uncommitted(batch)
             raise
         finally:
             self._batch = None
@@ -219,7 +223,7 @@ class KafkaExecutionContextAdapter:
             )
         return False
 
-    def _handle_poll_error(self, batch: DiscoveryBatch, wait: PollWait, message: KafkaMessage, error: Any) -> None:
+    def _handle_poll_error(self, batch: DiscoveryBatch, wait: PollWait, message: Message, error: Any) -> None:
         """Record EOF evidence, retry bounded transient errors, or fail discovery."""
         if error.name() == "_PARTITION_EOF":
             batch.end_offsets[(message.topic(), message.partition())] = message.offset()
@@ -229,7 +233,7 @@ class KafkaExecutionContextAdapter:
             raise KafkaConsumerError(f"kafka ECA: consumer error: {error}")
         logger.warning(f"kafka ECA: retriable consumer error ({wait.transient_errors}): {error}")
 
-    def _accept_record(self, batch: DiscoveryBatch, message: KafkaMessage) -> None:
+    def _accept_record(self, batch: DiscoveryBatch, message: Message) -> None:
         """Track one offset and parse it; catch only invalid-event errors."""
         self.last_discovery_stats["consumed"] += 1
         key = (message.topic(), message.partition())
@@ -250,7 +254,11 @@ class KafkaExecutionContextAdapter:
         An unresolved negative position cannot prove a nonempty partition is
         drained. Client failures propagate, rather than looking like emptiness.
         """
-        positions = {(tp.topic, tp.partition): tp for tp in self._consumer.position(assigned)}
+        try:
+            positions = self._consumer.position(assigned)
+        except self._consumer_errors as exc:
+            raise KafkaConsumerError(f"kafka ECA: position lookup failed: {exc}") from exc
+        positions = {(tp.topic, tp.partition): tp for tp in positions}
         for tp in assigned:
             remaining = deadline - time.monotonic()
             if remaining <= 0:
@@ -259,7 +267,10 @@ class KafkaExecutionContextAdapter:
             position = positions.get(key)
             if position is not None and position.error is not None:
                 raise KafkaConsumerError(f"kafka ECA: position lookup failed: {position.error}")
-            low, high = self._consumer.get_watermark_offsets(tp, timeout=remaining, cached=False)
+            try:
+                low, high = self._consumer.get_watermark_offsets(tp, timeout=remaining, cached=False)
+            except self._consumer_errors as exc:
+                raise KafkaConsumerError(f"kafka ECA: cannot check partition end offsets: {exc}") from exc
             next_offset = max(position.offset if position is not None else -1, batch.end_offsets.get(key, -1))
             if low < high and next_offset < high:
                 return False
@@ -275,13 +286,13 @@ class KafkaExecutionContextAdapter:
         for key, progress in batch.partitions.items():
             try:
                 self._commit_offset(key, progress.next_offset)
-            except KafkaConsumerError as exc:
+            except self._consumer_errors as exc:
                 batch.commit_failures.add(key)
                 logger.warning(f"kafka ECA: commit failed for {key}: {exc}; its contexts will not be returned")
             else:
                 batch.committed.add(key)
         contexts = self._dedupe(batch)
-        self._abandon_batch(batch)
+        self._rewind_uncommitted(batch)
         if batch.commit_failures and not contexts:
             raise KafkaConsumerError(f"kafka ECA: offset commit failed for {sorted(batch.commit_failures)}")
         return contexts
@@ -295,38 +306,38 @@ class KafkaExecutionContextAdapter:
         if not results or any(tp.error is not None for tp in results):
             raise KafkaConsumerError("kafka ECA: commit returned no successful partition result")
 
-    def _abandon_batch(self, batch: DiscoveryBatch) -> None:
+    def _rewind_uncommitted(self, batch: DiscoveryBatch) -> None:
         """Rewind uncommitted records still owned; close after an unsafe rewind.
 
         Successful partitions are untouched, including after another partition
         fails. Recovery catches only client errors. A failed rewind is surfaced
         as incomplete discovery and makes future calls fail explicitly.
         """
-        pending = batch.partitions.keys() - batch.committed - batch.rewound
+        pending = batch.partitions.keys() - batch.committed
         if self._closed or not pending:
             return
         try:
             owned = {(tp.topic, tp.partition) for tp in self._consumer.assignment()}
-        except KafkaConsumerError as exc:
+        except self._consumer_errors as exc:
             self._close_after_recovery_failure(exc)
             return
         for key in sorted(pending & owned):
             progress = batch.partitions[key]
             try:
                 self._consumer.seek(self._topic_partition(*key, progress.first_offset))
-            except KafkaConsumerError as exc:
+            except self._consumer_errors as exc:
                 self._close_after_recovery_failure(exc)
                 return
-            batch.rewound.add(key)
+            del batch.partitions[key]
 
-    def _close_after_recovery_failure(self, error: KafkaConsumerError) -> None:
+    def _close_after_recovery_failure(self, error: Exception) -> None:
         """Invalidate the consumer while preserving any successful batch subset."""
         self.discovery_incomplete = True
         self._batch = None
         logger.warning(f"kafka ECA: cannot rewind aborted batch: {error}")
         try:
             self.close()
-        except KafkaConsumerError as exc:
+        except self._consumer_errors as exc:
             logger.warning(f"kafka ECA: close after aborted batch failed: {exc}")
 
     def _on_revoke(self, consumer: Any, partitions: list[Any]) -> None:
@@ -340,10 +351,11 @@ class KafkaExecutionContextAdapter:
         if batch is None:
             return
         keys = {(tp.topic, tp.partition) for tp in partitions}
-        for key in sorted(keys & batch.partitions.keys() - batch.committed):
+        pending = batch.partitions.keys() - batch.committed
+        for key in sorted(keys & pending):
             try:
                 self._commit_offset(key, batch.partitions[key].first_offset)
-            except KafkaConsumerError as exc:
+            except self._consumer_errors as exc:
                 batch.bookmark_failures.add(key)
                 logger.warning(f"kafka ECA: cannot bookmark {key} on revoke: {exc}")
         batch.release(keys)
@@ -369,9 +381,9 @@ class KafkaExecutionContextAdapter:
                 contexts.append(ctx)
         return contexts
 
-    def _parse_message(self, message: KafkaMessage) -> KafkaExecutionContext | None:
+    def _parse_message(self, message: Message) -> KafkaExecutionContext | None:
         """Decode and filter CloudEvents before applying scheduler field mapping."""
-        event_id, event_type, data = _read_cloudevent(message)
+        event_id, event_type, data = _read_cloudevent(message.value(), message.headers())
         if self._event_types and event_type not in self._event_types:
             self.last_discovery_stats["filtered"] += 1
             self.last_unmatched_event_types[event_type] = self.last_unmatched_event_types.get(event_type, 0) + 1

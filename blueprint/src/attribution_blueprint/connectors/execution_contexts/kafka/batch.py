@@ -30,15 +30,14 @@ class DiscoveryBatch:
 
     partitions contains owned records awaiting a decision. contexts preserves
     poll order across partitions. Revoke/loss removes the affected records.
-    committed identifies which contexts can be returned after partial failure;
-    rewound prevents abort cleanup from seeking a failed partition twice.
+    committed identifies which contexts can be returned after partial failure.
+    Successfully rewound partitions are removed, so cleanup cannot seek twice.
     EOF positions are fetch evidence, never offsets to commit.
     """
 
     partitions: dict[PartitionKey, PartitionProgress] = field(default_factory=dict)
     contexts: list[tuple[PartitionKey, KafkaExecutionContext]] = field(default_factory=list)
     committed: set[PartitionKey] = field(default_factory=set)
-    rewound: set[PartitionKey] = field(default_factory=set)
     commit_failures: set[PartitionKey] = field(default_factory=set)
     bookmark_failures: set[PartitionKey] = field(default_factory=set)
     end_offsets: dict[PartitionKey, int] = field(default_factory=dict)

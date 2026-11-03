@@ -25,7 +25,6 @@ from datetime import datetime
 from typing import NotRequired, TypedDict
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from attribution_blueprint.connectors.execution_contexts.kafka.client import KafkaConsumerError, KafkaMessage
 from attribution_blueprint.orchestrator import _service_timezone_name
 
 _OPTIONAL_STR_FIELDS = (
@@ -79,9 +78,11 @@ class EventError(ValueError):
     """The event payload is invalid and may be skipped without retrying."""
 
 
-def _read_cloudevent(message: KafkaMessage) -> tuple[str, str, dict]:
+def _read_cloudevent(
+    raw: bytes | None,
+    headers: list[tuple[str, bytes | str | None]] | None,
+) -> tuple[str, str, dict]:
     """Return (id, type, data) from a structured- or binary-mode CloudEvent."""
-    raw = message.value()
     if raw is None:
         raise EventError("message has no value")
     try:
@@ -89,7 +90,7 @@ def _read_cloudevent(message: KafkaMessage) -> tuple[str, str, dict]:
     except (UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise EventError(f"value is not JSON: {exc}") from exc
 
-    headers = {key: value for key, value in (message.headers() or [])}
+    headers = dict(headers or [])
     if "ce_type" in headers:
         attrs = {key[3:]: _header_str(value) for key, value in headers.items() if key.startswith("ce_")}
         data = body
@@ -147,12 +148,17 @@ def _context_from_data(
     if ctx["end_time"] < ctx["start_time"]:
         raise EventError(f"CloudEvent {event_id} end_time is before start_time")
 
+    _validate_timezone(ctx, data.get("timezone"), event_id)
+    _copy_optional_fields(ctx, data, event_id)
+    return ctx
+
+
+def _copy_optional_fields(ctx: KafkaExecutionContext, data: dict, event_id: str) -> None:
+    """Copy scheduler/Pod metadata, validating numeric and collection fields."""
     for key in _OPTIONAL_STR_FIELDS:
         value = data.get(key)
         if value is not None and value != "":
             ctx[key] = str(value)
-
-    _validate_timezone(ctx, data.get("timezone"), event_id)
 
     for key in ("time_limit", "gpu_count"):
         value = data.get(key)
@@ -173,7 +179,6 @@ def _context_from_data(
         if not isinstance(pod_nodes, dict):
             raise EventError(f"CloudEvent {event_id} pod_nodes must be an object")
         ctx["pod_nodes"] = {str(pod): str(node) for pod, node in pod_nodes.items()}
-    return ctx
 
 
 def _validate_timezone(ctx: KafkaExecutionContext, timezone: object, event_id: str) -> None:
@@ -197,7 +202,7 @@ def _validate_timezone(ctx: KafkaExecutionContext, timezone: object, event_id: s
                 errno.EINVAL,
             ):
                 raise EventError(f"CloudEvent {event_id} timezone {timezone!r} is not an IANA key") from exc
-            raise KafkaConsumerError(f"kafka ECA: cannot read timezone {timezone!r}: {exc}") from exc
+            raise
 
     # The service needs an IANA zone; reject now what the orchestrator would
     # reject after the offset is committed (e.g. +05:30 without `timezone`).

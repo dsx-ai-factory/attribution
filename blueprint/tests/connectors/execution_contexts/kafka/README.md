@@ -70,10 +70,7 @@ The implementation follows the existing execution-context adapter separation:
 
 - `events.py` decodes structured/binary CloudEvents and maps scheduler fields.
   It raises `EventError` only for invalid payloads; host timezone read failures
-  abort discovery rather than discarding a valid event.
-- `client.py` defines the injected consumer protocol. `KafkaConsumerClient`
-  translates only native `KafkaException` failures, at individual client calls.
-  Other exceptions propagate unchanged.
+  propagate rather than discarding a valid event.
 - `batch.py` names the state of one discovery call. `PartitionProgress` records
   the first unfinished offset and the next handled offset. `PollWait` names
   the separate assignment and unread-fetch deadlines.
@@ -88,7 +85,8 @@ returned. If a rewind fails, discovery is incomplete and the consumer is closed.
 A later call must construct a new adapter. No active batch means revoke/close
 cannot commit anything. These are discovery acknowledgments, before attribution.
 
-Expected client failures use `KafkaConsumerError` in fake consumers, matching
-the native boundary. Tests inject programming errors separately and assert
-that they propagate, rather than being logged and skipped. The only broad
-handler performs abort cleanup and always re-raises, including cancellation.
+The factory supplies the native `KafkaException` type with the consumer.
+Recovery catches that specific type and `KafkaConsumerError`; other errors
+propagate unchanged. Test consumers inject operational errors separately from
+programming errors. The only broad handler performs abort cleanup and always
+re-raises, including cancellation.
