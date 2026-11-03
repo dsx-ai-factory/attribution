@@ -44,10 +44,28 @@ def _parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _validate_watch_configuration(
+    parser: argparse.ArgumentParser,
+    args: argparse.Namespace,
+) -> None:
+    if not any(
+        (
+            args.watch_pods,
+            args.watch_jobs,
+            args.watch_jobsets,
+            args.enable_kueue,
+            args.enable_kai,
+        )
+    ):
+        parser.error("at least one Kubernetes resource watch must be enabled")
+
+
 def main() -> None:
     from kubernetes import client, config
 
-    args = _parser().parse_args()
+    parser = _parser()
+    args = parser.parse_args()
+    _validate_watch_configuration(parser, args)
     configuration = client.Configuration()
     if args.kubeconfig or args.context:
         config.load_kube_config(

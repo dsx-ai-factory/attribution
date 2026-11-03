@@ -3,10 +3,13 @@
 
 from types import SimpleNamespace
 
+import pytest
+
 from attribution_blueprint.kubernetes.daemon.cli import (
     _API_REQUEST_TIMEOUT_SECONDS,
     _parser,
     _set_default_api_timeout,
+    _validate_watch_configuration,
 )
 
 
@@ -70,3 +73,39 @@ def test_lifecycle_watches_and_cluster_identity_are_configurable():
     assert args.watch_pods is True
     assert args.watch_jobs is False
     assert args.watch_jobsets is False
+
+
+def test_all_resource_watches_disabled_is_rejected(capsys):
+    parser = _parser()
+    args = parser.parse_args(
+        [
+            "--namespace",
+            "team-a",
+            "--no-watch-pods",
+            "--no-watch-jobs",
+            "--no-watch-jobsets",
+        ]
+    )
+
+    with pytest.raises(SystemExit) as error:
+        _validate_watch_configuration(parser, args)
+
+    assert error.value.code == 2
+    assert "at least one Kubernetes resource watch must be enabled" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("integration", ["--enable-kueue", "--enable-kai"])
+def test_scheduler_integration_supplies_a_resource_watch(integration):
+    parser = _parser()
+    args = parser.parse_args(
+        [
+            "--namespace",
+            "team-a",
+            "--no-watch-pods",
+            "--no-watch-jobs",
+            "--no-watch-jobsets",
+            integration,
+        ]
+    )
+
+    _validate_watch_configuration(parser, args)
