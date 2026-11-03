@@ -1035,8 +1035,20 @@ def sigkill_handler_promotion(context: RefinerContext):
 @refiner_def(
     name="EmptySymptomsFallback", author="NVIDIA Attribution team", priority=_priority("EmptySymptomsFallback")
 )
-def empty_symptoms_fallback(context: RefinerContext):
-    """If the outcome is still empty, try to explain why from raw_keywords."""
+def empty_symptoms_fallback(context: RefinerContext) -> None:
+    """Explain otherwise empty symptoms from raw keywords.
+
+    An unrecognized log path remains a collection diagnostic when the scheduler
+    already reports cancellation or timeout for this execution, or an extracted
+    cancellation symptom is present. Later refiners select the existing outcome
+    without treating absent log paths as an independent failure.
+
+    Args:
+        context: Raw keywords, current symptoms, and execution metadata.
+
+    Returns:
+        None. Promotes eligible keywords without removing their source evidence.
+    """
     raw_keywords = context.raw_keywords
     symptoms = context.symptoms
     job_info = context.job_info
@@ -1047,8 +1059,16 @@ def empty_symptoms_fallback(context: RefinerContext):
         # must not replace it with a missing-log outcome; raw keywords remain
         # available and independently extracted faults retain their precedence.
         return
-    if not symptoms or (len(symptoms) == 1 and "Cancelled by user" in symptoms):
+    if len(symptoms) == 0 or (len(symptoms) == 1 and "Cancelled by user" in symptoms):
         if "log file is not recognized from slurm cmdline" in raw_keywords:
+            if (
+                "Cancelled by user" in symptoms
+                or job_info.state in {"CANCELLED", "TIMEOUT"}
+                or job_info.state.startswith("CANCELLED by ")
+            ):
+                # Scheduler termination refiners run after this promotion rule.
+                # Keep the diagnostic without preempting those decisions.
+                return
             sources = raw_keywords["log file is not recognized from slurm cmdline"]
             if job_info.type == "interactive":
                 symptoms.add(SourceSet.new_one("interactive job", sources.one_source()))
