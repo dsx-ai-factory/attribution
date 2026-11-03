@@ -5,8 +5,8 @@ from __future__ import annotations
 
 from attribution_blueprint.connectors.execution_contexts.kai.helpers import (
     POD_GROUP_ANNOTATION,
+    controller_owner,
     owner_matches,
-    resolve_owner,
     top_owner,
 )
 from attribution_blueprint.kubernetes.daemon.models import (
@@ -63,7 +63,10 @@ class KaiResourceResolver:
             raise
 
         pod_group_metadata = pod_group.get("metadata") or {}
-        if not owner_matches(resolve_owner(pod_group_metadata), owner):
+        if not owner_matches(
+            top_owner(pod_group_metadata) or controller_owner(pod_group_metadata),
+            owner,
+        ):
             raise UnsupportedOwner("KAI PodGroup does not belong to the resolved Pod owner")
         if not pod_group_metadata.get("name") or not pod_group_metadata.get("uid"):
             raise ResolutionPending("KAI PodGroup identity is incomplete")
