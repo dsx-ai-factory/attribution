@@ -308,7 +308,7 @@ class SQLitePlacementStore:
         namespace: str,
         kind: str,
     ) -> list[ResourceObservation]:
-        with self._connect() as connection:
+        with self._connection() as connection:
             rows = connection.execute(
                 """
                 WITH latest AS (

@@ -290,12 +290,23 @@ def test_store_closes_connection_after_operation(tmp_path, monkeypatch):
             self.closed = True
             super().close()
 
-    connection = sqlite3.connect(store.path, factory=TrackingConnection)
-    connection.row_factory = sqlite3.Row
-    monkeypatch.setattr(store, "_connect", lambda: connection)
+    connections = []
 
+    def connect():
+        connection = sqlite3.connect(store.path, factory=TrackingConnection)
+        connection.row_factory = sqlite3.Row
+        connections.append(connection)
+        return connection
+
+    monkeypatch.setattr(store, "_connect", connect)
     assert store.get_by_pod_uid("missing") is None
-    assert connection.closed
+    assert store.list_latest_observations_for_kind(
+        "cluster-a",
+        "team-a",
+        "Pod",
+    ) == []
+    assert len(connections) == 2
+    assert all(connection.closed for connection in connections)
 
 
 def test_multiple_associated_resources_are_queryable(tmp_path):
