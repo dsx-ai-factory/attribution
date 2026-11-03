@@ -336,16 +336,19 @@ class _PodEvidence(NamedTuple):
 def _collect_pod_evidence(
     pods: list[dict],
     selector: tuple[str, str, str] | None,
+    *,
+    members_verified: bool = False,
 ) -> _PodEvidence:
     """Return sorted unique nodes, the lex-smallest failed_node, sorted pod
     names, the pod -> node mapping, bound Pod placements, the node-loss node
     set, and whether any member Pod reports node loss at all.
 
-    Re-checks each pod against `_pod_matches_selector` as a defensive filter,
-    since cluster-wide discovery can pool pods from other namespaces. Returns
-    empty evidence when `selector` is None (no recognised owner).
+    Re-checks each pod against `_pod_matches_selector` as a defensive filter
+    when a selector is available, since live discovery can pool pods from
+    other namespaces. Already-verified retained members can be processed
+    without a selector.
     """
-    if not selector:
+    if selector is None and not members_verified:
         return _PodEvidence([], None, [], {}, [], frozenset(), False)
     nodes: set[str] = set()
     node_loss_nodes: set[str] = set()
@@ -355,7 +358,7 @@ def _collect_pod_evidence(
     placements: list[PodPlacement] = []
     has_node_failure = False
     for pod in pods:
-        if not _pod_matches_selector(pod, selector):
+        if selector is not None and not _pod_matches_selector(pod, selector):
             continue
         meta = pod.get("metadata") or {}
         pod_name = meta.get("name")
@@ -637,7 +640,11 @@ def _context_from_attempt_evidence(
     workload = evidence.workload
     member_pods = list(evidence.pods.values())
     selector = _pod_selector_for(workload) if workload is not None else None
-    pod_evidence = _collect_pod_evidence(member_pods, selector)
+    pod_evidence = _collect_pod_evidence(
+        member_pods,
+        selector,
+        members_verified=True,
+    )
     state, kueue_state = _history_attempt_state(attempt)
     jobs_by_name = {
         (f"{(job.get('metadata') or {}).get('namespace') or ''}/{(job.get('metadata') or {}).get('name') or ''}"): job
@@ -697,7 +704,8 @@ def _context_from_attempt_evidence(
             retained_exit_nodes.add(record.node_name)
 
     node_loss_nodes = retained_node_loss_nodes | set(pod_evidence.node_loss_nodes)
-    if node_loss_nodes and state not in {
+    has_node_failure = bool(retained_node_loss_nodes) or pod_evidence.has_node_failure
+    if has_node_failure and state not in {
         "COMPLETED",
         "PREEMPTED",
         "NODE_FAIL",

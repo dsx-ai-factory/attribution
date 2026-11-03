@@ -1369,6 +1369,44 @@ def test_node_loss_pod_without_a_resolvable_node_name_still_reports_node_fail():
     assert context["state"] == "NODE_FAIL"
 
 
+def test_retained_node_loss_without_selector_or_placement_reports_node_fail():
+    start = datetime(2026, 10, 14, 10, 0, tzinfo=timezone.utc)
+    attempt = WorkloadAttempt(
+        workload_uid="workload-uid",
+        namespace="team-a",
+        workload_name="training-workload",
+        owner_kind="Job",
+        admission_key=start.isoformat(),
+        restart_attempt="0",
+        start_time=start,
+        end_time=datetime(2026, 10, 14, 11, 0, tzinfo=timezone.utc),
+        terminal=None,
+        open=True,
+        boundary_resolved=True,
+        pod_uids=frozenset({"pod-uid"}),
+    )
+    retained_pod = {
+        "metadata": {
+            "name": "failed-pod",
+            "namespace": "team-a",
+            "uid": "pod-uid",
+        },
+        "spec": {},
+        "status": {"reason": "NodeLost"},
+    }
+    evidence = _AttemptEvidence(
+        attempts=[attempt],
+        pods={"pod-uid": retained_pod},
+        retained_coverage=[{}],
+    )
+
+    context = _context_from_attempt_evidence(evidence)
+
+    assert context["state"] == "NODE_FAIL"
+    assert context["nodes"] == []
+    assert "failed_node" not in context
+
+
 def test_same_attempt_unions_retained_and_new_live_failure_evidence():
     admitted = "2026-10-14T10:00:00Z"
     workload = {
