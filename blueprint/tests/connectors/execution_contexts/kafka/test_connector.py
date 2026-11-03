@@ -466,12 +466,13 @@ def test_defaults_when_optional_fields_absent():
     assert ctx["workload_type"] == "kubernetes"
 
 
-def test_discover_stops_at_max_messages():
+def test_discover_stops_at_max_messages_and_closes():
     eca, consumer = _make_eca(_structured(_events()), max_messages=1)
-
     assert [ctx["id"] for ctx in eca.discover()] == ["job-a1"]
-    assert [ctx["id"] for ctx in eca.discover()] == ["job-b7"]
-    assert consumer.commits == [{0: 1}, {0: 2}]
+    assert consumer.commits == [{0: 1}]
+    assert consumer.closed
+    with pytest.raises(KafkaConsumerError, match="closed"):
+        eca.discover()
 
 
 def test_empty_topic_returns_nothing_and_does_not_commit():
@@ -576,7 +577,7 @@ def test_discovery_counters_surface_filtered_and_malformed_events():
     assert eca.last_discovery_stats["malformed"] == 1
     assert eca.last_discovery_stats["returned"] == 0
     assert eca.last_unmatched_event_types == {"com.example.job.completed.v2": 1}
-    assert eca.discovery_incomplete is True
+    assert eca.discovery_incomplete is False
     assert consumer.commits == [{0: 2}]
 
 
@@ -593,12 +594,12 @@ def test_first_commit_failure_does_not_attempt_remaining_partitions():
     assert eca.last_discovery_stats["commit_failed_partitions"] == 1
 
 
-def test_discovery_counters_reset_between_batches():
-    eca, _ = _make_eca(_structured([_events()[0], _events()[0]]))
+def test_discovery_counters_remain_available_after_close():
+    eca, consumer = _make_eca(_structured([_events()[0], _events()[0]]))
     assert len(eca.discover()) == 1
+    assert consumer.closed
     assert eca.last_discovery_stats["duplicates"] == 1
-    assert eca.discover() == []
-    assert not any(eca.last_discovery_stats.values())
+    assert eca.last_discovery_stats["returned"] == 1
     assert eca.discovery_incomplete is False
 
 
@@ -767,3 +768,68 @@ def test_build_rejects_latest_before_opening_consumer():
             {"bootstrap_servers": "localhost:9092", "topic": TOPIC, "group_id": "test", "auto_offset_reset": "latest"},
             {},
         )
+
+
+@pytest.mark.parametrize("encoding", ["structured", "binary"])
+@pytest.mark.parametrize("cluster", [None, "example-cluster"])
+def test_correlation_metadata_is_preserved(encoding, cluster):
+    event = _events()[0]
+    event["subject"] = "custom/subject/that-is-not-derived-from-job-id"
+    if cluster is not None:
+        event["data"]["cluster"] = cluster
+    if encoding == "structured":
+        messages = _structured([event])
+    else:
+        headers = [(f"ce_{key}", event[key].encode()) for key in ("specversion", "id", "type", "source", "subject")]
+        messages = [FakeMessage(json.dumps(event["data"]).encode(), 0, headers=headers)]
+    eca, consumer = _make_eca(messages)
+    [context] = eca.discover()
+    assert context["event_subject"] == event["subject"]
+    assert context.get("cluster") == cluster
+    assert consumer.closed
+
+
+@pytest.mark.parametrize(
+    "value",
+    [[], "", False, {"worker": None}, {"worker": 2}, {"worker": ""}, {"worker": " "}, {"": "node"}, {" ": "node"}],
+)
+def test_invalid_pod_nodes_is_skipped_without_coercion(value):
+    event = _events()[0]
+    event["data"]["pod_nodes"] = value
+    eca, consumer = _make_eca(_structured([event, _events()[1]]))
+    assert [ctx["id"] for ctx in eca.discover()] == ["job-b7"]
+    assert eca.last_discovery_stats["malformed"] == 1
+    assert consumer.commits == [{0: 2}]
+
+
+def test_optional_subject_can_be_absent():
+    event = _events()[0]
+    event.pop("subject", None)
+    eca, _ = _make_eca(_structured([event]))
+    assert "event_subject" not in eca.discover()[0]
+
+
+def test_filtered_only_batch_succeeds_and_closes():
+    event = _events()[0]
+    event["type"] = "com.example.job.started.v1"
+    eca, consumer = _make_eca(_structured([event]))
+    assert eca.discover() == []
+    assert eca.discovery_incomplete is False
+    assert eca.last_unmatched_event_types == {event["type"]: 1}
+    assert consumer.commits == [{0: 1}]
+    assert consumer.closed
+
+
+def test_close_failure_preserves_committed_contexts():
+    eca, consumer = _make_eca(_structured(_events()))
+    original_close = eca.close
+
+    def failed_close():
+        original_close()
+        raise KafkaConsumerError("injected close failure")
+
+    eca.close = failed_close
+    assert [ctx["id"] for ctx in eca.discover()] == ["job-a1", "job-b7"]
+    assert consumer.commits == [{0: 2}]
+    assert consumer.closed
+    assert eca.discovery_incomplete is True

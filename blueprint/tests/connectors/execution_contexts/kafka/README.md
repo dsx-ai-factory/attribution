@@ -21,13 +21,15 @@ malformed/filtered events, duplicate attempts, timeouts, commit boundaries,
 revocation/loss, and propagation of programming and native client errors.
 
 Live tests cover the complete shared payload in structured and binary mode,
-real Service attribution and SQLite output, restarts from committed offsets,
+subject/cluster preservation, real Service attribution and SQLite output,
+restarts from committed offsets,
 partial commit failure, delayed fetching, and two consumers rebalancing during
 a batch without missing/overlapping contexts. Service/output failures explicitly
 verify the documented commit-before-attribution limitation.
 
-The smaller failure contract closes the consumer instead of seeking or retrying
-inside the adapter. Retry tests construct a new consumer and verify that only
+Each discovery closes the consumer before attribution starts. Filtered-only
+batches succeed with visible counts; invalid pod-to-node mappings are skipped.
+The adapter closes instead of seeking or retrying after failures. Retry tests construct a new consumer and verify that only
 uncommitted records replay. Rebalance callbacks never commit. Native Kafka
 exceptions are injected separately from programming errors, which must escape.
 The only catch-all performs failure cleanup and re-raises, including cancellation.

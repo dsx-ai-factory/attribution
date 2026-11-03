@@ -36,6 +36,7 @@ _OPTIONAL_STR_FIELDS = (
     "std_out",
     "std_err",
     "namespace",
+    "cluster",
 )
 
 
@@ -43,6 +44,8 @@ class KafkaExecutionContext(ExecutionContext):
     """Common execution context plus Kafka correlation and Kubernetes metadata."""
 
     event_id: str
+    event_subject: NotRequired[str]
+    cluster: NotRequired[str]
     failed_nodes: NotRequired[list[str]]
     namespace: NotRequired[str]
     pod_names: NotRequired[list[str]]
@@ -56,8 +59,8 @@ class EventError(ValueError):
 def _read_cloudevent(
     raw: bytes | None,
     headers: list[tuple[str, bytes | str | None]] | None,
-) -> tuple[str, str, dict]:
-    """Return (id, type, data) from a structured- or binary-mode CloudEvent."""
+) -> tuple[str, str, dict, str | None]:
+    """Return (id, type, data, subject) from either CloudEvent encoding."""
     if raw is None:
         raise EventError("message has no value")
     try:
@@ -85,7 +88,10 @@ def _read_cloudevent(
         raise EventError(f"CloudEvent {event_id} type is missing")
     if not isinstance(data, dict):
         raise EventError(f"CloudEvent {event_id} data must be a JSON object")
-    return event_id, event_type, data
+    subject = attrs.get("subject")
+    if subject is not None and (not isinstance(subject, str) or not subject):
+        raise EventError(f"CloudEvent {event_id} subject must be a non-empty string")
+    return event_id, event_type, data, subject
 
 
 def _header_str(value: bytes | str | None) -> str:
@@ -101,6 +107,7 @@ def _context_from_data(
     event_id: str,
     default_scheduler: str,
     workload_type: str,
+    event_subject: str | None = None,
 ) -> KafkaExecutionContext:
     """Validate an event `data` object and build an ExecutionContext from it."""
     missing = [key for key in ("id", "start_time", "end_time", "nodes") if data.get(key) in (None, "", [])]
@@ -122,6 +129,8 @@ def _context_from_data(
     }
     if ctx["end_time"] < ctx["start_time"]:
         raise EventError(f"CloudEvent {event_id} end_time is before start_time")
+    if event_subject is not None:
+        ctx["event_subject"] = event_subject
 
     _validate_timezone(ctx, data.get("timezone"), event_id)
     _copy_optional_fields(ctx, data, event_id)
@@ -150,10 +159,13 @@ def _copy_optional_fields(ctx: KafkaExecutionContext, data: dict, event_id: str)
     if data.get("pod_names"):
         ctx["pod_names"] = _str_list(data["pod_names"], "pod_names", event_id)
     pod_nodes = data.get("pod_nodes")
-    if pod_nodes:
-        if not isinstance(pod_nodes, dict):
-            raise EventError(f"CloudEvent {event_id} pod_nodes must be an object")
-        ctx["pod_nodes"] = {str(pod): str(node) for pod, node in pod_nodes.items()}
+    if pod_nodes is not None:
+        if not isinstance(pod_nodes, dict) or not all(
+            isinstance(pod, str) and pod.strip() and isinstance(node, str) and node.strip()
+            for pod, node in pod_nodes.items()
+        ):
+            raise EventError(f"CloudEvent {event_id} pod_nodes must map non-empty pod names to node names")
+        ctx["pod_nodes"] = dict(pod_nodes)
 
 
 def _validate_timezone(ctx: KafkaExecutionContext, timezone: object, event_id: str) -> None:

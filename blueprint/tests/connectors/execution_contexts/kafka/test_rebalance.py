@@ -92,24 +92,35 @@ def _publish_attempts(completion_event, publish_event):
     return expected, partition_of
 
 
-def _peer_run(spec, first_read, release_peer):
-    """Join after the first record and retain ownership until the first batch ends."""
+def _discover_with_assignment(adapter):
+    """Snapshot ownership before one-shot discovery closes the native consumer."""
+    assignment = set()
+    original_close = adapter.close
+
+    def close():
+        if not adapter._closed:
+            assignment.update(tp.partition for tp in adapter._consumer.assignment())
+        original_close()
+
+    adapter.close = close
+    return adapter.discover(), assignment
+
+
+def _peer_run(spec, first_read):
+    """Join after the first record and return a separately committed batch."""
     assert first_read.wait(30), "the first consumer never read a record"
     peer = _build({**spec, "poll_timeout_seconds": 3}, {})
     try:
-        contexts = peer.discover()
-        assignment = {tp.partition for tp in peer._consumer.assignment()}
-        assert release_peer.wait(30), "the first consumer did not complete its batch"
-        return contexts, assignment
+        return _discover_with_assignment(peer)
     finally:
         peer.close()
 
 
 def _assert_rebalance(
-    observed, first, first_assignment, second, second_assignment, expected, partition_of, topic, rebalanced
+    observed, first, first_assignment, second, second_assignment, expected, partition_of, spec, rebalanced
 ):
     """Prove no revoke commit, no overlap/loss, and complete broker offsets."""
-    from confluent_kafka import TopicPartition
+    from confluent_kafka import Consumer, TopicPartition
 
     assert rebalanced.is_set()
     relevant = [item for item in observed.revocations if item[0] and item[1]]
@@ -117,13 +128,16 @@ def _assert_rebalance(
     assert all(commits == [] for _, _, commits in relevant)
     assert {partition_of[ctx["event_id"]] for ctx in first} <= first_assignment
     assert {partition_of[ctx["event_id"]] for ctx in second} <= second_assignment
-    assert len(first_assignment) == len(second_assignment) == 1
-    assert first_assignment.isdisjoint(second_assignment)
+    # Consumers leave on completion; ownership may overlap at different times.
     actual = [ctx["event_id"] for ctx in first + second]
     assert set(actual) == expected
     assert len(actual) == len(expected)  # No duplicates across consumers.
-    committed = observed.committed([TopicPartition(topic, p) for p in range(2)], timeout=10)
-    assert {tp.partition: tp.offset for tp in committed} == {0: 2, 1: 2}
+    reader = Consumer(_consumer_config(spec))
+    try:
+        committed = reader.committed([TopicPartition(spec["topic"], p) for p in range(2)], timeout=10)
+        assert {tp.partition: tp.offset for tp in committed} == {0: 2, 1: 2}
+    finally:
+        reader.close()
 
 
 def test_live_rebalance_drops_revoked_partition_without_duplicate_or_missing_events(
@@ -135,7 +149,7 @@ def test_live_rebalance_drops_revoked_partition_without_duplicate_or_missing_eve
     from confluent_kafka import KafkaException, TopicPartition
 
     expected, partition_of = _publish_attempts(completion_event, publish_event)
-    first_read, rebalanced, release_peer = Event(), Event(), Event()
+    first_read, rebalanced = Event(), Event()
     observed = ObservedConsumer(kafka_spec, first_read, rebalanced)
     adapter = KafkaExecutionContextAdapter(
         consumer=observed,
@@ -148,12 +162,8 @@ def test_live_rebalance_drops_revoked_partition_without_duplicate_or_missing_eve
 
     try:
         with ThreadPoolExecutor(max_workers=1) as executor:
-            future = executor.submit(_peer_run, kafka_spec, first_read, release_peer)
-            try:
-                first = adapter.discover()
-                first_assignment = {tp.partition for tp in observed.assignment()}
-            finally:
-                release_peer.set()
+            future = executor.submit(_peer_run, kafka_spec, first_read)
+            first, first_assignment = _discover_with_assignment(adapter)
             second, second_assignment = future.result(timeout=35)
 
         _assert_rebalance(
@@ -164,7 +174,7 @@ def test_live_rebalance_drops_revoked_partition_without_duplicate_or_missing_eve
             second_assignment,
             expected,
             partition_of,
-            kafka_spec["topic"],
+            kafka_spec,
             rebalanced,
         )
     finally:

@@ -48,8 +48,8 @@ class KafkaExecutionContextAdapter:
     """Consume CloudEvents with automatic commits disabled and earliest reset.
 
     Revocation/loss drops that partition's uncommitted batch; Kafka replays it
-    to its next owner. Successful calls can reuse the consumer. Any failed call
-    closes it, so no local cursor recovery or retry state is needed.
+    to its next owner. Each discover() call closes the consumer before returning,
+    including on failure. Construct a new adapter for each batch.
     """
 
     def __init__(
@@ -97,7 +97,7 @@ class KafkaExecutionContextAdapter:
         consumer.subscribe([topic], on_revoke=_weak(self._release), on_lost=_weak(self._release))
 
     def discover(self) -> list[KafkaExecutionContext]:
-        """Read, commit, and return contexts; close and re-raise on any failure.
+        """Read and commit one batch, then close before attribution can begin.
 
         Invalid/filtered/duplicate events are intentional skips and commit too.
         A commit failure returns only already committed contexts and flags the
@@ -124,15 +124,14 @@ class KafkaExecutionContextAdapter:
             self._read_batch()
             contexts = self._dedupe(self._commit_batch())
             self.last_discovery_stats["returned"] = len(contexts)
-            self.discovery_incomplete |= bool(self.last_unmatched_event_types) and not contexts
             return contexts
         except BaseException:
             self.discovery_incomplete = True
-            self._close_after_failure()
             raise
         finally:
             self._pending.clear()
             self._end_offsets.clear()
+            self._close_after_discovery()
             logger.info(f"kafka ECA: discovery summary {self.last_discovery_stats}")
             if self.last_unmatched_event_types:
                 logger.warning(f"kafka ECA: filtered event types {self.last_unmatched_event_types}")
@@ -182,7 +181,7 @@ class KafkaExecutionContextAdapter:
         batch = self._pending.setdefault(key, _PartitionBatch(message.offset() + 1))
         batch.offset = message.offset() + 1
         try:
-            event_id, event_type, data = _read_cloudevent(message.value(), message.headers())
+            event_id, event_type, data, subject = _read_cloudevent(message.value(), message.headers())
             if self._event_types and event_type not in self._event_types:
                 self.last_discovery_stats["filtered"] += 1
                 self.last_unmatched_event_types[event_type] = self.last_unmatched_event_types.get(event_type, 0) + 1
@@ -192,6 +191,7 @@ class KafkaExecutionContextAdapter:
                 event_id=event_id,
                 default_scheduler=self._scheduler,
                 workload_type=self._workload_type,
+                event_subject=subject,
             )
         except EventError as exc:
             self.last_discovery_stats["malformed"] += 1
@@ -225,19 +225,18 @@ class KafkaExecutionContextAdapter:
         """Report partial commits without discarding contexts already acknowledged."""
         self.discovery_incomplete = True
         self.last_discovery_stats["commit_failed_partitions"] = 1
-        self._close_after_failure()
         if not contexts:
             raise KafkaConsumerError(f"kafka ECA: offset commit failed: {error}") from error
         logger.warning(f"kafka ECA: offset commit failed: {error}; returning the committed subset")
         return contexts
 
-    def _close_after_failure(self) -> None:
-        """Invalidate the consumer; a close failure must not hide the original error."""
-        self._pending.clear()
+    def _close_after_discovery(self) -> None:
+        """Report close failures without hiding read errors or committed contexts."""
         try:
             self.close()
         except self._consumer_errors as exc:
-            logger.warning(f"kafka ECA: close after failure failed: {exc}")
+            self.discovery_incomplete = True
+            logger.warning(f"kafka ECA: consumer close failed: {exc}")
 
     def _release(self, consumer: Consumer, partitions: list[Any]) -> None:
         """Drop revoked/lost records without committing; their next owner replays."""
@@ -279,6 +278,7 @@ def _weak(method: Callable[..., None]) -> Callable[..., None]:
     ref = weakref.WeakMethod(method)
 
     def call(*args: Any) -> None:
+        """Forward the callback only while its adapter is alive."""
         target = ref()
         if target is not None:
             target(*args)

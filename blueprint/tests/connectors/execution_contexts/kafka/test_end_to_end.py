@@ -31,6 +31,7 @@ XID_SYMPTOM = "XID-79-GPU_HAS_FALLEN_OFF_THE_BUS"
 
 
 EXPECTED_FIELDS = {
+    "cluster",
     "id",
     "job_id",
     "attempt_id",
@@ -77,7 +78,8 @@ def _attribute(adapter, service_url, evidence, database, monkeypatch):
     create_attributor = attribution.create_attributor
 
     def record_create(info):
-        # Observe the request and delegate to the real HTTP client.
+        # Discovery must release Kafka ownership before the Service is called.
+        assert adapter._closed
         sent_workloads.append(info.workload.model_dump(mode="json"))
         return create_attributor(info)
 
@@ -137,6 +139,7 @@ def _assert_stored(database, event, expected_result, evidence_node):
         else:
             assert raw[field] == value, field
     assert raw["event_id"] == event["id"]
+    assert raw["event_subject"] == event["subject"]
     assert raw["failed_node"] == min(data["failed_nodes"])
     assert stored["job_id"] == data["job_id"]
     assert stored["attempt_id"] == data["attempt_id"]
@@ -169,6 +172,8 @@ def test_full_completion_event_reaches_service_and_sqlite(
     event = completion_event
     data = event["data"]
     data["cancelled_by"] = cancelled_by
+    data["cluster"] = "example-cluster"
+    event["subject"] = f"custom/jobs/{data['id']}"
     if multiple_failed_nodes:
         data["failed_nodes"] = list(reversed(data["nodes"]))
     event["dataschema"] = "https://example.com/schemas/job-completed-v1.json"

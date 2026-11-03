@@ -532,7 +532,9 @@ next owner. Rebalance callbacks never commit offsets.
 Kafka handles connection retries internally. The adapter does not retry reported
 consumer errors, seek partitions, or repair a failed consumer. A read/timeout
 failure closes the consumer and raises. Create a new adapter to retry from
-Kafka's committed offsets. Successful calls can reuse the adapter.
+Kafka's committed offsets. Every discovery closes its consumer before returning,
+so attribution runs without holding group membership. Create a new adapter for
+each batch; calling discovery again on a closed adapter raises.
 
 Each partition commits independently, because a mixed-partition commit can
 partially succeed before raising. At the first commit failure the adapter
@@ -548,15 +550,20 @@ Malformed, filtered, and within-batch duplicate events are intentional skips
 and their offsets commit too. Each call logs counts in `last_discovery_stats`
 (`consumed`, `accepted`, `filtered`, `malformed`, `duplicates`, `returned`,
 `commit_failed_partitions`, `dropped_partitions`). Filtered event types and their
-counts appear in `last_unmatched_event_types`. The CLI exits 1 on a filtered-only
-batch or commit failure, including when it processes a committed subset.
+counts appear in `last_unmatched_event_types`. A filtered-only batch succeeds
+with zero contexts. The CLI exits 1 on operational or commit failure, including
+when it processes a committed subset. A close failure is logged and marks the
+batch incomplete without discarding committed contexts or hiding a read error.
 Unexpected exceptions propagate; they are not classified as invalid events.
 
 The event `data` object uses ExecutionContext field names: `id`, `start_time`,
 `end_time` (with UTC offset) and a non-empty `nodes` list are required;
 `job_id`, `attempt_id`, `scheduler`, `state`, `name`, `user_name`,
 `workload_framework`, `timezone`, `time_limit`, `gpu_count`, `cancelled_by`,
-`failed_nodes`, `namespace`, `pod_names` and `pod_nodes` are optional. See
+`failed_nodes`, `namespace`, `pod_names`, `pod_nodes`, and `cluster` are optional.
+CloudEvent `subject`, when supplied, is retained as `event_subject`; `cluster`
+is retained unchanged. `pod_nodes` must be an object whose pod names and node
+names are non-empty strings; values are not coerced to strings. See
 `tests/fixtures/kafka_completion_events.json`. Send `timezone` as an IANA key
 whenever the timestamps' UTC offset is not a whole hour or the job crosses a
 DST change; events the service could not place in a timezone are skipped.

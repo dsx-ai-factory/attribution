@@ -336,12 +336,12 @@ def test_poll_error_replays_with_new_consumer(kafka_spec, completion_event, publ
     _assert_drained(kafka_spec)
 
 
-def test_cli_reports_filtered_only_schema_change(kafka_spec, completion_event, publish_event, run_kafka_cli):
+def test_cli_reports_filtered_only_batch_without_failing(kafka_spec, completion_event, publish_event, run_kafka_cli):
     completion_event["type"] = "com.example.job.completed.v2"
     publish_event(completion_event)
     completed = run_kafka_cli()
     output = completed.stdout + completed.stderr
-    assert completed.returncode == 1
+    assert completed.returncode == 0
     assert completion_event["type"] in output
     assert "'filtered': 1" in output
     assert "'accepted': 0" in output
