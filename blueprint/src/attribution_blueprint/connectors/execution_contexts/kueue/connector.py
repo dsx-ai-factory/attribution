@@ -607,8 +607,8 @@ def _workload_window(workload: dict, now: datetime) -> tuple[datetime, datetime]
     """Return `(start_time, end_time)` for a Workload using only data carried
     on the Workload object — no pod or owner-Job fetches.
 
-    Cheap pre-filter for `discover_by_time_range`, before the full
-    `_parse_workload` pass. Returns `None` if no start time can be derived.
+    Cheap pre-filter for `discover_by_time_range`, before full attempt
+    reconstruction. Returns `None` if no start time can be derived.
     """
     meta = workload.get("metadata") or {}
     if not meta.get("uid") or not meta.get("name"):
