@@ -2,7 +2,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-FROM python:3.14.6-slim-trixie
+FROM python:3.14-slim-trixie
 COPY --from=ghcr.io/astral-sh/uv:0.10.12 /uv /uvx /bin/
 
 ENV UV_COMPILE_BYTECODE=1
