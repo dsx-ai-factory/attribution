@@ -29,7 +29,7 @@ above one replica or mount the database from multiple writers.
 
 Deleted placements and completed or deleted controller histories are removed
 after `retentionDays`; active histories are retained. The default is 30 days.
-Cleanup runs at startup and during normal store activity.
+Cleanup runs at startup and periodically, every five minutes by default.
 
 It does not retain Pod logs or Pod specifications.
 

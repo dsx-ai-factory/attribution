@@ -1114,6 +1114,74 @@ def test_history_pruning_advances_coverage_boundary(tmp_path):
     assert boundary >= datetime.now(timezone.utc) - timedelta(days=1, seconds=5)
 
 
+def test_history_pruning_removes_only_expired_closed_coverage_gaps(tmp_path):
+    path = tmp_path / "placements.db"
+    store = SQLitePlacementStore(str(path), retention_days=1)
+    old = (datetime.now(timezone.utc) - timedelta(days=2)).isoformat()
+    current = datetime.now(timezone.utc).isoformat()
+    with sqlite3.connect(path) as connection:
+        connection.executemany(
+            """
+            INSERT INTO coverage_gap(
+                cluster_id, namespace, source_name, api_version, kind,
+                reason, start_resource_version, started_at, detected_at,
+                end_resource_version, recovered_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            [
+                (
+                    "cluster-a",
+                    "team-a",
+                    "expired",
+                    "v1",
+                    "Pod",
+                    "RESOURCE_VERSION_EXPIRED",
+                    "1",
+                    old,
+                    old,
+                    "2",
+                    old,
+                ),
+                (
+                    "cluster-a",
+                    "team-a",
+                    "retained",
+                    "v1",
+                    "Pod",
+                    "RESOURCE_VERSION_EXPIRED",
+                    "3",
+                    current,
+                    current,
+                    "4",
+                    current,
+                ),
+                (
+                    "cluster-a",
+                    "team-a",
+                    "open",
+                    "v1",
+                    "Pod",
+                    "RESOURCE_VERSION_EXPIRED",
+                    "5",
+                    old,
+                    old,
+                    None,
+                    None,
+                ),
+            ],
+        )
+
+    store.prune_expired()
+
+    gaps = {
+        gap.source_name: gap
+        for gap in store.list_coverage_gaps("cluster-a", "team-a")
+    }
+    assert set(gaps) == {"retained", "open"}
+    assert gaps["retained"].recovered_at == current
+    assert gaps["open"].recovered_at is None
+
+
 def test_coverage_gap_migration_uses_detection_time_for_existing_rows(tmp_path):
     path = tmp_path / "placements.db"
     with sqlite3.connect(path) as connection:

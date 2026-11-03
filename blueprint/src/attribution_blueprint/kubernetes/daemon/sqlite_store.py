@@ -910,6 +910,14 @@ class SQLitePlacementStore:
             """,
             (cutoff, cutoff),
         )
+        connection.execute(
+            """
+            DELETE FROM coverage_gap
+            WHERE recovered_at IS NOT NULL
+              AND datetime(recovered_at) < datetime('now', ?)
+            """,
+            (cutoff,),
+        )
 
 
 def _controller_uid(row: sqlite3.Row) -> str | None:
