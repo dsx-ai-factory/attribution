@@ -83,6 +83,7 @@ def _history_observation(
     name: str,
     uid: str,
     observed_at: str,
+    resource_version: str = "1",
     owners: tuple[OwnerReference, ...] = (),
     status: dict | None = None,
     event_type: ObservationEventType = "MODIFIED",
@@ -94,7 +95,7 @@ def _history_observation(
         namespace="team-a",
         name=name,
         uid=uid,
-        resource_version="1",
+        resource_version=resource_version,
         event_type=event_type,
         observed_at=observed_at,
         owner_references=owners,
@@ -397,6 +398,7 @@ def test_expired_workload_prunes_its_complete_controller_history(tmp_path):
             name="training",
             uid="jobset-uid",
             observed_at=old,
+            event_type="DELETED",
         ),
         _history_observation(
             kind="Job",
@@ -438,6 +440,191 @@ def test_expired_workload_prunes_its_complete_controller_history(tmp_path):
         assert connection.execute(
             "SELECT COUNT(*) FROM resource_observation"
         ).fetchone()[0] == 0
+
+
+def test_active_root_controller_protects_expired_workload_group(tmp_path):
+    path = tmp_path / "placements.db"
+    store = SQLitePlacementStore(str(path), retention_days=30)
+    old = (datetime.now(timezone.utc) - timedelta(days=2)).isoformat()
+    jobset_owner = OwnerReference(
+        api_version="jobset.x-k8s.io/v1alpha2",
+        kind="JobSet",
+        name="training",
+        uid="jobset-uid",
+        controller=True,
+    )
+    controller = _history_observation(
+        kind="JobSet",
+        name="training",
+        uid="jobset-uid",
+        observed_at=old,
+    )
+    workload = _history_observation(
+        kind="Workload",
+        name="training-workload",
+        uid="workload-uid",
+        observed_at=old,
+        owners=(jobset_owner,),
+        status={
+            "conditions": [
+                {
+                    "type": "Finished",
+                    "status": "True",
+                    "lastTransitionTime": old,
+                }
+            ]
+        },
+    )
+    store.append_observation(controller)
+    store.append_observation(workload)
+
+    reopened = SQLitePlacementStore(str(path), retention_days=1)
+
+    assert reopened.list_observations_for_uid(
+        "cluster-a",
+        "team-a",
+        controller.uid,
+    ) == [controller]
+    assert reopened.list_observations_for_uid(
+        "cluster-a",
+        "team-a",
+        workload.uid,
+    ) == [workload]
+
+
+def test_recently_completed_root_protects_expired_workload_group(tmp_path):
+    path = tmp_path / "placements.db"
+    store = SQLitePlacementStore(str(path), retention_days=30)
+    old = (datetime.now(timezone.utc) - timedelta(days=2)).isoformat()
+    current = datetime.now(timezone.utc).isoformat()
+    job_owner = OwnerReference(
+        api_version="batch/v1",
+        kind="Job",
+        name="training",
+        uid="job-uid",
+        controller=True,
+    )
+    controller = _history_observation(
+        kind="Job",
+        name="training",
+        uid="job-uid",
+        observed_at=current,
+        status={
+            "conditions": [
+                {
+                    "type": "Complete",
+                    "status": "True",
+                    "lastTransitionTime": current,
+                }
+            ]
+        },
+    )
+    workload = _history_observation(
+        kind="Workload",
+        name="training-workload",
+        uid="workload-uid",
+        observed_at=old,
+        owners=(job_owner,),
+        status={
+            "conditions": [
+                {
+                    "type": "Finished",
+                    "status": "True",
+                    "lastTransitionTime": old,
+                }
+            ]
+        },
+    )
+    store.append_observation(controller)
+    store.append_observation(workload)
+
+    reopened = SQLitePlacementStore(str(path), retention_days=1)
+
+    assert reopened.list_observations_for_uid(
+        "cluster-a",
+        "team-a",
+        controller.uid,
+    ) == [controller]
+    assert reopened.list_observations_for_uid(
+        "cluster-a",
+        "team-a",
+        workload.uid,
+    ) == [workload]
+
+
+def test_expired_owner_preserves_history_reassigned_to_active_owner(tmp_path):
+    path = tmp_path / "placements.db"
+    store = SQLitePlacementStore(str(path), retention_days=30)
+    old = (datetime.now(timezone.utc) - timedelta(days=2)).isoformat()
+    current = datetime.now(timezone.utc).isoformat()
+    old_owner = OwnerReference(
+        api_version="batch/v1",
+        kind="Job",
+        name="old-job",
+        uid="old-job-uid",
+        controller=True,
+    )
+    active_owner = OwnerReference(
+        api_version="batch/v1",
+        kind="Job",
+        name="active-job",
+        uid="active-job-uid",
+        controller=True,
+    )
+    expired_job = _history_observation(
+        kind="Job",
+        name="old-job",
+        uid=old_owner.uid,
+        observed_at=old,
+        event_type="DELETED",
+    )
+    active_job = _history_observation(
+        kind="Job",
+        name="active-job",
+        uid=active_owner.uid,
+        observed_at=current,
+    )
+    old_pod = _history_observation(
+        kind="Pod",
+        name="worker-0",
+        uid="pod-uid",
+        resource_version="1",
+        observed_at=old,
+        owners=(old_owner,),
+    )
+    reassigned_pod = _history_observation(
+        kind="Pod",
+        name="worker-0",
+        uid="pod-uid",
+        resource_version="2",
+        observed_at=current,
+        owners=(active_owner,),
+    )
+    for observation in (
+        expired_job,
+        old_pod,
+        active_job,
+        reassigned_pod,
+    ):
+        store.append_observation(observation)
+
+    reopened = SQLitePlacementStore(str(path), retention_days=1)
+
+    assert reopened.list_observations_for_uid(
+        "cluster-a",
+        "team-a",
+        expired_job.uid,
+    ) == []
+    assert reopened.list_observations_for_uid(
+        "cluster-a",
+        "team-a",
+        active_job.uid,
+    ) == [active_job]
+    assert reopened.list_observations_for_uid(
+        "cluster-a",
+        "team-a",
+        old_pod.uid,
+    ) == [old_pod, reassigned_pod]
 
 
 def test_old_active_workload_history_is_retained(tmp_path):
@@ -561,6 +748,7 @@ def test_expired_non_workload_histories_are_pruned(tmp_path):
             name="kai-job",
             uid="kai-job-uid",
             observed_at=old,
+            event_type="DELETED",
         ),
         _history_observation(
             kind="PodGroup",

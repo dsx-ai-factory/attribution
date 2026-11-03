@@ -498,10 +498,25 @@ class SQLitePlacementStore:
             JOIN latest ON latest.observation_id = observation.id
             """
         ).fetchall()
-        observed = {
-            (row["cluster_id"], row["namespace"], row["uid"])
+        latest_by_uid = {
+            (row["cluster_id"], row["namespace"], row["uid"]): row
             for row in rows
         }
+        observed = set(latest_by_uid)
+        current_children: dict[tuple[str, str, str], set[str]] = {}
+        for row in rows:
+            if controller_uid := _controller_uid(row):
+                key = (row["cluster_id"], row["namespace"], controller_uid)
+                current_children.setdefault(key, set()).add(row["uid"])
+
+        def root_is_retained(key: tuple[str, str, str]) -> bool:
+            root = latest_by_uid.get(key)
+            return root is not None and not _expired_terminal_resource(
+                connection,
+                root,
+                self.retention_days,
+            )
+
         scheduler_groups: dict[
             tuple[str, str, str],
             list[sqlite3.Row],
@@ -526,7 +541,8 @@ class SQLitePlacementStore:
         expired_roots = {
             key
             for key, scheduler_rows in scheduler_groups.items()
-            if all(
+            if not root_is_retained(key)
+            and all(
                 _expired_terminal_resource(
                     connection,
                     row,
@@ -539,6 +555,7 @@ class SQLitePlacementStore:
             key
             for key, candidate in orphan_candidates.items()
             if key not in scheduler_groups
+            and not root_is_retained(key)
             and _expired_terminal_resource(
                 connection,
                 candidate,
@@ -546,30 +563,22 @@ class SQLitePlacementStore:
             )
         )
         for cluster_id, namespace, controller_uid in expired_roots:
-            connection.execute(
-                """
-                WITH RECURSIVE related(uid) AS (
-                    SELECT ?
-                    UNION
-                    SELECT observation.uid
-                    FROM resource_observation AS observation
-                    JOIN observation_owner_reference AS owner
-                      ON owner.observation_id = observation.id
-                    JOIN related ON related.uid = owner.owner_uid
-                    WHERE observation.cluster_id = ?
-                      AND observation.namespace = ?
+            related = {controller_uid}
+            pending = [controller_uid]
+            while pending:
+                owner_uid = pending.pop()
+                children = current_children.get(
+                    (cluster_id, namespace, owner_uid),
+                    set(),
                 )
+                pending.extend(children - related)
+                related.update(children)
+            connection.executemany(
+                """
                 DELETE FROM resource_observation
-                WHERE cluster_id = ? AND namespace = ?
-                  AND uid IN (SELECT uid FROM related)
+                WHERE cluster_id = ? AND namespace = ? AND uid = ?
                 """,
-                (
-                    controller_uid,
-                    cluster_id,
-                    namespace,
-                    cluster_id,
-                    namespace,
-                ),
+                [(cluster_id, namespace, uid) for uid in related],
             )
 
 
