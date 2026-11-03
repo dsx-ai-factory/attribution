@@ -852,6 +852,32 @@ def test_watch_replays_event_without_advancing_failed_persistence_checkpoint(tmp
     assert daemon.health.persistence_failed is False
 
 
+def test_two_source_relist_stays_unready_until_both_sources_complete(mocker):
+    sources = (
+        SimpleNamespace(name="pods"),
+        SimpleNamespace(name="jobs"),
+    )
+    daemon = KubernetesDaemon(
+        core_api=None,
+        store=mocker.Mock(),
+        namespace="team-a",
+        watch_sources=sources,
+    )
+
+    daemon._mark_initial_list_complete("pods")
+    assert daemon.health.ready() is False
+    daemon._mark_initial_list_complete("jobs")
+    assert daemon.health.ready() is True
+
+    daemon._mark_initial_list_incomplete("pods")
+    assert daemon.health.ready() is False
+    daemon._mark_initial_list_complete("jobs")
+    assert daemon.health.ready() is False
+
+    daemon._mark_initial_list_complete("pods")
+    assert daemon.health.ready() is True
+
+
 def test_resource_version_expiry_resets_readiness_before_relisting(mocker):
     """A relist triggered by an expired watch resourceVersion (HTTP 410) must
     clear `initial_list_complete` until the relist completes, so `/readyz`

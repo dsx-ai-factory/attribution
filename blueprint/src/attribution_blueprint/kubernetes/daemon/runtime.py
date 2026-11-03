@@ -175,7 +175,7 @@ class KubernetesDaemon:
                 if error.status == 410:
                     logger.warning(f"{source.name} watch resourceVersion expired; relisting")
                     resource_version = None
-                    self.health.update(initial_list_complete=False)
+                    self._mark_initial_list_incomplete(source.name)
                     continue
                 logger.warning(f"{source.name} watch failed: {error}")
             except RequiredPersistenceError as error:
@@ -243,7 +243,12 @@ class KubernetesDaemon:
         with self._initial_lists_lock:
             self._initial_lists_complete.add(source_name)
             all_complete = len(self._initial_lists_complete) == len(self.watch_sources)
-        self.health.update(initial_list_complete=all_complete)
+            self.health.update(initial_list_complete=all_complete)
+
+    def _mark_initial_list_incomplete(self, source_name: str) -> None:
+        with self._initial_lists_lock:
+            self._initial_lists_complete.discard(source_name)
+            self.health.update(initial_list_complete=False)
 
     def stop(self) -> None:
         self.stop_event.set()
