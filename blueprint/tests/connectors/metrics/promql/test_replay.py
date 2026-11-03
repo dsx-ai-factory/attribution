@@ -71,16 +71,20 @@ def _response(replay, name, node_label, cluster_label):
     return payload
 
 
-@pytest.mark.parametrize("node_label,cluster_label", LABELS)
-def test_bundled_query_range_replay(mocker, replay, node_label, cluster_label):
-    templates = TEMPLATES[Source.NODE_METRICS]
+def _mock_responses(mocker, replay, node_label, cluster_label):
     responses = []
-    expected = []
-    for name in templates:
+    for name in TEMPLATES[Source.NODE_METRICS]:
         payload = _response(replay, name, node_label, cluster_label)
         response = mocker.Mock()
         response.json.return_value = payload
         responses.append(response)
+    return responses
+
+
+def _expected_entries(replay, node_label, cluster_label):
+    expected = []
+    for name in TEMPLATES[Source.NODE_METRICS]:
+        payload = _response(replay, name, node_label, cluster_label)
         for series in payload["data"]["result"]:
             labels = series["metric"]
             for ts, value in series["values"]:
@@ -95,6 +99,13 @@ def test_bundled_query_range_replay(mocker, replay, node_label, cluster_label):
                         ),
                     }
                 )
+    return expected
+
+
+@pytest.mark.parametrize("node_label,cluster_label", LABELS)
+def test_bundled_query_range_replay(mocker, replay, node_label, cluster_label):
+    responses = _mock_responses(mocker, replay, node_label, cluster_label)
+    expected = _expected_entries(replay, node_label, cluster_label)
     post = mocker.patch("requests.Session.post", side_effect=responses)
     # Omit the new options entirely in the default-label case.
     options = {} if node_label == "net_host_name" else dict(node_label=node_label, cluster_label=cluster_label)
@@ -109,7 +120,7 @@ def test_bundled_query_range_replay(mocker, replay, node_label, cluster_label):
     }
     assert json.loads(observations[0]["body"]) == expected
     assert len(expected) == 24
-    selector = f'{{{cluster_label}="example-cluster", {node_label}=~"node-01|node-02"}}'
+    selector = f'{{{cluster_label}="example-cluster", {node_label}=~`node-01|node-02`}}'
     queries = [
         f"changes(node_infiniband_link_downed_total{selector}[10m]) > 0",
         f"changes(node_network_carrier_down_changes_total{selector}[10m]) > 0",
@@ -180,7 +191,7 @@ def test_label_mapping_config_surfaces(mocker, surface):
     cfg.metrics_connectors[0].collect(cfg.execution_context_adapters[0].discover()[0])
     assert post.call_count == 4
     for call in post.call_args_list:
-        assert 'cluster="example-cluster", hostname=~"node-01|node-02"' in call.kwargs["data"]["query"]
+        assert 'cluster="example-cluster", hostname=~`node-01|node-02`' in call.kwargs["data"]["query"]
 
 
 @pytest.mark.parametrize(

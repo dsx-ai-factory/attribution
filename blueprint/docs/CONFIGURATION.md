@@ -923,8 +923,8 @@ series must retain the node label. If an aggregation drops the cluster label,
 the connector uses the configured `cluster` value for the observation.
 
 Each template may use `{name}` (the template's own name), `{cluster}` (the
-configured cluster value), `{nodes}` (a regex alternation of the context's node
-names, escaped for use inside a double-quoted string such as `=~"{nodes}"`),
+configured cluster value), `{nodes}` (an RE2-escaped alternation of the context's node
+names; use a backtick raw string, or double quotes only for hostnames without regex metacharacters),
 `{node_label}`, and `{cluster_label}` (the configured label names).
 Literal `{` and `}` in PromQL label selectors must be doubled (`{{`, `}}`).
 Existing custom queries with literal label names still work; use the label
@@ -932,7 +932,7 @@ placeholders when a query should follow the configured mapping. For example:
 
 ```toml
 [metrics.node_metrics.promql.queries]
-up = 'max by ({node_label}) ({name}{{{cluster_label}="{cluster}", {node_label}=~"{nodes}"}}) == 0'
+up = 'max by ({node_label}) ({name}{{{cluster_label}="{cluster}", {node_label}=~`{nodes}`}}) == 0'
 ```
 
 ### Using VictoriaMetrics

@@ -21,14 +21,10 @@ def re2_escape(value: str) -> str:
     return "".join("\\" + char if char in _RE2_METAS else char for char in value)
 
 
-def promql_string_content(value: str) -> str:
-    """Escape a string for use inside a double-quoted PromQL string literal."""
-    return value.replace("\\", "\\\\").replace("\n", "\\n").replace('"', '\\"')
-
-
 def promql_string(value: str) -> str:
     """Quote a string for use as a PromQL label-matcher value."""
-    return f'"{promql_string_content(value)}"'
+    escaped = value.replace("\\", "\\\\").replace("\n", "\\n").replace('"', '\\"')
+    return f'"{escaped}"'
 
 
 class PrometheusClient:

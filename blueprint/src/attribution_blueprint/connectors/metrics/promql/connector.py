@@ -10,7 +10,6 @@ from loguru import logger
 from attribution_blueprint.connectors.auth import Auth
 from attribution_blueprint.connectors.metrics.promql.client import (
     PrometheusClient,
-    promql_string_content,
     re2_escape,
 )
 from attribution_blueprint.connectors.metrics.promql.templates import TEMPLATES
@@ -132,6 +131,11 @@ class PromQLMetricsConnector:
         return self._source
 
     def collect(self, context: ExecutionContext) -> list[Observation]:
+        """Render queries and combine samples into one observation, or none without nodes/data.
+
+        Missing template keys are logged and skipped; query, time-validation and
+        sample-conversion exceptions propagate.
+        """
         # Drop empty strings: `re.escape("")` is `""`, which would render the
         # selector as `net_host_name=~""` and match every series in the cluster.
         nodes = [n for n in (context.get("nodes") or []) if n]
@@ -144,14 +148,9 @@ class PromQLMetricsConnector:
         start_s = int(start.timestamp())
         end_s = int(end.timestamp())
         samples: list[PrometheusMetricEntry] = []
-        # Each node lands inside a PromQL `=~ "..."` regex on the node label,
-        # so regex metacharacters in hostnames would silently broaden the
-        # match. Escape only RE2 metacharacters so common hyphenated hostnames
-        # don't produce invalid regexes. Templates place `{nodes}` inside a
-        # double-quoted string literal, so the regex's backslashes must be
-        # escaped again: a bare `\.` is an invalid string escape and the query
-        # is rejected with HTTP 400.
-        nodes_regex = promql_string_content("|".join(re2_escape(n) for n in nodes))
+        # Escape RE2 metacharacters without escaping hyphens. Bundled templates
+        # place this regex in a backtick raw string to preserve its backslashes.
+        nodes_regex = "|".join(re2_escape(n) for n in nodes)
         for name, tmpl in self._templates.items():
             try:
                 query = tmpl.format(
@@ -179,6 +178,11 @@ class PromQLMetricsConnector:
         ]
 
     def _query_range(self, name: str, query: str, start_s: int, end_s: int) -> list[PrometheusMetricEntry]:
+        """Fetch and map range samples, skipping missing node labels and invalid timestamps.
+
+        API error statuses and non-list results are logged and skipped by the
+        client; transport, HTTP, JSON and other malformed-data exceptions propagate.
+        """
         result = self._client.query_range(
             name=name,
             query=query,

@@ -7,8 +7,8 @@ from attribution_blueprint.types import Source
 # threshold and comparison operator embedded by the template author; the
 # connector substitutes {name}, {cluster}, {nodes}, {node_label}, and
 # {cluster_label} at render time.
-# {nodes} resolves to a "|".join of the ExecutionContext's hostnames, suitable for use as
-# the right-hand side of a Prometheus =~ regex selector.
+# {nodes} resolves to an RE2-escaped alternation of the ExecutionContext's hostnames,
+# suitable for use in a backtick raw string on the right-hand side of =~.
 #
 # PromQL uses {} for label selectors, which collides with str.format() field
 # syntax — literal { and } must be doubled in templates. Substitution
@@ -27,18 +27,18 @@ from attribution_blueprint.types import Source
 TEMPLATES: dict[Source, dict[str, str]] = {
     Source.NODE_METRICS: {
         "node_infiniband_link_downed_total": (
-            'changes({name}{{{cluster_label}="{cluster}", {node_label}=~"{nodes}"}}[10m]) > 0'
+            'changes({name}{{{cluster_label}="{cluster}", {node_label}=~`{nodes}`}}[10m]) > 0'
         ),
         # attribution_lib node_metrics_rules treats this as the second
         # LINK_DOWN_EAST_WEST signal alongside node_infiniband_link_downed_total;
         # without this template the carrier-down symptom path never fires.
         "node_network_carrier_down_changes_total": (
-            'changes({name}{{{cluster_label}="{cluster}", {node_label}=~"{nodes}"}}[10m]) > 0'
+            'changes({name}{{{cluster_label}="{cluster}", {node_label}=~`{nodes}`}}[10m]) > 0'
         ),
         # increase() is correct for counters; delta() returns wrong values when
         # scrape intervals are uneven (Prometheus docs warn against delta on
         # counters).
-        "ib_roce_adp_retrans": ('increase({name}{{{cluster_label}="{cluster}", {node_label}=~"{nodes}"}}[10m]) > 50'),
-        "up": ('max by ({node_label}) ({name}{{{cluster_label}="{cluster}", {node_label}=~"{nodes}"}}) == 0'),
+        "ib_roce_adp_retrans": ('increase({name}{{{cluster_label}="{cluster}", {node_label}=~`{nodes}`}}[10m]) > 50'),
+        "up": ('max by ({node_label}) ({name}{{{cluster_label}="{cluster}", {node_label}=~`{nodes}`}}) == 0'),
     },
 }
