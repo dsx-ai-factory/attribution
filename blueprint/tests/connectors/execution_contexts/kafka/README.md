@@ -17,12 +17,12 @@ uv run --project blueprint --frozen --extra dev --extra kafka pytest \
 ```
 
 Without these settings, live tests skip. Unit tests still check payload mapping,
-malformed/filtered events, exact-ID redeliveries, latest-attempt selection,
+malformed/filtered events, exact `(source, id)` redeliveries, latest-attempt selection,
 cross-partition warnings, timeouts, commit boundaries,
 revocation/loss, and propagation of programming and native client errors.
 
 Live tests cover the complete shared payload in structured and binary mode,
-subject/cluster preservation, winning trigger identity through real Service
+source/subject/cluster preservation, winning trigger identity through real Service
 attribution and SQLite output, batch-scoped deduplication,
 restarts from committed offsets,
 partial commit failure, delayed fetching, and two consumers rebalancing during

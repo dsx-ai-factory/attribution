@@ -140,6 +140,7 @@ def _assert_stored(database, event, expected_result, evidence_node):
         else:
             assert raw[field] == value, field
     assert raw["event_id"] == event["id"]
+    assert raw["event_source"] == event["source"]
     assert raw["event_subject"] == event["subject"]
     assert raw["failed_node"] == min(data["failed_nodes"])
     assert stored["job_id"] == data["job_id"]

@@ -396,3 +396,27 @@ def test_paused_native_partition_has_bounded_discovery_wait(kafka_spec, completi
         assert adapter._consumer.assigned
     finally:
         adapter.close()
+
+
+@pytest.mark.parametrize("encoding", ["structured", "binary"])
+def test_same_id_from_distinct_sources_keeps_both_jobs(kafka_spec, completion_event, publish_event, encoding):
+    """Commit both producers' jobs, dropping only the actual redelivery."""
+    first = completion_event
+    first["source"] = "/scheduler/a"
+    second = copy.deepcopy(first)
+    second["source"] = "/scheduler/b"
+    second["data"]["id"] += "-other-producer"
+    second["data"]["job_id"] = second["data"]["id"]
+    for event in (first, second, first):
+        publish_event(event, encoding=encoding)
+
+    adapter = _build(kafka_spec, {})
+    contexts = adapter.discover()
+
+    assert [(c["event_source"], c["job_id"]) for c in contexts] == [
+        (e["source"], e["data"]["job_id"]) for e in (first, second)
+    ]
+    assert {c["event_id"] for c in contexts} == {first["id"]}
+    assert adapter.last_discovery_stats["redeliveries"] == 1
+    assert adapter.last_discovery_stats["superseded"] == 0
+    _assert_drained(kafka_spec)

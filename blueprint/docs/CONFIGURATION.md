@@ -567,17 +567,21 @@ names are non-empty strings; values are not coerced to strings. See
 `tests/fixtures/kafka_completion_events.json`. Send `timezone` as an IANA key
 whenever the timestamps' UTC offset is not a whole hour or the job crosses a
 DST change; events the service could not place in a timezone are skipped.
-Within one run, an exact redelivery (same CloudEvent `id`) is dropped, and for
-repeated events of the same `(scheduler, job_id, attempt_id)` only the latest
+Within one run, an exact redelivery (same CloudEvent `source` and `id`) is
+dropped, and for repeated events of the same `(scheduler, job_id, attempt_id)`
+only the latest
 is attributed. Events in earlier runs are not deduplicated. The input preserves
-the winning CloudEvent ID as `event_id` for correlation by the output connector.
+the winning CloudEvent ID and source as `event_id` and `event_source` for
+correlation by the output connector. CloudEvent `source` is required and must
+be a non-empty string without whitespace.
 
 Deduplication runs after offset commits, on the successfully committed contexts.
 Within a partition, latest means highest offset. Across partitions, the last
 context in commit order wins and a warning asks operators to check the producer's
 message key; Kafka provides no ordering across partitions. Output order follows
 when each attempt was first seen in commit order. `redeliveries` counts repeated
-CloudEvent IDs; `superseded` counts different IDs replaced for the same attempt.
+CloudEvent `(source, id)` pairs; `superseded` counts different events replaced
+for the same attempt.
 Publishing this ID as `trigger_event_id` is the Kafka result connector's contract,
 implemented separately.
 The SQLite output records a later run as another run of the same attempt.

@@ -9,8 +9,8 @@ payload format but has no consumer, offset, or rebalance state.
 data must supply id, nodes, and timezone-aware start_time/end_time. job_id
 falls back to id; attempt_id to "0"; scheduler to the configured default;
 state to UNKNOWN. Other supported fields retain their ExecutionContext names.
-CloudEvent id is retained separately as event_id. Kubernetes namespace,
-pod_names, and pod_nodes remain extensions, as in the Kueue adapter.
+CloudEvent id and source are retained as event_id and event_source. Kubernetes
+namespace, pod_names, and pod_nodes remain extensions, as in the Kueue adapter.
 failed_nodes keeps the full list and supplies the lexicographically first
 failed_node, also matching the Kueue convention. Numeric allocation fields
 must be non-negative integers. Invalid events raise EventError; callers decide
@@ -44,6 +44,7 @@ class KafkaExecutionContext(ExecutionContext):
     """Common execution context plus Kafka correlation and Kubernetes metadata."""
 
     event_id: str
+    event_source: str
     event_subject: NotRequired[str]
     cluster: NotRequired[str]
     failed_nodes: NotRequired[list[str]]
@@ -59,8 +60,8 @@ class EventError(ValueError):
 def _read_cloudevent(
     raw: bytes | None,
     headers: list[tuple[str, bytes | str | None]] | None,
-) -> tuple[str, str, dict, str | None]:
-    """Return (id, type, data, subject) from either CloudEvent encoding."""
+) -> tuple[str, str, dict, str | None, str]:
+    """Return (id, type, data, subject, source) from either CloudEvent encoding."""
     if raw is None:
         raise EventError("message has no value")
     try:
@@ -88,10 +89,13 @@ def _read_cloudevent(
         raise EventError(f"CloudEvent {event_id} type is missing")
     if not isinstance(data, dict):
         raise EventError(f"CloudEvent {event_id} data must be a JSON object")
+    source = attrs.get("source")
+    if not isinstance(source, str) or not source or any(char.isspace() for char in source):
+        raise EventError(f"CloudEvent {event_id} source must be a non-empty URI-reference without whitespace")
     subject = attrs.get("subject")
     if subject is not None and (not isinstance(subject, str) or not subject):
         raise EventError(f"CloudEvent {event_id} subject must be a non-empty string")
-    return event_id, event_type, data, subject
+    return event_id, event_type, data, subject, source
 
 
 def _header_str(value: bytes | str | None) -> str:
@@ -105,6 +109,7 @@ def _context_from_data(
     data: dict,
     *,
     event_id: str,
+    event_source: str,
     default_scheduler: str,
     workload_type: str,
     event_subject: str | None = None,
@@ -126,6 +131,7 @@ def _context_from_data(
         "attempt_id": _str_or_default(data.get("attempt_id"), "0"),
         "state": _str_or_default(data.get("state"), "UNKNOWN"),
         "event_id": event_id,
+        "event_source": event_source,
     }
     if ctx["end_time"] < ctx["start_time"]:
         raise EventError(f"CloudEvent {event_id} end_time is before start_time")

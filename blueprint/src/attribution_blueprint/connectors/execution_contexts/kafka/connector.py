@@ -184,7 +184,7 @@ class KafkaExecutionContextAdapter:
         batch = self._pending.setdefault(key, _PartitionBatch(message.offset() + 1))
         batch.offset = message.offset() + 1
         try:
-            event_id, event_type, data, subject = _read_cloudevent(message.value(), message.headers())
+            event_id, event_type, data, subject, source = _read_cloudevent(message.value(), message.headers())
             if self._event_types and event_type not in self._event_types:
                 self.last_discovery_stats["filtered"] += 1
                 self.last_unmatched_event_types[event_type] = self.last_unmatched_event_types.get(event_type, 0) + 1
@@ -192,6 +192,7 @@ class KafkaExecutionContextAdapter:
             context = _context_from_data(
                 data,
                 event_id=event_id,
+                event_source=source,
                 default_scheduler=self._scheduler,
                 workload_type=self._workload_type,
                 event_subject=subject,
@@ -250,18 +251,19 @@ class KafkaExecutionContextAdapter:
             self._end_offsets.pop(key, None)
 
     def _dedupe(self, contexts: list[CommittedContext]) -> list[KafkaExecutionContext]:
-        """Drop exact redeliveries, then keep the latest event for each attempt.
+        """Drop repeated (source, id) pairs, then keep the latest event per attempt.
 
         Committed contexts arrive in partition order, then increasing offsets.
         Replacing a dict value preserves the attempt's first-seen output order.
         """
-        seen_ids: set[str] = set()
+        seen_events: set[tuple[str, str]] = set()
         unique: dict[tuple[str, str, str], CommittedContext] = {}
         for partition, context in contexts:
-            if context["event_id"] in seen_ids:
+            event_key = (context["event_source"], context["event_id"])
+            if event_key in seen_events:
                 self.last_discovery_stats["redeliveries"] += 1
                 continue
-            seen_ids.add(context["event_id"])
+            seen_events.add(event_key)
             key = (context["scheduler"], context["job_id"], context["attempt_id"])
             previous = unique.get(key)
             if previous is not None:

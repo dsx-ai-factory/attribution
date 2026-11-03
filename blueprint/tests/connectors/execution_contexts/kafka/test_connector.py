@@ -234,16 +234,66 @@ def test_discover_drops_exact_redelivery_before_attempt_supersession():
     assert consumer.commits == [{0: 3}]
 
 
-def test_discover_keeps_higher_offset_for_same_attempt_in_first_seen_order():
+@pytest.mark.parametrize("encoding", ["structured", "binary"])
+@pytest.mark.parametrize("same_source", [False, True])
+def test_redelivery_identity_is_scoped_to_source(encoding, same_source):
+    first, second = _events()
+    first["source"] = "/scheduler/a"
+    second = copy.deepcopy(first) if same_source else second
+    second["source"] = first["source"] if same_source else "/scheduler/b"
+    second["id"] = first["id"]
+    events = [first, second]
+    messages = _structured(events) if encoding == "structured" else [_binary(e, offset=i) for i, e in enumerate(events)]
+    eca, consumer = _make_eca(messages)
+
+    contexts = eca.discover()
+
+    expected = events[:1] if same_source else events
+    assert [ctx["job_id"] for ctx in contexts] == [e["data"]["job_id"] for e in expected]
+    assert [ctx["event_source"] for ctx in contexts] == [e["source"] for e in expected]
+    assert eca.last_discovery_stats["redeliveries"] == int(same_source)
+    assert eca.last_discovery_stats["superseded"] == 0
+    assert consumer.commits == [{0: 2}]
+
+
+@pytest.mark.parametrize("encoding", ["structured", "binary"])
+@pytest.mark.parametrize("source", [None, "", "/scheduler with spaces"])
+def test_missing_or_empty_source_is_skipped(encoding, source):
+    event = _events()[0]
+    if source is None:
+        event.pop("source")
+    else:
+        event["source"] = source
+    messages = _structured([event]) if encoding == "structured" else [_binary(event)]
+    eca, consumer = _make_eca(messages)
+
+    assert eca.discover() == []
+    assert eca.last_discovery_stats["malformed"] == 1
+    assert consumer.commits == [{0: 1}]
+
+
+@pytest.mark.parametrize("source", [42, False, {}, []])
+def test_structured_source_must_be_a_string(source):
+    event = _events()[0]
+    event["source"] = source
+    eca, _ = _make_eca(_structured([event]))
+
+    assert eca.discover() == []
+    assert eca.last_discovery_stats["malformed"] == 1
+
+
+@pytest.mark.parametrize("field,value", [("id", "new-event-id"), ("source", "/scheduler/re-send")])
+def test_discover_keeps_higher_offset_for_same_attempt_in_first_seen_order(field, value):
     first, other = _events()
     resend = copy.deepcopy(first)
-    resend["id"] = "new-event-id"
+    resend[field] = value
     resend["subject"] = "jobs/new-trigger-subject"
     eca, consumer = _make_eca(_structured([first, other, resend], first_offset=4))
 
     contexts = eca.discover()
 
     assert [ctx["event_id"] for ctx in contexts] == [resend["id"], other["id"]]
+    assert contexts[0]["event_source"] == resend["source"]
     assert contexts[0]["event_subject"] == resend["subject"]
     assert eca.last_discovery_stats["redeliveries"] == 0
     assert eca.last_discovery_stats["superseded"] == 1
