@@ -4,6 +4,7 @@
 import os
 
 from attribution_blueprint import mca_registry as _registry
+from attribution_blueprint.connectors.execution_contexts.kafka.client import KafkaConsumerClient
 from attribution_blueprint.connectors.execution_contexts.kafka.connector import (
     KafkaExecutionContext,
     KafkaExecutionContextAdapter,
@@ -59,6 +60,7 @@ def _consumer_config(spec: dict) -> dict:
 
 
 def _build(spec: dict, ctx: dict) -> KafkaExecutionContextAdapter:
+    """Build the input adapter; import the optional native client only on use."""
     from attribution_blueprint.mca import _coerce_float, _coerce_int, _coerce_str_list
 
     config = _consumer_config(spec)
@@ -80,7 +82,7 @@ def _build(spec: dict, ctx: dict) -> KafkaExecutionContextAdapter:
     consumer = Consumer(config)
     try:
         return KafkaExecutionContextAdapter(
-            consumer=consumer,
+            consumer=KafkaConsumerClient(consumer),
             topic=str(spec["topic"]),
             topic_partition=TopicPartition,
             event_types=event_types,

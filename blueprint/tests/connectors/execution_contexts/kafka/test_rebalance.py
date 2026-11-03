@@ -12,6 +12,7 @@ from uuid import uuid4
 import pytest
 
 from attribution_blueprint.connectors.execution_contexts.kafka import _build, _consumer_config
+from attribution_blueprint.connectors.execution_contexts.kafka.client import KafkaConsumerClient
 from attribution_blueprint.connectors.execution_contexts.kafka.connector import KafkaExecutionContextAdapter
 
 pytestmark = pytest.mark.integration
@@ -94,7 +95,7 @@ def test_live_rebalance_drops_revoked_partition_without_duplicate_or_missing_eve
 
     observed = ObservedConsumer()
     adapter = KafkaExecutionContextAdapter(
-        consumer=observed,
+        consumer=KafkaConsumerClient(observed),
         topic=kafka_spec["topic"],
         topic_partition=TopicPartition,
         event_types=kafka_spec["event_types"],

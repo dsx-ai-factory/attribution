@@ -63,3 +63,32 @@ Two additional tests require explicit infrastructure settings:
 
 These settings describe test infrastructure only. The broker interruption and
 authorization tests skip unless their respective settings are present.
+
+## Input connector structure
+
+The implementation follows the existing execution-context adapter separation:
+
+- `events.py` decodes structured/binary CloudEvents and maps scheduler fields.
+  It raises `EventError` only for invalid payloads; host timezone read failures
+  abort discovery rather than discarding a valid event.
+- `client.py` defines the injected consumer protocol. `KafkaConsumerClient`
+  translates only native `KafkaException` failures, at individual client calls.
+  Other exceptions propagate unchanged.
+- `batch.py` names the state of one discovery call. `PartitionProgress` records
+  the first unfinished offset and the next handled offset. `PollWait` names
+  the separate assignment and unread-fetch deadlines.
+- `connector.py` coordinates polling, completion, and rebalance callbacks.
+  It owns no output publishing, durable Runtime storage, or acknowledgment API.
+
+For each partition, successful discovery commits the next handled offset.
+A normal revoke bookmarks the first unfinished offset and removes that
+partition's contexts. Loss removes them without committing. Commit failure
+omits and rewinds the affected partition; other successful partitions are
+returned. If a rewind fails, discovery is incomplete and the consumer is closed.
+A later call must construct a new adapter. No active batch means revoke/close
+cannot commit anything. These are discovery acknowledgments, before attribution.
+
+Expected client failures use `KafkaConsumerError` in fake consumers, matching
+the native boundary. Tests inject programming errors separately and assert
+that they propagate, rather than being logged and skipped. The only broad
+handler performs abort cleanup and always re-raises, including cancellation.

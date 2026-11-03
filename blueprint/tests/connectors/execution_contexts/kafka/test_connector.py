@@ -13,7 +13,7 @@ import pytest
 from attribution_blueprint.connectors.execution_contexts.kafka import (
     KafkaExecutionContextAdapter,
     _build as build_kafka,
-    connector as connector_module,
+    events as events_module,
 )
 from attribution_blueprint.connectors.execution_contexts.kafka.connector import KafkaConsumerError
 from attribution_blueprint.exceptions import MCAError
@@ -42,6 +42,9 @@ class FakeError:
         self._text = text
         self._retriable = retriable
         self._fatal = fatal
+
+    def name(self):
+        return self._text
 
     def retriable(self):
         return self._retriable
@@ -124,12 +127,12 @@ class FakeConsumer:
     def commit(self, *, offsets, asynchronous):
         assert asynchronous is False
         if self._commit_raises:
-            raise RuntimeError("coordinator unavailable")
+            raise KafkaConsumerError("coordinator unavailable")
         self.commits.append({tp.partition: tp.offset for tp in offsets})
         if any(tp.partition in self._commit_errors for tp in offsets):
             # Match the native synchronous client: a failed partition can
             # raise, including when other partitions in a mixed call committed.
-            raise RuntimeError("partition commit failed")
+            raise KafkaConsumerError("partition commit failed")
         return [TP(tp.topic, tp.partition, tp.offset) for tp in offsets]
 
     def position(self, partitions):
@@ -679,7 +682,7 @@ def test_timezone_lookup_os_error_skips_event(monkeypatch, error):
             raise error
         return ZoneInfo(key)
 
-    monkeypatch.setattr(connector_module, "ZoneInfo", zone_info)
+    monkeypatch.setattr(events_module, "ZoneInfo", zone_info)
     bad = _events()[0]
     bad["data"]["timezone"] = "America"
     eca, consumer = _make_eca(_structured([bad, _events()[1]]))
@@ -698,7 +701,7 @@ def test_timezone_read_failure_fails_discovery_without_commit(monkeypatch, error
             raise error
         return ZoneInfo(key)
 
-    monkeypatch.setattr(connector_module, "ZoneInfo", zone_info)
+    monkeypatch.setattr(events_module, "ZoneInfo", zone_info)
     eca, consumer = _make_eca(_structured(_events()))
 
     with pytest.raises(KafkaConsumerError, match="cannot read timezone"):
@@ -714,3 +717,88 @@ def test_revoke_after_successful_discover_does_not_move_commit_backwards():
     assert len(eca.discover()) == 2
     consumer.on_revoke(consumer, [TP(TOPIC, 0)])
     assert consumer.commits == [{0: 6}]
+
+
+@pytest.mark.parametrize("operation", ["poll", "commit", "position", "get_watermark_offsets"])
+def test_unexpected_client_bug_is_reraised_instead_of_treated_as_kafka_failure(operation):
+    eca, consumer = _make_eca(_structured(_events()))
+    bug = AttributeError(f"unexpected {operation} bug")
+
+    def broken(*args, **kwargs):
+        raise bug
+
+    setattr(consumer, operation, broken)
+    with pytest.raises(AttributeError) as caught:
+        eca.discover()
+    assert caught.value is bug
+    assert eca.discovery_incomplete is True
+    assert consumer.commits == []
+    if operation != "poll":
+        assert consumer.seeks == [(0, 0)]
+
+
+def test_unexpected_parser_bug_does_not_commit_or_become_malformed(monkeypatch):
+    eca, consumer = _make_eca(_structured(_events()))
+
+    def broken(message):
+        raise TypeError("unexpected parser bug")
+
+    monkeypatch.setattr(eca, "_parse_message", broken)
+    with pytest.raises(TypeError, match="unexpected parser bug"):
+        eca.discover()
+    assert consumer.commits == []
+    assert consumer.seeks == [(0, 0)]
+    assert eca.last_discovery_stats["malformed"] == 0
+
+
+def test_failed_rewind_returns_successful_partition_and_prevents_consumer_reuse():
+    eca, consumer = _make_eca(
+        [*_structured(_events()[:1], partition=0), *_structured(_events()[1:], partition=1)],
+        partitions=(0, 1),
+        commit_errors={0},
+    )
+
+    def failed_seek(partition):
+        raise KafkaConsumerError("injected seek failure")
+
+    consumer.seek = failed_seek
+    assert [ctx["id"] for ctx in eca.discover()] == ["job-b7"]
+    assert consumer.closed
+    assert eca.discovery_incomplete is True
+    assert eca.last_discovery_stats["returned"] == 1
+    with pytest.raises(KafkaConsumerError, match="closed"):
+        eca.discover()
+    eca.close()  # Safe even after recovery already closed the consumer.
+
+
+def test_failed_abort_cleanup_keeps_original_failure_and_cannot_commit_on_close():
+    eca, consumer = _make_eca(
+        [
+            *_structured(_events()[:1]),
+            FakeMessage(None, 1, error=FakeError("authorization failed")),
+        ]
+    )
+
+    def failed_seek(partition):
+        raise KafkaConsumerError("injected seek failure")
+
+    consumer.seek = failed_seek
+    original_close = eca.close
+
+    def close():
+        consumer.on_revoke(consumer, [TP(TOPIC, 0)])
+        original_close()
+        raise KafkaConsumerError("injected close failure")
+
+    eca.close = close
+    with pytest.raises(KafkaConsumerError, match="authorization failed"):
+        eca.discover()
+    assert consumer.commits == []
+    assert consumer.closed
+
+
+def test_closed_adapter_rejects_discovery():
+    eca, _ = _make_eca([])
+    eca.close()
+    with pytest.raises(KafkaConsumerError, match="closed"):
+        eca.discover()

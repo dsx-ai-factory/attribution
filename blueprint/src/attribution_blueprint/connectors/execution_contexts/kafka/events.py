@@ -1,0 +1,237 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+"""Decode CloudEvents and normalize scheduler data into execution contexts.
+
+Like the Slurm and Kueue mapping helpers, this module knows the scheduler's
+payload format but has no consumer, offset, or rebalance state.
+
+data must supply id, nodes, and timezone-aware start_time/end_time. job_id
+falls back to id; attempt_id to "0"; scheduler to the configured default;
+state to UNKNOWN. Other supported fields retain their ExecutionContext names.
+CloudEvent id is retained separately as event_id. Kubernetes namespace,
+pod_names, and pod_nodes remain extensions, as in the Kueue adapter.
+failed_nodes keeps the full list and supplies the lexicographically first
+failed_node, also matching the Kueue convention. Numeric allocation fields
+must be non-negative integers. Invalid events raise EventError; callers decide
+whether to skip them and how to account for their offsets.
+"""
+
+from __future__ import annotations
+
+import errno
+import json
+from datetime import datetime
+from typing import NotRequired, TypedDict
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+
+from attribution_blueprint.connectors.execution_contexts.kafka.client import KafkaConsumerError, KafkaMessage
+from attribution_blueprint.orchestrator import _service_timezone_name
+
+_OPTIONAL_STR_FIELDS = (
+    "name",
+    "user_name",
+    "workload_framework",
+    "cancelled_by",
+    "std_out",
+    "std_err",
+    "namespace",
+)
+
+
+class KafkaExecutionContext(TypedDict):
+    """Adapter-specific ExecutionContext shape.
+
+    Same spine as `attribution_blueprint.types.ExecutionContext`; `event_id`,
+    `failed_nodes`, `namespace`, `pod_names` and `pod_nodes` are extensions
+    stored on the dict for the per-context raw_scheduler_json column.
+    """
+
+    id: str
+    workload_type: str
+    scheduler: str
+    nodes: list[str]
+    start_time: datetime
+    end_time: datetime
+    job_id: str
+    attempt_id: str
+    state: str
+    # CloudEvent `id` of the triggering event, for tracing results back to it.
+    event_id: str
+
+    timezone: NotRequired[str]
+    name: NotRequired[str]
+    user_name: NotRequired[str]
+    workload_framework: NotRequired[str]
+    failed_node: NotRequired[str]
+    failed_nodes: NotRequired[list[str]]
+    cancelled_by: NotRequired[str]
+    time_limit: NotRequired[int]
+    gpu_count: NotRequired[int]
+    std_out: NotRequired[str]
+    std_err: NotRequired[str]
+    namespace: NotRequired[str]
+    pod_names: NotRequired[list[str]]
+    pod_nodes: NotRequired[dict[str, str]]
+
+
+class EventError(ValueError):
+    """The event payload is invalid and may be skipped without retrying."""
+
+
+def _read_cloudevent(message: KafkaMessage) -> tuple[str, str, dict]:
+    """Return (id, type, data) from a structured- or binary-mode CloudEvent."""
+    raw = message.value()
+    if raw is None:
+        raise EventError("message has no value")
+    try:
+        body = json.loads(raw)
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise EventError(f"value is not JSON: {exc}") from exc
+
+    headers = {key: value for key, value in (message.headers() or [])}
+    if "ce_type" in headers:
+        attrs = {key[3:]: _header_str(value) for key, value in headers.items() if key.startswith("ce_")}
+        data = body
+    else:
+        if not isinstance(body, dict):
+            raise EventError("structured CloudEvent must be a JSON object")
+        attrs = body
+        data = body.get("data")
+
+    if attrs.get("specversion") != "1.0":
+        raise EventError(f"unsupported CloudEvents specversion {attrs.get('specversion')!r}")
+    event_id = attrs.get("id")
+    event_type = attrs.get("type")
+    if not isinstance(event_id, str) or event_id == "":
+        raise EventError("CloudEvent id is missing")
+    if not isinstance(event_type, str) or event_type == "":
+        raise EventError(f"CloudEvent {event_id} type is missing")
+    if not isinstance(data, dict):
+        raise EventError(f"CloudEvent {event_id} data must be a JSON object")
+    return event_id, event_type, data
+
+
+def _header_str(value: bytes | str | None) -> str:
+    """Decode CloudEvent binary headers; absent values normalize to empty text."""
+    if isinstance(value, bytes):
+        return value.decode("utf-8", errors="replace")
+    return "" if value is None else value
+
+
+def _context_from_data(
+    data: dict,
+    *,
+    event_id: str,
+    default_scheduler: str,
+    workload_type: str,
+) -> KafkaExecutionContext:
+    """Validate an event `data` object and build an ExecutionContext from it."""
+    missing = [key for key in ("id", "start_time", "end_time", "nodes") if data.get(key) in (None, "", [])]
+    if missing:
+        raise EventError(f"CloudEvent {event_id} data missing required keys: {missing}")
+
+    ctx_id = str(data["id"])
+    ctx: KafkaExecutionContext = {
+        "id": ctx_id,
+        "workload_type": workload_type,
+        "scheduler": _str_or_default(data.get("scheduler"), default_scheduler),
+        "nodes": _str_list(data["nodes"], "nodes", event_id),
+        "start_time": _aware_datetime(data["start_time"], "start_time", event_id),
+        "end_time": _aware_datetime(data["end_time"], "end_time", event_id),
+        "job_id": _str_or_default(data.get("job_id"), ctx_id),
+        "attempt_id": _str_or_default(data.get("attempt_id"), "0"),
+        "state": _str_or_default(data.get("state"), "UNKNOWN"),
+        "event_id": event_id,
+    }
+    if ctx["end_time"] < ctx["start_time"]:
+        raise EventError(f"CloudEvent {event_id} end_time is before start_time")
+
+    for key in _OPTIONAL_STR_FIELDS:
+        value = data.get(key)
+        if value is not None and value != "":
+            ctx[key] = str(value)
+
+    _validate_timezone(ctx, data.get("timezone"), event_id)
+
+    for key in ("time_limit", "gpu_count"):
+        value = data.get(key)
+        if value is not None:
+            ctx[key] = _non_negative_int(value, key, event_id)
+
+    failed_nodes = data.get("failed_nodes")
+    if failed_nodes:
+        ctx["failed_nodes"] = _str_list(failed_nodes, "failed_nodes", event_id)
+        ctx["failed_node"] = min(ctx["failed_nodes"])
+    elif data.get("failed_node"):
+        ctx["failed_node"] = str(data["failed_node"])
+
+    if data.get("pod_names"):
+        ctx["pod_names"] = _str_list(data["pod_names"], "pod_names", event_id)
+    pod_nodes = data.get("pod_nodes")
+    if pod_nodes:
+        if not isinstance(pod_nodes, dict):
+            raise EventError(f"CloudEvent {event_id} pod_nodes must be an object")
+        ctx["pod_nodes"] = {str(pod): str(node) for pod, node in pod_nodes.items()}
+    return ctx
+
+
+def _validate_timezone(ctx: KafkaExecutionContext, timezone: object, event_id: str) -> None:
+    """Resolve the service's timezone before an event can be committed.
+
+    Invalid keys are payload errors; failures reading a valid zone database are
+    host failures and must abort discovery without acknowledging the event.
+    """
+    if timezone is not None and timezone != "":
+        try:
+            ctx["timezone"] = ZoneInfo(str(timezone)).key
+        except (ZoneInfoNotFoundError, ValueError) as exc:
+            raise EventError(f"CloudEvent {event_id} timezone {timezone!r} is not an IANA key") from exc
+        except OSError as exc:
+            # With the tzdata package, a directory name ("America") or an
+            # overlong key raises these instead of ZoneInfoNotFoundError. Any
+            # other OSError is a host problem with a possibly valid key: fail
+            # the run uncommitted so the event is retried, not skipped.
+            if isinstance(exc, (IsADirectoryError, NotADirectoryError, FileNotFoundError)) or exc.errno in (
+                errno.ENAMETOOLONG,
+                errno.EINVAL,
+            ):
+                raise EventError(f"CloudEvent {event_id} timezone {timezone!r} is not an IANA key") from exc
+            raise KafkaConsumerError(f"kafka ECA: cannot read timezone {timezone!r}: {exc}") from exc
+
+    # The service needs an IANA zone; reject now what the orchestrator would
+    # reject after the offset is committed (e.g. +05:30 without `timezone`).
+    try:
+        _service_timezone_name(ctx["start_time"], ctx["end_time"], ctx.get("timezone"))
+    except ValueError as exc:
+        raise EventError(f"CloudEvent {event_id}: {exc}") from exc
+
+
+def _str_or_default(value: object, default: str) -> str:
+    """Normalize optional scheduler identifiers using the adapter defaults."""
+    return default if value is None or value == "" else str(value)
+
+
+def _str_list(value: object, field: str, event_id: str) -> list[str]:
+    """Copy a list of nonempty names; reject mixed or non-list payloads."""
+    if not isinstance(value, list) or not all(isinstance(item, str) and item for item in value):
+        raise EventError(f"CloudEvent {event_id} {field} must be a list of non-empty strings")
+    return list(value)
+
+
+def _aware_datetime(value: object, field: str, event_id: str) -> datetime:
+    """Parse an ISO-8601 timestamp and require an explicit UTC offset."""
+    try:
+        parsed = datetime.fromisoformat(str(value))
+    except ValueError as exc:
+        raise EventError(f"CloudEvent {event_id} {field}={value!r} must be ISO-8601") from exc
+    if parsed.tzinfo is None:
+        raise EventError(f"CloudEvent {event_id} {field} must include a UTC offset")
+    return parsed
+
+
+def _non_negative_int(value: object, field: str, event_id: str) -> int:
+    """Reject booleans, floats, and negative allocation/duration values."""
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        raise EventError(f"CloudEvent {event_id} {field} must be a non-negative integer")
+    return value

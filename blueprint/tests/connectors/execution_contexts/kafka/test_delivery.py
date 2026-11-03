@@ -14,6 +14,7 @@ import pytest
 
 from attribution_blueprint.connectors.attribution import AttributionConnector
 from attribution_blueprint.connectors.execution_contexts.kafka import _build, _consumer_config
+from attribution_blueprint.connectors.execution_contexts.kafka.client import KafkaConsumerClient
 from attribution_blueprint.connectors.execution_contexts.kafka.connector import (
     KafkaConsumerError,
     KafkaExecutionContextAdapter,
@@ -184,7 +185,7 @@ def _wrapped_adapter(spec, wrapper):
     from confluent_kafka import Consumer, TopicPartition
 
     return KafkaExecutionContextAdapter(
-        consumer=wrapper(Consumer(_consumer_config(spec))),
+        consumer=KafkaConsumerClient(wrapper(Consumer(_consumer_config(spec)))),
         topic=spec["topic"],
         topic_partition=TopicPartition,
         event_types=spec["event_types"],
@@ -240,7 +241,7 @@ def test_commit_exception_replays_event_on_retry(kafka_spec, completion_event, p
         def commit(self, **kwargs):
             if not self.failed:
                 self.failed = True
-                raise TimeoutError("injected coordinator timeout")
+                raise KafkaConsumerError("injected coordinator timeout")
             return self.consumer.commit(**kwargs)
 
     adapter = _wrapped_adapter(kafka_spec, FailCommitOnce)
@@ -371,7 +372,7 @@ def test_short_polls_wait_for_delayed_real_fetch(kafka_spec, completion_event, p
     adapter = _wrapped_adapter({**kafka_spec, "poll_timeout_seconds": 0.001}, DelayedFetch)
     try:
         assert [ctx["event_id"] for ctx in adapter.discover()] == [completion_event["id"]]
-        assert adapter._consumer.empty_polls >= 8
+        assert adapter._consumer._consumer.empty_polls >= 8
     finally:
         adapter.close()
 
