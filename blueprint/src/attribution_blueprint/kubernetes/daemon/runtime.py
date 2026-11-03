@@ -14,6 +14,7 @@ from attribution_blueprint.kubernetes.daemon.health import HealthState
 from attribution_blueprint.kubernetes.daemon.models import (
     ObservationEventType,
     PlacementRecord,
+    ResourceIdentity,
     ResourceObservation,
 )
 from attribution_blueprint.kubernetes.daemon.resolvers import (
@@ -383,6 +384,34 @@ class KubernetesDaemon:
             return False
         return self._enrich_placement(pod, base, generation)
 
+    def _resolve_owner(
+        self,
+        pod: dict,
+        base: PlacementRecord,
+    ) -> tuple[ResourceIdentity | None, bool]:
+        """Return the resolved owner and whether resolution should be retried."""
+        assert self.owner_resolver is not None
+        # Unobserved relationship changes cannot be reconstructed after deletion.
+        cached_owner = base.owner if _stored_owner_matches_pod(base, pod) else None
+        try:
+            return self.owner_resolver.resolve(pod), False
+        except ResolutionPending as error:
+            if cached_owner is not None:
+                return cached_owner, False
+            logger.info(f"deferred Pod owner enrichment for retry: {error}")
+            return None, True
+        except UnsupportedOwner as error:
+            logger.info(f"retained placement without supported owner: {error}")
+            return None, False
+        except StaleOwnerReference as error:
+            logger.warning(f"retained placement with stale owner reference: {error}")
+            return None, False
+        except Exception as error:
+            # Resolvers treat all other errors as retryable rather
+            # than dropping enrichment outright.
+            logger.warning(f"deferred Pod owner enrichment after an unexpected failure, will retry: {error}")
+            return None, True
+
     def _enrich_placement(
         self,
         pod: dict,
@@ -396,31 +425,11 @@ class KubernetesDaemon:
         metadata = pod.get("metadata") or {}
         if self.owner_resolver is None:
             return False
-        # Unobserved relationship changes cannot be reconstructed after deletion.
-        cached_owner = (
-            base.owner
-            if _stored_owner_matches_pod(base, pod)
-            else None
-        )
-        try:
-            owner = self.owner_resolver.resolve(pod)
-        except ResolutionPending as error:
-            if cached_owner is not None:
-                owner = cached_owner
-            else:
-                logger.info(f"deferred Pod owner enrichment for retry: {error}")
-                return True
-        except UnsupportedOwner as error:
-            logger.info(f"retained placement without supported owner: {error}")
-            return False
-        except StaleOwnerReference as error:
-            logger.warning(f"retained placement with stale owner reference: {error}")
-            return False
-        except Exception as error:
-            # Resolvers treat all other errors as retryable rather
-            # than dropping enrichment outright.
-            logger.warning(f"deferred Pod owner enrichment after an unexpected failure, will retry: {error}")
+        owner, owner_retry = self._resolve_owner(pod, base)
+        if owner_retry:
             return True
+        if owner is None:
+            return False
 
         current = PlacementRecord.for_pod(pod)
         owned = current.enriched(owner=owner)
@@ -435,11 +444,10 @@ class KubernetesDaemon:
             # A newer generation for this Pod UID already superseded this
             # write; that newer work owns any further enrichment.
             return False
-        if owner_result != CreateResult.DUPLICATE:
-            logger.info(f"{owner_result.value} owner metadata for Pod {self.namespace}/{metadata.get('name')}")
 
         enriched = owned
         needs_retry = False
+        enrichment_updated = owner_result != CreateResult.DUPLICATE
         for resolver in self.resource_resolvers:
             resolver_name = type(resolver).__name__
             try:
@@ -454,9 +462,6 @@ class KubernetesDaemon:
                 logger.info(f"retained Pod placement without resources from {resolver_name}: {error}")
                 continue
             except Exception as error:
-                # Same reasoning as the owner-resolution case above: an
-                # unexpected error (e.g. a transient HTTP 503) is retryable,
-                # not a reason to permanently drop this resolver's evidence.
                 logger.warning(
                     f"deferred Pod resources from {resolver_name} after an unexpected failure, "
                     f"will retry: {error}"
@@ -473,10 +478,9 @@ class KubernetesDaemon:
                 needs_retry = True
                 continue
             if resource_result is not None and resource_result != CreateResult.DUPLICATE:
-                logger.info(
-                    f"{resource_result.value} resources from {resolver_name} for "
-                    f"Pod {self.namespace}/{metadata.get('name')}"
-                )
+                enrichment_updated = True
+        if enrichment_updated:
+            logger.info(f"updated enrichment for Pod {self.namespace}/{metadata.get('name')}")
         return needs_retry
 
     def _persist_enrichment(
