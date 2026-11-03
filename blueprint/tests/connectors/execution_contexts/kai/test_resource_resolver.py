@@ -5,6 +5,7 @@ import pytest
 
 from attribution_blueprint.connectors.execution_contexts.kai.resource_resolver import KaiResourceResolver
 from attribution_blueprint.kubernetes.daemon.models import (
+    ObservationEventType,
     ResourceIdentity,
     ResourceObservation,
 )
@@ -22,6 +23,32 @@ def _pod():
 
 def _owner():
     return ResourceIdentity("batch/v1", "Job", "team-a", "job-a", "job-uid")
+
+
+def _retained_pod_group(
+    uid: str,
+    *,
+    owner_uid: str = "job-uid",
+    event_type: ObservationEventType = "DELETED",
+) -> ResourceObservation:
+    return ResourceObservation(
+        cluster_id="cluster-a",
+        api_version="scheduling.run.ai/v2alpha2",
+        kind="PodGroup",
+        namespace="team-a",
+        name="pg-a",
+        uid=uid,
+        resource_version=uid,
+        event_type=event_type,
+        observed_at="2026-10-14T00:00:00Z",
+        selected_metadata={
+            "annotations": {
+                "kai.scheduler/top-owner-metadata": (
+                    f"kind: Job\nname: job-a\nuid: {owner_uid}\n"
+                )
+            }
+        },
+    )
 
 
 class _Journal:
@@ -87,24 +114,7 @@ def test_rejects_recreated_or_unrelated_pod_group(mocker):
 
 def test_resolves_deleted_pod_group_from_uid_verified_journal(mocker):
     custom_api = mocker.Mock()
-    observation = ResourceObservation(
-        cluster_id="cluster-a",
-        api_version="scheduling.run.ai/v2alpha2",
-        kind="PodGroup",
-        namespace="team-a",
-        name="pg-a",
-        uid="original-pg-uid",
-        resource_version="12",
-        event_type="DELETED",
-        observed_at="2026-10-14T00:00:00Z",
-        selected_metadata={
-            "annotations": {
-                "kai.scheduler/top-owner-metadata": (
-                    "kind: Job\nname: job-a\nuid: job-uid\n"
-                )
-            }
-        },
-    )
+    observation = _retained_pod_group("original-pg-uid")
 
     result = KaiResourceResolver(
         custom_api,
@@ -121,4 +131,59 @@ def test_resolves_deleted_pod_group_from_uid_verified_journal(mocker):
             "original-pg-uid",
         ),
     )
+    custom_api.get_namespaced_custom_object.assert_not_called()
+
+
+def test_unrelated_retained_pod_group_falls_back_to_live_lookup(mocker):
+    custom_api = mocker.Mock()
+    custom_api.get_namespaced_custom_object.return_value = {
+        "apiVersion": "scheduling.run.ai/v2alpha2",
+        "kind": "PodGroup",
+        "metadata": {
+            "namespace": "team-a",
+            "name": "pg-a",
+            "uid": "live-pg-uid",
+            "annotations": {
+                "kai.scheduler/top-owner-metadata": (
+                    "kind: Job\nname: job-a\nuid: job-uid\n"
+                )
+            },
+        },
+    }
+    resolver = KaiResourceResolver(
+        custom_api,
+        journal=_Journal(
+            [_retained_pod_group("unrelated-pg-uid", owner_uid="other-job-uid")]
+        ),
+        cluster_id="cluster-a",
+    )
+
+    assert resolver.resolve(_pod(), _owner()) == (
+        ResourceIdentity(
+            "scheduling.run.ai/v2alpha2",
+            "PodGroup",
+            "team-a",
+            "pg-a",
+            "live-pg-uid",
+        ),
+    )
+    custom_api.get_namespaced_custom_object.assert_called_once()
+
+
+def test_ambiguous_retained_pod_groups_preserve_uncertainty(mocker):
+    custom_api = mocker.Mock()
+    resolver = KaiResourceResolver(
+        custom_api,
+        journal=_Journal(
+            [
+                _retained_pod_group("deleted-pg-uid"),
+                _retained_pod_group("live-pg-uid", event_type="MODIFIED"),
+            ]
+        ),
+        cluster_id="cluster-a",
+    )
+
+    with pytest.raises(UnsupportedOwner, match="multiple retained"):
+        resolver.resolve(_pod(), _owner())
+
     custom_api.get_namespaced_custom_object.assert_not_called()

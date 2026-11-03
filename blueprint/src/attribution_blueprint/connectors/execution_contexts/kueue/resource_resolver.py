@@ -119,8 +119,8 @@ class KueueResourceResolver:
             return observation_identity(matches[0])
         if len(matches) > 1:
             raise UnsupportedOwner("multiple retained Kueue Workloads match the Pod owner")
-        if workload_name is not None and named:
-            raise UnsupportedOwner("retained Kueue Workload does not belong to the resolved Pod owner")
+        # A retained object with the same name can belong to an older or
+        # unrelated incarnation. Let the live UID/owner check decide.
         return None
 
 

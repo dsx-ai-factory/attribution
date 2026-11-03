@@ -102,8 +102,8 @@ class KaiResourceResolver:
             return observation_identity(matches[0])
         if len(matches) > 1:
             raise UnsupportedOwner("multiple retained KAI PodGroups match the Pod owner")
-        if named:
-            raise UnsupportedOwner("retained KAI PodGroup does not belong to the resolved Pod owner")
+        # A retained object with the same name can belong to an older or
+        # unrelated incarnation. Let the live UID/owner check decide.
         return None
 
 
