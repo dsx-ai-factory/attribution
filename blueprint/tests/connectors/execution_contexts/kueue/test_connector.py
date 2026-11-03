@@ -1895,7 +1895,7 @@ def test_same_named_jobsets_in_two_namespaces_keep_separate_pod_evidence():
         jobs = _jobs_for_workload(workload, {})
         attempt = attempts_from_live_resources(workload, pods, jobs, now=now)[-1]
         evidence = _AttemptEvidence(
-            attempts=[attempt],
+            attempt=attempt,
             workload=workload,
             pods={
                 uid: pod for pod in pods if (uid := (pod.get("metadata") or {}).get("uid")) and uid in attempt.pod_uids

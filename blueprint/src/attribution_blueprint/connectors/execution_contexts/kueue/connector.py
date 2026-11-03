@@ -142,19 +142,14 @@ class KueueExecutionContext(TypedDict):
 class _AttemptEvidence:
     """Inputs for one admitted execution, keyed by canonical attempt ID."""
 
-    attempts: list[WorkloadAttempt] = field(default_factory=list)
+    attempt: WorkloadAttempt
     workload: dict | None = None
     pods: dict[str, dict] = field(default_factory=dict)
     jobs: dict[str, dict] = field(default_factory=dict)
     placements: dict[str, PlacementRecord] = field(default_factory=dict)
     retained_coverage: list[dict] = field(default_factory=list)
 
-    @property
-    def attempt(self) -> WorkloadAttempt:
-        return merge_attempts(self.attempts)
-
     def merge(self, other: _AttemptEvidence) -> None:
-        self.attempts.extend(other.attempts)
         if other.workload is not None:
             self.workload = other.workload
         self.pods.update(other.pods)
@@ -650,17 +645,15 @@ def _context_from_attempt_evidence(
         (f"{(job.get('metadata') or {}).get('namespace') or ''}/{(job.get('metadata') or {}).get('name') or ''}"): job
         for job in evidence.jobs.values()
     }
-    if workload is not None:
+    if workload is not None and attempt.terminal is None:
         live_kueue_state = _derive_state((workload.get("status") or {}).get("conditions") or [])
-        live_state = _service_state(
+        state = _service_state(
             live_kueue_state,
             workload,
             pod_evidence.has_node_failure,
             jobs_by_name,
         )
-        if attempt.terminal is None:
-            state = live_state
-            kueue_state = live_kueue_state
+        kueue_state = live_kueue_state
 
     owner_job_uids = {uid for job in evidence.jobs.values() if (uid := (job.get("metadata") or {}).get("uid"))}
     if workload is not None:
@@ -1043,7 +1036,7 @@ class KueueExecutionContextAdapter:
                 ):
                     evidence_items.append(
                         _AttemptEvidence(
-                            attempts=[attempt],
+                            attempt=attempt,
                             pods={uid: resources_by_uid[uid] for uid in attempt.pod_uids if uid in resources_by_uid},
                             jobs={uid: resources_by_uid[uid] for uid in attempt.job_uids if uid in resources_by_uid},
                             placements=history_placements,
@@ -1056,30 +1049,31 @@ class KueueExecutionContextAdapter:
     def _combine_attempt_evidence(
         evidence_items: list[_AttemptEvidence],
     ) -> list[_AttemptEvidence]:
-        by_attempt_id: dict[str, _AttemptEvidence] = {}
+        grouped: dict[str, list[_AttemptEvidence]] = {}
         for evidence in evidence_items:
-            attempt_id = evidence.attempt.attempt_id
-            if attempt_id in by_attempt_id:
-                by_attempt_id[attempt_id].merge(evidence)
-            else:
-                by_attempt_id[attempt_id] = _AttemptEvidence(
-                    attempts=list(evidence.attempts),
-                    workload=evidence.workload,
-                    pods=dict(evidence.pods),
-                    jobs=dict(evidence.jobs),
-                    placements=dict(evidence.placements),
-                    retained_coverage=list(evidence.retained_coverage),
-                )
-        return [
-            by_attempt_id[attempt_id]
-            for attempt_id in sorted(
-                by_attempt_id,
-                key=lambda key: (
-                    by_attempt_id[key].attempt.start_time,
-                    key,
-                ),
+            grouped.setdefault(evidence.attempt.attempt_id, []).append(evidence)
+
+        combined = []
+        for items in grouped.values():
+            first = items[0]
+            merged = _AttemptEvidence(
+                attempt=merge_attempts([item.attempt for item in items]),
+                workload=first.workload,
+                pods=dict(first.pods),
+                jobs=dict(first.jobs),
+                placements=dict(first.placements),
+                retained_coverage=list(first.retained_coverage),
             )
-        ]
+            for item in items[1:]:
+                merged.merge(item)
+            combined.append(merged)
+        return sorted(
+            combined,
+            key=lambda evidence: (
+                evidence.attempt.start_time,
+                evidence.attempt.attempt_id,
+            ),
+        )
 
     def discover_by_time_range(
         self,
@@ -1413,7 +1407,7 @@ class KueueExecutionContextAdapter:
             for attempt in attempts:
                 evidence_items.append(
                     _AttemptEvidence(
-                        attempts=[attempt],
+                        attempt=attempt,
                         workload=workload,
                         pods={uid: pods_by_uid[uid] for uid in attempt.pod_uids if uid in pods_by_uid},
                         jobs={uid: jobs_by_uid[uid] for uid in attempt.job_uids if uid in jobs_by_uid},

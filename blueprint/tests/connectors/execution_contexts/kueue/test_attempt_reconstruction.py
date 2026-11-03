@@ -14,6 +14,7 @@ from attribution_blueprint.connectors.execution_contexts.kueue.attempts import (
     WorkloadAttempt,
     attempts_from_live_resources,
     attempts_from_workload_history,
+    merge_attempts,
 )
 from attribution_blueprint.connectors.execution_contexts.kueue.connector import (
     KueueExecutionContextAdapter,
@@ -44,7 +45,7 @@ def _context_from_live_resources(workload: dict, pods: list[dict], now: datetime
     jobs = _jobs_for_workload(workload, {})
     attempt = attempts_from_live_resources(workload, pods, jobs, now=now)[-1]
     evidence = _AttemptEvidence(
-        attempts=[attempt],
+        attempt=attempt,
         workload=workload,
         pods={uid: pod for pod in pods if (uid := (pod.get("metadata") or {}).get("uid")) and uid in attempt.pod_uids},
         jobs={uid: job for job in jobs if (uid := (job.get("metadata") or {}).get("uid")) and uid in attempt.job_uids},
@@ -62,7 +63,7 @@ def _context_from_history_attempt(
     retained-history discovery."""
     return _context_from_attempt_evidence(
         _AttemptEvidence(
-            attempts=[attempt],
+            attempt=attempt,
             placements={
                 placement.pod_uid: placement for placement in placements if placement.pod_uid in attempt.pod_uids
             },
@@ -1256,7 +1257,7 @@ def test_retained_attempt_suppresses_live_never_admitted_context(mocker):
 
     contexts = adapter._finalize(
         [workload],
-        [_AttemptEvidence(attempts=[attempt])],
+        [_AttemptEvidence(attempt=attempt)],
     )
 
     assert [context["attempt_id"] for context in contexts] == [attempt.attempt_id]
@@ -1524,7 +1525,7 @@ def test_node_loss_without_a_resolvable_node_name_reports_node_fail(retained):
         )
         context = _context_from_attempt_evidence(
             _AttemptEvidence(
-                attempts=[attempt],
+                attempt=attempt,
                 pods={"pod-uid": pod_without_node_name},
                 retained_coverage=[{}],
             )
@@ -1541,7 +1542,7 @@ def test_node_loss_without_a_resolvable_node_name_reports_node_fail(retained):
     assert "failed_node" not in context
 
 
-def test_same_attempt_unions_retained_and_new_live_failure_evidence():
+def test_same_attempt_unions_retained_and_new_live_failure_evidence(mocker):
     admitted = "2026-10-14T10:00:00Z"
     workload = {
         "metadata": {
@@ -1614,21 +1615,26 @@ def test_same_attempt_unions_retained_and_new_live_failure_evidence():
         observed_at="2026-10-14T10:05:00Z",
     )
     retained = _AttemptEvidence(
-        attempts=[retained_attempt],
+        attempt=retained_attempt,
         placements={"old-pod-uid": retained_placement},
         retained_coverage=[{}],
     )
     live = _AttemptEvidence(
-        attempts=[live_attempt],
+        attempt=live_attempt,
         workload=workload,
         pods={"new-pod-uid": live_pod},
+    )
+    merge = mocker.patch(
+        "attribution_blueprint.connectors.execution_contexts.kueue.connector.merge_attempts",
+        wraps=merge_attempts,
     )
 
     [combined] = KueueExecutionContextAdapter._combine_attempt_evidence([retained, live])
     context = _context_from_attempt_evidence(combined)
 
+    merge.assert_called_once()
     assert combined is not retained
-    assert retained.attempts == [retained_attempt]
+    assert retained.attempt == retained_attempt
     assert retained.workload is None
     assert retained.pods == {}
     assert retained.placements == {"old-pod-uid": retained_placement}
@@ -1641,7 +1647,9 @@ def test_same_attempt_unions_retained_and_new_live_failure_evidence():
     assert context["user_name"] == "grace"
 
 
-def test_retained_terminal_and_timeout_specificity_beat_stale_live_state():
+def test_retained_terminal_and_timeout_specificity_beat_stale_live_state(
+    mocker,
+):
     start = datetime(2026, 10, 14, 10, tzinfo=timezone.utc)
     failed = {
         "kind": "Workload",
@@ -1688,19 +1696,30 @@ def test_retained_terminal_and_timeout_specificity_beat_stale_live_state():
             "namespace": "team-a",
             "name": "training-workload",
             "uid": "workload-uid",
+            "labels": {"user": "grace"},
         },
+        "spec": {"queueName": "gpu"},
         "status": {"conditions": [_condition("Admitted", "2026-10-14T10:00:00Z")]},
     }
     evidence = _AttemptEvidence(
-        attempts=[attempt(failed), attempt(None), attempt(timeout)],
+        attempt=merge_attempts(
+            [attempt(failed), attempt(None), attempt(timeout)]
+        ),
         workload=stale_live_workload,
         retained_coverage=[{}],
+    )
+    service_state = mocker.patch(
+        "attribution_blueprint.connectors.execution_contexts.kueue.connector._service_state",
+        side_effect=AssertionError("terminal attempts must not derive live state"),
     )
 
     context = _context_from_attempt_evidence(evidence)
 
+    service_state.assert_not_called()
     assert context["state"] == "TIMEOUT"
     assert context["kueue_state"] == "FINISHED_FAILED"
+    assert context["queue_name"] == "gpu"
+    assert context["user_name"] == "grace"
     assert context["end_time"] == datetime(
         2026,
         10,
@@ -1758,7 +1777,7 @@ def test_deleted_placement_requires_attempt_scheduling_evidence(
         owner_references=(owner,),
     )
     evidence = _AttemptEvidence(
-        attempts=[attempt],
+        attempt=attempt,
         jobs={
             "job-uid": {
                 "metadata": {
