@@ -158,6 +158,18 @@ class KubernetesDaemon:
                         self.namespace,
                         source.name,
                     )
+                    open_gap = next(
+                        (
+                            gap
+                            for gap in self.store.list_coverage_gaps(
+                                self.cluster_id,
+                                self.namespace,
+                            )
+                            if gap.source_name == source.name
+                            and gap.recovered_at is None
+                        ),
+                        None,
+                    )
                     if pending_gap_reason is not None:
                         assert pending_gap_resource_version is not None
                         assert coverage is not None
@@ -172,6 +184,8 @@ class KubernetesDaemon:
                             started_at=coverage.checkpointed_at,
                             detected_at=_utc_now(),
                         )
+                    elif open_gap is not None:
+                        gap_id = open_gap.id
                     elif coverage is not None:
                         if (
                             coverage.api_version != source.api_version

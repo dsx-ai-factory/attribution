@@ -963,13 +963,16 @@ def test_two_source_relist_stays_unready_until_both_sources_complete(mocker):
     assert daemon.health.ready() is True
 
 
-def test_resource_version_expiry_resets_readiness_before_relisting(mocker):
+def test_resource_version_expiry_resets_readiness_before_relisting(
+    tmp_path,
+    mocker,
+):
     """A relist triggered by an expired watch resourceVersion (HTTP 410) must
     clear `initial_list_complete` until the relist completes, so `/readyz`
     does not report ready while the daemon cannot currently reconcile."""
     from kubernetes.client.exceptions import ApiException
 
-    store = mocker.Mock()
+    store = SQLitePlacementStore(str(tmp_path / "placements.db"))
     core_api = mocker.Mock()
     daemon = KubernetesDaemon(core_api=core_api, store=store, namespace="team-a", workers=1)
 
@@ -1690,6 +1693,55 @@ def test_daemon_restart_resumes_from_durable_checkpoint_without_relist(tmp_path)
     assert second_source.list_calls == 0
     assert second_source.stream_resource_versions == ["11"]
     assert store.list_coverage_gaps("cluster-a", "team-a") == []
+
+
+def test_daemon_restart_with_open_gap_forces_relist_and_closes_gap(tmp_path):
+    store = SQLitePlacementStore(str(tmp_path / "placements.db"))
+    store.complete_watch_list(
+        cluster_id="cluster-a",
+        namespace="team-a",
+        source_name="pods",
+        api_version="v1",
+        kind="Pod",
+        resource_version="10",
+        completed_at="2026-10-14T00:00:00Z",
+        gap_id=None,
+    )
+    gap_id = store.begin_coverage_gap(
+        cluster_id="cluster-a",
+        namespace="team-a",
+        source_name="pods",
+        api_version="v1",
+        kind="Pod",
+        reason="RESOURCE_VERSION_EXPIRED",
+        start_resource_version="10",
+        started_at="2026-10-14T00:00:00Z",
+        detected_at="2026-10-14T00:01:00Z",
+    )
+    source = _FinitePodWatchSource(
+        [],
+        [],
+        list_resource_version="20",
+    )
+    daemon = KubernetesDaemon(
+        core_api=None,
+        store=store,
+        namespace="team-a",
+        cluster_id="cluster-a",
+        watch_sources=(source,),
+    )
+    source.daemon = daemon
+
+    daemon._watch_source(source)
+
+    assert source.list_calls == 1
+    assert source.stream_resource_versions == ["20"]
+    [gap] = store.list_coverage_gaps("cluster-a", "team-a")
+    assert gap.id == gap_id
+    assert gap.started_at == "2026-10-14T00:00:00Z"
+    assert gap.detected_at == "2026-10-14T00:01:00Z"
+    assert gap.end_resource_version == "20"
+    assert gap.recovered_at is not None
 
 
 def test_expired_watch_records_coverage_gap_around_relist(tmp_path):
