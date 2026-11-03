@@ -625,11 +625,13 @@ def _terminal_at(row: sqlite3.Row) -> str | None:
     ]
     if transitions:
         return max(transitions)
+    if status.get("completionTime"):
+        return status["completionTime"]
     if status.get("phase") in {"Failed", "Succeeded"} or status.get(
         "terminalState"
     ):
-        return row["source_timestamp"] or row["observed_at"]
-    return status.get("completionTime")
+        return row["observed_at"]
+    return None
 
 
 def _placement_identity(record: PlacementRecord) -> tuple:

@@ -86,6 +86,7 @@ def _history_observation(
     resource_version: str = "1",
     owners: tuple[OwnerReference, ...] = (),
     status: dict | None = None,
+    source_timestamp: str | None = None,
     event_type: ObservationEventType = "MODIFIED",
 ) -> ResourceObservation:
     return ResourceObservation(
@@ -98,6 +99,7 @@ def _history_observation(
         resource_version=resource_version,
         event_type=event_type,
         observed_at=observed_at,
+        source_timestamp=source_timestamp,
         owner_references=owners,
         status=status,
     )
@@ -646,6 +648,35 @@ def test_old_active_workload_history_is_retained(tmp_path):
         "team-a",
         "workload-uid",
     ) == [workload]
+
+
+def test_recent_terminal_without_terminal_timestamp_uses_observation_time(
+    tmp_path,
+):
+    path = tmp_path / "placements.db"
+    store = SQLitePlacementStore(str(path), retention_days=30)
+    old_start = (datetime.now(timezone.utc) - timedelta(days=2)).isoformat()
+    observed_terminal = datetime.now(timezone.utc).isoformat()
+    pod = _history_observation(
+        kind="Pod",
+        name="worker-0",
+        uid="pod-uid",
+        observed_at=observed_terminal,
+        source_timestamp=old_start,
+        status={
+            "phase": "Succeeded",
+            "startTime": old_start,
+        },
+    )
+    store.append_observation(pod)
+
+    reopened = SQLitePlacementStore(str(path), retention_days=1)
+
+    assert reopened.list_observations_for_uid(
+        "cluster-a",
+        "team-a",
+        pod.uid,
+    ) == [pod]
 
 
 def test_newer_active_workload_protects_owner_group_from_late_old_terminal(
