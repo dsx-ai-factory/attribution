@@ -20,6 +20,7 @@ from common.refiner_helpers import (
 )
 from loguru import logger
 
+from attribution_lib.attr_types import JobNodeAttributions
 from attribution_lib.event_helpers import query_events_with_source
 from attribution_lib.events import BAD_PAIR_EVENT_TYPES, EventStream, sql_placeholders
 from attribution_lib.failed_node_provenance import FailedNodeResolution
@@ -935,13 +936,20 @@ def _hca_source_near(sources: list[Source], time: datetime | None) -> Source | N
     return sources[index] if index < len(sources) and _hca_near(sources[index].time, time) else None
 
 
-def _hca_commands(stream: EventStream) -> list[_HcaCommand]:
-    return [
-        _HcaCommand(**payload, source=source)
-        for _, _, payload, source in query_events_with_source(
-            stream, stream.mgr.types.get_id("Application.hca.command_failure")
-        )
-    ]
+def _active_hca_commands(stream: EventStream, nodes: JobNodeAttributions) -> list[_HcaCommand]:
+    """Select sources that survived attribution filters; never revive demoted evidence."""
+    active = []
+    for _, _, payload, source in query_events_with_source(
+        stream, stream.mgr.types.get_id("Application.hca.command_failure")
+    ):
+        command = _HcaCommand(**payload, source=source)
+        if command.node is None or command.node not in nodes:
+            continue
+        group = nodes[command.node].attributions
+        symptom = command_symptom(command.verb, command.errno)
+        if symptom in group and command.source in group[symptom]:
+            active.append(command)
+    return active
 
 
 def _resolve_hca_devices(commands: list[_HcaCommand]) -> list[_HcaCommand]:
@@ -986,78 +994,87 @@ def _hca_corroboration(command: _HcaCommand, group) -> list[tuple[str, Source]]:
     return matches
 
 
+def _index_hca_guard_sources(commands: list[_HcaCommand]) -> dict[tuple[str, str], dict[str, list[Source]]]:
+    """Index timed failures by node, device and verb for five-minute proof lookups.
+
+    Resource-limited EAGAIN failures cannot prove another such failure is hardware.
+    """
+    by_device = defaultdict(lambda: defaultdict(list))
+    for command in commands:
+        if command.node and command.device and command.source.time is not None and not _hca_resource_limited(command):
+            by_device[command.node, command.device][command.verb].append(command.source)
+    for verbs in by_device.values():
+        for sources in verbs.values():
+            sources.sort(key=lambda source: source.time)
+    return by_device
+
+
+def _hca_guard_proof(command: _HcaCommand, by_device, corroboration) -> list[Source]:
+    """Require a different verb on the same device or matching NIC syslog.
+
+    Provider evidence can corroborate a diagnosis but cannot bypass this guard.
+    """
+    proof = []
+    if command.device:
+        proof = [
+            source
+            for verb, sources in by_device[command.node, command.device].items()
+            if verb != command.verb and (source := _hca_source_near(sources, command.source.time)) is not None
+        ]
+    return proof or [source for _, source in corroboration if source.source_context.source == ObsSource.SYSLOG]
+
+
+def _refine_hca_command(command: _HcaCommand, nodes: JobNodeAttributions, by_device) -> list[tuple[str, str, Source]]:
+    """Apply one command's resource guard and build its corroborated diagnosis.
+
+    Return the exact sources replaced by the compound for deferred demotion.
+    """
+    symptom = command_symptom(command.verb, command.errno)
+    group = nodes[command.node].attributions
+    corroboration = _hca_corroboration(command, group)
+    guard_proof = _hca_guard_proof(command, by_device, corroboration)
+    guarded = _hca_resource_limited(command)
+    qualifies = not guarded or bool(guard_proof)
+    sources = group[symptom]
+    if not qualifies:
+        sources.discard_selected([command.source])
+    elif guarded:
+        for proof_source in guard_proof:
+            sources.add_interesting(proof_source)
+    if command.device_source is not None:
+        sources.add_interesting(command.device_source)
+    if not qualifies or not corroboration:
+        return []
+
+    combined = SourceSet(_HCA_COMPOUND).add(command.source)
+    if command.device_source is not None:
+        combined.add(command.device_source)
+    consumed_sources = []
+    for matched_symptom, source in corroboration:
+        combined.add(source)
+        if matched_symptom in _HCA_NIC_SYSLOG:
+            consumed_sources.append((command.node, matched_symptom, source))
+    # Keep authoritative provider evidence selected so its priority and cascades apply.
+    nodes.add([command.node], combined)
+    consumed_sources.append((command.node, symptom, command.source))
+    return consumed_sources
+
+
 @refiner_def(
     name="LocalHcaCommandFailures",
     author="NVIDIA Attribution team",
     priority=_priority("LocalHcaCommandFailures"),
 )
 def local_hca_command_failures(context: RefinerContext) -> None:
-    """Apply local attribution, registration guards and corroborated NIC outcomes.
-
-    Existing per-node NIC correlation has already run. Only that node's active
-    diagnosis can corroborate a local call. Unavailable identities, ambiguous
-    devices and missing timestamps cannot satisfy a multi-verb guard.
-    """
+    """Select active commands, evaluate their guards and correlate per-node NIC evidence."""
     stream, nodes = context.event_stream, context.my_bad_nodes
     if stream is None or nodes is None:
         return
-    commands = _hca_commands(stream)
-    if not commands:
-        return
-    # Only candidates that survived the normal attribution filters can provide
-    # guard proofs or become compound diagnoses. Never revive demoted evidence.
-    active = []
-    for command in commands:
-        if command.node is None or command.node not in nodes:
-            continue
-        group = nodes[command.node].attributions
-        symptom = command_symptom(command.verb, command.errno)
-        if symptom in group and command.source in group[symptom]:
-            active.append(command)
-    active = _resolve_hca_devices(active)
-    commands = active
-    by_device = defaultdict(lambda: defaultdict(list))
-    for command in active:
-        if command.node and command.device and command.source.time is not None and not _hca_resource_limited(command):
-            by_device[command.node, command.device][command.verb].append(command.source)
-    for verbs in by_device.values():
-        for sources in verbs.values():
-            sources.sort(key=lambda source: source.time)
+    commands = _resolve_hca_devices(_active_hca_commands(stream, nodes))
+    by_device = _index_hca_guard_sources(commands)
     consumed_sources = []
     for command in commands:
-        symptom = command_symptom(command.verb, command.errno)
-        proof = []
-        if command.device:
-            proof = [
-                source
-                for verb, sources in by_device[command.node, command.device].items()
-                if verb != command.verb and (source := _hca_source_near(sources, command.source.time)) is not None
-            ]
-        group = nodes[command.node].attributions
-        corroboration = _hca_corroboration(command, group)
-        guarded = _hca_resource_limited(command)
-        guard_proof = proof or [
-            source for _, source in corroboration if source.source_context.source == ObsSource.SYSLOG
-        ]
-        qualifies = not guarded or bool(guard_proof)
-        sources = group[symptom]
-        if not qualifies:
-            sources.discard_selected([command.source])
-        elif guarded:
-            for proof_source in guard_proof:
-                sources.add_interesting(proof_source)
-        if command.device_source is not None:
-            sources.add_interesting(command.device_source)
-        if qualifies and corroboration:
-            combined = SourceSet(_HCA_COMPOUND).add(command.source)
-            if command.device_source is not None:
-                combined.add(command.device_source)
-            for matched_symptom, source in corroboration:
-                combined.add(source)
-                if matched_symptom in _HCA_NIC_SYSLOG:
-                    consumed_sources.append((command.node, matched_symptom, source))
-            nodes.add([command.node], combined)
-            consumed_sources.append((command.node, symptom, command.source))
+        consumed_sources.extend(_refine_hca_command(command, nodes, by_device))
     # Demote only command and syslog sources used by the compound, after all
     # commands have been examined. Other nodes, devices and episodes stay selected.
     for node, symptom, source in consumed_sources:
