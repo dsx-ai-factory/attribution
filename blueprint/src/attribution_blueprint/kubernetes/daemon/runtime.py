@@ -255,24 +255,6 @@ class KubernetesDaemon:
         }
         self._reconcile_active_pod_uids(active_pod_uids)
 
-    def _enqueue(self, pod: dict, *, deleted: bool = False) -> None:
-        # Unbound Pod ingestion belongs to the reusable watch interface in
-        # step 3. The placement foundation remains bound-Pod-only for now.
-        if not (pod.get("spec") or {}).get("nodeName"):
-            return
-        pod_uid = (pod.get("metadata") or {}).get("uid")
-        captured = self._capture_placement(pod)
-        deletion_persisted = True
-        if deleted and pod_uid:
-            deletion_persisted = self._mark_deleted(pod_uid)
-        if not captured or not deletion_persisted:
-            raise RequiredPersistenceError(
-                f"required placement persistence failed for Pod UID {pod_uid}"
-            )
-        if not pod_uid:
-            return
-        self._schedule(pod_uid, pod)
-
     def _schedule(self, pod_uid: str, pod: dict) -> None:
         """Track the latest `(pod, generation)` snapshot for `pod_uid`.
 
@@ -401,18 +383,6 @@ class KubernetesDaemon:
             return False
         return self._enrich_placement(pod, base, generation)
 
-    def _capture_placement(self, pod: dict) -> bool:
-        failure_reason = pod_node_failure_reason(pod) or pod_container_exit_reason(pod)
-        base = PlacementRecord.for_pod(pod, node_failure_reason=failure_reason)
-        result = self._persist(base, "scheduler-neutral Pod placement")
-        if result is None:
-            return False
-
-        metadata = pod.get("metadata") or {}
-        if result != CreateResult.DUPLICATE:
-            logger.info(f"{result.value} placement for Pod {self.namespace}/{metadata.get('name')}")
-        return True
-
     def _enrich_placement(
         self,
         pod: dict,
@@ -533,15 +503,6 @@ class KubernetesDaemon:
             return None
         self.health.update(persistence_failed=False)
         return result
-
-    def _mark_deleted(self, pod_uid: str) -> bool:
-        try:
-            self.store.mark_deleted(pod_uid)
-        except Exception:
-            self.health.update(persistence_failed=True)
-            logger.exception(f"failed to persist deletion for Pod UID {pod_uid}")
-            return False
-        return True
 
     def _reconcile_active_pod_uids(self, active_pod_uids: set[str]) -> None:
         try:
