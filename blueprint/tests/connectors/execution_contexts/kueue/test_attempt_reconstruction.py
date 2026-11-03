@@ -1371,6 +1371,104 @@ def test_retained_node_loss_placement_restores_failed_node():
     assert context["nodes"] == ["node-failed"]
 
 
+@pytest.mark.parametrize(
+    ("terminal", "expected_state"),
+    [
+        (
+            {
+                "kind": "Workload",
+                "type": "Finished",
+                "reason": "Succeeded",
+                "time": "2026-10-14T11:00:00Z",
+            },
+            "COMPLETED",
+        ),
+        (
+            {
+                "kind": "Workload",
+                "type": "Evicted",
+                "reason": "Preempted",
+                "time": "2026-10-14T11:00:00Z",
+            },
+            "PREEMPTED",
+        ),
+    ],
+)
+def test_retained_node_loss_preserves_terminal_precedence(
+    terminal,
+    expected_state,
+):
+    start = datetime(2026, 10, 14, 10, 0, tzinfo=timezone.utc)
+    attempt = WorkloadAttempt(
+        workload_uid="workload-uid",
+        namespace="team-a",
+        workload_name="training-workload",
+        owner_kind="Job",
+        admission_key=start.isoformat(),
+        restart_attempt="0",
+        start_time=start,
+        end_time=datetime(2026, 10, 14, 11, 0, tzinfo=timezone.utc),
+        terminal=terminal,
+        open=False,
+        boundary_resolved=True,
+        pod_uids=frozenset({"pod-uid"}),
+    )
+    placement = PlacementRecord(
+        namespace="team-a",
+        pod_name="failed-pod",
+        pod_uid="pod-uid",
+        node_name="node-failed",
+        observed_at=start.isoformat(),
+        node_failure_reason="NodeLost",
+    )
+
+    context = _context_from_history_attempt(attempt, [placement], {})
+
+    assert context["state"] == expected_state
+    assert context["failed_node"] == "node-failed"
+
+
+def test_retained_node_loss_outranks_exit_code_node():
+    start = datetime(2026, 10, 14, 10, 0, tzinfo=timezone.utc)
+    attempt = WorkloadAttempt(
+        workload_uid="workload-uid",
+        namespace="team-a",
+        workload_name="training-workload",
+        owner_kind="Job",
+        admission_key=start.isoformat(),
+        restart_attempt="0",
+        start_time=start,
+        end_time=datetime(2026, 10, 14, 11, 0, tzinfo=timezone.utc),
+        terminal=None,
+        open=True,
+        boundary_resolved=True,
+        pod_uids=frozenset({"lost-pod-uid", "exit-pod-uid"}),
+    )
+    placements = [
+        PlacementRecord(
+            namespace="team-a",
+            pod_name="lost-pod",
+            pod_uid="lost-pod-uid",
+            node_name="node-z",
+            observed_at=start.isoformat(),
+            node_failure_reason="NodeLost",
+        ),
+        PlacementRecord(
+            namespace="team-a",
+            pod_name="exit-pod",
+            pod_uid="exit-pod-uid",
+            node_name="node-a",
+            observed_at=start.isoformat(),
+            node_failure_reason="ExitCode:1",
+        ),
+    ]
+
+    context = _context_from_history_attempt(attempt, placements, {})
+
+    assert context["state"] == "NODE_FAIL"
+    assert context["failed_node"] == "node-z"
+
+
 def test_node_loss_pod_without_a_resolvable_node_name_still_reports_node_fail():
     """Regression: a verified member Pod can report NodeLost with no
     resolvable `spec.nodeName` (a relevant case for retained observations
