@@ -1134,6 +1134,59 @@ def test_never_admitted_history_does_not_invent_running_attempt():
     )
 
 
+def test_retained_attempt_suppresses_live_never_admitted_context(mocker):
+    start = datetime(2026, 10, 14, 10, 0, tzinfo=timezone.utc)
+    evicted = datetime(2026, 10, 14, 10, 30, tzinfo=timezone.utc)
+    attempt = WorkloadAttempt(
+        workload_uid="workload-uid",
+        namespace="team-a",
+        workload_name="training-workload",
+        owner_kind=None,
+        admission_key=start.isoformat(),
+        restart_attempt="0",
+        start_time=start,
+        end_time=evicted,
+        terminal={
+            "kind": "Workload",
+            "type": "Evicted",
+            "reason": "Preempted",
+            "time": evicted.isoformat(),
+        },
+        open=False,
+        boundary_resolved=True,
+        pod_uids=frozenset(),
+    )
+    workload = {
+        "metadata": {
+            "name": "training-workload",
+            "namespace": "team-a",
+            "uid": attempt.workload_uid,
+            "creationTimestamp": "2026-10-14T09:55:00Z",
+        },
+        "status": {
+            "conditions": [
+                _condition("Requeued", "2026-10-14T10:31:00Z"),
+            ]
+        },
+    }
+    adapter = KueueExecutionContextAdapter()
+    mocker.patch.object(adapter, "_fetch_pods_for", return_value=[])
+    mocker.patch.object(adapter, "_fetch_owner_jobs", return_value={})
+    mocker.patch.object(
+        adapter,
+        "_recover_pod_evidence_from_events",
+        return_value=([], []),
+    )
+
+    contexts = adapter._finalize(
+        [workload],
+        [_AttemptEvidence(attempts=[attempt])],
+    )
+
+    assert [context["attempt_id"] for context in contexts] == [attempt.attempt_id]
+    assert contexts[0]["state"] == "PREEMPTED"
+
+
 def test_live_then_retained_discovery_writes_one_execution_context(tmp_path):
     admitted = "2026-10-14T10:00:00Z"
     finished = "2026-10-14T11:00:00Z"

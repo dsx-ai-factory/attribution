@@ -1414,7 +1414,13 @@ class KueueExecutionContextAdapter:
                 retained_only.append(context)
             else:
                 parsed.append((workload, context))
-        parsed.extend(pending_contexts)
+        admitted_workload_uids = {context["workload_uid"] for context in retained_only}
+        admitted_workload_uids.update(context["workload_uid"] for _, context in parsed)
+        parsed.extend(
+            (workload, context)
+            for workload, context in pending_contexts
+            if context["workload_uid"] not in admitted_workload_uids
+        )
         self._merge_prometheus_placements_batched(parsed)
 
         missing = [
