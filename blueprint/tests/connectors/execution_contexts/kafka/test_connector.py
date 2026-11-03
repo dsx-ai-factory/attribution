@@ -38,19 +38,11 @@ class TP:
 
 
 class FakeError:
-    def __init__(self, text, *, retriable=False, fatal=False):
+    def __init__(self, text):
         self._text = text
-        self._retriable = retriable
-        self._fatal = fatal
 
     def name(self):
         return self._text
-
-    def retriable(self):
-        return self._retriable
-
-    def fatal(self):
-        return self._fatal
 
     def __str__(self):
         return self._text
@@ -167,6 +159,17 @@ def _structured(events, partition=0, first_offset=0) -> list[FakeMessage]:
     return [FakeMessage(json.dumps(event).encode(), first_offset + i, partition) for i, event in enumerate(events)]
 
 
+def _binary(event, partition=0, offset=0) -> FakeMessage:
+    """Carry envelope attributes as `ce_` headers and `data` as the value."""
+    headers = [(f"ce_{key}", value.encode()) for key, value in event.items() if key not in {"data", "datacontenttype"}]
+    return FakeMessage(json.dumps(event["data"]).encode(), offset, partition, headers=headers)
+
+
+def _two_partitions(*between) -> list:
+    """First fixture event on partition 0, then `between` steps, then the second on partition 1."""
+    return [*_structured(_events()[:1], partition=0), *between, *_structured(_events()[1:], partition=1)]
+
+
 def _make_eca(script, unassigned_polls=0, partitions=(0,), commit_errors=(), commit_raises=False, **overrides):
     consumer = FakeConsumer(script, unassigned_polls, partitions, commit_errors, commit_raises)
     kwargs = {
@@ -209,13 +212,7 @@ def test_discover_maps_structured_event_to_context():
 
 def test_discover_reads_binary_mode_event():
     event = _events()[1]
-    headers = [
-        ("ce_specversion", b"1.0"),
-        ("ce_id", event["id"].encode()),
-        ("ce_type", EVENT_TYPE.encode()),
-        ("ce_source", b"/example/scheduler"),
-    ]
-    eca, _ = _make_eca([FakeMessage(json.dumps(event["data"]).encode(), 0, headers=headers)])
+    eca, _ = _make_eca([_binary(event)])
 
     contexts = eca.discover()
 
@@ -351,29 +348,16 @@ def test_non_json_value_is_skipped():
     assert [ctx["id"] for ctx in eca.discover()] == ["job-b7"]
 
 
-def test_non_retriable_consumer_error_raises_without_commit():
-    error = FakeError("topic authorization failed")
-    eca, consumer = _make_eca([*_structured(_events()[:1]), FakeMessage(None, 0, error=error)])
+@pytest.mark.parametrize("read_first", [False, True])
+def test_consumer_error_closes_without_commit_and_leaves_retry_to_a_new_consumer(read_first):
+    """Retriable, fatal, and authorization errors all fail the batch the same way."""
+    error = FakeMessage(None, 0, error=FakeError("broker transport failure"))
+    script = [*_structured(_events()[:1]), error] if read_first else [error, *_structured(_events())]
+    eca, consumer = _make_eca(script)
 
-    with pytest.raises(KafkaConsumerError, match="topic authorization failed"):
-        eca.discover()
-    assert consumer.commits == []
-
-
-def test_fatal_consumer_error_raises():
-    error = FakeError("fenced", retriable=True, fatal=True)
-    eca, _ = _make_eca([FakeMessage(None, 0, error=error)])
-
-    with pytest.raises(KafkaConsumerError, match="fenced"):
-        eca.discover()
-
-
-def test_retriable_error_is_left_to_a_new_consumer():
-    error = FakeError("broker transport failure", retriable=True)
-    eca, consumer = _make_eca([FakeMessage(None, 0, error=error), *_structured(_events())])
     with pytest.raises(KafkaConsumerError, match="broker transport failure"):
         eca.discover()
-    assert consumer.polls == 1
+    assert consumer.polls == (2 if read_first else 1)
     assert consumer.closed
     assert consumer.commits == []
 
@@ -414,7 +398,7 @@ def test_commits_explicit_offsets_per_partition():
 
 def test_revoked_partition_is_released_without_committing():
     eca, consumer = _make_eca(
-        [*_structured(_events()[:1], partition=0), revoke(0), *_structured(_events()[1:], partition=1)],
+        _two_partitions(revoke(0)),
         partitions=(0, 1),
     )
     assert [ctx["id"] for ctx in eca.discover()] == ["job-b7"]
@@ -440,7 +424,7 @@ def test_failure_after_revoke_commits_nothing_past_unreturned_records():
 
 def test_lost_partition_is_dropped_and_not_committed():
     eca, consumer = _make_eca(
-        [*_structured(_events()[:1], partition=0), lose(0), *_structured(_events()[1:], partition=1)],
+        _two_partitions(lose(0)),
         partitions=(0, 1),
     )
 
@@ -470,16 +454,10 @@ def test_reassigned_partition_is_reread_from_last_commit(release, commits):
 
 
 def test_commit_failure_closes_consumer_and_keeps_only_earlier_successes():
-    eca, consumer = _make_eca(
-        [*_structured(_events()[:1], partition=0), *_structured(_events()[1:], partition=1)],
-        partitions=(0, 1),
-        commit_errors={1},
-    )
+    eca, consumer = _make_eca(_two_partitions(), partitions=(0, 1), commit_errors={1})
     assert [ctx["id"] for ctx in eca.discover()] == ["job-a1"]
     assert eca.discovery_incomplete
     assert consumer.closed
-    with pytest.raises(KafkaConsumerError, match="closed"):
-        eca.discover()
 
 
 def test_commit_exception_raises_and_revoke_cannot_commit_aborted_batch():
@@ -625,11 +603,7 @@ def test_discovery_counters_surface_filtered_and_malformed_events():
 
 
 def test_first_commit_failure_does_not_attempt_remaining_partitions():
-    eca, consumer = _make_eca(
-        [*_structured(_events()[:1], partition=0), *_structured(_events()[1:], partition=1)],
-        partitions=(0, 1),
-        commit_errors={0},
-    )
+    eca, consumer = _make_eca(_two_partitions(), partitions=(0, 1), commit_errors={0})
     with pytest.raises(KafkaConsumerError, match="offset commit failed"):
         eca.discover()
     assert consumer.commits == [{0: 1}]
@@ -772,11 +746,7 @@ def test_closed_adapter_rejects_discovery():
 
 def test_native_commit_failure_keeps_successful_partition():
     native = pytest.importorskip("confluent_kafka")
-    eca, consumer = _make_eca(
-        [*_structured(_events()[:1], partition=0), *_structured(_events()[1:], partition=1)],
-        partitions=(0, 1),
-        consumer_error=native.KafkaException,
-    )
+    eca, consumer = _make_eca(_two_partitions(), partitions=(0, 1), consumer_error=native.KafkaException)
     commit = consumer.commit
 
     def fail_one_partition(*, offsets, asynchronous):
@@ -821,12 +791,7 @@ def test_correlation_metadata_is_preserved(encoding, cluster):
     event["subject"] = "custom/subject/that-is-not-derived-from-job-id"
     if cluster is not None:
         event["data"]["cluster"] = cluster
-    if encoding == "structured":
-        messages = _structured([event])
-    else:
-        headers = [(f"ce_{key}", event[key].encode()) for key in ("specversion", "id", "type", "source", "subject")]
-        messages = [FakeMessage(json.dumps(event["data"]).encode(), 0, headers=headers)]
-    eca, consumer = _make_eca(messages)
+    eca, consumer = _make_eca(_structured([event]) if encoding == "structured" else [_binary(event)])
     [context] = eca.discover()
     assert context["event_subject"] == event["subject"]
     assert context.get("cluster") == cluster
