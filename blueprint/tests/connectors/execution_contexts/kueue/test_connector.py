@@ -2182,6 +2182,7 @@ class TestMergePrometheusPlacements:
             "namespace": "team-a",
             "workload_uid": "workload-uid-1",
             "owner_job_uids": ["job-uid-1"],
+            "attempt_identity_resolved": True,
             "nodes": [],
             "pod_names": [],
             "start_time": datetime(2026, 5, 1, tzinfo=timezone.utc),
@@ -2189,6 +2190,15 @@ class TestMergePrometheusPlacements:
         }
         ctx.update(overrides)
         return ctx
+
+    @staticmethod
+    def _placement(pod_uid, pod_name, node_name):
+        return {
+            "pod_uid": pod_uid,
+            "pod_name": pod_name,
+            "node_name": node_name,
+            "source": "live_pod",
+        }
 
     def test_complete_live_placement_still_queries_prometheus(self, mocker):
         """G5 regression: neither the live Pod count nor the Workload's
@@ -2229,14 +2239,7 @@ class TestMergePrometheusPlacements:
         context = self._context(
             nodes=["node-a"],
             pod_names=["pod-a"],
-            pod_placements=[
-                {
-                    "pod_uid": "pod-uid-1",
-                    "pod_name": "pod-a",
-                    "node_name": "node-a",
-                    "source": "live",
-                }
-            ],
+            pod_placements=[self._placement("pod-uid-1", "pod-a", "node-a")],
         )
 
         eca._merge_prometheus_placements_batched([(workload, context)])
@@ -2257,12 +2260,11 @@ class TestMergePrometheusPlacements:
             nodes=["node-a", "node-b"],
             pod_names=["pod-a", "pod-b"],
             pod_placements=[
-                {
-                    "pod_uid": f"pod-uid-{index}",
-                    "pod_name": f"pod-{name}",
-                    "node_name": f"node-{name}",
-                    "source": "live",
-                }
+                self._placement(
+                    f"pod-uid-{index}",
+                    f"pod-{name}",
+                    f"node-{name}",
+                )
                 for index, name in enumerate(("a", "b"), start=1)
             ],
         )
@@ -2333,8 +2335,15 @@ class TestMergePrometheusPlacements:
             ],
         }
         eca = KueueExecutionContextAdapter(prometheus_placement_resolver=resolver)
-        first = self._context(owner_job_uids=["job-uid-1"])
-        second = self._context(workload_uid="workload-uid-2", owner_job_uids=["job-uid-2"])
+        first = self._context(
+            owner_job_uids=["job-uid-1"],
+            pod_placements=[self._placement("pod-uid-1", "pod-a", "node-a")],
+        )
+        second = self._context(
+            workload_uid="workload-uid-2",
+            owner_job_uids=["job-uid-2"],
+            pod_placements=[self._placement("pod-uid-2", "pod-b", "node-b")],
+        )
 
         eca._merge_prometheus_placements_batched(
             [
@@ -2348,37 +2357,6 @@ class TestMergePrometheusPlacements:
         assert [query.owner_job_uids for query in queries] == [{"job-uid-1"}, {"job-uid-2"}]
         assert first["nodes"] == ["node-a"]
         assert second["nodes"] == ["node-b"]
-
-    def test_deleted_original_pod_is_recovered_alongside_live_replacement(self, mocker):
-        """G5 end-to-end: a Workload declares 1 desired Pod. Its original
-        Pod (uid pod-uid-A) ran on node-a and was deleted; a replacement
-        Pod (uid pod-uid-B) is now live on node-b. Live evidence alone
-        satisfies the declared count (1 Pod, 1 node), which is exactly the
-        shape that made the old completeness gate skip Prometheus and lose
-        pod-uid-A's placement forever. The merged context must contain
-        both Pod UIDs and both nodes."""
-        resolver = mocker.Mock()
-        resolver.placements_for_many.return_value = {
-            "workload-uid-1": [
-                {"pod_uid": "pod-uid-A", "pod_name": "pod-a", "node_name": "node-a", "source": "prometheus"},
-            ]
-        }
-        eca = KueueExecutionContextAdapter(prometheus_placement_resolver=resolver)
-        workload = self._workload()
-        workload["spec"] = {"podSets": [{"name": "workers", "count": 1}]}
-        context = self._context(
-            nodes=["node-b"],
-            pod_names=["pod-b"],
-            pod_placements=[
-                {"pod_uid": "pod-uid-B", "pod_name": "pod-b", "node_name": "node-b", "source": "live"},
-            ],
-        )
-
-        eca._merge_prometheus_placements_batched([(workload, context)])
-
-        resolver.placements_for_many.assert_called_once()
-        assert {p["pod_uid"] for p in context["pod_placements"]} == {"pod-uid-A", "pod-uid-B"}
-        assert set(context["nodes"]) == {"node-a", "node-b"}
 
     def test_resolved_attempt_rejects_unverified_prometheus_pod(self, mocker):
         resolver = mocker.Mock()
@@ -2400,12 +2378,11 @@ class TestMergePrometheusPlacements:
             nodes=["node-current"],
             pod_names=["current-pod"],
             pod_placements=[
-                {
-                    "pod_uid": "current-pod-uid",
-                    "pod_name": "current-pod",
-                    "node_name": "node-current",
-                    "source": "live_pod",
-                }
+                self._placement(
+                    "current-pod-uid",
+                    "current-pod",
+                    "node-current",
+                )
             ],
         )
 

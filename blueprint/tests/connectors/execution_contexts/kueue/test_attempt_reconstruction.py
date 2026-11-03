@@ -135,6 +135,26 @@ def _observation(
     )
 
 
+def _placement(
+    pod_uid: str,
+    node_name: str,
+    *,
+    node_failure_reason: str | None = None,
+    scheduled_at: str | None = None,
+    owner_references: tuple[ResourceIdentity, ...] = (),
+) -> PlacementRecord:
+    return PlacementRecord(
+        namespace="team-a",
+        pod_name=f"{pod_uid}-pod",
+        pod_uid=pod_uid,
+        node_name=node_name,
+        observed_at="2026-10-14T10:05:00Z",
+        scheduled_at=scheduled_at,
+        node_failure_reason=node_failure_reason,
+        owner_references=owner_references,
+    )
+
+
 def _condition(
     condition_type: str,
     transition: str,
@@ -1351,12 +1371,9 @@ def test_retained_node_loss_placement_restores_failed_node():
         boundary_resolved=True,
         pod_uids=frozenset({"failed-pod-uid"}),
     )
-    placement = PlacementRecord(
-        namespace="team-a",
-        pod_name="failed-pod",
-        pod_uid="failed-pod-uid",
-        node_name="node-failed",
-        observed_at=start.isoformat(),
+    placement = _placement(
+        "failed-pod-uid",
+        "node-failed",
         node_failure_reason="NodeLost",
     )
 
@@ -1413,12 +1430,9 @@ def test_retained_node_loss_preserves_terminal_precedence(
         boundary_resolved=True,
         pod_uids=frozenset({"pod-uid"}),
     )
-    placement = PlacementRecord(
-        namespace="team-a",
-        pod_name="failed-pod",
-        pod_uid="pod-uid",
-        node_name="node-failed",
-        observed_at=start.isoformat(),
+    placement = _placement(
+        "pod-uid",
+        "node-failed",
         node_failure_reason="NodeLost",
     )
 
@@ -1445,20 +1459,14 @@ def test_retained_node_loss_outranks_exit_code_node():
         pod_uids=frozenset({"lost-pod-uid", "exit-pod-uid"}),
     )
     placements = [
-        PlacementRecord(
-            namespace="team-a",
-            pod_name="lost-pod",
-            pod_uid="lost-pod-uid",
-            node_name="node-z",
-            observed_at=start.isoformat(),
+        _placement(
+            "lost-pod-uid",
+            "node-z",
             node_failure_reason="NodeLost",
         ),
-        PlacementRecord(
-            namespace="team-a",
-            pod_name="exit-pod",
-            pod_uid="exit-pod-uid",
-            node_name="node-a",
-            observed_at=start.isoformat(),
+        _placement(
+            "exit-pod-uid",
+            "node-a",
             node_failure_reason="ExitCode:1",
         ),
     ]
@@ -1469,7 +1477,8 @@ def test_retained_node_loss_outranks_exit_code_node():
     assert context["failed_node"] == "node-z"
 
 
-def test_node_loss_pod_without_a_resolvable_node_name_still_reports_node_fail():
+@pytest.mark.parametrize("retained", [False, True], ids=["live", "retained"])
+def test_node_loss_without_a_resolvable_node_name_reports_node_fail(retained):
     """Regression: a verified member Pod can report NodeLost with no
     resolvable `spec.nodeName` (a relevant case for retained observations
     that selected the failure reason but not the node binding). That must
@@ -1505,47 +1514,27 @@ def test_node_loss_pod_without_a_resolvable_node_name_still_reports_node_fail():
         "status": {"reason": "NodeLost"},
     }
 
-    context = _context_from_live_resources(
-        workload,
-        [pod_without_node_name],
-        datetime(2026, 10, 14, 11, tzinfo=timezone.utc),
-    )
-
-    assert context["state"] == "NODE_FAIL"
-
-
-def test_retained_node_loss_without_selector_or_placement_reports_node_fail():
-    start = datetime(2026, 10, 14, 10, 0, tzinfo=timezone.utc)
-    attempt = WorkloadAttempt(
-        workload_uid="workload-uid",
-        namespace="team-a",
-        workload_name="training-workload",
-        owner_kind="Job",
-        admission_key=start.isoformat(),
-        restart_attempt="0",
-        start_time=start,
-        end_time=datetime(2026, 10, 14, 11, 0, tzinfo=timezone.utc),
-        terminal=None,
-        open=True,
-        boundary_resolved=True,
-        pod_uids=frozenset({"pod-uid"}),
-    )
-    retained_pod = {
-        "metadata": {
-            "name": "failed-pod",
-            "namespace": "team-a",
-            "uid": "pod-uid",
-        },
-        "spec": {},
-        "status": {"reason": "NodeLost"},
-    }
-    evidence = _AttemptEvidence(
-        attempts=[attempt],
-        pods={"pod-uid": retained_pod},
-        retained_coverage=[{}],
-    )
-
-    context = _context_from_attempt_evidence(evidence)
+    now = datetime(2026, 10, 14, 11, tzinfo=timezone.utc)
+    if retained:
+        [attempt] = attempts_from_live_resources(
+            workload,
+            [pod_without_node_name],
+            [],
+            now=now,
+        )
+        context = _context_from_attempt_evidence(
+            _AttemptEvidence(
+                attempts=[attempt],
+                pods={"pod-uid": pod_without_node_name},
+                retained_coverage=[{}],
+            )
+        )
+    else:
+        context = _context_from_live_resources(
+            workload,
+            [pod_without_node_name],
+            now,
+        )
 
     assert context["state"] == "NODE_FAIL"
     assert context["nodes"] == []
@@ -1725,10 +1714,11 @@ def test_retained_terminal_and_timeout_specificity_beat_stale_live_state():
     ("scheduled_at", "accepted"),
     [
         ("2026-10-14T10:30:00Z", True),
+        ("2026-10-14T09:30:00Z", False),
         (None, False),
     ],
 )
-def test_deleted_current_placement_requires_scheduled_at(
+def test_deleted_placement_requires_attempt_scheduling_evidence(
     scheduled_at,
     accepted,
 ):
@@ -1761,12 +1751,9 @@ def test_deleted_current_placement_requires_scheduled_at(
         "training",
         "job-uid",
     )
-    placement = PlacementRecord(
-        namespace="team-a",
-        pod_name="deleted-pod",
-        pod_uid="deleted-pod-uid",
-        node_name="node-deleted",
-        observed_at="2026-10-14T10:40:00Z",
+    placement = _placement(
+        "deleted-pod-uid",
+        "node-deleted",
         scheduled_at=scheduled_at,
         owner_references=(owner,),
     )
