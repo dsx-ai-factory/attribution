@@ -206,12 +206,17 @@ def _placements_for_observations(
     evidence_store: PlacementStore,
     observations: list[ResourceObservation],
 ) -> list[dict]:
+    pod_uids = sorted(
+        {
+            observation.uid
+            for observation in observations
+            if observation.kind == "Pod"
+        }
+    )
     records = {
         record.pod_uid: record
-        for observation in observations
-        if observation.kind == "Pod"
-        and (record := evidence_store.get_by_pod_uid(observation.uid))
-        is not None
+        for pod_uid in pod_uids
+        if (record := evidence_store.get_by_pod_uid(pod_uid)) is not None
     }
     return [
         records[pod_uid].to_resource()

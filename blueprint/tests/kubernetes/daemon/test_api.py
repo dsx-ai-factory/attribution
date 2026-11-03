@@ -12,7 +12,10 @@ from attribution_blueprint.kubernetes.daemon.models import (
     ResourceIdentity,
     ResourceObservation,
 )
-from attribution_blueprint.kubernetes.daemon.server import serve_api
+from attribution_blueprint.kubernetes.daemon.server import (
+    _placements_for_observations,
+    serve_api,
+)
 from attribution_blueprint.kubernetes.daemon.sqlite_store import SQLitePlacementStore
 
 
@@ -43,6 +46,43 @@ def _capture(store: SQLitePlacementStore, observation: ResourceObservation) -> N
         placement=None,
         advance_checkpoint=False,
     )
+
+
+def test_history_placement_lookup_deduplicates_pod_versions(mocker):
+    observations = [
+        ResourceObservation(
+            cluster_id="cluster-a",
+            api_version="v1",
+            kind="Pod",
+            namespace="team-a",
+            name="trainer-0",
+            uid="pod-uid-1",
+            resource_version=resource_version,
+            event_type="MODIFIED",
+            observed_at="2026-10-14T00:00:00Z",
+        )
+        for resource_version in ("1", "2")
+    ]
+    observations.append(
+        ResourceObservation(
+            cluster_id="cluster-a",
+            api_version="batch/v1",
+            kind="Job",
+            namespace="team-a",
+            name="trainer",
+            uid="job-uid-1",
+            resource_version="1",
+            event_type="MODIFIED",
+            observed_at="2026-10-14T00:00:00Z",
+        )
+    )
+    store = mocker.Mock()
+    store.get_by_pod_uid.return_value = _record()
+
+    assert _placements_for_observations(store, observations) == [
+        _record().to_resource()
+    ]
+    store.get_by_pod_uid.assert_called_once_with("pod-uid-1")
 
 
 def test_placement_endpoint_queries_associated_resource(tmp_path):
