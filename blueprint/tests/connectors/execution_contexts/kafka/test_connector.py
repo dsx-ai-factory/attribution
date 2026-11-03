@@ -102,7 +102,6 @@ class FakeConsumer:
         self._commit_raises = commit_raises
         self.polls = 0
         self.commits = []
-        self.seeks = []
         self.closed = False
 
     def subscribe(self, topics, *, on_revoke, on_lost):
@@ -142,10 +141,6 @@ class FakeConsumer:
         assert timeout > 0
         assert cached is False
         return 0, self._highs.get(tp.partition, 0)
-
-    def seek(self, tp):
-        self._positions[tp.partition] = tp.offset
-        self.seeks.append((tp.partition, tp.offset))
 
     def close(self):
         assert not self.closed, "consumer closed twice"
@@ -330,19 +325,13 @@ def test_fatal_consumer_error_raises():
         eca.discover()
 
 
-def test_retriable_consumer_errors_are_retried():
+def test_retriable_error_is_left_to_a_new_consumer():
     error = FakeError("broker transport failure", retriable=True)
-    eca, _ = _make_eca([FakeMessage(None, 0, error=error), *_structured(_events())])
-
-    assert [ctx["id"] for ctx in eca.discover()] == ["job-a1", "job-b7"]
-
-
-def test_retriable_consumer_errors_are_bounded():
-    error = FakeError("broker transport failure", retriable=True)
-    eca, consumer = _make_eca([FakeMessage(None, 0, error=error)] * 3, max_transient_errors=2)
-
+    eca, consumer = _make_eca([FakeMessage(None, 0, error=error), *_structured(_events())])
     with pytest.raises(KafkaConsumerError, match="broker transport failure"):
         eca.discover()
+    assert consumer.polls == 1
+    assert consumer.closed
     assert consumer.commits == []
 
 
@@ -359,12 +348,15 @@ def test_discover_polls_again_when_assignment_completes_on_empty_poll():
     assert consumer.commits == [{0: 2}]
 
 
-def test_discover_raises_when_never_assigned():
-    eca, consumer = _make_eca([], unassigned_polls=10**9, assignment_timeout_seconds=0)
-
-    with pytest.raises(KafkaConsumerError, match="no partitions assigned"):
+def test_discover_raises_when_never_assigned(monkeypatch):
+    eca, consumer = _make_eca([], unassigned_polls=10**9, discovery_timeout_seconds=1)
+    tick = iter(range(100))
+    monkeypatch.setattr(
+        "attribution_blueprint.connectors.execution_contexts.kafka.connector.time.monotonic", lambda: next(tick)
+    )
+    with pytest.raises(KafkaConsumerError, match="assignment or unread records"):
         eca.discover()
-    assert consumer.polls == 1
+    assert consumer.closed
 
 
 def test_commits_explicit_offsets_per_partition():
@@ -377,18 +369,13 @@ def test_commits_explicit_offsets_per_partition():
     assert consumer.commits == [{0: 8}, {1: 1}]
 
 
-def test_revoked_partition_is_released_with_a_bookmark_commit():
-    # The revoked partition's contexts are not returned; its first unreturned
-    # offset is committed so the next owner starts there, even for a new
-    # group whose reset policy is `latest`.
+def test_revoked_partition_is_released_without_committing():
     eca, consumer = _make_eca(
         [*_structured(_events()[:1], partition=0), revoke(0), *_structured(_events()[1:], partition=1)],
         partitions=(0, 1),
     )
-
     assert [ctx["id"] for ctx in eca.discover()] == ["job-b7"]
-    assert consumer.commits == [{0: 0}, {1: 1}]
-    assert consumer.seeks == []  # no longer owned; the new owner rereads it
+    assert consumer.commits == [{1: 1}]
 
 
 def test_failure_after_revoke_commits_nothing_past_unreturned_records():
@@ -405,40 +392,7 @@ def test_failure_after_revoke_commits_nothing_past_unreturned_records():
 
     with pytest.raises(KafkaConsumerError, match="topic authorization failed"):
         eca.discover()
-    assert consumer.commits == [{0: 4}]
-
-
-def test_failed_bookmark_commit_marks_discovery_incomplete():
-    # The revoked records are still reread by the next owner, but without the
-    # bookmark a new `latest` group could skip them, so the run must not look
-    # complete.
-    eca, consumer = _make_eca(
-        [*_structured(_events()[:1], partition=0), revoke(0), *_structured(_events()[1:], partition=1)],
-        partitions=(0, 1),
-        commit_errors={0},
-    )
-
-    assert [ctx["id"] for ctx in eca.discover()] == ["job-b7"]
-    assert eca.discovery_incomplete is True
-    assert eca.last_discovery_stats["commit_failed_partitions"] == 1
-
-
-def test_bookmark_partition_error_result_marks_discovery_incomplete():
-    eca, consumer = _make_eca(
-        [*_structured(_events()[:1], partition=0), revoke(0), *_structured(_events()[1:], partition=1)],
-        partitions=(0, 1),
-    )
-    commit = consumer.commit
-
-    def commit_with_partition_error(*, offsets, asynchronous):
-        if offsets[0].partition == 0:
-            return [TP(TOPIC, 0, offsets[0].offset, error="not coordinator")]
-        return commit(offsets=offsets, asynchronous=asynchronous)
-
-    consumer.commit = commit_with_partition_error
-
-    assert [ctx["id"] for ctx in eca.discover()] == ["job-b7"]
-    assert eca.discovery_incomplete is True
+    assert consumer.commits == []
 
 
 def test_lost_partition_is_dropped_and_not_committed():
@@ -451,7 +405,7 @@ def test_lost_partition_is_dropped_and_not_committed():
     assert consumer.commits == [{1: 1}]
 
 
-@pytest.mark.parametrize("release, commits", [(lose, [{0: 5}]), (revoke, [{0: 4}, {0: 5}])])
+@pytest.mark.parametrize("release, commits", [(lose, [{0: 5}]), (revoke, [{0: 5}])])
 def test_reassigned_partition_is_reread_from_last_commit(release, commits):
     # An eager rebalance revokes every partition and may hand one back; the
     # consumer then fetches it again from the last commit.
@@ -469,19 +423,20 @@ def test_reassigned_partition_is_reread_from_last_commit(release, commits):
 
     assert [ctx["id"] for ctx in eca.discover()] == ["job-a1"]
     assert consumer.commits == commits
-    assert consumer.seeks == []
     assert eca.last_discovery_stats["duplicates"] == 0
 
 
-def test_partial_commit_failure_drops_and_rewinds_that_partition():
+def test_commit_failure_closes_consumer_and_keeps_only_earlier_successes():
     eca, consumer = _make_eca(
-        [*_structured(_events()[:1], partition=0, first_offset=3), *_structured(_events()[1:], partition=1)],
+        [*_structured(_events()[:1], partition=0), *_structured(_events()[1:], partition=1)],
         partitions=(0, 1),
-        commit_errors={0},
+        commit_errors={1},
     )
-
-    assert [ctx["id"] for ctx in eca.discover()] == ["job-b7"]
-    assert consumer.seeks == [(0, 3)]
+    assert [ctx["id"] for ctx in eca.discover()] == ["job-a1"]
+    assert eca.discovery_incomplete
+    assert consumer.closed
+    with pytest.raises(KafkaConsumerError, match="closed"):
+        eca.discover()
 
 
 def test_commit_exception_raises_and_revoke_cannot_commit_aborted_batch():
@@ -489,7 +444,6 @@ def test_commit_exception_raises_and_revoke_cannot_commit_aborted_batch():
 
     with pytest.raises(KafkaConsumerError, match="offset commit failed"):
         eca.discover()
-    assert consumer.seeks == [(0, 0)]
 
     consumer._commit_raises = False
     # Invoke the callback the real Kafka consumer calls during close.
@@ -552,19 +506,10 @@ def test_consumer_closed_when_adapter_is_collected():
     assert consumer.closed
 
 
-@pytest.mark.parametrize(
-    "field,value",
-    [
-        ("max_messages", 0),
-        ("poll_timeout_seconds", 0),
-        ("assignment_timeout_seconds", -1),
-        ("fetch_timeout_seconds", 0),
-        ("max_transient_errors", -1),
-    ],
-)
-def test_constructor_rejects_non_positive_limits(field, value):
+@pytest.mark.parametrize("field", ["max_messages", "poll_timeout_seconds", "discovery_timeout_seconds"])
+def test_constructor_rejects_non_positive_limits(field):
     with pytest.raises(ValueError, match=field):
-        _make_eca([], **{field: value})
+        _make_eca([], **{field: 0})
 
 
 def test_build_requires_connection_keys():
@@ -607,7 +552,7 @@ def test_empty_polls_do_not_end_discovery_before_partition_end():
 
 
 def test_unread_partition_times_out_instead_of_returning_empty(monkeypatch):
-    eca, consumer = _make_eca([], fetch_timeout_seconds=0.01)
+    eca, consumer = _make_eca([], discovery_timeout_seconds=0.01)
     consumer._highs[0] = 1
     tick = iter(range(1000))
     monkeypatch.setattr(
@@ -635,17 +580,17 @@ def test_discovery_counters_surface_filtered_and_malformed_events():
     assert consumer.commits == [{0: 2}]
 
 
-def test_partial_commit_failure_is_reported_but_keeps_successful_contexts():
+def test_first_commit_failure_does_not_attempt_remaining_partitions():
     eca, consumer = _make_eca(
         [*_structured(_events()[:1], partition=0), *_structured(_events()[1:], partition=1)],
         partitions=(0, 1),
         commit_errors={0},
     )
-
-    assert [ctx["id"] for ctx in eca.discover()] == ["job-b7"]
-    assert consumer.commits == [{0: 1}, {1: 1}]
+    with pytest.raises(KafkaConsumerError, match="offset commit failed"):
+        eca.discover()
+    assert consumer.commits == [{0: 1}]
+    assert consumer.closed
     assert eca.last_discovery_stats["commit_failed_partitions"] == 1
-    assert eca.discovery_incomplete is True
 
 
 def test_discovery_counters_reset_between_batches():
@@ -734,56 +679,31 @@ def test_unexpected_client_bug_is_reraised_instead_of_treated_as_kafka_failure(o
     assert caught.value is bug
     assert eca.discovery_incomplete is True
     assert consumer.commits == []
-    if operation != "poll":
-        assert consumer.seeks == [(0, 0)]
+    assert consumer.closed
 
 
 def test_unexpected_parser_bug_does_not_commit_or_become_malformed(monkeypatch):
     eca, consumer = _make_eca(_structured(_events()))
 
-    def broken(message):
+    def broken(*args, **kwargs):
         raise TypeError("unexpected parser bug")
 
-    monkeypatch.setattr(eca, "_parse_message", broken)
+    monkeypatch.setattr(
+        "attribution_blueprint.connectors.execution_contexts.kafka.connector._context_from_data", broken
+    )
     with pytest.raises(TypeError, match="unexpected parser bug"):
         eca.discover()
     assert consumer.commits == []
-    assert consumer.seeks == [(0, 0)]
     assert eca.last_discovery_stats["malformed"] == 0
 
 
-def test_failed_rewind_returns_successful_partition_and_prevents_consumer_reuse():
-    eca, consumer = _make_eca(
-        [*_structured(_events()[:1], partition=0), *_structured(_events()[1:], partition=1)],
-        partitions=(0, 1),
-        commit_errors={0},
-    )
-
-    def failed_seek(partition):
-        raise KafkaConsumerError("injected seek failure")
-
-    consumer.seek = failed_seek
-    assert [ctx["id"] for ctx in eca.discover()] == ["job-b7"]
-    assert consumer.closed
-    assert eca.discovery_incomplete is True
-    assert eca.last_discovery_stats["returned"] == 1
-    with pytest.raises(KafkaConsumerError, match="closed"):
-        eca.discover()
-    eca.close()  # Safe even after recovery already closed the consumer.
-
-
-def test_failed_abort_cleanup_keeps_original_failure_and_cannot_commit_on_close():
+def test_close_failure_preserves_original_read_error():
     eca, consumer = _make_eca(
         [
             *_structured(_events()[:1]),
             FakeMessage(None, 1, error=FakeError("authorization failed")),
         ]
     )
-
-    def failed_seek(partition):
-        raise KafkaConsumerError("injected seek failure")
-
-    consumer.seek = failed_seek
     original_close = eca.close
 
     def close():
@@ -815,17 +735,16 @@ def test_native_commit_failure_keeps_successful_partition():
     commit = consumer.commit
 
     def fail_one_partition(*, offsets, asynchronous):
-        if offsets[0].partition == 0:
+        if offsets[0].partition == 1:
             raise native.KafkaException(native.KafkaError(native.KafkaError._TIMED_OUT))
         return commit(offsets=offsets, asynchronous=asynchronous)
 
     consumer.commit = fail_one_partition
-    assert [ctx["id"] for ctx in eca.discover()] == ["job-b7"]
-    assert consumer.seeks == [(0, 0)]
+    assert [ctx["id"] for ctx in eca.discover()] == ["job-a1"]
     assert eca.discovery_incomplete is True
 
 
-def test_native_poll_failure_rewinds_and_propagates_original_error():
+def test_native_poll_failure_closes_and_propagates_original_error():
     native = pytest.importorskip("confluent_kafka")
     error = native.KafkaException(native.KafkaError(native.KafkaError._TRANSPORT))
 
@@ -840,4 +759,11 @@ def test_native_poll_failure_rewinds_and_propagates_original_error():
         eca.discover()
     assert caught.value is error
     assert consumer.commits == []
-    assert consumer.seeks == [(0, 0)]
+
+
+def test_build_rejects_latest_before_opening_consumer():
+    with pytest.raises(MCAError, match="supports only auto_offset_reset=earliest"):
+        build_kafka(
+            {"bootstrap_servers": "localhost:9092", "topic": TOPIC, "group_id": "test", "auto_offset_reset": "latest"},
+            {},
+        )

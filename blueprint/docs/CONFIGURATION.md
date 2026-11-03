@@ -517,55 +517,40 @@ treats the scheduler as unknown.
 
 ### `[eca.kafka]`
 
-Reads job-completion CloudEvents from a Kafka topic instead of querying a
-scheduler. Each run resumes from its `group_id`'s committed offsets; a new
-group starts according to `auto_offset_reset`. Install the `kafka` extra
-(`confluent-kafka`).
+Reads job-completion CloudEvents from a Kafka topic. Install the `kafka` extra
+(`confluent-kafka`). Each call reads at most `max_messages`, and the complete
+read (assignment and fetching included) is bounded by `discovery_timeout_seconds`.
+An empty poll ends discovery only when all assigned partitions have reached
+broker end offsets. `poll_timeout_seconds` controls individual polls.
 
-Delivery is best effort. Offsets are committed when discovery returns, before
-attribution runs, so an event is lost if its attribution then fails (for
-example, the service is unreachable) or the process dies mid-run. To replay,
-reset the group's offsets with your Kafka tooling.
+Consumer auto-commit is disabled. Each group resumes its committed offsets;
+a new group starts at `earliest`. `latest` is rejected: replaying an unfinished
+batch across a rebalance would require extra assignment checkpointing.
+Revoked/lost partitions' uncommitted contexts are dropped and replayed by the
+next owner. Rebalance callbacks never commit offsets.
 
-Offsets are committed only for events a discovery call finished handling:
-returned for attribution, or skipped as filtered, malformed or duplicate.
-Skipped events are not replayed. During a rebalance, revoked and lost
-partitions' events are removed from the batch and the partition's next owner,
-possibly the same consumer, rereads them. A revoked partition commits its first
-unfinished offset as the next owner's starting point. A lost partition (the
-consumer missed its session timeout) cannot be committed; with
-`auto_offset_reset = "latest"` and no earlier commit for the group, its unread
-events can be skipped.
+Kafka handles connection retries internally. The adapter does not retry reported
+consumer errors, seek partitions, or repair a failed consumer. A read/timeout
+failure closes the consumer and raises. Create a new adapter to retry from
+Kafka's committed offsets. Successful calls can reuse the adapter.
 
-Each partition is committed independently because the native Kafka client can
-raise on a mixed commit after other partitions have already committed. Failed
-partitions' contexts are dropped and still-owned partitions are rewound to their
-first uncommitted record. A commit error may mean the broker applied the offset
-but its reply was lost; redelivery after restart is therefore not guaranteed.
-Failed discovery calls clear pending commits before cleanup and rewind
-still-owned uncommitted records, allowing the same adapter to retry without
-skipping them.
+Each partition commits independently, because a mixed-partition commit can
+partially succeed before raising. At the first commit failure the adapter
+closes the consumer and returns only contexts whose commits already succeeded,
+with `discovery_incomplete = true`; if there are none it raises. A failed
+commit's broker outcome can be uncertain, so replay is not guaranteed.
 
-A single empty poll does not mean the topic is drained. Discovery compares
-consumer positions and partition EOF notifications with broker end offsets for
-every assigned partition, including consumers already at their committed end. It waits
-up to `fetch_timeout_seconds` without progress while unread records remain.
-`poll_timeout_seconds` only controls individual polls. Failure to query the end
-offsets, exhausted assignment/fetch waits, fatal or non-retriable consumer errors,
-and more than `max_transient_errors` retriable errors fail discovery.
+Delivery is best effort: commits happen before attribution. A later attribution
+or output failure does not automatically replay the event. Reset group offsets
+with Kafka tooling to replay; deferred acknowledgment is separate work.
 
-Every call logs a discovery summary. The adapter exposes `last_discovery_stats`
-with `consumed`, `accepted`, `filtered`, `malformed`, `duplicates`, `returned`,
-`commit_failed_partitions`, and `dropped_partitions` counts, plus
-`last_unmatched_event_types` containing filtered type counts. Filtered events are
-still committed; their types and counts are logged as a warning. The CLI exits 1
-when a nonempty batch has filtered events but no accepted events, so a schema/type
-change cannot silently appear successful. Mixed batches still process accepted
-events and show the filter counts. If any partition commit fails, successfully
-committed contexts are processed but the CLI exits 1; if none can be returned,
-discovery raises. A revoked partition whose starting-point commit fails is also
-counted in `commit_failed_partitions` and makes the CLI exit 1. Library callers can inspect `discovery_incomplete` to detect
-these conditions. Diagnostics reset at the beginning of each discovery call.
+Malformed, filtered, and within-batch duplicate events are intentional skips
+and their offsets commit too. Each call logs counts in `last_discovery_stats`
+(`consumed`, `accepted`, `filtered`, `malformed`, `duplicates`, `returned`,
+`commit_failed_partitions`, `dropped_partitions`). Filtered event types and their
+counts appear in `last_unmatched_event_types`. The CLI exits 1 on a filtered-only
+batch or commit failure, including when it processes a committed subset.
+Unexpected exceptions propagate; they are not classified as invalid events.
 
 The event `data` object uses ExecutionContext field names: `id`, `start_time`,
 `end_time` (with UTC offset) and a non-empty `nodes` list are required;
@@ -600,15 +585,13 @@ sasl_password_env = "KAFKA_PASSWORD"
 | `bootstrap_servers`          | Yes               | none        | Comma-separated `host:port` list.                                                        |
 | `topic`                      | Yes               | none        | Topic carrying the completion events.                                                    |
 | `group_id`                   | Yes               | none        | Consumer group. Offsets are tracked per group.                                           |
-| `auto_offset_reset`          | No                | `earliest`  | Where a new group starts: `earliest` or `latest`.                                        |
+| `auto_offset_reset`          | No                | `earliest`  | Only `earliest` is supported. |
 | `event_types`                | No                | all types   | CloudEvent `type` values to accept.                                                      |
 | `scheduler`                  | No                | `kafka`     | Scheduler identity for events whose data has no `scheduler`.                             |
 | `workload_type`              | No                | empty       | Workload type sent to the service.                                                       |
 | `max_messages`               | No                | `500`       | Maximum messages read per run.                                                           |
 | `poll_timeout_seconds`       | No                | `5`         | Timeout for an individual poll; end offsets determine whether the batch is drained.      |
-| `assignment_timeout_seconds` | No                | `60`        | Maximum unassigned wait before the run fails; exceeds the default 45 s session timeout.  |
-| `fetch_timeout_seconds`      | No                | `60`        | Maximum wait without progress while assigned partitions still have unread records.       |
-| `max_transient_errors`       | No                | `3`         | Retriable consumer errors tolerated per run before it fails.                             |
+| `discovery_timeout_seconds` | No | `60` | Maximum time for the complete discovery read, including assignment and fetching. |
 | `security_protocol`          | No                | `PLAINTEXT` | `PLAINTEXT`, `SSL`, `SASL_PLAINTEXT`, or `SASL_SSL`.                                     |
 | `sasl_mechanism`             | With `SASL_*`     | none        | `PLAIN`, `SCRAM-SHA-256`, or `SCRAM-SHA-512`.                                            |
 | `sasl_username_env`          | With `SASL_*`     | none        | Environment variable holding the SASL username.                                          |

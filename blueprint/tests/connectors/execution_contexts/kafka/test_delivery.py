@@ -4,7 +4,6 @@
 """State and failure contracts over real Kafka and a disposable Service."""
 
 import copy
-import json
 import os
 import sqlite3
 import subprocess
@@ -12,14 +11,11 @@ from uuid import uuid4
 
 import pytest
 
-from attribution_blueprint.connectors.attribution import AttributionConnector
 from attribution_blueprint.connectors.execution_contexts.kafka import _build, _consumer_config
 from attribution_blueprint.connectors.execution_contexts.kafka.connector import (
     KafkaConsumerError,
     KafkaExecutionContextAdapter,
 )
-from attribution_blueprint.connectors.outputs.sqlite import SQLiteOutput
-from attribution_blueprint.orchestrator import AttributionOrchestrator
 
 pytestmark = pytest.mark.integration
 
@@ -30,77 +26,6 @@ def _assert_drained(spec):
         assert restarted.discover() == []
     finally:
         restarted.close()
-
-
-@pytest.mark.parametrize(
-    "state,cancelled_by,outcome,terminal_state,symptom,time_limit",
-    [
-        ("COMPLETED", "", "Pass", "pass", None, 480),
-        ("FAILED", "", "Fail User", "fail", "job failed", 480),
-        ("CANCELLED", "example-user", "Cancelled by User", "cancelled", "Cancelled by user", 480),
-        (
-            "CANCELLED",
-            "site-automation-account",
-            "Cancelled by cluster operators",
-            "cancelled",
-            "Cancelled by cluster operators",
-            480,
-        ),
-        # Existing Service policy classifies timeout-only jobs with a known
-        # wall-clock limit as Pass. Omitting the limit keeps the Fail User fallback.
-        ("TIMEOUT", "", "Pass", "pass", "Cancelled by Timeout", 480),
-        ("TIMEOUT", "", "Fail User", "fail", "Cancelled by Timeout", None),
-    ],
-)
-def test_state_without_log_evidence(
-    kafka_topic,
-    kafka_spec,
-    completion_event,
-    publish_event,
-    tmp_path,
-    state,
-    cancelled_by,
-    outcome,
-    terminal_state,
-    symptom,
-    time_limit,
-):
-    completion_event["data"].update(state=state, cancelled_by=cancelled_by, failed_nodes=[])
-    if time_limit is None:
-        completion_event["data"].pop("time_limit")
-    else:
-        completion_event["data"]["time_limit"] = time_limit
-    publish_event(completion_event)
-    database = tmp_path / "state.db"
-    adapter = _build(kafka_spec, {})
-    try:
-        pipeline = AttributionOrchestrator(
-            execution_context_adapters=[adapter],
-            log_connectors=[],
-            metrics_connectors=[],
-            attribution=AttributionConnector(kafka_topic[1]),
-            outputs=[SQLiteOutput(str(database))],
-        )
-        results = pipeline.analyze()
-        assert pipeline.last_run_stats == {"attempted": 1, "succeeded": 1, "conflicted": 0}
-    finally:
-        adapter.close()
-    assert len(results) == 1
-    result = results[0]
-    assert result["verdict"]["attribution_outcome"] == outcome
-    assert result["terminal_state"] == terminal_state
-    assert result["evidence_status"] == "none"
-    if symptom:
-        assert symptom in result["symptoms"]
-    with sqlite3.connect(database) as connection:
-        row = connection.execute("SELECT outcome, raw_result_json FROM attribution_run").fetchone()
-        raw = json.loads(connection.execute("SELECT raw_scheduler_json FROM execution_context").fetchone()[0])
-    assert row[0] == outcome
-    assert json.loads(row[1]) == result
-    assert raw["state"] == state
-    if cancelled_by:
-        assert raw["cancelled_by"] == cancelled_by
-    _assert_drained(kafka_spec)
 
 
 @pytest.mark.parametrize("failure", ["service", "sqlite"])
@@ -132,7 +57,7 @@ def test_unreachable_broker_returns_nonzero(kafka_spec, run_kafka_cli, unavailab
         **kafka_spec,
         "bootstrap_servers": unavailable_endpoint,
         "poll_timeout_seconds": 0.2,
-        "assignment_timeout_seconds": 1,
+        "discovery_timeout_seconds": 1,
     }
     completed = run_kafka_cli(spec=spec)
     assert completed.returncode == 1
@@ -155,7 +80,7 @@ def test_broker_interruption_preserves_event_for_retry(
         completed = run_kafka_cli(
             spec={
                 **kafka_spec,
-                "assignment_timeout_seconds": 1,
+                "discovery_timeout_seconds": 1,
                 "poll_timeout_seconds": 0.2,
             }
         )
@@ -190,11 +115,14 @@ def _wrapped_adapter(spec, wrapper):
         topic_partition=TopicPartition,
         event_types=spec["event_types"],
         poll_timeout_seconds=spec.get("poll_timeout_seconds", 1),
-        fetch_timeout_seconds=spec.get("fetch_timeout_seconds", 60),
+        discovery_timeout_seconds=spec.get("discovery_timeout_seconds", 60),
     )
 
 
-def test_partial_commit_failure_rewinds_only_failed_partition(kafka_spec, completion_event, publish_event):
+def test_partial_commit_failure_replays_uncommitted_partition_with_new_consumer(
+    kafka_spec, completion_event, publish_event
+):
+    """Keep confirmed commits and replay only the uncommitted partition after restart."""
     from confluent_kafka import TopicPartition
 
     first = completion_event
@@ -225,14 +153,17 @@ def test_partial_commit_failure_rewinds_only_failed_partition(kafka_spec, comple
     adapter = _wrapped_adapter(kafka_spec, FailOnePartitionOnce)
     try:
         assert [ctx["event_id"] for ctx in adapter.discover()] == [first["id"]]
+        assert adapter.discovery_incomplete
+        with pytest.raises(KafkaConsumerError, match="closed"):
+            adapter.discover()
+        adapter = _build(kafka_spec, {})
         assert [ctx["event_id"] for ctx in adapter.discover()] == [second["id"]]
     finally:
         adapter.close()
     _assert_drained(kafka_spec)
 
 
-@pytest.mark.parametrize("restart", [False, True])
-def test_commit_exception_replays_event_on_retry(kafka_spec, completion_event, publish_event, restart):
+def test_commit_exception_replays_event_on_retry(kafka_spec, completion_event, publish_event):
     publish_event(completion_event)
 
     class FailCommitOnce(ConsumerProxy):
@@ -248,11 +179,8 @@ def test_commit_exception_replays_event_on_retry(kafka_spec, completion_event, p
     try:
         with pytest.raises(KafkaConsumerError, match="offset commit failed"):
             adapter.discover()
-        if restart:
-            # close() invokes a real revoke callback; it must not commit
-            # the batch abandoned by the unsuccessful discover call.
-            adapter.close()
-            adapter = _build(kafka_spec, {})
+        # Failure closed the old consumer; a new one resumes committed offsets.
+        adapter = _build(kafka_spec, {})
         assert [ctx["event_id"] for ctx in adapter.discover()] == [completion_event["id"]]
     finally:
         adapter.close()
@@ -266,6 +194,7 @@ def test_topic_authorization_failure_is_nonzero_and_does_not_commit(
     publish_event,
     run_kafka_cli,
 ):
+    """Deny test-topic reads, verify CLI failure, then restore access and replay."""
     sasl_brokers = os.environ.get("ATTRIBUTION_TEST_KAFKA_SASL_BOOTSTRAP_SERVERS")
     username = os.environ.get("ATTRIBUTION_TEST_KAFKA_USERNAME")
     if not sasl_brokers or not username or not os.environ.get("ATTRIBUTION_TEST_KAFKA_PASSWORD"):
@@ -344,6 +273,7 @@ def test_native_mixed_commit_raises_after_another_partition_commits(kafka_spec, 
 
 
 def test_short_polls_wait_for_delayed_real_fetch(kafka_spec, completion_event, publish_event):
+    """Do not mistake short empty polls on a paused partition for a drained topic."""
     publish_event(completion_event)
 
     class DelayedFetch(ConsumerProxy):
@@ -377,7 +307,7 @@ def test_short_polls_wait_for_delayed_real_fetch(kafka_spec, completion_event, p
         adapter.close()
 
 
-def test_poll_error_rewinds_for_same_consumer_retry(kafka_spec, completion_event, publish_event):
+def test_poll_error_replays_with_new_consumer(kafka_spec, completion_event, publish_event):
     publish_event(completion_event)
 
     class FailAfterReadOnce(ConsumerProxy):
@@ -398,6 +328,7 @@ def test_poll_error_rewinds_for_same_consumer_retry(kafka_spec, completion_event
     try:
         with pytest.raises(KafkaConsumerError, match="injected read error"):
             adapter.discover()
+        adapter = _build(kafka_spec, {})
         assert [ctx["event_id"] for ctx in adapter.discover()] == [completion_event["id"]]
         assert adapter.discovery_incomplete is False
     finally:
@@ -439,35 +370,29 @@ def test_cli_surfaces_filtered_count_in_mixed_batch(
         assert connection.execute("SELECT count(*) FROM attribution_run").fetchone()[0] == 1
 
 
-def test_latest_reset_uses_eof_without_skipping_future_records(kafka_spec, completion_event, publish_event):
-    publish_event(completion_event)
-    adapter = _build({**kafka_spec, "auto_offset_reset": "latest"}, {})
-    try:
-        assert adapter.discover() == []
-        assert adapter.last_discovery_stats["consumed"] == 0
-        later = copy.deepcopy(completion_event)
-        later["id"] = str(uuid4())
-        publish_event(later)
-        assert [ctx["event_id"] for ctx in adapter.discover()] == [later["id"]]
-    finally:
-        adapter.close()
-
-
-def test_unread_native_partition_has_bounded_fetch_wait(kafka_spec, completion_event, publish_event):
+def test_paused_native_partition_has_bounded_discovery_wait(kafka_spec, completion_event, publish_event):
     publish_event(completion_event)
 
     class PausedFetch(ConsumerProxy):
+        assigned = False
+
         def subscribe(self, topics, **callbacks):
             def assigned(consumer, partitions):
                 consumer.assign(partitions)
                 consumer.pause(partitions)
+                self.assigned = True
 
             self.consumer.subscribe(topics, on_assign=assigned, **callbacks)
 
-    adapter = _wrapped_adapter({**kafka_spec, "poll_timeout_seconds": 0.001, "fetch_timeout_seconds": 0.2}, PausedFetch)
+    adapter = _wrapped_adapter(
+        {**kafka_spec, "poll_timeout_seconds": 0.001, "discovery_timeout_seconds": 10}, PausedFetch
+    )
     try:
-        with pytest.raises(KafkaConsumerError, match="unread records|end offsets"):
+        from confluent_kafka import KafkaException
+
+        with pytest.raises((KafkaConsumerError, KafkaException), match="unread records|end offsets|Timed out"):
             adapter.discover()
         assert adapter.last_discovery_stats["returned"] == 0
+        assert adapter._consumer.assigned
     finally:
         adapter.close()

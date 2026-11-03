@@ -15,8 +15,6 @@ The test creates and deletes its own topic; it never uses an existing topic.
 import json
 import sqlite3
 from datetime import datetime
-from pathlib import Path
-from uuid import uuid4
 
 import pytest
 
@@ -29,67 +27,50 @@ from attribution_blueprint.types import Source
 
 pytestmark = pytest.mark.integration
 
-FIXTURE = Path(__file__).parents[3] / "fixtures" / "kafka_completion_events.json"
 XID_SYMPTOM = "XID-79-GPU_HAS_FALLEN_OFF_THE_BUS"
 
 
-@pytest.mark.parametrize("encoding", ["structured", "binary"])
-@pytest.mark.parametrize("multiple_failed_nodes", [False, True])
-@pytest.mark.parametrize("cancelled_by", ["", "example-operator"])
-def test_full_completion_event_reaches_service_and_sqlite(
-    kafka_topic, tmp_path, monkeypatch, cancelled_by, encoding, multiple_failed_nodes, publish_event
-):
-    brokers, service_url, topic = kafka_topic
-    event = json.loads(FIXTURE.read_text())[0]
-    event["id"] = str(uuid4())
-    data = event["data"]
-    data["id"] = data["job_id"] = f"job-{uuid4().hex}"
-    data["cancelled_by"] = cancelled_by
-    if multiple_failed_nodes:
-        data["failed_nodes"] = list(reversed(data["nodes"]))
-    evidence_node = min(data["failed_nodes"])
-    event["subject"] = f"jobs/{data['id']}"
-    # Optional envelope attribute from the completion-event contract.
-    event["dataschema"] = "https://example.com/schemas/job-completed-v1.json"
+EXPECTED_FIELDS = {
+    "id",
+    "job_id",
+    "attempt_id",
+    "scheduler",
+    "workload_framework",
+    "name",
+    "user_name",
+    "state",
+    "start_time",
+    "end_time",
+    "timezone",
+    "time_limit",
+    "nodes",
+    "gpu_count",
+    "failed_nodes",
+    "cancelled_by",
+    "namespace",
+    "pod_names",
+    "pod_nodes",
+}
 
-    # Guard the complete payload, so narrowing the shared fixture cannot
-    # silently remove integration coverage for scheduler or Pod metadata.
-    assert set(data) == {
-        "id",
-        "job_id",
-        "attempt_id",
-        "scheduler",
-        "workload_framework",
-        "name",
-        "user_name",
-        "state",
-        "start_time",
-        "end_time",
-        "timezone",
-        "time_limit",
-        "nodes",
-        "gpu_count",
-        "failed_nodes",
-        "cancelled_by",
-        "namespace",
-        "pod_names",
-        "pod_nodes",
-    }
-    publish_event(event, encoding=encoding)
 
-    # Real local-file collection and a real hardware symptom inside the
-    # event's time window prove the Service performs attribution on its nodes.
-    evidence = tmp_path / "syslog.jsonl"
+def _write_evidence(path, node):
+    """Write an XID inside the event window on a node declared by the event."""
+    evidence = path
     evidence.write_text(
         json.dumps(
             {
                 "body": "NVRM: Xid (PCI:0000:01:00): 79, GPU has fallen off the bus.",
                 "ts": int(datetime.fromisoformat("2026-10-21T17:38:12+00:00").timestamp()) * 1_000_000_000,
-                "resources": [{"kind": "node", "hostname": evidence_node}],
+                "resources": [{"kind": "node", "hostname": node}],
             }
         )
         + "\n"
     )
+    return evidence
+
+
+def _attribute(adapter, service_url, evidence, database, monkeypatch):
+    """Use real collection/HTTP/output, recording the workload sent to the Service."""
     collector = LocalFileLogConnector(log_path_templates=[str(evidence)], source=Source.SYSLOG)
     attribution = AttributionConnector(service_url)
     sent_workloads = []
@@ -101,33 +82,23 @@ def test_full_completion_event_reaches_service_and_sqlite(
         return create_attributor(info)
 
     monkeypatch.setattr(attribution, "create_attributor", record_create)
-    spec = {
-        "bootstrap_servers": brokers,
-        "topic": topic,
-        "group_id": f"completion-contract-{uuid4().hex}",
-        "event_types": [event["type"]],
-        "poll_timeout_seconds": 1,
-        "assignment_timeout_seconds": 30,
-    }
-    database = tmp_path / "attributions.db"
-    adapter = _build(spec, {})
-    try:
-        pipeline = AttributionOrchestrator(
-            execution_context_adapters=[adapter],
-            log_connectors=[collector],
-            metrics_connectors=[],
-            attribution=attribution,
-            outputs=[SQLiteOutput(str(database))],
-            gpus_per_node=8,
-        )
-        results = pipeline.analyze()
-        assert pipeline.last_run_stats == {"attempted": 1, "succeeded": 1, "conflicted": 0}
-        assert len(results) == 1
-    finally:
-        adapter.close()
-
+    pipeline = AttributionOrchestrator(
+        execution_context_adapters=[adapter],
+        log_connectors=[collector],
+        metrics_connectors=[],
+        attribution=attribution,
+        outputs=[SQLiteOutput(str(database))],
+        gpus_per_node=8,
+    )
+    results = pipeline.analyze()
+    assert pipeline.last_run_stats == {"attempted": 1, "succeeded": 1, "conflicted": 0}
+    assert len(results) == 1
     assert len(sent_workloads) == 1
-    workload = sent_workloads[0]
+    return results[0], sent_workloads[0]
+
+
+def _assert_workload(workload, data):
+    """Check scheduler fields, time window, and rank placement at the HTTP boundary."""
     for context_field, wire_field in {
         "id": "id",
         "state": "status",
@@ -141,12 +112,16 @@ def test_full_completion_event_reaches_service_and_sqlite(
     for context_field, wire_field in {"start_time": "job_start_time", "end_time": "job_end_time"}.items():
         assert datetime.fromisoformat(workload[wire_field]) == datetime.fromisoformat(data[context_field])
     assert workload["failed_node"] == min(data["failed_nodes"])
-    assert workload["cancelled_by"] == (cancelled_by or None)
+    assert workload["cancelled_by"] == (data["cancelled_by"] or None)
     assert workload["nodes"] == {node: list(range(i * 8, (i + 1) * 8)) for i, node in enumerate(data["nodes"])}
     # Connector-only scheduler provenance stays local; the generic example
     # value is not a supported service scheduler enum.
     assert workload["scheduler"] is None
 
+
+def _assert_stored(database, event, expected_result, evidence_node):
+    """Check every input field and the hardware verdict in the persisted result."""
+    data = event["data"]
     with sqlite3.connect(database) as connection:
         connection.row_factory = sqlite3.Row
         contexts = connection.execute("SELECT * FROM execution_context").fetchall()
@@ -169,14 +144,47 @@ def test_full_completion_event_reaches_service_and_sqlite(
     assert json.loads(stored["nodes_json"]) == data["nodes"]
     assert runs[0]["execution_context_id"] == stored["id"]
     result = json.loads(runs[0]["raw_result_json"])
-    assert result == results[0]
+    assert result == expected_result
     assert XID_SYMPTOM in result["symptoms"]
     assert json.loads(runs[0]["responsible_nodes_json"]) == [evidence_node]
     assert any(report["status"] == "ok" for report in result["connector_reports"])
     assert result["observation_context"]
 
-    # A fresh consumer in the same group must resume after the event.
-    restarted = _build(spec, {})
+
+@pytest.mark.parametrize("encoding", ["structured", "binary"])
+@pytest.mark.parametrize("multiple_failed_nodes", [False, True])
+@pytest.mark.parametrize("cancelled_by", ["", "example-operator"])
+def test_full_completion_event_reaches_service_and_sqlite(
+    kafka_topic,
+    kafka_spec,
+    completion_event,
+    tmp_path,
+    monkeypatch,
+    cancelled_by,
+    encoding,
+    multiple_failed_nodes,
+    publish_event,
+):
+    """Prove full-payload attribution and restart from the committed group offset."""
+    event = completion_event
+    data = event["data"]
+    data["cancelled_by"] = cancelled_by
+    if multiple_failed_nodes:
+        data["failed_nodes"] = list(reversed(data["nodes"]))
+    event["dataschema"] = "https://example.com/schemas/job-completed-v1.json"
+    assert set(data) == EXPECTED_FIELDS
+    publish_event(event, encoding=encoding)
+    evidence_node = min(data["failed_nodes"])
+    evidence = _write_evidence(tmp_path / "syslog.jsonl", evidence_node)
+    database = tmp_path / "attributions.db"
+    adapter = _build(kafka_spec, {})
+    try:
+        result, workload = _attribute(adapter, kafka_topic[1], evidence, database, monkeypatch)
+    finally:
+        adapter.close()
+    _assert_workload(workload, data)
+    _assert_stored(database, event, result, evidence_node)
+    restarted = _build(kafka_spec, {})
     try:
         assert restarted.discover() == []
     finally:

@@ -22,10 +22,11 @@ from __future__ import annotations
 import errno
 import json
 from datetime import datetime
-from typing import NotRequired, TypedDict
+from typing import NotRequired
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from attribution_blueprint.orchestrator import _service_timezone_name
+from attribution_blueprint.types import ExecutionContext
 
 _OPTIONAL_STR_FIELDS = (
     "name",
@@ -38,37 +39,11 @@ _OPTIONAL_STR_FIELDS = (
 )
 
 
-class KafkaExecutionContext(TypedDict):
-    """Adapter-specific ExecutionContext shape.
+class KafkaExecutionContext(ExecutionContext):
+    """Common execution context plus Kafka correlation and Kubernetes metadata."""
 
-    Same spine as `attribution_blueprint.types.ExecutionContext`; `event_id`,
-    `failed_nodes`, `namespace`, `pod_names` and `pod_nodes` are extensions
-    stored on the dict for the per-context raw_scheduler_json column.
-    """
-
-    id: str
-    workload_type: str
-    scheduler: str
-    nodes: list[str]
-    start_time: datetime
-    end_time: datetime
-    job_id: str
-    attempt_id: str
-    state: str
-    # CloudEvent `id` of the triggering event, for tracing results back to it.
     event_id: str
-
-    timezone: NotRequired[str]
-    name: NotRequired[str]
-    user_name: NotRequired[str]
-    workload_framework: NotRequired[str]
-    failed_node: NotRequired[str]
     failed_nodes: NotRequired[list[str]]
-    cancelled_by: NotRequired[str]
-    time_limit: NotRequired[int]
-    gpu_count: NotRequired[int]
-    std_out: NotRequired[str]
-    std_err: NotRequired[str]
     namespace: NotRequired[str]
     pod_names: NotRequired[list[str]]
     pod_nodes: NotRequired[dict[str, str]]

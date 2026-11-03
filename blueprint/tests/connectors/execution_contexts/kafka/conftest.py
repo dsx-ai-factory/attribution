@@ -52,7 +52,7 @@ def kafka_spec(kafka_topic):
         "group_id": f"completion-contract-{uuid4().hex}",
         "event_types": ["com.example.job.completed.v1"],
         "poll_timeout_seconds": 1,
-        "assignment_timeout_seconds": 20,
+        "discovery_timeout_seconds": 20,
     }
 
 
