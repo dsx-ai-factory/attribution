@@ -574,8 +574,17 @@ def test_scheduler_readmission_creates_a_new_attempt():
         )
         for attempt in attempts
     ]
+    adapter = KueueExecutionContextAdapter(
+        placement_records_enabled=True,
+        placement_reader=MagicMock(),
+    )
+    retained_evidence = adapter._evidence_from_histories(
+        [history],
+        workload_name="training-workload",
+    )
 
     assert len(contexts) == 2
+    assert retained_evidence[0].placements is retained_evidence[1].placements
     assert contexts[0]["attempt_id"] != contexts[1]["attempt_id"]
     assert contexts[0]["state"] == "PREEMPTED"
     assert contexts[0]["start_time"] == datetime(
@@ -1446,6 +1455,12 @@ def test_same_attempt_unions_retained_and_new_live_failure_evidence():
     [combined] = KueueExecutionContextAdapter._combine_attempt_evidence([retained, live])
     context = _context_from_attempt_evidence(combined)
 
+    assert combined is not retained
+    assert retained.attempts == [retained_attempt]
+    assert retained.workload is None
+    assert retained.pods == {}
+    assert retained.placements == {"old-pod-uid": retained_placement}
+    assert live.pods == {"new-pod-uid": live_pod}
     assert context["attempt_id"] == live_attempt.attempt_id
     assert context["nodes"] == ["node-new", "node-old"]
     assert context["failed_node"] == "node-new"

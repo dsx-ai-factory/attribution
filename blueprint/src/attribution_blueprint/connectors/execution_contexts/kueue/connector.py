@@ -1018,9 +1018,10 @@ class KueueExecutionContextAdapter:
                 and metadata.get("name")
                 and (workload_name is None or metadata["name"] == workload_name)
             }
-            history_placements = [
-                PlacementRecord.from_resource(resource) for resource in history.get("placements") or []
-            ]
+            history_placements: dict[str, PlacementRecord] = {}
+            for resource in history.get("placements") or []:
+                placement = PlacementRecord.from_resource(resource)
+                history_placements[placement.pod_uid] = placement
             resources_by_uid = {
                 metadata["uid"]: self._resource_from_observation(observation)
                 for observation in history.get("observations") or []
@@ -1037,7 +1038,7 @@ class KueueExecutionContextAdapter:
                             attempts=[attempt],
                             pods={uid: resources_by_uid[uid] for uid in attempt.pod_uids if uid in resources_by_uid},
                             jobs={uid: resources_by_uid[uid] for uid in attempt.job_uids if uid in resources_by_uid},
-                            placements={placement.pod_uid: placement for placement in history_placements},
+                            placements=history_placements,
                             retained_coverage=[history.get("coverage") or {}],
                         )
                     )
@@ -1053,7 +1054,14 @@ class KueueExecutionContextAdapter:
             if attempt_id in by_attempt_id:
                 by_attempt_id[attempt_id].merge(evidence)
             else:
-                by_attempt_id[attempt_id] = evidence
+                by_attempt_id[attempt_id] = _AttemptEvidence(
+                    attempts=list(evidence.attempts),
+                    workload=evidence.workload,
+                    pods=dict(evidence.pods),
+                    jobs=dict(evidence.jobs),
+                    placements=dict(evidence.placements),
+                    retained_coverage=list(evidence.retained_coverage),
+                )
         return [
             by_attempt_id[attempt_id]
             for attempt_id in sorted(
