@@ -426,7 +426,12 @@ def _starts(admissions: list[dict], restarts: dict[str, str]) -> list[dict]:
                 (restart, timestamp) for restart, timestamp in subsequent_restarts if restart != seed_restart
             )
         elif subsequent_restarts:
-            scoped_restarts = subsequent_restarts
+            first_restart = subsequent_restarts[0][0]
+            scoped_restarts = (
+                [(first_restart, admission["time"]), *subsequent_restarts[1:]]
+                if first_restart == "0"
+                else subsequent_restarts
+            )
         else:
             scoped_restarts = [("0", admission["time"])]
         for restart, timestamp in scoped_restarts:

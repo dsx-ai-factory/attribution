@@ -653,6 +653,53 @@ def test_scheduler_readmission_creates_a_new_attempt():
     assert partial_context["history_complete"] is False
 
 
+@pytest.mark.parametrize(
+    ("restart_attempt", "expected_start"),
+    [
+        (
+            "0",
+            datetime(2026, 10, 14, 10, 0, tzinfo=timezone.utc),
+        ),
+        (
+            "2",
+            datetime(2026, 10, 14, 10, 2, tzinfo=timezone.utc),
+        ),
+    ],
+    ids=["initial-generation-zero", "missing-earlier-generations"],
+)
+def test_initial_jobset_generation_start_is_anchored_conservatively(
+    restart_attempt,
+    expected_start,
+):
+    history = {
+        "observations": [
+            _workload_history_observation(
+                "1",
+                "2026-10-14T10:00:00Z",
+                [_condition("Admitted", "2026-10-14T10:00:00Z")],
+            ),
+            {
+                "kind": "Pod",
+                "metadata": {"uid": "pod-uid"},
+                "selectedMetadata": {
+                    "labels": {_RESTART_LABEL: restart_attempt},
+                },
+                "observedAt": "2026-10-14T10:02:00Z",
+                "status": {"startTime": "2026-10-14T10:02:00Z"},
+            },
+        ]
+    }
+
+    [attempt] = attempts_from_workload_history(
+        history,
+        now=datetime(2026, 10, 14, 11, 0, tzinfo=timezone.utc),
+        workload_name="training-workload",
+    )
+
+    assert attempt.restart_attempt == restart_attempt
+    assert attempt.start_time == expected_start
+
+
 def test_jobset_restart_generation_carries_across_readmission():
     owner_reference = {
         "apiVersion": "jobset.x-k8s.io/v1alpha2",
