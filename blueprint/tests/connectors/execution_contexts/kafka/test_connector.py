@@ -223,16 +223,59 @@ def test_discover_reads_binary_mode_event():
     assert contexts[0]["event_id"] == event["id"]
 
 
-def test_discover_drops_redelivery_of_same_attempt():
+def test_discover_drops_exact_redelivery_before_attempt_supersession():
     first = _events()[0]
     resend = copy.deepcopy(first)
-    resend["id"] = "a-new-id-per-send"
-    eca, _ = _make_eca(_structured([first, resend]))
+    resend["id"] = "new-event-id"
+    eca, consumer = _make_eca(_structured([first, resend, first]))
+
+    [context] = eca.discover()
+
+    assert context["event_id"] == resend["id"]
+    assert eca.last_discovery_stats["redeliveries"] == 1
+    assert eca.last_discovery_stats["superseded"] == 1
+    assert consumer.commits == [{0: 3}]
+
+
+def test_discover_keeps_higher_offset_for_same_attempt_in_first_seen_order():
+    first, other = _events()
+    resend = copy.deepcopy(first)
+    resend["id"] = "new-event-id"
+    resend["subject"] = "jobs/new-trigger-subject"
+    eca, consumer = _make_eca(_structured([first, other, resend], first_offset=4))
 
     contexts = eca.discover()
 
-    assert len(contexts) == 1
-    assert contexts[0]["event_id"] == first["id"]
+    assert [ctx["event_id"] for ctx in contexts] == [resend["id"], other["id"]]
+    assert contexts[0]["event_subject"] == resend["subject"]
+    assert eca.last_discovery_stats["redeliveries"] == 0
+    assert eca.last_discovery_stats["superseded"] == 1
+    assert consumer.commits == [{0: 7}]
+
+
+def test_cross_partition_attempt_uses_commit_order_and_warns(monkeypatch):
+    first = _events()[0]
+    resend = copy.deepcopy(first)
+    resend["id"] = "event-on-partition-one"
+    warnings = []
+    monkeypatch.setattr(
+        "attribution_blueprint.connectors.execution_contexts.kafka.connector.logger.warning", warnings.append
+    )
+    # Poll partition 1 first; partition 1 still wins because it commits last.
+    eca, consumer = _make_eca(
+        [*_structured([resend], partition=1), *_structured([first], partition=0)], partitions=(0, 1)
+    )
+
+    [context] = eca.discover()
+
+    assert context["event_id"] == resend["id"]
+    assert eca.last_discovery_stats["superseded"] == 1
+    assert eca.last_discovery_stats["redeliveries"] == 0
+    assert consumer.commits == [{0: 1}, {1: 1}]
+    assert len(warnings) == 1
+    assert "spans partitions" in warnings[0]
+    assert "commit order" in warnings[0]
+    assert "message key" in warnings[0]
 
 
 def test_discover_keeps_distinct_attempts():
@@ -423,7 +466,7 @@ def test_reassigned_partition_is_reread_from_last_commit(release, commits):
 
     assert [ctx["id"] for ctx in eca.discover()] == ["job-a1"]
     assert consumer.commits == commits
-    assert eca.last_discovery_stats["duplicates"] == 0
+    assert eca.last_discovery_stats["redeliveries"] == 0
 
 
 def test_commit_failure_closes_consumer_and_keeps_only_earlier_successes():
@@ -598,7 +641,8 @@ def test_discovery_counters_remain_available_after_close():
     eca, consumer = _make_eca(_structured([_events()[0], _events()[0]]))
     assert len(eca.discover()) == 1
     assert consumer.closed
-    assert eca.last_discovery_stats["duplicates"] == 1
+    assert eca.last_discovery_stats["redeliveries"] == 1
+    assert eca.last_discovery_stats["superseded"] == 0
     assert eca.last_discovery_stats["returned"] == 1
     assert eca.discovery_incomplete is False
 
@@ -833,3 +877,22 @@ def test_close_failure_preserves_committed_contexts():
     assert consumer.commits == [{0: 2}]
     assert consumer.closed
     assert eca.discovery_incomplete is True
+
+
+def test_uncommitted_resend_cannot_supersede_a_committed_event():
+    first = _events()[0]
+    resend = copy.deepcopy(first)
+    resend["id"] = "uncommitted-resend"
+    eca, consumer = _make_eca(
+        [*_structured([first], partition=0), *_structured([resend], partition=1)],
+        partitions=(0, 1),
+        commit_errors={1},
+    )
+
+    [context] = eca.discover()
+
+    assert context["event_id"] == first["id"]
+    assert eca.discovery_incomplete is True
+    assert eca.last_discovery_stats["superseded"] == 0
+    assert eca.last_discovery_stats["redeliveries"] == 0
+    assert consumer.commits == [{0: 1}, {1: 1}]

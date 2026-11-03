@@ -12,6 +12,7 @@ Run against disposable local services:
 The test creates and deletes its own topic; it never uses an existing topic.
 """
 
+import copy
 import json
 import sqlite3
 from datetime import datetime
@@ -194,3 +195,30 @@ def test_full_completion_event_reaches_service_and_sqlite(
         assert restarted.discover() == []
     finally:
         restarted.close()
+
+
+@pytest.mark.parametrize("encoding", ["structured", "binary"])
+def test_latest_trigger_is_attributed_and_later_batch_is_not_deduplicated(
+    kafka_topic, kafka_spec, completion_event, publish_event, tmp_path, monkeypatch, encoding
+):
+    """Keep the new trigger through attribution, even when an old ID redelivers."""
+    old = copy.deepcopy(completion_event)
+    latest = copy.deepcopy(old)
+    latest["id"] += "-resend"
+    latest["subject"] = "custom/jobs/latest-trigger"
+    publish_event(old, encoding=encoding)
+    publish_event(latest, encoding=encoding)
+    publish_event(old, encoding=encoding)
+    evidence_node = min(latest["data"]["failed_nodes"])
+    evidence = _write_evidence(tmp_path / "syslog.jsonl", evidence_node)
+
+    for batch in range(2):
+        if batch:
+            publish_event(latest, encoding=encoding)
+        adapter = _build(kafka_spec, {})
+        database = tmp_path / f"batch-{batch}.db"
+        result, workload = _attribute(adapter, kafka_topic[1], evidence, database, monkeypatch)
+        _assert_workload(workload, latest["data"])
+        _assert_stored(database, latest, result, evidence_node)
+        assert adapter.last_discovery_stats["redeliveries"] == (1 if batch == 0 else 0)
+        assert adapter.last_discovery_stats["superseded"] == (1 if batch == 0 else 0)

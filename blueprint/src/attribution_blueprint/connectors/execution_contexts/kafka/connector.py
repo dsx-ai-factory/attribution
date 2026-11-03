@@ -30,6 +30,7 @@ if TYPE_CHECKING:
     from confluent_kafka import Consumer, Message
 
 PartitionKey = tuple[str, int]
+CommittedContext = tuple[PartitionKey, KafkaExecutionContext]
 
 
 class KafkaConsumerError(RuntimeError):
@@ -111,7 +112,8 @@ class KafkaExecutionContextAdapter:
                 "accepted",
                 "filtered",
                 "malformed",
-                "duplicates",
+                "redeliveries",
+                "superseded",
                 "returned",
                 "commit_failed_partitions",
                 "dropped_partitions",
@@ -200,14 +202,14 @@ class KafkaExecutionContextAdapter:
         batch.contexts.append(context)
         self.last_discovery_stats["accepted"] += 1
 
-    def _commit_batch(self) -> list[KafkaExecutionContext]:
+    def _commit_batch(self) -> list[CommittedContext]:
         """Commit one partition per call so earlier successes remain returnable.
 
         Mixed-partition commits may partially succeed and then raise. Stop at
         the first failure, close the consumer, and leave remaining work to a
         new adapter. A failed commit's broker outcome may still be uncertain.
         """
-        contexts: list[KafkaExecutionContext] = []
+        contexts: list[CommittedContext] = []
         for key, batch in sorted(self._pending.items()):
             try:
                 results = self._consumer.commit(
@@ -218,10 +220,10 @@ class KafkaExecutionContextAdapter:
                 return self._commit_failed(contexts, exc)
             if not results or any(tp.error is not None for tp in results):
                 return self._commit_failed(contexts, KafkaConsumerError("commit returned no successful result"))
-            contexts.extend(batch.contexts)
+            contexts.extend((key, context) for context in batch.contexts)
         return contexts
 
-    def _commit_failed(self, contexts: list[KafkaExecutionContext], error: Exception) -> list[KafkaExecutionContext]:
+    def _commit_failed(self, contexts: list[CommittedContext], error: Exception) -> list[CommittedContext]:
         """Report partial commits without discarding contexts already acknowledged."""
         self.discovery_incomplete = True
         self.last_discovery_stats["commit_failed_partitions"] = 1
@@ -246,16 +248,30 @@ class KafkaExecutionContextAdapter:
                 self.last_discovery_stats["dropped_partitions"] += 1
             self._end_offsets.pop(key, None)
 
-    def _dedupe(self, contexts: list[KafkaExecutionContext]) -> list[KafkaExecutionContext]:
-        """Keep one committed context per scheduler/job/attempt in this call."""
-        unique: dict[tuple[str, str, str], KafkaExecutionContext] = {}
-        for context in contexts:
+    def _dedupe(self, contexts: list[CommittedContext]) -> list[KafkaExecutionContext]:
+        """Drop exact redeliveries, then keep the latest event for each attempt.
+
+        Committed contexts arrive in partition order, then increasing offsets.
+        Replacing a dict value preserves the attempt's first-seen output order.
+        """
+        seen_ids: set[str] = set()
+        unique: dict[tuple[str, str, str], CommittedContext] = {}
+        for partition, context in contexts:
+            if context["event_id"] in seen_ids:
+                self.last_discovery_stats["redeliveries"] += 1
+                continue
+            seen_ids.add(context["event_id"])
             key = (context["scheduler"], context["job_id"], context["attempt_id"])
-            if key in unique:
-                self.last_discovery_stats["duplicates"] += 1
-            else:
-                unique[key] = context
-        return list(unique.values())
+            previous = unique.get(key)
+            if previous is not None:
+                self.last_discovery_stats["superseded"] += 1
+                if previous[0] != partition:
+                    logger.warning(
+                        f"kafka ECA: attempt {key} spans partitions {previous[0]} and {partition}; "
+                        "keeping the last event in commit order; check the producer's message key"
+                    )
+            unique[key] = (partition, context)
+        return [context for _, context in unique.values()]
 
     def discover_by_ids(self, ids: list[str]) -> list[KafkaExecutionContext]:
         """Kafka is a completion stream, not a scheduler job index."""

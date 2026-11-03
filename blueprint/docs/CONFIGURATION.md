@@ -548,7 +548,7 @@ with Kafka tooling to replay; deferred acknowledgment is separate work.
 
 Malformed, filtered, and within-batch duplicate events are intentional skips
 and their offsets commit too. Each call logs counts in `last_discovery_stats`
-(`consumed`, `accepted`, `filtered`, `malformed`, `duplicates`, `returned`,
+(`consumed`, `accepted`, `filtered`, `malformed`, `redeliveries`, `superseded`, `returned`,
 `commit_failed_partitions`, `dropped_partitions`). Filtered event types and their
 counts appear in `last_unmatched_event_types`. A filtered-only batch succeeds
 with zero contexts. The CLI exits 1 on operational or commit failure, including
@@ -567,10 +567,21 @@ names are non-empty strings; values are not coerced to strings. See
 `tests/fixtures/kafka_completion_events.json`. Send `timezone` as an IANA key
 whenever the timestamps' UTC offset is not a whole hour or the job crosses a
 DST change; events the service could not place in a timezone are skipped.
-Malformed events are logged and skipped; repeated events for the same
-`(scheduler, job_id, attempt_id)` in one run are dropped. A repeat in a later
-run is attributed again, and the SQLite output records it as another run of the
-same attempt. `ids` and time-range selectors are not supported.
+Within one run, an exact redelivery (same CloudEvent `id`) is dropped, and for
+repeated events of the same `(scheduler, job_id, attempt_id)` only the latest
+is attributed. Events in earlier runs are not deduplicated; each result carries
+`trigger_event_id` so consumers can drop stale results.
+
+Deduplication runs after offset commits, on the successfully committed contexts.
+Within a partition, latest means highest offset. Across partitions, the last
+context in commit order wins and a warning asks operators to check the producer's
+message key; Kafka provides no ordering across partitions. Output order follows
+when each attempt was first seen in commit order. `redeliveries` counts repeated
+CloudEvent IDs; `superseded` counts different IDs replaced for the same attempt.
+The input retains the winning CloudEvent ID as `event_id`; publishing it as
+`trigger_event_id` is the Kafka result connector's contract, implemented separately.
+The SQLite output records a later run as another run of the same attempt.
+`ids` and time-range selectors are not supported.
 
 ```toml
 [eca]
