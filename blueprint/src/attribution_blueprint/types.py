@@ -30,11 +30,9 @@ class ExecutionContext(TypedDict):
     # The orchestrator forwards only supported scheduler identities as V2
     # `workload.scheduler`; connector-only values such as "static" stay local.
     scheduler: NotRequired[str]
-    # Per-attempt key, scheduler-agnostic. Slurm sets it = sluid; Kueue sets
-    # it = the Workload's metadata.uid (a new Workload is created per
-    # requeue). The sqlite output reads this as the `attempt_id` column and
-    # uses it in the (job_id, attempt_id, scheduler_type) unique key, so the
-    # value must be deterministic across re-runs of the same logical attempt.
+    # Deterministic per-attempt key. Slurm uses SLUID; Kueue derives a
+    # `kueue:v1:...` ID from Workload UID, admission, and restart generation.
+    # SQLite uses it in the (job_id, attempt_id, scheduler_type) unique key.
     attempt_id: NotRequired[str]
 
     # Fields adapters write into the context dict in addition to the spine.

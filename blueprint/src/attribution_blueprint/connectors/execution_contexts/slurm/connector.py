@@ -237,8 +237,8 @@ def _parse_row(row: str, cluster_tz: ZoneInfo | None = None) -> SlurmExecutionCo
         "sluid": sluid,
         # Scheduler-agnostic per-attempt key consumed by the sqlite output.
         # For Slurm this is the SLUID (shared by a head row and its steps,
-        # distinct per requeue) — same semantics Kueue achieves via
-        # Workload.metadata.uid.
+        # distinct per requeue); Kueue derives its canonical attempt ID from
+        # Workload UID, admission, and restart generation.
         "attempt_id": sluid,
         "parent_job_id": parent_job_id,
         "state": state,

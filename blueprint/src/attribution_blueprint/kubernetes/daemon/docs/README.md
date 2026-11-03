@@ -194,11 +194,9 @@ reachable and that any proxy authentication or TLS settings are valid.
 
 **Records disappear too early or consume too much storage**
 
-`retentionDays` applies only to the derived placement view. Lifecycle
-observations are append-only and currently have no automatic retention limit.
-Size and monitor the PVC for the expected event volume. Confirm the PVC is
-persistent; deleting the PVC or namespace deletes both placements and
-observations.
+`retentionDays` bounds deleted placements, terminal lifecycle histories, and
+closed coverage gaps; active histories and open gaps remain. Size and monitor
+the PVC. Deleting the PVC or namespace deletes all retained evidence.
 
 **Node failure is not retained**
 
