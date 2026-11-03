@@ -11,6 +11,7 @@ Delivery remains best effort because attribution happens after these commits.
 
 from __future__ import annotations
 
+import math
 import time
 import weakref
 from dataclasses import dataclass, field
@@ -79,8 +80,8 @@ class KafkaExecutionContextAdapter:
             ("poll_timeout_seconds", poll_timeout_seconds),
             ("discovery_timeout_seconds", discovery_timeout_seconds),
         ):
-            if value <= 0:
-                raise ValueError(f"kafka ECA: {name} must be positive, got {value}")
+            if not math.isfinite(value) or value <= 0:
+                raise ValueError(f"kafka ECA: {name} must be positive and finite, got {value}")
         self._consumer, self._topic_partition = consumer, topic_partition
         self._consumer_errors = (consumer_error, KafkaConsumerError)
         self._event_types = frozenset(event_types or ())

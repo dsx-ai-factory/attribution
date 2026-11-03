@@ -529,9 +529,10 @@ def test_consumer_closed_when_adapter_is_collected():
 
 
 @pytest.mark.parametrize("field", ["max_messages", "poll_timeout_seconds", "discovery_timeout_seconds"])
-def test_constructor_rejects_non_positive_limits(field):
+@pytest.mark.parametrize("value", [0, -1, float("nan"), float("inf"), float("-inf")])
+def test_constructor_rejects_invalid_limits(field, value):
     with pytest.raises(ValueError, match=field):
-        _make_eca([], **{field: 0})
+        _make_eca([], **{field: value})
 
 
 def test_build_requires_connection_keys():

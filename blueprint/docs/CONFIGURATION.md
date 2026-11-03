@@ -569,8 +569,8 @@ whenever the timestamps' UTC offset is not a whole hour or the job crosses a
 DST change; events the service could not place in a timezone are skipped.
 Within one run, an exact redelivery (same CloudEvent `id`) is dropped, and for
 repeated events of the same `(scheduler, job_id, attempt_id)` only the latest
-is attributed. Events in earlier runs are not deduplicated; each result carries
-`trigger_event_id` so consumers can drop stale results.
+is attributed. Events in earlier runs are not deduplicated. The input preserves
+the winning CloudEvent ID as `event_id` for correlation by the output connector.
 
 Deduplication runs after offset commits, on the successfully committed contexts.
 Within a partition, latest means highest offset. Across partitions, the last
@@ -578,8 +578,8 @@ context in commit order wins and a warning asks operators to check the producer'
 message key; Kafka provides no ordering across partitions. Output order follows
 when each attempt was first seen in commit order. `redeliveries` counts repeated
 CloudEvent IDs; `superseded` counts different IDs replaced for the same attempt.
-The input retains the winning CloudEvent ID as `event_id`; publishing it as
-`trigger_event_id` is the Kafka result connector's contract, implemented separately.
+Publishing this ID as `trigger_event_id` is the Kafka result connector's contract,
+implemented separately.
 The SQLite output records a later run as another run of the same attempt.
 `ids` and time-range selectors are not supported.
 
