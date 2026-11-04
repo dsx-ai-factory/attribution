@@ -4,8 +4,8 @@
 """Full completion-event contract through disposable Kafka, Service, and SQLite.
 
 Run against disposable local services:
-    ATTRIBUTION_TEST_SERVICE_URL=http://127.0.0.1:18000 \
-    ATTRIBUTION_TEST_KAFKA_BOOTSTRAP_SERVERS=127.0.0.1:39092 \
+    ATTRIBUTION_TEST_SERVICE_URL=http://127.0.0.1:18001 \
+    ATTRIBUTION_TEST_KAFKA_BOOTSTRAP_SERVERS=127.0.0.1:39093 \
     uv run --project blueprint --frozen --extra dev --extra kafka pytest \
     blueprint/tests/connectors/execution_contexts/kafka/test_end_to_end.py -q
 
