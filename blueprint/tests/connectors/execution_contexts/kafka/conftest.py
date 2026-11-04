@@ -80,7 +80,7 @@ def publish_event(kafka_topic):
             value = json.dumps(event).encode()
             headers = None
         producer.produce(
-            topic, key=event["data"]["job_id"], value=value, headers=headers, partition=partition, on_delivery=delivered
+            topic, key=event["data"]["id"], value=value, headers=headers, partition=partition, on_delivery=delivered
         )
         assert producer.flush(15) == 0
         assert errors == []

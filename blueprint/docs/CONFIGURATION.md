@@ -561,7 +561,8 @@ The event `data` object uses ExecutionContext field names: `id`, `start_time`,
 `job_id`, `attempt_id`, `scheduler`, `state`, `name`, `user_name`,
 `workload_framework`, `timezone`, `time_limit`, `gpu_count`, `cancelled_by`,
 `failed_nodes`, `namespace`, `pod_names`, `pod_nodes`, and `cluster` are optional.
-CloudEvent `subject`, when supplied, is retained as `event_subject`; `cluster`
+CloudEvent `subject`, when it is a non-empty string, is retained as
+`event_subject`; any other value is ignored without skipping the event. `cluster`
 is retained unchanged. `pod_nodes` must be an object whose pod names and node
 names are non-empty strings; values are not coerced to strings. See
 `tests/fixtures/kafka_completion_events.json`. Send `timezone` as an IANA key

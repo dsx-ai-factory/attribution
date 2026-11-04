@@ -92,9 +92,11 @@ def _read_cloudevent(
     source = attrs.get("source")
     if not isinstance(source, str) or not source or any(char.isspace() for char in source):
         raise EventError(f"CloudEvent {event_id} source must be a non-empty URI-reference without whitespace")
+    # Optional and only echoed on results, so an unusable value is treated as
+    # absent rather than rejecting (and committing past) the completion event.
     subject = attrs.get("subject")
-    if subject is not None and (not isinstance(subject, str) or not subject):
-        raise EventError(f"CloudEvent {event_id} subject must be a non-empty string")
+    if not isinstance(subject, str) or not subject:
+        subject = None
     return event_id, event_type, data, subject, source
 
 

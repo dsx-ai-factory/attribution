@@ -862,11 +862,25 @@ def test_invalid_pod_nodes_is_skipped_without_coercion(value):
     assert consumer.commits == [{0: 2}]
 
 
-def test_optional_subject_can_be_absent():
+@pytest.mark.parametrize("subject", ["absent", "", 7, None])
+def test_missing_or_unusable_subject_is_treated_as_absent(subject):
     event = _events()[0]
-    event.pop("subject", None)
+    if subject == "absent":
+        event.pop("subject", None)
+    else:
+        event["subject"] = subject
     eca, _ = _make_eca(_structured([event]))
-    assert "event_subject" not in eca.discover()[0]
+    [context] = eca.discover()
+    assert "event_subject" not in context
+    assert eca.last_discovery_stats["malformed"] == 0
+
+
+def test_valueless_binary_subject_header_is_treated_as_absent():
+    message = _binary(_events()[0])
+    message._headers = [(key, None if key == "ce_subject" else value) for key, value in message._headers]
+    eca, _ = _make_eca([message])
+    [context] = eca.discover()
+    assert "event_subject" not in context
 
 
 def test_filtered_only_batch_succeeds_and_closes():
