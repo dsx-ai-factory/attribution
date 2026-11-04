@@ -8,7 +8,7 @@ import pytest
 
 from attribution_blueprint.config import load_config
 from attribution_blueprint.connectors.attribution import AttributionConnector
-from attribution_blueprint.connectors.execution_contexts.kubernetes_daemon import build_kubernetes_daemon_client
+from attribution_blueprint.kubernetes.daemon.config import build_kubernetes_daemon_client
 from attribution_blueprint.connectors.execution_contexts.kueue import _build_prometheus_metrics
 from attribution_blueprint.connectors.execution_contexts.slurm import SlurmExecutionContextAdapter
 from attribution_blueprint.connectors.logs.victorialogs import VictoriaLogsConnector

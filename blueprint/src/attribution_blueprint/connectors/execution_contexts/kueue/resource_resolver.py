@@ -6,7 +6,8 @@ from __future__ import annotations
 from attribution_blueprint.connectors.execution_contexts.kueue.helpers import (
     WORKLOAD_ANNOTATION,
     WORKLOAD_OWNER_UID_LABEL,
-    controller_owner,
+    OwnerIdentity,
+    workload_matches_owner,
 )
 from attribution_blueprint.kubernetes.daemon.models import ResourceIdentity
 from attribution_blueprint.kubernetes.daemon.resolvers import ResolutionPending, UnsupportedOwner
@@ -75,7 +76,7 @@ class KueueResourceResolver:
 
 
 def _matches_owner(workload: dict, owner: ResourceIdentity) -> bool:
-    reference = controller_owner(workload)
-    if reference and reference.get("kind") == owner.kind and reference.get("uid") == owner.uid:
-        return True
-    return ((workload.get("metadata") or {}).get("labels") or {}).get(WORKLOAD_OWNER_UID_LABEL) == owner.uid
+    return workload_matches_owner(
+        workload,
+        OwnerIdentity(owner.api_version, owner.kind, owner.name, owner.uid),
+    )

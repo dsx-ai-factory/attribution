@@ -5,21 +5,36 @@ from __future__ import annotations
 
 import re
 from collections import defaultdict
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+from typing import Protocol
 
 from loguru import logger
 
 from attribution_blueprint.connectors.auth import Auth
-from attribution_blueprint.connectors.execution_contexts.kueue.pod_placement.models import PlacementQuery, PodPlacement
 from attribution_blueprint.connectors.metrics.promql.client import (
     PrometheusClient,
     promql_string,
     re2_escape,
 )
+from attribution_blueprint.kubernetes.daemon.models import PodPlacement
 from attribution_blueprint.types import assert_aware
 
 _PROMQL_METRIC_IDENTIFIER = re.compile(r"^[a-zA-Z_:][a-zA-Z0-9_:]*$")
 _PROMQL_LABEL_IDENTIFIER = re.compile(r"^[a-zA-Z_][a-zA-Z0-9_]*$")
+
+
+@dataclass(frozen=True)
+class PlacementQuery:
+    workload_uid: str
+    namespace: str
+    owner_job_uids: frozenset[str]
+    start_time: datetime
+    end_time: datetime
+
+
+class PlacementResolver(Protocol):
+    def placements_for_many(self, queries: list[PlacementQuery]) -> dict[str, list[PodPlacement]]: ...
 
 
 class PrometheusPlacementResolver:
@@ -223,13 +238,13 @@ class PrometheusPlacementResolver:
         pod_selector = f"{self.pod_info_metric}{{{','.join(pod_matchers)}}}"
         labels_selector = f"{self.pod_labels_metric}{{{','.join(labels_matchers)}}}"
 
-        # Window each raw metric independently, THEN join. A subquery 
+        # Window each raw metric independently, THEN join. A subquery
         # re-evaluates its inner expression only at each step tick.
         labels_last = f"last_over_time({labels_selector}[{window_seconds}s])"
         pod_last = f"last_over_time({pod_selector}[{window_seconds}s])"
 
-        # Aggregate away exporter-identity labels before matching. 
-        # A genuine conflict (the same Pod UID reported on two different nodes) 
+        # Aggregate away exporter-identity labels before matching.
+        # A genuine conflict (the same Pod UID reported on two different nodes)
         # still yields two distinct groups on the right.
         labels_deduped = f"group by (namespace,pod,uid,{self.pod_controller_uid_label}) ({labels_last})"
         pod_deduped = f"group by (namespace,pod,uid,node) ({pod_last})"

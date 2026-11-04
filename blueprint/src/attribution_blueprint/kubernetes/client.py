@@ -13,7 +13,7 @@ class KubernetesClientError(RuntimeError):
 
     `status` carries the HTTP status code when the failure was an API
     response (e.g. 404, 403); it is `None` for connection-level failures
-    (timeout, DNS, malformed response, ...).=
+    (timeout, DNS, malformed response, ...).
     """
 
     def __init__(self, message: str, *, status: int | None = None):
@@ -74,15 +74,7 @@ class KubernetesClient:
                 _request_timeout=self.timeout_seconds,
             )
         except Exception as error:
-            # bare exception keeps the raw API response body out of logs.
-            status = getattr(error, "status", None)
-            reason = getattr(error, "reason", None)
-            reason = reason if isinstance(reason, str) and reason else str(error)
-            if status is not None:
-                raise KubernetesClientError(
-                    f"Kubernetes API query failed with status {status}: {reason}", status=status
-                ) from error
-            raise KubernetesClientError(f"Kubernetes API query failed: {type(error).__name__}: {reason}") from error
+            raise self._query_error(error) from error
         return self._as_dict(payload, kind)
 
     def list(
@@ -106,20 +98,22 @@ class KubernetesClient:
                 _request_timeout=self.timeout_seconds,
             )
         except Exception as error:
-            # bare exception keeps the raw API response body out of logs.
-            status = getattr(error, "status", None)
-            reason = getattr(error, "reason", None)
-            reason = reason if isinstance(reason, str) and reason else str(error)
-            if status is not None:
-                raise KubernetesClientError(
-                    f"Kubernetes API query failed with status {status}: {reason}", status=status
-                ) from error
-            raise KubernetesClientError(f"Kubernetes API query failed: {type(error).__name__}: {reason}") from error
+            raise self._query_error(error) from error
         data = self._as_dict(payload, kind)
         items = data.get("items")
         if not isinstance(items, list) or not all(isinstance(item, dict) for item in items):
             raise KubernetesClientError(f"Kubernetes API query for {kind!r} returned an unexpected response shape")
         return items
+
+    @staticmethod
+    def _query_error(error: Exception) -> KubernetesClientError:
+        # bare exception keeps the raw API response body out of logs.
+        status = getattr(error, "status", None)
+        reason = getattr(error, "reason", None)
+        reason = reason if isinstance(reason, str) and reason else str(error)
+        if status is not None:
+            return KubernetesClientError(f"Kubernetes API query failed with status {status}: {reason}", status=status)
+        return KubernetesClientError(f"Kubernetes API query failed: {type(error).__name__}: {reason}")
 
     def _resource(self, kind: str, *, group: str | None, api_version: str | None, prefix: str | None):
         """Resolve `kind` to a queryable resource; any failure here is a hard
