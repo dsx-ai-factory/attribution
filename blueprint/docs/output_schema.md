@@ -1,4 +1,6 @@
-# SQLite Output Schema
+# Output Schemas
+
+This guide describes SQLite persistence and [Kafka result events](#kafka-result-events).
 
 The Blueprint SQLite output stores execution contexts and attribution runs in a
 local database. This document records schema version `1`, implemented by the
@@ -164,3 +166,43 @@ CREATE TABLE IF NOT EXISTS webui_node_day_fact (
     PRIMARY KEY(end_day, node_name)
 );
 ```
+
+## Kafka result events
+
+Kafka output publishes structured CloudEvents 1.0 JSON with an
+`application/cloudevents+json` header. The record key is the execution context
+`id` (Run ID for RunAPI). See [configuration](CONFIGURATION.md) for connection,
+authentication, and size/timeout settings.
+
+| Event field | Value |
+| --- | --- |
+| `specversion`, `datacontenttype` | `1.0`, `application/json`. |
+| `id`, `time` | A new UUID per emit and the UTC production time. |
+| `source`, `type` | Configured values; defaults are `/attribution/blueprint` and `com.nvidia.attribution.job.attributed.v1`. |
+| `subject` | Triggering `event_subject`, falling back to `jobs/<job_id>`. |
+| `data.job_id`, `data.attempt_id` | Context job/attempt identity; defaults are context `id` and `"0"`. |
+| `data.cluster`, `data.scheduler` | Context values; cluster can fall back to configuration. Missing values are null. |
+| `data.trigger_event_id` | Original completion event ID, or null for contexts without a triggering event. |
+| `data.terminal_state`, `data.sub_domain` | Blueprint summary fields. |
+| `data.tenant_sre_action`, `data.cloud_operator_sre_action` | Blueprint action fields; empty strings when unavailable. |
+| `data.result` | Service result fields, including verdict, symptoms, collectors, and observation IDs. |
+| `data.connector_reports` | Collector reports; defaults to an empty list. |
+| `data.ingestion_reports`, `data.evidence_status` | Blueprint evidence extensions, included when present. |
+
+### Delivery behavior
+
+A write succeeds only after broker acknowledgement, using `acks=all` and an
+idempotent producer. Enqueue errors, delivery failures, and unconfirmed delivery
+raise to the caller. Broker acceptance does not confirm RunAPI consumption.
+
+A timeout can occur after the broker stored the record. Native idempotence
+covers client transport retries; separate writes and application restarts can
+produce duplicate results. Consumers must handle repeats and stale results
+using job/attempt identity and trigger correlation. No evidence is trimmed to
+meet the size limit. Closing flushes pending records and rejects later writes.
+
+The current Blueprint orchestrator counts a context as successful if any output
+succeeds; SQLite success can therefore coexist with Kafka failure. This sink
+does not change input offset commits or provide durable application retries.
+Required-output policy, acknowledgement, and recovery belong to Runtime
+integration.

@@ -197,6 +197,29 @@ def test_oversized_result_fails_without_truncation(context, attribution):
     assert attribution == original
 
 
+@pytest.mark.parametrize("via_registry", [False, True])
+def test_default_size_guardrail_can_be_overridden(via_registry, mocker, context):
+    """Both construction paths reject large results by default and allow an override."""
+    producer = FakeProducer()
+    if via_registry:
+        native = pytest.importorskip("confluent_kafka")
+        mocker.patch.object(native, "Producer", return_value=producer)
+
+    def build(**options):
+        """Construct the selected path with identical options."""
+        if via_registry:
+            return _build({"bootstrap_servers": "localhost:9092", "topic": "results", **options}, {})
+        return KafkaOutput(producer=producer, topic="results", **options)
+
+    attribution = {"verdict": {"detail": "x" * 65536}, "symptoms": {}}
+    with pytest.raises(KafkaOutputError, match="max_message_bytes=65536"):
+        build().write(context, attribution)
+    assert not producer.queued
+
+    build(max_message_bytes=128 * 1024).write(context, attribution)
+    assert json.loads(producer.messages[0][1]["value"])["data"]["result"] == attribution
+
+
 @pytest.mark.parametrize("pending", [False, True])
 def test_close_is_idempotent_and_prevents_reuse(pending, context, attribution):
     producer = FakeProducer(deliver=not pending)

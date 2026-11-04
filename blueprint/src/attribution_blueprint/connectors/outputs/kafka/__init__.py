@@ -8,6 +8,7 @@ import math
 from attribution_blueprint import mca_registry as _registry
 from attribution_blueprint.connectors.kafka_client import SECURITY_SCHEMA_KEYS, security_config
 from attribution_blueprint.connectors.outputs.kafka.connector import (
+    DEFAULT_MAX_MESSAGE_BYTES,
     EVENT_SOURCE,
     EVENT_TYPE,
     KafkaOutput,
@@ -32,7 +33,9 @@ def _output_options(spec: dict) -> dict:
         "event_type": spec.get("event_type", EVENT_TYPE),
         "source": spec.get("source", EVENT_SOURCE),
         "cluster": spec.get("cluster"),
-        "max_message_bytes": _coerce_int(spec.get("max_message_bytes", 900_000), "output.kafka.max_message_bytes"),
+        "max_message_bytes": _coerce_int(
+            spec.get("max_message_bytes", DEFAULT_MAX_MESSAGE_BYTES), "output.kafka.max_message_bytes"
+        ),
         "delivery_timeout_seconds": _coerce_float(
             spec.get("delivery_timeout_seconds", 30.0), "output.kafka.delivery_timeout_seconds"
         ),
@@ -58,6 +61,8 @@ def _build(spec: dict, ctx: dict) -> KafkaOutput:
         "acks": "all",
         "enable.idempotence": True,
         "message.timeout.ms": math.ceil(options["delivery_timeout_seconds"] * 1000),
+        # Blueprint checks the event cap before enqueueing. Keep the native
+        # 1 MB default unless the configured event limit requires more.
         "message.max.bytes": max(1_000_000, options["max_message_bytes"]),
         **security_config(spec, "output.kafka"),
     }

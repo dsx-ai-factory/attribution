@@ -20,6 +20,7 @@ from attribution_blueprint.types import ExecutionContext
 
 EVENT_TYPE = "com.nvidia.attribution.job.attributed.v1"
 EVENT_SOURCE = "/attribution/blueprint"
+DEFAULT_MAX_MESSAGE_BYTES = 64 * 1024
 _SUMMARY_FIELDS = ("terminal_state", "sub_domain", "tenant_sre_action", "cloud_operator_sre_action")
 _REPORT_FIELDS = ("connector_reports", "ingestion_reports", "evidence_status")
 
@@ -88,7 +89,7 @@ class KafkaOutput:
         event_type: str = EVENT_TYPE,
         source: str = EVENT_SOURCE,
         cluster: str | None = None,
-        max_message_bytes: int = 900_000,
+        max_message_bytes: int = DEFAULT_MAX_MESSAGE_BYTES,
         delivery_timeout_seconds: float = 30.0,
     ):
         """Use an injected producer; the registry builder supplies the native client."""
