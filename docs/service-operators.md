@@ -59,7 +59,7 @@ service variables in [Service environment variables](#service-environment-variab
 with `-e` as needed.
 
 The `BASE_IMAGE` build argument sets only the final runtime image. The build
-stage still pulls `python:3.14.6-slim-trixie` and `ghcr.io/astral-sh/uv:0.10.12`,
+stage still pulls `python:3.14-slim-trixie` and `ghcr.io/astral-sh/uv:0.10.12`,
 installs Debian packages with `apt-get`, and downloads Python dependencies with
 `uv`. For a build with no internet access, mirror those images and package
 sources as well, and point the build at them.
