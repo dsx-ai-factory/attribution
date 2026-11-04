@@ -399,15 +399,31 @@ def test_non_json_value_is_skipped():
 
 
 @pytest.mark.parametrize("read_first", [False, True])
-def test_consumer_error_closes_without_commit_and_leaves_retry_to_a_new_consumer(read_first):
-    """Retriable, fatal, and authorization errors all fail the batch the same way."""
-    error = FakeMessage(None, 0, error=FakeError("broker transport failure"))
-    script = [*_structured(_events()[:1]), error] if read_first else [error, *_structured(_events())]
-    eca, consumer = _make_eca(script)
+@pytest.mark.parametrize("failure_kind", ["message", "native_poll"])
+def test_consumer_error_closes_without_commit_and_leaves_retry_to_a_new_consumer(read_first, failure_kind):
+    """Message errors and raised native poll errors leave the batch uncommitted."""
+    error_type = KafkaConsumerError
+    native_error = None
+    failure = FakeMessage(None, 0, error=FakeError("broker transport failure"))
+    if failure_kind == "native_poll":
+        native = pytest.importorskip("confluent_kafka")
+        error_type = native.KafkaException
+        native_error = error_type(native.KafkaError(native.KafkaError._TRANSPORT))
 
-    with pytest.raises(KafkaConsumerError, match="broker transport failure"):
+        def fail_poll(_consumer):
+            """Raise the exact native exception from inside the fake poll."""
+            raise native_error
+
+        failure = fail_poll
+    script = [*_structured(_events()[:1]), failure] if read_first else [failure, *_structured(_events())]
+    eca, consumer = _make_eca(script, consumer_error=error_type)
+
+    with pytest.raises(error_type, match="transport failure") as caught:
         eca.discover()
+    if native_error is not None:
+        assert caught.value is native_error
     assert consumer.polls == (2 if read_first else 1)
+    assert eca.discovery_incomplete is True
     assert consumer.closed
     assert consumer.commits == []
 
