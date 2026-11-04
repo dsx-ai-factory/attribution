@@ -23,13 +23,13 @@ malformed/filtered events, exact `(source, id)` redeliveries, latest-attempt sel
 cross-partition warnings, timeouts, commit boundaries,
 revocation/loss, and propagation of programming and native client errors.
 
-Live tests cover the complete shared payload in structured and binary mode,
-source/subject/cluster preservation, winning trigger identity through real Service
-attribution and SQLite output, batch-scoped deduplication,
-restarts from committed offsets,
-partial commit failure, delayed fetching, and two consumers rebalancing during
-a batch without missing/overlapping contexts. Service/output failures explicitly
-verify the documented commit-before-attribution limitation.
+Live tests cover both CloudEvent encodings, source-scoped redeliveries, restarts
+from committed offsets, partial commit failure, delayed fetching, and two
+consumers rebalancing without missing/overlapping contexts. One structured-event
+smoke test checks real Service attribution and SQLite persistence of correlation
+metadata. Expanded payload combinations and repeated-batch pipeline attribution
+are separate Blueprint integration follow-up work. Service/output failures
+explicitly verify the documented commit-before-attribution limitation.
 
 Each discovery closes the consumer before attribution starts. Filtered-only
 batches succeed with visible counts; invalid pod-to-node mappings are skipped.
