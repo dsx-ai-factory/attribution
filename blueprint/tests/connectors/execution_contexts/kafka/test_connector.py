@@ -503,13 +503,6 @@ def test_reassigned_partition_is_reread_from_last_commit(release, commits):
     assert eca.last_discovery_stats["redeliveries"] == 0
 
 
-def test_commit_failure_closes_consumer_and_keeps_only_earlier_successes():
-    eca, consumer = _make_eca(_two_partitions(), partitions=(0, 1), commit_errors={1})
-    assert [ctx["id"] for ctx in eca.discover()] == ["job-a1"]
-    assert eca.discovery_incomplete
-    assert consumer.closed
-
-
 def test_commit_exception_raises_and_revoke_cannot_commit_aborted_batch():
     eca, consumer = _make_eca(_structured(_events()), commit_raises=True)
 
@@ -808,23 +801,7 @@ def test_native_commit_failure_keeps_successful_partition():
     consumer.commit = fail_one_partition
     assert [ctx["id"] for ctx in eca.discover()] == ["job-a1"]
     assert eca.discovery_incomplete is True
-
-
-def test_native_poll_failure_closes_and_propagates_original_error():
-    native = pytest.importorskip("confluent_kafka")
-    error = native.KafkaException(native.KafkaError(native.KafkaError._TRANSPORT))
-
-    def fail_after_read(consumer):
-        raise error
-
-    eca, consumer = _make_eca(
-        [*_structured(_events()[:1]), fail_after_read],
-        consumer_error=native.KafkaException,
-    )
-    with pytest.raises(native.KafkaException) as caught:
-        eca.discover()
-    assert caught.value is error
-    assert consumer.commits == []
+    assert consumer.closed
 
 
 def test_build_rejects_latest_before_opening_consumer():

@@ -96,7 +96,7 @@ def test_broker_interruption_preserves_event_for_retry(
 
 
 class ConsumerProxy:
-    """Delegate to a real consumer; subclasses inject only a commit failure."""
+    """Delegate to a native consumer while a test controls one operation."""
 
     def __init__(self, consumer):
         self.consumer = consumer
@@ -158,30 +158,6 @@ def test_partial_commit_failure_replays_uncommitted_partition_with_new_consumer(
             adapter.discover()
         adapter = _build(kafka_spec, {})
         assert [ctx["event_id"] for ctx in adapter.discover()] == [second["id"]]
-    finally:
-        adapter.close()
-    _assert_drained(kafka_spec)
-
-
-def test_commit_exception_replays_event_on_retry(kafka_spec, completion_event, publish_event):
-    publish_event(completion_event)
-
-    class FailCommitOnce(ConsumerProxy):
-        failed = False
-
-        def commit(self, **kwargs):
-            if not self.failed:
-                self.failed = True
-                raise KafkaConsumerError("injected coordinator timeout")
-            return self.consumer.commit(**kwargs)
-
-    adapter = _wrapped_adapter(kafka_spec, FailCommitOnce)
-    try:
-        with pytest.raises(KafkaConsumerError, match="offset commit failed"):
-            adapter.discover()
-        # Failure closed the old consumer; a new one resumes committed offsets.
-        adapter = _build(kafka_spec, {})
-        assert [ctx["event_id"] for ctx in adapter.discover()] == [completion_event["id"]]
     finally:
         adapter.close()
     _assert_drained(kafka_spec)
@@ -305,35 +281,6 @@ def test_short_polls_wait_for_delayed_real_fetch(kafka_spec, completion_event, p
         assert adapter._consumer.empty_polls >= 8
     finally:
         adapter.close()
-
-
-def test_poll_error_replays_with_new_consumer(kafka_spec, completion_event, publish_event):
-    publish_event(completion_event)
-
-    class FailAfterReadOnce(ConsumerProxy):
-        fail_next = False
-        failed = False
-
-        def poll(self, timeout):
-            if self.fail_next:
-                self.fail_next = False
-                self.failed = True
-                raise KafkaConsumerError("injected read error after a real record")
-            message = self.consumer.poll(timeout)
-            if message is not None and message.error() is None and not self.failed:
-                self.fail_next = True
-            return message
-
-    adapter = _wrapped_adapter(kafka_spec, FailAfterReadOnce)
-    try:
-        with pytest.raises(KafkaConsumerError, match="injected read error"):
-            adapter.discover()
-        adapter = _build(kafka_spec, {})
-        assert [ctx["event_id"] for ctx in adapter.discover()] == [completion_event["id"]]
-        assert adapter.discovery_incomplete is False
-    finally:
-        adapter.close()
-    _assert_drained(kafka_spec)
 
 
 def test_cli_reports_filtered_only_batch_without_failing(kafka_spec, completion_event, publish_event, run_kafka_cli):

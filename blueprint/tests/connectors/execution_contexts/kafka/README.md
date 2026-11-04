@@ -16,7 +16,9 @@ uv run --project blueprint --frozen --extra dev --extra kafka pytest \
   blueprint/tests/connectors/execution_contexts/kafka -q
 ```
 
-Without these settings, live tests skip. Unit tests still check payload mapping,
+The repository Blueprint gate installs the `kafka` extra so native-exception
+coverage runs even without a broker. Without the endpoint settings above, live
+tests skip. Unit tests still check payload mapping,
 malformed/filtered events, exact `(source, id)` redeliveries, latest-attempt selection,
 cross-partition warnings, timeouts, commit boundaries,
 revocation/loss, and propagation of programming and native client errors.
