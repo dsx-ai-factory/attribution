@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import json
+import re
 from typing import NotRequired, TypedDict
 
 from loguru import logger
@@ -12,6 +13,7 @@ from attribution_blueprint.connectors.metrics.promql.client import (
     re2_escape,
 )
 from attribution_blueprint.connectors.metrics.promql.templates import TEMPLATES
+from attribution_blueprint.exceptions import MCAError
 from attribution_blueprint.types import (
     ExecutionContext,
     Observation,
@@ -25,6 +27,7 @@ DEFAULT_NODE_LABEL = "net_host_name"
 DEFAULT_CLUSTER_LABEL = "s_cluster"
 DEFAULT_COMPONENT_LABEL = "device"
 _NS = 10**9  # PromQL sample times are unix seconds; `ts` is nanoseconds
+_LABEL_IDENTIFIER = re.compile(r"[a-zA-Z_][a-zA-Z0-9_]*")
 
 
 class PrometheusMetricEntry(TypedDict):
@@ -80,7 +83,7 @@ def _timeseries_entry(sample: PrometheusMetricEntry) -> TimeseriesEntry:
 
 
 class PromQLMetricsConnector:
-    """Collector that fetches one Source from a PromQL backend (Mimir, Prometheus, Cortex).
+    """Collector for a Prometheus-compatible backend, including VictoriaMetrics.
 
     Each instance handles exactly one Source. For multiple Sources from the same
     backend, instantiate per Source — failure isolation lives at the instance
@@ -98,13 +101,20 @@ class PromQLMetricsConnector:
         templates: dict[Source, dict[str, str]] = TEMPLATES,
         timeout_seconds: float = 60.0,
         step_seconds: int = DEFAULT_STEP_SECONDS,
+        node_label: str = DEFAULT_NODE_LABEL,
+        cluster_label: str = DEFAULT_CLUSTER_LABEL,
     ):
         if source not in templates:
             raise ValueError(f"no templates registered for source {source}")
+        for setting, label in (("node_label", node_label), ("cluster_label", cluster_label)):
+            if not isinstance(label, str) or not _LABEL_IDENTIFIER.fullmatch(label):
+                raise MCAError(f"promql.{setting}={label!r} must match [a-zA-Z_][a-zA-Z0-9_]*")
         self._source = source
         self._templates = templates[source]
         self._endpoint = endpoint.rstrip("/")
         self._cluster = cluster
+        self._node_label = node_label
+        self._cluster_label = cluster_label
         self._timeout = timeout_seconds
         self._step = step_seconds
         self._auth = auth
@@ -121,6 +131,11 @@ class PromQLMetricsConnector:
         return self._source
 
     def collect(self, context: ExecutionContext) -> list[Observation]:
+        """Render queries and combine samples into one observation, or none without nodes/data.
+
+        Missing template keys are logged and skipped; query, time-validation and
+        sample-conversion exceptions propagate.
+        """
         # Drop empty strings: `re.escape("")` is `""`, which would render the
         # selector as `net_host_name=~""` and match every series in the cluster.
         nodes = [n for n in (context.get("nodes") or []) if n]
@@ -133,14 +148,18 @@ class PromQLMetricsConnector:
         start_s = int(start.timestamp())
         end_s = int(end.timestamp())
         samples: list[PrometheusMetricEntry] = []
-        # Each node lands inside a PromQL `=~ "..."` regex on net_host_name,
-        # so regex metacharacters in hostnames would silently broaden the
-        # match. Escape only RE2 metacharacters so common hyphenated hostnames
-        # don't produce invalid regexes.
+        # Escape RE2 metacharacters without escaping hyphens. Bundled templates
+        # place this regex in a backtick raw string to preserve its backslashes.
         nodes_regex = "|".join(re2_escape(n) for n in nodes)
         for name, tmpl in self._templates.items():
             try:
-                query = tmpl.format(name=name, cluster=self._cluster, nodes=nodes_regex)
+                query = tmpl.format(
+                    name=name,
+                    cluster=self._cluster,
+                    nodes=nodes_regex,
+                    node_label=self._node_label,
+                    cluster_label=self._cluster_label,
+                )
             except KeyError as e:
                 logger.warning(f"promql template {name!r} missing kwarg {e}; skipping")
                 continue
@@ -159,6 +178,11 @@ class PromQLMetricsConnector:
         ]
 
     def _query_range(self, name: str, query: str, start_s: int, end_s: int) -> list[PrometheusMetricEntry]:
+        """Fetch and map range samples, skipping missing node labels and invalid timestamps.
+
+        API error statuses and non-list results are logged and skipped by the
+        client; transport, HTTP, JSON and other malformed-data exceptions propagate.
+        """
         result = self._client.query_range(
             name=name,
             query=query,
@@ -169,17 +193,17 @@ class PromQLMetricsConnector:
         out: list[PrometheusMetricEntry] = []
         for series in result:
             labels = series.get("metric", {}) or {}
-            node = labels.get(DEFAULT_NODE_LABEL)
+            node = labels.get(self._node_label)
             if not node:
                 # A node_metrics entry must declare its node; the service never
                 # parses one out of a metric body. Aggregations that drop
-                # net_host_name are unattributable; skip rather than emit
+                # the node label are unattributable; skip rather than emit
                 # unscoped points.
                 continue
-            # Templates that aggregate (e.g. `max by (net_host_name) (...)`)
-            # drop s_cluster, so fall back to the connector's configured
+            # Templates that aggregate (e.g. `max by (<node label>) (...)`)
+            # drop the cluster label, so fall back to the configured
             # cluster — the value is known either way.
-            cluster = labels.get(DEFAULT_CLUSTER_LABEL) or self._cluster
+            cluster = labels.get(self._cluster_label) or self._cluster
             component = labels.get(DEFAULT_COMPONENT_LABEL)
             for ts, val in series.get("values", []) or []:
                 try:

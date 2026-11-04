@@ -147,7 +147,7 @@ The blueprint needs endpoint access and credentials. The service still does not 
 
 For Loki, confirm that the stream labels can identify nodes in the same spelling used by SLURM `NodeList`. The default `node_label` is `host_name`.
 
-For PromQL, confirm that host labels can match the SLURM node names. The bundled queries expect `net_host_name` for host matching and `s_cluster` for the cluster label.
+For PromQL, confirm that host labels can match the SLURM node names. The bundled queries default to `net_host_name` for host matching and `s_cluster` for the cluster label. Set `node_label` and `cluster_label` in the [metrics configuration](CONFIGURATION.md#metrics-collection) to map other labels, including those in a VictoriaMetrics deployment.
 
 ### SLURM Epilog Hooks
 
