@@ -29,9 +29,11 @@ flowchart TD
         ECASlurm[slurm]
         ECAStatic[static]
         ECAKueue[kueue]
+        ECAKafka[kafka]
         ECA --> ECASlurm
         ECA --> ECAStatic
         ECA --> ECAKueue
+        ECA --> ECAKafka
 
         Log[log]
         LogLoki[loki]
@@ -80,7 +82,7 @@ for durable Pod-to-node placement before post-hoc Kubernetes attribution.
 
 ## End-to-end flow for one workload
 
-1. **Discover.** The Blueprint's execution-context adapter (Slurm shells to `sacct`, Kueue shells to `kubectl`, Static hand-feeds one workload) returns one or more `ExecutionContext` objects.
+1. **Discover.** Execution-context adapters return one or more `ExecutionContext` objects. Slurm queries `sacct`, Kueue queries `kubectl`, Static uses supplied workload metadata, and Kafka reads a bounded batch of completion CloudEvents. Kafka commits the batch before attribution begins.
 2. **Collect.** For each context, every configured log and metric collector runs `collect(ctx)` and returns zero or more `Observation` objects. Each `Observation` carries a `Source` enum value (`applog`, `syslog`, `node_metrics`) and an `entry_timeseries` body; the entry shape is in [Observation entry format](https://github.com/dsx-ai-factory/attribution/blob/main/service/service-app/docs/api/observation-format.md).
 3. **Open attributor.** `POST /v2/attributor` creates a per-context handle. On a duplicate-session 409, the connector raises `AttributorConflictError` with the original HTTP error as its cause. The Blueprint preserves the existing session, records that context as `conflicted` in the run statistics and summaries, and continues with other contexts. Retry after the existing session's owner finishes and deletes it.
 4. **Submit observations.** Each `Observation` goes via `POST /v2/attributor/{id}/observation`. Individual failures are logged and skipped. A duplicate-observation 409 counts as delivered. Per-connector delivery outcomes land in `ingestion_reports`.
@@ -98,10 +100,11 @@ an attribution verdict. `attributed` means a verdict was obtained; the
 `succeeded` counter still requires that at least one output sink accepted it.
 
 The CLI prints these summaries and conflict totals for each run and across
-multiple configuration files. Its exit policy is unchanged: a configuration
-with attempted contexts but no successful output exits nonzero; partial
-success or no discovered contexts exits zero. Scheduling systems that need to
-detect partial conflicts must inspect the summaries; a zero exit code alone
+multiple configuration files. After completed discovery, a configuration with
+attempted contexts but no successful output exits 1; partial success or no
+discovered contexts exits zero. If any adapter reports `discovery_incomplete`,
+the CLI exits 1 even when some contexts succeeded. Scheduling systems that need
+to detect partial conflicts must inspect the summaries; a zero exit code alone
 does not mean every context was attributed. With `--strict`, the CLI also
 exits nonzero when any attributed context's `evidence_status` is not
 `complete`. See the
@@ -114,7 +117,7 @@ The Blueprint's configuration model is patterned on Open MPI's Modular Component
 
 | Framework | Components today | Shape | Sources |
 |---|---|---|---|
-| eca (execution context adapter) | slurm, kueue, static | component-selector | (none) |
+| eca (execution context adapter) | slurm, kueue, static, kafka | component-selector | (none) |
 | log | loki, victorialogs, local_file, kubectl_logs | per-source component-selector | applog, syslog |
 | metrics | promql | per-source component-selector | node_metrics |
 | output | stdout, sqlite, kafka | per-instance component-selector | (none) |

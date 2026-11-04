@@ -586,8 +586,8 @@ message key; Kafka provides no ordering across partitions. Output order follows
 when each attempt was first seen in commit order. `redeliveries` counts repeated
 CloudEvent `(source, id)` pairs; `superseded` counts different events replaced
 for the same attempt.
-Publishing this ID as `trigger_event_id` is the Kafka result connector's contract,
-implemented separately.
+Kafka output publishes `event_id` as `trigger_event_id`; see
+[Kafka result events](output_schema.md#kafka-result-events).
 The SQLite output records a later run as another run of the same attempt.
 `ids` and time-range selectors are not supported.
 
