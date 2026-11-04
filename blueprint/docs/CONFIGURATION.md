@@ -691,6 +691,68 @@ component = "sqlite"
 path = "./attributions.db"
 ```
 
+Kafka output (requires `nvidia-attribution-blueprint[kafka]`; included in the
+standard Blueprint Docker image):
+
+```toml
+[output.events]
+component = "kafka"
+
+[output.events.kafka]
+bootstrap_servers = "localhost:9092"
+topic = "mfn.attribution.run-results"
+# For MSK SCRAM, enable these and provide credentials through the environment:
+# security_protocol = "SASL_SSL"
+# sasl_mechanism = "SCRAM-SHA-512"
+# sasl_username_env = "ATTRIBUTION_KAFKA_USERNAME"
+# sasl_password_env = "ATTRIBUTION_KAFKA_PASSWORD"
+```
+
+| Field | Default | Meaning |
+| --- | --- | --- |
+| `bootstrap_servers` | Required | Comma-separated Kafka broker addresses. |
+| `topic` | Required | Existing result topic; provision it before running. |
+| `event_type` | `com.nvidia.attribution.job.attributed.v1` | Result CloudEvent type. |
+| `source` | `/attribution/blueprint` | Result CloudEvent source URI-reference. |
+| `cluster` | Unset | Fallback when the execution context has no cluster. |
+| `max_message_bytes` | `900000` | Encoded event limit in 1..1000000000 bytes; oversized results fail without truncation. Raises the native producer size limit when above its 1000000-byte default. Record/protocol overhead and broker/topic limits also apply. |
+| `delivery_timeout_seconds` | `30` | Finite wait in (0, 2147483.647] seconds for a delivery report; also bounds the native client's transport retries. |
+
+Security settings match `eca.kafka`: `security_protocol` supports `PLAINTEXT`
+(default), `SSL`, `SASL_PLAINTEXT`, and `SASL_SSL`. SASL uses `PLAIN`,
+`SCRAM-SHA-256`, or `SCRAM-SHA-512` through `sasl_mechanism`, with
+`sasl_username_env` and `sasl_password_env` naming environment variables.
+`ssl_ca_location` supplies an optional CA file. IAM/OAUTHBEARER is not supported.
+
+Each write emits a structured CloudEvents 1.0 JSON record, with a fresh UUID,
+UTC production time, and `application/cloudevents+json` content-type header.
+The Kafka message key is the context `id` (Run ID for RunAPI), matching the
+completion-event producer. The payload carries the separate `job_id`,
+`attempt_id`, `scheduler`, `cluster`, and `trigger_event_id`. The subject echoes
+`event_subject`, falling back to `jobs/<job_id>`. Contexts from other adapters
+fall back to `id` for `job_id`, `"0"` for a missing attempt, and null for missing
+trigger, scheduler, and cluster metadata.
+
+The four Blueprint summary fields and `connector_reports` sit beside `result`,
+which retains the service fields, including verdict, symptoms, collectors, and
+observation IDs. `ingestion_reports` and `evidence_status` are also carried at
+the data level when present. Missing SRE actions remain empty strings; this sink
+does not invent recommendations. No evidence is removed to meet the size limit.
+
+`write()` succeeds only after its delivery callback confirms broker acceptance,
+using `acks=all` and an idempotent producer. Enqueue failures, delivery errors,
+and unconfirmed delivery raise to the orchestrator. A timeout can mean the broker
+stored the record but acknowledgement was lost; idempotence does not deduplicate
+new writes or application restarts. RunAPI still needs to handle repeated
+results. `close()` flushes pending records and rejects subsequent writes.
+
+The orchestrator isolates failures per sink and counts a context as successful
+if at least one sink succeeds. A successful SQLite write therefore does not
+guarantee Kafka publication. Broker acceptance also does not prove that RunAPI
+has consumed the result. This sink does not change input offset commits or add
+durable retries; Runtime acknowledgement and delivery orchestration remain
+separate integration work.
+
 
 
 ## Log Collection

@@ -54,8 +54,10 @@ flowchart TD
         Out[output]
         OutStdout[stdout]
         OutSqlite[sqlite]
+        OutKafka[kafka]
         Out --> OutStdout
         Out --> OutSqlite
+        Out --> OutKafka
     end
 
     Service[attribution service<br/>HTTP v2 API]
@@ -85,7 +87,7 @@ for durable Pod-to-node placement before post-hoc Kubernetes attribution.
 5. **Get verdict.** `GET /v2/attributor/{id}/attribution` returns the raw verdict.
 6. **Clean up.** `DELETE /v2/attributor/{id}` for the handle created by this run so later runs don't collide. A failed create does not grant ownership of an existing handle.
 7. **Enrich.** The Blueprint's `result.enrich_attribution_result()` maps the service verdict to `(terminal_state, sub_domain)` via `taxonomy.py`, and attaches a `ConnectorReport` per collector.
-8. **Write.** Each configured output sink (`stdout`, `sqlite`) persists the enriched result.
+8. **Write.** Each configured output sink (`stdout`, `sqlite`, `kafka`) persists the enriched result.
 
 The orchestrator exposes conflict counts in `last_run_stats["conflicted"]`
 and records every attributed or conflicting context in `last_run_summaries`.
@@ -115,7 +117,7 @@ The Blueprint's configuration model is patterned on Open MPI's Modular Component
 | eca (execution context adapter) | slurm, kueue, static | component-selector | (none) |
 | log | loki, victorialogs, local_file, kubectl_logs | per-source component-selector | applog, syslog |
 | metrics | promql | per-source component-selector | node_metrics |
-| output | stdout, sqlite | per-instance component-selector | (none) |
+| output | stdout, sqlite, kafka | per-instance component-selector | (none) |
 | attribution | (implicit HTTP client) | flat: service_url, timeout_seconds | (none) |
 | workload | (no components) | flat: gpus_per_node, used to build service v2 node-to-ranks payload | (none) |
 
@@ -164,5 +166,6 @@ sidecar.
 
 * **stdout.** Prints the enriched result as JSON. Used for one-shot CLI runs and for piping into other tools.
 * **sqlite.** Persists the result into a local SQLite database. The schema lives in `blueprint/docs/output_schema.md` and carries three tables (`schema_version`, `execution_context`, `attribution_run`). The read-side `nvidia-attribution-blueprint-web` dashboard queries this database.
+* **kafka.** Publishes a result CloudEvent and waits for broker acknowledgement. Uses the optional `kafka` extra and the same connection security settings as the Kafka input adapter.
 
-Multiple sinks can be configured per run. Per-sink failures are isolated. The architecture supports additional sinks (Elasticsearch, Kafka, downstream HTTP) via the same `OutputConnector` Protocol. None ship at V1.
+Multiple sinks can be configured per run. Per-sink failures are isolated. The architecture supports additional sinks (Elasticsearch, downstream HTTP) via the same `OutputConnector` Protocol.
