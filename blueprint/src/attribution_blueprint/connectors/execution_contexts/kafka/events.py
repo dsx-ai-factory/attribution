@@ -66,8 +66,8 @@ def _read_cloudevent(
         raise EventError("message has no value")
     try:
         body = json.loads(raw)
-    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-        raise EventError(f"value is not JSON: {exc}") from exc
+    except (ValueError, RecursionError) as exc:
+        raise EventError(f"value is not a supported JSON event: {exc}") from exc
 
     headers = dict(headers or [])
     if "ce_type" in headers:

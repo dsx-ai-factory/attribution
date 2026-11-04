@@ -382,6 +382,22 @@ def test_malformed_event_is_skipped_without_blocking(mutate):
     assert consumer.commits == [{0: 2}]
 
 
+@pytest.mark.parametrize(
+    "raw",
+    [b"9" * 10_000, b"[" * 100_000 + b"0" + b"]" * 100_000],
+    ids=["integer-digit-limit", "nesting-limit"],
+)
+def test_json_parser_limits_do_not_block_following_events(raw):
+    """Skip parser-limit failures and commit past them with the next valid event."""
+    eca, consumer = _make_eca([FakeMessage(raw, 0), *_structured(_events()[1:], first_offset=1)])
+
+    assert [ctx["id"] for ctx in eca.discover()] == ["job-b7"]
+    assert eca.last_discovery_stats["malformed"] == 1
+    assert eca.last_discovery_stats["accepted"] == 1
+    assert consumer.commits == [{0: 2}]
+    assert consumer.closed
+
+
 def test_non_hour_offset_accepted_with_iana_timezone():
     event = _events()[0]
     event["data"].update(
@@ -441,14 +457,19 @@ def test_discover_polls_again_when_assignment_completes_on_empty_poll():
     assert consumer.commits == [{0: 2}]
 
 
-def test_discover_raises_when_never_assigned(monkeypatch):
+def test_discover_raises_when_never_assigned(monkeypatch, mocker):
+    """Poll for assignment before timing out, closing without committing."""
     eca, consumer = _make_eca([], unassigned_polls=10**9, discovery_timeout_seconds=1)
+    assignment = mocker.spy(consumer, "assignment")
     tick = iter(range(100))
     monkeypatch.setattr(
-        "attribution_blueprint.connectors.execution_contexts.kafka.connector.time.monotonic", lambda: next(tick)
+        "attribution_blueprint.connectors.execution_contexts.kafka.connector.time.monotonic", lambda: next(tick) / 10
     )
     with pytest.raises(KafkaConsumerError, match="assignment or unread records"):
         eca.discover()
+    assert consumer.polls > 1
+    assignment.assert_called()
+    assert consumer.commits == []
     assert consumer.closed
 
 
@@ -633,18 +654,23 @@ def test_empty_polls_do_not_end_discovery_before_partition_end():
     assert consumer.polls == 5
 
 
-def test_unread_partition_times_out_instead_of_returning_empty(monkeypatch):
+def test_unread_partition_times_out_instead_of_returning_empty(monkeypatch, mocker):
+    """Check unread offsets after polling, then time out without committing."""
     eca, consumer = _make_eca([], discovery_timeout_seconds=0.01)
     consumer._highs[0] = 1
+    watermark = mocker.spy(consumer, "get_watermark_offsets")
     tick = iter(range(1000))
     monkeypatch.setattr(
         "attribution_blueprint.connectors.execution_contexts.kafka.connector.time.monotonic",
-        lambda: next(tick) / 100,
+        lambda: next(tick) / 1000,
     )
 
     with pytest.raises(KafkaConsumerError, match="unread records"):
         eca.discover()
+    assert consumer.polls > 1
+    watermark.assert_called()
     assert consumer.commits == []
+    assert consumer.closed
 
 
 def test_discovery_counters_surface_filtered_and_malformed_events():
