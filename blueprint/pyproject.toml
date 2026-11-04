@@ -33,6 +33,9 @@ web = [
     "pyyaml>=6.0",
 ]
 kubernetes-daemon = []
+kafka = [
+    "confluent-kafka>=2.6",
+]
 
 [project.scripts]
 nvidia-attribution-blueprint = "attribution_blueprint.cli:main"

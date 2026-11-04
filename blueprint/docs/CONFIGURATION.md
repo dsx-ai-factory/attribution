@@ -107,7 +107,7 @@ timeout_seconds = 60
 
 | Field             | Required             | Default                     | Meaning                                                                                                             |
 | ----------------- | -------------------- | --------------------------- | ------------------------------------------------------------------------------------------------------------------- |
-| `[eca].component` | No                   | `slurm`                     | Selects the execution context adapter: `slurm`, `kueue`, `kai`, or `static`. Defaults to `slurm` when unset.        |
+| `[eca].component` | No                   | `slurm`                     | Selects the execution context adapter: `slurm`, `kueue`, `kai`, `static`, or `kafka`. Defaults to `slurm` when unset.|
 | `sacct_path`      | No                   | `sacct`                     | Path to the `sacct` binary. Use an absolute path if `sacct` is not on `PATH`.                                       |
 | `cluster_tz`      | Strongly recommended | blueprint host fixed offset | IANA timezone for the SLURM controller, used to anchor naive `sacct` timestamps and preserve regional/DST identity. |
 | `ids`             | Per run              | none                        | Comma-separated job IDs. Usually pass this by CLI, not TOML.                                                        |
@@ -514,6 +514,115 @@ Scheduler identity comes from the execution context's `scheduler` value, which
 Blueprint sends as `workload.scheduler` when it is a supported scheduler
 (`slurm` or `kueue`). Other values, such as `static`, are omitted and the service
 treats the scheduler as unknown.
+
+### `[eca.kafka]`
+
+Reads job-completion CloudEvents from a Kafka topic. Install the `kafka` extra
+(`confluent-kafka`). Each call reads at most `max_messages`, and the complete
+read (assignment and fetching included) is bounded by `discovery_timeout_seconds`.
+An empty poll ends discovery only when all assigned partitions have reached
+broker end offsets. `poll_timeout_seconds` controls individual polls.
+
+Consumer auto-commit is disabled. Each group resumes its committed offsets;
+a new group starts at `earliest`. `latest` is rejected: replaying an unfinished
+batch across a rebalance would require extra assignment checkpointing.
+Revoked/lost partitions' uncommitted contexts are dropped and replayed by the
+next owner. Rebalance callbacks never commit offsets.
+
+Kafka handles connection retries internally. The adapter does not retry reported
+consumer errors, seek partitions, or repair a failed consumer. A read/timeout
+failure closes the consumer and raises. Create a new adapter to retry from
+Kafka's committed offsets. Every discovery closes its consumer before returning,
+so attribution runs without holding group membership. Create a new adapter for
+each batch; calling discovery again on a closed adapter raises.
+
+Each partition commits independently, because a mixed-partition commit can
+partially succeed before raising. At the first commit failure the adapter
+closes the consumer and returns only contexts whose commits already succeeded,
+with `discovery_incomplete = true`; if there are none it raises. A failed
+commit's broker outcome can be uncertain, so replay is not guaranteed.
+
+Delivery is best effort: commits happen before attribution. A later attribution
+or output failure does not automatically replay the event. Reset group offsets
+with Kafka tooling to replay; deferred acknowledgment is separate work.
+
+Malformed, filtered, and within-batch duplicate events are intentional skips
+and their offsets commit too. Each call logs counts in `last_discovery_stats`
+(`consumed`, `accepted`, `filtered`, `malformed`, `redeliveries`, `superseded`, `returned`,
+`commit_failed_partitions`, `dropped_partitions`). Filtered event types and their
+counts appear in `last_unmatched_event_types`. A filtered-only batch succeeds
+with zero contexts. The CLI exits 1 on operational or commit failure, including
+when it processes a committed subset. A close failure is logged and marks the
+batch incomplete without discarding committed contexts or hiding a read error.
+Unexpected exceptions propagate; they are not classified as invalid events.
+
+The event `data` object uses ExecutionContext field names: `id`, `start_time`,
+`end_time` (with UTC offset) and a non-empty `nodes` list are required;
+`job_id`, `attempt_id`, `scheduler`, `state`, `name`, `user_name`,
+`workload_framework`, `timezone`, `time_limit`, `gpu_count`, `cancelled_by`,
+`failed_nodes`, `failed_node`, `std_out`, `std_err`, `namespace`, `pod_names`,
+`pod_nodes`, and `cluster` are optional. `failed_node` is used when `failed_nodes`
+is absent or empty; otherwise, the lexicographically first entry in
+`failed_nodes` supplies `failed_node`.
+CloudEvent `subject`, when it is a non-empty string, is retained as
+`event_subject`; any other value is ignored without skipping the event. `cluster`
+is retained unchanged. `pod_nodes` must be an object whose pod names and node
+names are non-empty strings; values are not coerced to strings. See
+`tests/fixtures/kafka_completion_events.json`. Send `timezone` as an IANA key
+whenever the timestamps' UTC offset is not a whole hour or the job crosses a
+DST change; events the service could not place in a timezone are skipped.
+Within one run, an exact redelivery (same CloudEvent `source` and `id`) is
+dropped, and for repeated events of the same `(scheduler, job_id, attempt_id)`
+only the latest
+is attributed. Events in earlier runs are not deduplicated. The input preserves
+the winning CloudEvent ID and source as `event_id` and `event_source` for
+correlation by the output connector. CloudEvent `source` is required and must
+be a non-empty string without whitespace.
+
+Deduplication runs after offset commits, on the successfully committed contexts.
+Within a partition, latest means highest offset. Across partitions, the last
+context in commit order wins and a warning asks operators to check the producer's
+message key; Kafka provides no ordering across partitions. Output order follows
+when each attempt was first seen in commit order. `redeliveries` counts repeated
+CloudEvent `(source, id)` pairs; `superseded` counts different events replaced
+for the same attempt.
+Publishing this ID as `trigger_event_id` is the Kafka result connector's contract,
+implemented separately.
+The SQLite output records a later run as another run of the same attempt.
+`ids` and time-range selectors are not supported.
+
+```toml
+[eca]
+component = "kafka"
+
+[eca.kafka]
+bootstrap_servers = "broker-1:9092,broker-2:9092"
+topic = "job-completions"
+group_id = "attribution"
+event_types = ["com.example.job.completed.v1"]
+security_protocol = "SASL_SSL"
+sasl_mechanism = "SCRAM-SHA-512"
+sasl_username_env = "KAFKA_USERNAME"
+sasl_password_env = "KAFKA_PASSWORD"
+```
+
+| Field                        | Required          | Default     | Meaning                                                                                  |
+| ---------------------------- | ----------------- | ----------- | ---------------------------------------------------------------------------------------- |
+| `bootstrap_servers`          | Yes               | none        | Comma-separated `host:port` list.                                                        |
+| `topic`                      | Yes               | none        | Topic carrying the completion events.                                                    |
+| `group_id`                   | Yes               | none        | Consumer group. Offsets are tracked per group.                                           |
+| `auto_offset_reset`          | No                | `earliest`  | Only `earliest` is supported. |
+| `event_types`                | No                | all types   | CloudEvent `type` values to accept.                                                      |
+| `scheduler`                  | No                | `kafka`     | Scheduler identity for events whose data has no `scheduler`.                             |
+| `workload_type`              | No                | empty       | Workload type sent to the service.                                                       |
+| `max_messages`               | No                | `500`       | Maximum messages read per run.                                                           |
+| `poll_timeout_seconds`       | No                | `5`         | Timeout for an individual poll; end offsets determine whether the batch is drained.      |
+| `discovery_timeout_seconds` | No | `60` | Maximum time for the complete discovery read, including assignment and fetching. |
+| `security_protocol`          | No                | `PLAINTEXT` | `PLAINTEXT`, `SSL`, `SASL_PLAINTEXT`, or `SASL_SSL`.                                     |
+| `sasl_mechanism`             | With `SASL_*`     | none        | `PLAIN`, `SCRAM-SHA-256`, or `SCRAM-SHA-512`.                                            |
+| `sasl_username_env`          | With `SASL_*`     | none        | Environment variable holding the SASL username.                                          |
+| `sasl_password_env`          | With `SASL_*`     | none        | Environment variable holding the SASL password.                                          |
+| `ssl_ca_location`            | No                | system CAs  | CA bundle for `SSL` / `SASL_SSL`.                                                        |
 
 ### `[workload]`
 

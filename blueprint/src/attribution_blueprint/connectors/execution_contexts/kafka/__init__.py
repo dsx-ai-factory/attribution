@@ -1,0 +1,126 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+import os
+
+from attribution_blueprint import mca_registry as _registry
+from attribution_blueprint.connectors.execution_contexts.kafka.connector import (
+    KafkaExecutionContext,
+    KafkaExecutionContextAdapter,
+)
+from attribution_blueprint.exceptions import MCAError
+from attribution_blueprint.mca_registry import _PARAM
+
+_SECURITY_PROTOCOLS = ("PLAINTEXT", "SSL", "SASL_PLAINTEXT", "SASL_SSL")
+_SASL_MECHANISMS = ("PLAIN", "SCRAM-SHA-256", "SCRAM-SHA-512")
+
+
+def _consumer_config(spec: dict) -> dict:
+    """Translate `[eca.kafka]` into librdkafka consumer settings.
+
+    Credentials are read from the environment variables named by
+    `sasl_username_env` / `sasl_password_env`, never from the TOML itself.
+    """
+    missing = [key for key in ("bootstrap_servers", "topic", "group_id") if not spec.get(key)]
+    if missing:
+        raise MCAError(f"eca.kafka missing required keys: {missing}")
+
+    if spec.get("auto_offset_reset", "earliest") != "earliest":
+        raise MCAError("eca.kafka supports only auto_offset_reset=earliest; latest needs assignment checkpointing")
+    config = {
+        "bootstrap.servers": str(spec["bootstrap_servers"]),
+        "group.id": str(spec["group_id"]),
+        "enable.auto.commit": False,
+        "enable.partition.eof": True,
+        "auto.offset.reset": "earliest",
+    }
+
+    security_protocol = spec.get("security_protocol") or "PLAINTEXT"
+    if security_protocol not in _SECURITY_PROTOCOLS:
+        raise MCAError(f"eca.kafka.security_protocol must be one of {list(_SECURITY_PROTOCOLS)}")
+    config["security.protocol"] = security_protocol
+    if spec.get("ssl_ca_location"):
+        config["ssl.ca.location"] = str(spec["ssl_ca_location"])
+
+    if security_protocol.startswith("SASL_"):
+        mechanism = spec.get("sasl_mechanism")
+        if mechanism not in _SASL_MECHANISMS:
+            raise MCAError(f"eca.kafka.sasl_mechanism must be one of {list(_SASL_MECHANISMS)}")
+        config["sasl.mechanism"] = mechanism
+        for key, setting in (("sasl_username_env", "sasl.username"), ("sasl_password_env", "sasl.password")):
+            env_name = spec.get(key)
+            if not env_name:
+                raise MCAError(f"eca.kafka security_protocol={security_protocol} requires {key}")
+            if env_name not in os.environ:
+                raise MCAError(f"eca.kafka.{key} references unset environment variable: {env_name}")
+            config[setting] = os.environ[env_name]
+    return config
+
+
+def _build(spec: dict, ctx: dict) -> KafkaExecutionContextAdapter:
+    """Build the input adapter; import the optional native client only on use."""
+    from attribution_blueprint.mca import _coerce_float, _coerce_int, _coerce_str_list
+
+    config = _consumer_config(spec)
+    event_types_raw = spec.get("event_types")
+    event_types = _coerce_str_list(event_types_raw, "eca.kafka.event_types") if event_types_raw else []
+    max_messages = _coerce_int(spec.get("max_messages", 500), "eca.kafka.max_messages")
+    poll_timeout = _coerce_float(spec.get("poll_timeout_seconds", 5.0), "eca.kafka.poll_timeout_seconds")
+    timeout = _coerce_float(spec.get("discovery_timeout_seconds", 60), "eca.kafka.discovery_timeout_seconds")
+
+    try:
+        from confluent_kafka import Consumer, KafkaException, TopicPartition
+    except ImportError as exc:
+        raise MCAError("eca.kafka requires the kafka extra: install nvidia-attribution-blueprint[kafka]") from exc
+    consumer = Consumer(config)
+    try:
+        return KafkaExecutionContextAdapter(
+            consumer=consumer,
+            consumer_error=KafkaException,
+            topic=str(spec["topic"]),
+            topic_partition=TopicPartition,
+            event_types=event_types,
+            scheduler=str(spec.get("scheduler") or "kafka"),
+            workload_type=str(spec.get("workload_type", "")),
+            max_messages=max_messages,
+            poll_timeout_seconds=poll_timeout,
+            discovery_timeout_seconds=timeout,
+        )
+    except ValueError as exc:
+        consumer.close()
+        raise MCAError(str(exc)) from exc
+
+
+_registry.register_component(
+    framework="eca",
+    name="kafka",
+    schema={
+        # Comma-separated host:port list.
+        "bootstrap_servers": _PARAM,
+        "topic": _PARAM,
+        # Consumer group; offsets are committed per group, so each
+        # deployment reading the same topic needs its own.
+        "group_id": _PARAM,
+        # Only earliest is supported; latest requires assignment checkpointing.
+        "auto_offset_reset": _PARAM,
+        # CloudEvent `type` values to accept. Unset accepts every type.
+        "event_types": _PARAM,
+        # Scheduler identity when an event's data has no `scheduler`.
+        "scheduler": _PARAM,
+        # Wire-format `workload.type` sent to the attribution service.
+        "workload_type": _PARAM,
+        "max_messages": _PARAM,
+        "poll_timeout_seconds": _PARAM,
+        # Bound the complete read, including assignment and empty fetches.
+        "discovery_timeout_seconds": _PARAM,
+        "security_protocol": _PARAM,
+        "sasl_mechanism": _PARAM,
+        "sasl_username_env": _PARAM,
+        "sasl_password_env": _PARAM,
+        "ssl_ca_location": _PARAM,
+    },
+    build=_build,
+)
+
+
+__all__ = ["KafkaExecutionContext", "KafkaExecutionContextAdapter"]
