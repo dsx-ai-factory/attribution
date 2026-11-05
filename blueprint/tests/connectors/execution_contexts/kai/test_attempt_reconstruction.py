@@ -635,7 +635,14 @@ def test_single_podgroup_includes_pod_that_predates_start():
     assert attempts[0].membership_resolved is True
 
 
-def test_deleted_podgroup_without_timestamp_retains_terminal_and_pods():
+@pytest.mark.parametrize(
+    "deletion_timestamp",
+    [None, "2026-10-14T10:10:00Z"],
+    ids=["without-source-timestamp", "with-source-timestamp"],
+)
+def test_deleted_podgroup_retains_later_owner_terminal_and_pods(
+    deletion_timestamp,
+):
     owner = {
         "apiVersion": "batch/v1",
         "kind": "Job",
@@ -660,7 +667,16 @@ def test_deleted_podgroup_without_timestamp_retains_terminal_and_pods():
                 "observedAt": "2026-10-14T10:01:00Z",
                 "status": {"startTime": "2026-10-14T10:01:00Z"},
             },
-            _podgroup_observation(owner, "2026-10-14T10:15:00Z", eventType="DELETED"),
+            _podgroup_observation(
+                owner,
+                "2026-10-14T10:15:00Z",
+                eventType="DELETED",
+                selectedMetadata=(
+                    {"deletionTimestamp": deletion_timestamp}
+                    if deletion_timestamp
+                    else None
+                ),
+            ),
             {
                 "kind": "Job",
                 "metadata": {"uid": "job-uid", "name": "trainer"},

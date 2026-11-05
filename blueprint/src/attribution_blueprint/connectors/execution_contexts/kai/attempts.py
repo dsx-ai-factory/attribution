@@ -246,7 +246,7 @@ def attempts_from_podgroup_history(
                     or boundary.terminal_resolvable
                     else None
                 ),
-                podgroup_end=boundary.end,
+                owner_outcome_end=boundary.owner_outcome_end,
             )
             boundary_resolved = next_start is not None or boundary.resolved or (
                 boundary.terminal_resolvable
@@ -337,6 +337,7 @@ def attempts_from_podgroup_history(
 @dataclass(frozen=True)
 class _PodGroupBoundary:
     end: str | None
+    owner_outcome_end: str | None
     retired: bool
     resolved: bool
     terminal_resolvable: bool
@@ -405,6 +406,7 @@ def _podgroup_boundaries(
         retired = bool(deletion_observations) or has_successor
         boundaries[pod_group_uid] = _PodGroupBoundary(
             end=end,
+            owner_outcome_end=replacement,
             retired=retired,
             # A standalone deleted PodGroup still has an exact owner UID.
             # Its owner terminal and Pod evidence remain trustworthy even
@@ -571,7 +573,7 @@ def _terminal_for(
     terminals: list[dict],
     owner: dict | None,
     *,
-    podgroup_end: str | None,
+    owner_outcome_end: str | None,
 ) -> dict | None:
     return next(
         (
@@ -587,8 +589,9 @@ def _terminal_for(
                 include_end=True,
             )
             and (
-                podgroup_end is None
-                or parse_time(terminal["time"]) < parse_time(podgroup_end)
+                owner_outcome_end is None
+                or parse_time(terminal["time"])
+                < parse_time(owner_outcome_end)
             )
             and terminal["restart_attempt"] in {
                 None,
