@@ -10,7 +10,7 @@ COPY blueprint/src/attribution_blueprint/webui/frontend/ ./
 RUN corepack enable && pnpm install --frozen-lockfile && pnpm exec tsc -b && pnpm exec vite build --outDir dist
 
 # Stage 2: python app
-FROM python:3.14.6-slim-trixie
+FROM python:3.14-slim-trixie
 LABEL com.nvidia.attribution.project.license="Apache-2.0"
 COPY --from=ghcr.io/astral-sh/uv:0.10.12 /uv /uvx /bin/
 COPY LICENSE /licenses/LICENSE
