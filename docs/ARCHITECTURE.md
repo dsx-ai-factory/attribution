@@ -29,9 +29,11 @@ flowchart TD
         ECASlurm[slurm]
         ECAStatic[static]
         ECAKueue[kueue]
+        ECAKafka[kafka]
         ECA --> ECASlurm
         ECA --> ECAStatic
         ECA --> ECAKueue
+        ECA --> ECAKafka
 
         Log[log]
         LogLoki[loki]
@@ -54,8 +56,10 @@ flowchart TD
         Out[output]
         OutStdout[stdout]
         OutSqlite[sqlite]
+        OutKafka[kafka]
         Out --> OutStdout
         Out --> OutSqlite
+        Out --> OutKafka
     end
 
     Service[attribution service<br/>HTTP v2 API]
@@ -78,14 +82,14 @@ for durable Pod-to-node placement before post-hoc Kubernetes attribution.
 
 ## End-to-end flow for one workload
 
-1. **Discover.** The Blueprint's execution-context adapter (Slurm shells to `sacct`, Kueue shells to `kubectl`, Static hand-feeds one workload) returns one or more `ExecutionContext` objects.
+1. **Discover.** Execution-context adapters return one or more `ExecutionContext` objects. Slurm queries `sacct`, Kueue queries `kubectl`, Static uses supplied workload metadata, and Kafka reads a bounded batch of completion CloudEvents. Kafka commits offsets per partition before attribution. Only contexts from successfully committed partitions are returned.
 2. **Collect.** For each context, every configured log and metric collector runs `collect(ctx)` and returns zero or more `Observation` objects. Each `Observation` carries a `Source` enum value (`applog`, `syslog`, `node_metrics`) and an `entry_timeseries` body; the entry shape is in [Observation entry format](https://github.com/dsx-ai-factory/attribution/blob/main/service/service-app/docs/api/observation-format.md).
 3. **Open attributor.** `POST /v2/attributor` creates a per-context handle. On a duplicate-session 409, the connector raises `AttributorConflictError` with the original HTTP error as its cause. The Blueprint preserves the existing session, records that context as `conflicted` in the run statistics and summaries, and continues with other contexts. Retry after the existing session's owner finishes and deletes it.
 4. **Submit observations.** Each `Observation` goes via `POST /v2/attributor/{id}/observation`. Individual failures are logged and skipped. A duplicate-observation 409 counts as delivered. Per-connector delivery outcomes land in `ingestion_reports`.
 5. **Get verdict.** `GET /v2/attributor/{id}/attribution` returns the raw verdict.
 6. **Clean up.** `DELETE /v2/attributor/{id}` for the handle created by this run so later runs don't collide. A failed create does not grant ownership of an existing handle.
 7. **Enrich.** The Blueprint's `result.enrich_attribution_result()` maps the service verdict to `(terminal_state, sub_domain)` via `taxonomy.py`, and attaches a `ConnectorReport` per collector.
-8. **Write.** Each configured output sink (`stdout`, `sqlite`) persists the enriched result.
+8. **Write.** Each configured output sink (`stdout`, `sqlite`, `kafka`) persists the enriched result.
 
 The orchestrator exposes conflict counts in `last_run_stats["conflicted"]`
 and records every attributed or conflicting context in `last_run_summaries`.
@@ -96,10 +100,11 @@ an attribution verdict. `attributed` means a verdict was obtained; the
 `succeeded` counter still requires that at least one output sink accepted it.
 
 The CLI prints these summaries and conflict totals for each run and across
-multiple configuration files. Its exit policy is unchanged: a configuration
-with attempted contexts but no successful output exits nonzero; partial
-success or no discovered contexts exits zero. Scheduling systems that need to
-detect partial conflicts must inspect the summaries; a zero exit code alone
+multiple configuration files. After completed discovery, a configuration with
+attempted contexts but no successful output exits 1; partial success or no
+discovered contexts exits zero. If any adapter reports `discovery_incomplete`,
+the CLI exits 1 even when some contexts succeeded. Scheduling systems that need
+to detect partial conflicts must inspect the summaries; a zero exit code alone
 does not mean every context was attributed. With `--strict`, the CLI also
 exits nonzero when any attributed context's `evidence_status` is not
 `complete`. See the
@@ -112,10 +117,10 @@ The Blueprint's configuration model is patterned on Open MPI's Modular Component
 
 | Framework | Components today | Shape | Sources |
 |---|---|---|---|
-| eca (execution context adapter) | slurm, kueue, static | component-selector | (none) |
+| eca (execution context adapter) | slurm, kueue, static, kafka | component-selector | (none) |
 | log | loki, victorialogs, local_file, kubectl_logs | per-source component-selector | applog, syslog |
 | metrics | promql | per-source component-selector | node_metrics |
-| output | stdout, sqlite | per-instance component-selector | (none) |
+| output | stdout, sqlite, kafka | per-instance component-selector | (none) |
 | attribution | (implicit HTTP client) | flat: service_url, timeout_seconds | (none) |
 | workload | (no components) | flat: gpus_per_node, used to build service v2 node-to-ranks payload | (none) |
 
@@ -164,5 +169,6 @@ sidecar.
 
 * **stdout.** Prints the enriched result as JSON. Used for one-shot CLI runs and for piping into other tools.
 * **sqlite.** Persists the result into a local SQLite database. The schema lives in `blueprint/docs/output_schema.md` and carries three tables (`schema_version`, `execution_context`, `attribution_run`). The read-side `nvidia-attribution-blueprint-web` dashboard queries this database.
+* **kafka.** Publishes a result CloudEvent and waits for broker acknowledgement. Uses the optional `kafka` extra and the same connection security settings as the Kafka input adapter.
 
-Multiple sinks can be configured per run. Per-sink failures are isolated. The architecture supports additional sinks (Elasticsearch, Kafka, downstream HTTP) via the same `OutputConnector` Protocol. None ship at V1.
+Multiple sinks can be configured per run. Per-sink failures are isolated. The architecture supports additional sinks (Elasticsearch, downstream HTTP) via the same `OutputConnector` Protocol.

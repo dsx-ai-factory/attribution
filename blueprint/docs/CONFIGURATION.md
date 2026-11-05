@@ -586,8 +586,8 @@ message key; Kafka provides no ordering across partitions. Output order follows
 when each attempt was first seen in commit order. `redeliveries` counts repeated
 CloudEvent `(source, id)` pairs; `superseded` counts different events replaced
 for the same attempt.
-Publishing this ID as `trigger_event_id` is the Kafka result connector's contract,
-implemented separately.
+Kafka output publishes `event_id` as `trigger_event_id`; see
+[Kafka result events](output_schema.md#kafka-result-events).
 The SQLite output records a later run as another run of the same attempt.
 `ids` and time-range selectors are not supported.
 
@@ -691,7 +691,40 @@ component = "sqlite"
 path = "./attributions.db"
 ```
 
+Kafka output (requires `nvidia-attribution-blueprint[kafka]`; included in the
+standard Blueprint Docker image):
 
+```toml
+[output.events]
+component = "kafka"
+
+[output.events.kafka]
+bootstrap_servers = "localhost:9092"
+topic = "mfn.attribution.run-results"
+# For MSK SCRAM, enable these and provide credentials through the environment:
+# security_protocol = "SASL_SSL"
+# sasl_mechanism = "SCRAM-SHA-512"
+# sasl_username_env = "ATTRIBUTION_KAFKA_USERNAME"
+# sasl_password_env = "ATTRIBUTION_KAFKA_PASSWORD"
+```
+
+| Field | Default | Meaning |
+| --- | --- | --- |
+| `bootstrap_servers` | Required | Comma-separated Kafka broker addresses. |
+| `topic` | Required | Existing result topic; provision it before running. |
+| `event_type` | `com.nvidia.attribution.job.attributed.v1` | Result CloudEvent type. |
+| `source` | `/attribution/blueprint` | Result CloudEvent source URI-reference. |
+| `cluster` | Unset | Fallback when the execution context has no cluster. |
+| `max_message_bytes` | `65536` (64 KiB) | Encoded event size limit in 1..1000000000 bytes. Increase for larger results; oversized events fail without truncation. |
+| `delivery_timeout_seconds` | `30` | Delivery wait and client retry budget; must be finite and in (0, 2147483.647] seconds. |
+
+Use the same [security settings as Kafka input](#ecakafka), including environment
+variable references for SASL credentials and `ssl_ca_location` for a CA file.
+IAM/OAUTHBEARER is not supported. Record overhead and broker/topic size limits
+also apply.
+
+For payload fields and delivery guarantees, see
+[Kafka result events](output_schema.md#kafka-result-events).
 
 ## Log Collection
 

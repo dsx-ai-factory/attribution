@@ -98,9 +98,11 @@ def test_output_components_registered_by_connector_packages():
     _fresh_import(
         "attribution_blueprint.connectors.outputs.stdout",
         "attribution_blueprint.connectors.outputs.sqlite",
+        "attribution_blueprint.connectors.outputs.kafka",
     )
     assert r.get_component("output", "stdout").name == "stdout"
     assert r.get_component("output", "sqlite").name == "sqlite"
+    assert r.get_component("output", "kafka").name == "kafka"
 
 
 def test_eca_components_registered_by_connector_packages():
@@ -250,7 +252,7 @@ def test_built_schema_has_expected_shape():
             "org_id",
         }
 
-    assert set(schema["output"]["_instances"]) == {"stdout", "sqlite"}
+    assert set(schema["output"]["_instances"]) == {"stdout", "sqlite", "kafka"}
     assert set(schema["output"]["_instances"]["sqlite"]) == {"path"}
     assert set(schema["attribution"]) == {"service_url", "timeout_seconds"}
     assert set(schema["workload"]) == {"gpus_per_node"}

@@ -53,5 +53,7 @@ Optional infrastructure tests:
 
 Run sequentially, without pytest-xdist. The source is split between `events.py`
 (payload decoding/mapping), `connector.py` (batch and ownership lifecycle), and
-`__init__.py` (MCA registration and native client settings). Runtime storage,
-deferred acknowledgment, and Kafka result publishing are outside this input PR.
+`__init__.py` (MCA registration and native client settings). Runtime storage and
+deferred acknowledgment remain follow-up work. Kafka result publishing is
+implemented by `output.kafka` and covered in the
+[Kafka output tests](../../outputs/kafka/).

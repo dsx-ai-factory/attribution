@@ -28,7 +28,7 @@ COPY blueprint/src/ ./src/
 # built SPA -> the package's static dir, BEFORE uv sync packages it
 COPY --from=web-build /repo/blueprint/src/attribution_blueprint/webui/frontend/dist ./src/attribution_blueprint/webui/static/
 COPY service/service-app/nvidia_attribution_client/ /opt/service/service-app/nvidia_attribution_client/
-RUN uv sync --extra web --no-dev --no-editable --frozen
+RUN uv sync --extra web --extra kafka --no-dev --no-editable --frozen
 
 WORKDIR /opt/attribution-service
 # attribution-lib is bundled at service/attribution-lib and the service
