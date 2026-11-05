@@ -1056,13 +1056,14 @@ class KaiExecutionContextAdapter:
 
     # --- internals ---------------------------------------------------------
 
-    def _finalize(
+    def _collect_live_evidence(
         self,
         podgroups: list[dict],
-        retained_evidence: list[_WorkloadEvidence] | None = None,
         *,
+        now: datetime,
         time_range: tuple[datetime, datetime] | None = None,
-    ) -> list[KaiExecutionContext]:
+    ) -> tuple[list[_WorkloadEvidence], list[KaiExecutionContext]]:
+        """Collect live started-attempt evidence and unscheduled contexts."""
         # Unsupported owners cannot supply an end time, so drop them before
         # fetching Pods or owners.
         owned: list[tuple[dict, dict, str]] = []
@@ -1077,13 +1078,12 @@ class KaiExecutionContextAdapter:
                 )
                 continue
             owned.append((podgroup, owner, owner_resource))
-        if not owned and not retained_evidence:
-            return []
+        if not owned:
+            return [], []
         pods_by_key = _index_pods_by_pod_group(
             self._fetch_pods([pg for pg, _, _ in owned])
         )
-        now = datetime.now(tz=timezone.utc)
-        evidence_items = list(retained_evidence or [])
+        evidence_items: list[_WorkloadEvidence] = []
         pending_contexts: list[KaiExecutionContext] = []
         for podgroup, owner, owner_resource in owned:
             meta = podgroup.get("metadata") or {}
@@ -1201,10 +1201,26 @@ class KaiExecutionContextAdapter:
             self._merge_placement_records(context)
             pending_contexts.append(context)
 
+        return evidence_items, pending_contexts
+
+    def _finalize(
+        self,
+        podgroups: list[dict],
+        retained_evidence: list[_WorkloadEvidence] | None = None,
+        *,
+        time_range: tuple[datetime, datetime] | None = None,
+    ) -> list[KaiExecutionContext]:
+        if not podgroups and not retained_evidence:
+            return []
+        live_evidence, pending_contexts = self._collect_live_evidence(
+            podgroups,
+            now=datetime.now(tz=timezone.utc),
+            time_range=time_range,
+        )
         contexts = [
             _context_from_attempt_evidence(evidence)
             for evidence in self._combine_attempt_evidence(
-                evidence_items
+                [*(retained_evidence or []), *live_evidence]
             )
         ]
         admitted_uids = {
