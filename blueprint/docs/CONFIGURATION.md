@@ -625,14 +625,13 @@ sasl_password_env = "KAFKA_PASSWORD"
 | `ssl_ca_location`            | No                | system CAs  | CA bundle for `SSL` / `SASL_SSL`.                                                        |
 | `aws_region`                 | With `AWS_MSK_IAM` | none       | AWS region of the MSK cluster.                                                           |
 
-`AWS_MSK_IAM` authenticates to Amazon MSK with IAM on the IAM listener
-(port 9098). It requires `security_protocol = "SASL_SSL"` and the `kafka-aws`
-extra (`nvidia-attribution-blueprint[kafka-aws]`). The client signs a
-short-lived token with credentials from the standard AWS credential chain:
+`AWS_MSK_IAM` requires `security_protocol = "SASL_SSL"`, `aws_region`, and the
+`kafka-aws` extra (`nvidia-attribution-blueprint[kafka-aws]`). Use the cluster's
+[IAM listener](https://docs.aws.amazon.com/msk/latest/developerguide/port-info.html)
+bootstrap addresses. Credentials come from the standard AWS credential chain:
 environment variables, a shared credentials file, or a container or instance
 role. A sidecar can rotate a shared credentials file without restarting the
 client; changing another process's environment does not update this client.
-The connector signs with the supplied identity and does not assume another role.
 Images built from the Blueprint Dockerfile include the `kafka-aws` extra.
 
 ```toml
