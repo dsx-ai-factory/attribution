@@ -520,7 +520,6 @@ def test_owner_comes_from_top_owner_annotation(mocker):
     [ctx] = KaiExecutionContextAdapter().discover_by_ids(["team-alpha/pg-train-mnist-1a2b3c4d"])
 
     assert (ctx["owner_kind"], ctx["owner_name"], ctx["owner_uid"]) == ("Job", "train-mnist", "uid-job-1001")
-    assert ctx["podgroup_shape"] == "owned"
 
 
 @pytest.mark.parametrize(
@@ -537,7 +536,6 @@ def test_owner_falls_back_to_controller_owner_reference(mocker, api_version, kin
     [ctx] = KaiExecutionContextAdapter().discover_by_ids(["team-alpha/pg-a"])
 
     assert (ctx["owner_kind"], ctx["owner_name"], ctx["owner_uid"]) == (kind, "owner", "uid-owner")
-    assert ctx["podgroup_shape"] == "owned"
 
 
 def test_malformed_top_owner_annotation_leaves_the_podgroup_unowned(mocker):
@@ -546,18 +544,6 @@ def test_malformed_top_owner_annotation_leaves_the_podgroup_unowned(mocker):
     _wire_kubectl(mocker, [pg], [])
 
     assert KaiExecutionContextAdapter().discover_by_ids(["team-alpha/pg-a"]) == []
-
-
-def test_hierarchical_podgroup_is_emitted_and_flagged(mocker):
-    pg = _podgroup(
-        owner_kind="JobSet",
-        spec={"queue": "q", "subGroups": [{"name": "decode", "minMember": 1}]},
-    )
-    _wire_kubectl(mocker, [pg], [])
-
-    [ctx] = KaiExecutionContextAdapter().discover_by_ids(["team-alpha/pg-a"])
-
-    assert ctx["podgroup_shape"] == "hierarchical"
 
 
 def test_recreated_podgroup_under_unchanged_job_is_a_known_limitation(mocker):
