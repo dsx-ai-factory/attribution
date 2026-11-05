@@ -36,6 +36,10 @@ kubernetes-daemon = []
 kafka = [
     "confluent-kafka>=2.6",
 ]
+kafka-aws = [
+    "confluent-kafka>=2.6",
+    "aws-msk-iam-sasl-signer-python>=1.0.1",
+]
 
 [project.scripts]
 nvidia-attribution-blueprint = "attribution_blueprint.cli:main"
