@@ -210,7 +210,8 @@ def _extract_timestamp_from_slurmstepd_format(
 ) -> Optional[datetime]:
     """Extract the timestamp that slurmstepd writes to the step log.
 
-    Example: [Jan 15 10:20:30.123456 4321 slurmstepd   0x1234] error: ...
+    Examples: [Jan 15 10:20:30.123456 4321 slurmstepd   0x1234] error: ...
+              [Jan 15 10:20:30.11173  4321 slurmstepd   0x1234] error: ...
 
     Args:
         line: The log line to parse.
@@ -220,13 +221,17 @@ def _extract_timestamp_from_slurmstepd_format(
     Returns:
         The timestamp, or None when the line has no slurmstepd timestamp.
     """
-    match = re.search(r"\[(\w{3} +\d{1,2} \d{2}:\d{2}:\d{2})(\.\d+)? \d+ slurmstepd\b", line)
+    match = re.search(r"\[(\w{3} +\d{1,2} \d{2}:\d{2}:\d{2})(?:\.(\d+))? +\d+ slurmstepd\b", line)
     if match is None:
         return None
-    # %f reads at most six digits, the microseconds.
-    fraction = match.group(2)[:7] if match.group(2) is not None else ".0"
     # The caller turns the ValueError for an unknown month name into None.
-    timestamp = datetime.strptime(f"2000 {match.group(1)}{fraction}", "%Y %b %d %H:%M:%S.%f")
+    timestamp = datetime.strptime(f"2000 {match.group(1)}", "%Y %b %d %H:%M:%S")
+    digits = match.group(2)
+    if digits is not None:
+        # Slurm writes the microseconds as a left-aligned integer ("%-6d"), so
+        # ".600    299314" is 600 us. More than six digits can only be a decimal
+        # fraction, so keep its first six digits.
+        timestamp = timestamp.replace(microsecond=int(digits[:6]))
     return _in_job_year(timestamp, timezone, job_end_time)
 
 

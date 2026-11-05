@@ -768,6 +768,16 @@ class TestTimestampExtraction:
                 (2026, 1, 15, 10, 20, 30, 123456),
                 id="nanoseconds",
             ),
+            pytest.param(
+                "0: [Jan 15 10:20:30.11173  478453 slurmstepd   0x1234] error: *** STEP 7.0 CANCELLED ***",
+                (2026, 1, 15, 10, 20, 30, 11173),
+                id="slurm_padded_microseconds",
+            ),
+            pytest.param(
+                "0: [Jan 15 10:20:30.600    299314 slurmstepd   0x1234] error: *** STEP 7.0 CANCELLED ***",
+                (2026, 1, 15, 10, 20, 30, 600),
+                id="slurm_three_digit_microseconds",
+            ),
             pytest.param("43: [Jan 15 10:20:40] no slurmstepd marker", None, id="other_tool"),
             pytest.param("43: [Foo 04 03:23:43.1 1 slurmstepd] bad month", None, id="bad_month"),
         ],
@@ -785,7 +795,7 @@ class TestTimestampExtraction:
     def test_slurmstepd_line_after_new_year(self, timezone):
         """A teardown line logged on January 1 after a December 31 job end gets the next year."""
 
-        line = "0: [Jan 01 00:00:01.5 4321 slurmstepd   0x1234] error: *** STEP 7.0 CANCELLED ***"
+        line = "0: [Jan 01 00:00:01.500000 4321 slurmstepd   0x1234] error: *** STEP 7.0 CANCELLED ***"
 
         result = _extract_timestamp_from_log_line(line, timezone, datetime(2026, 12, 31, 23, 59, 59, tzinfo=timezone))
 
