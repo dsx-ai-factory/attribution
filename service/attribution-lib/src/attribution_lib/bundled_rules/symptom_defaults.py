@@ -1773,10 +1773,12 @@ outcome_symptom(
     doc="nccl-late-arrival",
 )
 
+# NVRx detected failure carries no cause. Rank it below every user failure so
+# a concrete user error sets the outcome, but above the last-resort fallbacks.
 outcome_symptom(
     "NVRx detected failure",
     outcome="Fail MultiCategory",
-    priority=OutcomePriority.LOW_GENERIC,
+    priority=OutcomePriority.LOW_FALLBACK,
     doc="nvrx-detected-failure",
     hw_cause="Underlying failure reason unavailable from the collected evidence.",
 )
