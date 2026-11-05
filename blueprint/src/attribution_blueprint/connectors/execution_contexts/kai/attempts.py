@@ -158,6 +158,10 @@ def attempts_from_podgroup_history(
     pod_group_name: str,
     now: datetime,
 ) -> list[PodGroupAttempt]:
+    """Reconstruct attempts from scheduling starts, restarts, and exact-owner evidence.
+
+    Missing owners or starts produce no attempt; unresolved boundaries preserve
+    uncertainty rather than claim Pod membership."""
     observations = history.get("observations") or []
     podgroups = observations_by_uid(
         item
@@ -364,7 +368,9 @@ class _PodGroupBoundary:
 def _podgroup_boundaries(
     podgroups: dict[str, list[dict]],
 ) -> dict[str, _PodGroupBoundary]:
-    """Bound PodGroup incarnations using source lifecycle timestamps."""
+    """Bound membership by deletion or replacement, and owner outcomes by replacement.
+
+    Deletion alone must not discard a later completion from the same owner."""
     incarnations = []
     for pod_group_uid, timeline in podgroups.items():
         starts = _podgroup_starts(timeline)
@@ -533,6 +539,10 @@ def _attempt_starts(
     *,
     initial_execution_evidence: bool = False,
 ) -> list[dict]:
+    """Carry restart generations across scheduling boundaries.
+
+    Defer a first nonzero restart to its evidence time unless earlier execution
+    establishes an initial interval."""
     starts = []
     ordered_restarts = sorted(
         restarts.items(),
