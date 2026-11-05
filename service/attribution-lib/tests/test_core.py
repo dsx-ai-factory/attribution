@@ -297,6 +297,85 @@ class TestRunningJob:
         assert list(result.symptoms()) == ["running without error"]
 
 
+class TestKubernetesUnknownAttempt:
+    @pytest.mark.parametrize("scheduler", [Scheduler.KUEUE, Scheduler.KAI])
+    def test_without_failure_evidence_is_incomplete_info(
+        self, event_stream, simple_job_factory, scheduler
+    ):
+        job_info = simple_job_factory(
+            state="UNKNOWN",
+            scheduler=scheduler,
+            nodes=["test-node-001"],
+        )
+
+        symptoms = calculate_symptoms(
+            event_stream=event_stream("test-job"),
+            job_info=job_info,
+            my_bad_nodes=JobNodeAttributions(),
+        )
+
+        assert "job failed" not in symptoms
+        assert calculate_outcome(symptoms).value().outcome == "Incomplete Info"
+
+    @pytest.mark.parametrize("scheduler", [Scheduler.KUEUE, Scheduler.KAI])
+    def test_failure_evidence_still_determines_verdict(
+        self,
+        event_stream,
+        simple_job_factory,
+        source_set_factory,
+        scheduler,
+    ):
+        job_info = simple_job_factory(
+            state="UNKNOWN",
+            scheduler=scheduler,
+            nodes=["test-node-001"],
+        )
+        bad_nodes = JobNodeAttributions()
+        bad_nodes.add(
+            "test-node-001",
+            source_set_factory("XID-95-UNCONTAINED_ERROR"),
+        )
+
+        symptoms = calculate_symptoms(
+            event_stream=event_stream("test-job"),
+            job_info=job_info,
+            my_bad_nodes=bad_nodes,
+        )
+
+        assert "XID-95-UNCONTAINED_ERROR" in symptoms
+        assert "job failed" not in symptoms
+        assert calculate_outcome(symptoms).value().outcome == "Fail InfraHW"
+
+    @pytest.mark.parametrize(
+        ("state", "expected_outcome"),
+        [
+            ("FAILED", "Fail User"),
+            ("COMPLETED", "Pass"),
+            ("CANCELLED", "Cancelled by User"),
+        ],
+    )
+    def test_existing_terminal_fallbacks_are_unchanged(
+        self,
+        event_stream,
+        simple_job_factory,
+        state,
+        expected_outcome,
+    ):
+        job_info = simple_job_factory(
+            state=state,
+            scheduler=Scheduler.KUEUE,
+            nodes=["test-node-001"],
+        )
+
+        symptoms = calculate_symptoms(
+            event_stream=event_stream("test-job"),
+            job_info=job_info,
+            my_bad_nodes=JobNodeAttributions(),
+        )
+
+        assert calculate_outcome(symptoms).value().outcome == expected_outcome
+
+
 class TestJobLevelSymptoms:
     """Tests for failure symptoms that intentionally do not blame a node."""
 
