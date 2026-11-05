@@ -792,6 +792,10 @@ class KaiExecutionContextAdapter:
     def _combine_attempt_evidence(
         evidence_items: list[_WorkloadEvidence],
     ) -> list[_AttemptEvidence]:
+        """Combine observations by namespace/name before deriving canonical attempt IDs.
+
+        Reconstruct once, filter resources by attempt membership, and attach live
+        owner state only to the latest attempt for each PodGroup UID."""
         workload_groups: dict[
             tuple[str, str],
             list[_WorkloadEvidence],
