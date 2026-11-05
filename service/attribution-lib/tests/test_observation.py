@@ -778,6 +778,11 @@ class TestTimestampExtraction:
                 (2026, 1, 15, 10, 20, 30, 600),
                 id="slurm_three_digit_microseconds",
             ),
+            pytest.param(
+                "0: Jan 15 10:20:30.123456 4321 slurmstepd: error: *** STEP 7.0 CANCELLED ***",
+                (2026, 1, 15, 10, 20, 30, 123456),
+                id="no_brackets",
+            ),
             pytest.param("43: [Jan 15 10:20:40] no slurmstepd marker", None, id="other_tool"),
             pytest.param("43: [Foo 04 03:23:43.1 1 slurmstepd] bad month", None, id="bad_month"),
         ],

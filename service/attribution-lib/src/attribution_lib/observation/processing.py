@@ -221,7 +221,8 @@ def _extract_timestamp_from_slurmstepd_format(
     Returns:
         The timestamp, or None when the line has no slurmstepd timestamp.
     """
-    match = re.search(r"\[(\w{3} +\d{1,2} \d{2}:\d{2}:\d{2})(?:\.(\d+))? +\d+ slurmstepd\b", line)
+    # Slurm brackets the prefix in the step log, but not always on job stderr.
+    match = re.search(r"\[?(\w{3} +\d{1,2} \d{2}:\d{2}:\d{2})(?:\.(\d+))? +\d+ slurmstepd\b", line)
     if match is None:
         return None
     # The caller turns the ValueError for an unknown month name into None.
