@@ -530,25 +530,62 @@ def test_restart_boundaries_are_scoped_to_podgroup_incarnation():
 
 
 @pytest.mark.parametrize(
-    ("restart_time", "pod_time", "expected_start"),
+    (
+        "restart_time",
+        "pod_time",
+        "initial_pod_time",
+        "expected_starts",
+        "expected_members",
+    ),
     [
         (
             "2026-10-14T09:55:00Z",
             "2026-10-14T09:56:00Z",
-            datetime(2026, 10, 14, 10, 0, tzinfo=timezone.utc),
+            None,
+            ["10:00"],
+            [frozenset({"pod-current"})],
         ),
         (
             "2026-10-14T10:30:00Z",
             "2026-10-14T10:31:00Z",
-            datetime(2026, 10, 14, 10, 30, tzinfo=timezone.utc),
+            None,
+            ["10:30"],
+            [frozenset({"pod-current"})],
+        ),
+        (
+            "2026-10-14T10:30:00Z",
+            "2026-10-14T10:31:00Z",
+            "2026-10-14T10:05:00Z",
+            ["10:00", "10:30"],
+            [
+                frozenset({"pod-initial"}),
+                frozenset({"pod-current"}),
+            ],
+        ),
+        (
+            "2026-10-14T10:30:00Z",
+            "2026-10-14T10:31:00Z",
+            "2026-10-14T09:59:00Z",
+            ["10:00", "10:30"],
+            [
+                frozenset({"pod-initial"}),
+                frozenset({"pod-current"}),
+            ],
         ),
     ],
-    ids=["active-before-boundary", "first-seen-after-boundary"],
+    ids=[
+        "active-before-boundary",
+        "first-seen-after-boundary",
+        "unlabeled-execution-before-restart",
+        "predating-unlabeled-execution",
+    ],
 )
 def test_initial_boundary_preserves_nonzero_restart_evidence_time(
     restart_time,
     pod_time,
-    expected_start,
+    initial_pod_time,
+    expected_starts,
+    expected_members,
 ):
     owner = {
         "apiVersion": "jobset.x-k8s.io/v1alpha2",
@@ -557,8 +594,29 @@ def test_initial_boundary_preserves_nonzero_restart_evidence_time(
         "uid": "jobset-uid",
         "controller": True,
     }
+    initial_pods = (
+        [
+            {
+                "kind": "Pod",
+                "metadata": {
+                    "uid": "pod-initial",
+                    "name": "initial-pod",
+                },
+                "selectedMetadata": {
+                    "annotations": {
+                        "pod-group-name": "pg-training"
+                    }
+                },
+                "observedAt": initial_pod_time,
+                "status": {"startTime": initial_pod_time},
+            }
+        ]
+        if initial_pod_time
+        else []
+    )
     history = {
         "observations": [
+            *initial_pods,
             {
                 "kind": "Job",
                 "metadata": {"uid": "job-current", "name": "current-child"},
@@ -590,10 +648,13 @@ def test_initial_boundary_preserves_nonzero_restart_evidence_time(
         now=datetime(2026, 10, 14, 11, 0, tzinfo=timezone.utc),
     )
 
-    assert len(attempts) == 1
-    assert attempts[0].restart_attempt == "2"
-    assert attempts[0].start_time == expected_start
-    assert attempts[0].pod_uids == frozenset({"pod-current"})
+    assert [attempt.start_time.strftime("%H:%M") for attempt in attempts] == (
+        expected_starts
+    )
+    assert [attempt.restart_attempt for attempt in attempts] == (
+        ["0", "2"] if initial_pod_time else ["2"]
+    )
+    assert [attempt.pod_uids for attempt in attempts] == expected_members
 
 
 def test_single_podgroup_includes_pod_that_predates_start():
