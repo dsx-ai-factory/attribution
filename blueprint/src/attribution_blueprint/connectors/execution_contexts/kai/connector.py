@@ -55,6 +55,7 @@ from attribution_blueprint.connectors.execution_contexts.kai.helpers import (
     resolve_owner as _resolve_owner,
 )
 from attribution_blueprint.kubernetes.attempts import (
+    kai_podgroup_start_timestamp,
     resource_from_observation,
     retained_history_covers_window,
 )
@@ -1140,9 +1141,9 @@ class KaiExecutionContextAdapter:
                 if _skip_reason(owner, owner_object) is None
                 else []
             )
-            if live_observations and (
-                podgroup.get("status") or {}
-            ).get("lastStartTimestamp"):
+            if live_observations and kai_podgroup_start_timestamp(
+                podgroup
+            ):
                 records = self._fetch_placement_records(
                     {
                         "namespace": namespace,
