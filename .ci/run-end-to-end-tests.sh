@@ -76,6 +76,10 @@ docker build \
     "${source_root}"
 assert_image_license "${service_image}"
 assert_image_license "${blueprint_image}"
+docker run --rm \
+    --entrypoint /opt/blueprint/.venv/bin/python \
+    "${blueprint_image}" \
+    -c 'from confluent_kafka import Consumer, Producer; from attribution_blueprint.connectors.outputs.kafka import KafkaOutput'
 docker run --detach --rm \
     --name "${container_name}" \
     --env ATTRIBUTION_DB=/data/attributions.db \

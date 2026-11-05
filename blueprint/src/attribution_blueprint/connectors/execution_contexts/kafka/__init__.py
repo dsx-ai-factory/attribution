@@ -1,18 +1,14 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-import os
-
 from attribution_blueprint import mca_registry as _registry
 from attribution_blueprint.connectors.execution_contexts.kafka.connector import (
     KafkaExecutionContext,
     KafkaExecutionContextAdapter,
 )
+from attribution_blueprint.connectors.kafka_client import SECURITY_SCHEMA_KEYS, security_config
 from attribution_blueprint.exceptions import MCAError
 from attribution_blueprint.mca_registry import _PARAM
-
-_SECURITY_PROTOCOLS = ("PLAINTEXT", "SSL", "SASL_PLAINTEXT", "SASL_SSL")
-_SASL_MECHANISMS = ("PLAIN", "SCRAM-SHA-256", "SCRAM-SHA-512")
 
 
 def _consumer_config(spec: dict) -> dict:
@@ -35,25 +31,7 @@ def _consumer_config(spec: dict) -> dict:
         "auto.offset.reset": "earliest",
     }
 
-    security_protocol = spec.get("security_protocol") or "PLAINTEXT"
-    if security_protocol not in _SECURITY_PROTOCOLS:
-        raise MCAError(f"eca.kafka.security_protocol must be one of {list(_SECURITY_PROTOCOLS)}")
-    config["security.protocol"] = security_protocol
-    if spec.get("ssl_ca_location"):
-        config["ssl.ca.location"] = str(spec["ssl_ca_location"])
-
-    if security_protocol.startswith("SASL_"):
-        mechanism = spec.get("sasl_mechanism")
-        if mechanism not in _SASL_MECHANISMS:
-            raise MCAError(f"eca.kafka.sasl_mechanism must be one of {list(_SASL_MECHANISMS)}")
-        config["sasl.mechanism"] = mechanism
-        for key, setting in (("sasl_username_env", "sasl.username"), ("sasl_password_env", "sasl.password")):
-            env_name = spec.get(key)
-            if not env_name:
-                raise MCAError(f"eca.kafka security_protocol={security_protocol} requires {key}")
-            if env_name not in os.environ:
-                raise MCAError(f"eca.kafka.{key} references unset environment variable: {env_name}")
-            config[setting] = os.environ[env_name]
+    config.update(security_config(spec, "eca.kafka"))
     return config
 
 
@@ -113,11 +91,7 @@ _registry.register_component(
         "poll_timeout_seconds": _PARAM,
         # Bound the complete read, including assignment and empty fetches.
         "discovery_timeout_seconds": _PARAM,
-        "security_protocol": _PARAM,
-        "sasl_mechanism": _PARAM,
-        "sasl_username_env": _PARAM,
-        "sasl_password_env": _PARAM,
-        "ssl_ca_location": _PARAM,
+        **dict.fromkeys(SECURITY_SCHEMA_KEYS, _PARAM),
     },
     build=_build,
 )
