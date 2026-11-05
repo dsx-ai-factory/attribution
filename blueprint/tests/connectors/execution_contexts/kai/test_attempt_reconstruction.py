@@ -701,8 +701,21 @@ def test_single_podgroup_includes_pod_that_predates_start():
     [None, "2026-10-14T10:10:00Z"],
     ids=["without-source-timestamp", "with-source-timestamp"],
 )
+@pytest.mark.parametrize(
+    "completion_status",
+    [
+        {
+            "conditions": [
+                _condition("Complete", "2026-10-14T10:20:00Z")
+            ]
+        },
+        {"completionTime": "2026-10-14T10:20:00Z"},
+    ],
+    ids=["complete-condition", "completion-time"],
+)
 def test_deleted_podgroup_retains_later_owner_terminal_and_pods(
     deletion_timestamp,
+    completion_status,
 ):
     owner = {
         "apiVersion": "batch/v1",
@@ -742,14 +755,7 @@ def test_deleted_podgroup_retains_later_owner_terminal_and_pods(
                 "kind": "Job",
                 "metadata": {"uid": "job-uid", "name": "trainer"},
                 "observedAt": "2026-10-14T10:20:00Z",
-                "status": {
-                    "conditions": [
-                        _condition(
-                            "Complete",
-                            "2026-10-14T10:20:00Z",
-                        )
-                    ]
-                },
+                "status": completion_status,
             },
         ]
     }

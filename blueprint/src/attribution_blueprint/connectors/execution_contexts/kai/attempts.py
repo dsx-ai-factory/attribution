@@ -599,7 +599,31 @@ def _terminal_events(observations: list[dict]) -> list[dict]:
         if kind not in {"Job", "JobSet"}:
             continue
         status = observation.get("status") or {}
-        for condition in status.get("conditions") or []:
+        conditions = status.get("conditions") or []
+        has_job_terminal = any(
+            condition.get("status") == "True"
+            and condition.get("type") in {"Failed", "Complete"}
+            and condition.get("lastTransitionTime")
+            for condition in conditions
+        )
+        if (
+            kind == "Job"
+            and not has_job_terminal
+            and status.get("completionTime")
+        ):
+            events.append(
+                {
+                    "kind": "Job",
+                    "uid": (observation.get("metadata") or {}).get(
+                        "uid"
+                    ),
+                    "type": "Complete",
+                    "reason": None,
+                    "time": status["completionTime"],
+                    "restart_attempt": restart_attempt(observation),
+                }
+            )
+        for condition in conditions:
             condition_type = condition.get("type")
             transition = condition.get("lastTransitionTime")
             supported = (
