@@ -953,6 +953,10 @@ def _active_hca_commands(stream: EventStream, nodes: JobNodeAttributions) -> lis
 
 
 def _resolve_hca_devices(commands: list[_HcaCommand]) -> list[_HcaCommand]:
+    """Fill missing devices from same-node, same-PID/thread anchors within five minutes.
+
+    All nearby anchors must agree on one device; retain its source as evidence.
+    """
     anchors = defaultdict(lambda: defaultdict(list))
     for command in commands:
         if command.device and command.node and command.process and command.source.time is not None:

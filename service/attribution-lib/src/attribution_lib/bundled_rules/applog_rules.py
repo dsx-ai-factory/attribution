@@ -483,13 +483,8 @@ def irrecoverable_net_ib_communicator_error_event(
     return events
 
 
-@rule_processor("applog:Call to ibv_modify_qp failed")
-def ibv_modify_qp_failed_event(
-    groups: Dict[str, str], node: str, source: Source, ctx: RuleContext
-) -> List[EventTriple]:
-    node = command_source_node(node, source, ctx)
-    error_code = int(groups["error_code"])
-    local_gid, remote_gid = groups["local_gid"], groups["remote_gid"]
+def _qp_gid_addresses(local_gid: str, remote_gid: str) -> tuple[dict[str, str], bool]:
+    """Canonicalize available addresses and identify two IPv4-mapped GIDs."""
     addresses = {}
     for endpoint, gid in (("local", local_gid), ("remote", remote_gid)):
         try:
@@ -503,13 +498,11 @@ def ibv_modify_qp_failed_event(
         f"{endpoint}_dev_ip": str(getattr(address, "ipv4_mapped", None) or address)
         for endpoint, address in addresses.items()
     }
-    remote_ip = pair_ips.get("remote_dev_ip", remote_gid)
+    return pair_ips, mapped_gids
 
-    pair_peer = get_hostname(remote_ip) if remote_gid != "N/A" else None
-    peer_node = normalize_network_hostname(pair_peer) if pair_peer is not None else None
-    # Pair reports retain unmapped addresses; fault attribution requires a name.
-    pair_peer = peer_node or pair_peer
 
+def _qp_failure_symptom(error_code: int, mapped_gids: bool, job_script: str | None) -> str:
+    """Preserve the existing errno, GID mismatch and user-configuration symptoms."""
     msg = f"Call to ibv_modify_qp failed: eno {error_code}"
     if error_code == 11:
         msg += " resource unavailable"
@@ -520,9 +513,22 @@ def ibv_modify_qp_failed_event(
     elif error_code == 110:
         msg += " timeout"
         # Check if job script contains forbidden NCCL parameters
-        if ctx.job_script_content and any(param in ctx.job_script_content for param in NCCL_PARAMS_OVERWRITE_FORBIDDEN):
+        if job_script and any(param in job_script for param in NCCL_PARAMS_OVERWRITE_FORBIDDEN):
             msg += "(Overwrite NCCL parameters)"
 
+    return msg
+
+
+def _qp_failure_attributions(
+    error_code: int,
+    mapped_gids: bool,
+    node: str | None,
+    peer_node: str | None,
+    local_hca: str,
+    msg: str,
+    source: Source,
+) -> list[EventTriple]:
+    """Choose local or pair evidence without blaming an unidentified emitter's peer."""
     # Only the errno-22 variant with two IPv4-mapped GIDs establishes a
     # local-side fault. Keep mismatched-GID and resolved timeout behavior.
     local_argument_error = error_code == 22 and mapped_gids
@@ -536,7 +542,7 @@ def ibv_modify_qp_failed_event(
             else _bad(node, msg, source, demotion="Call to ibv_modify_qp failed")
         ]
     elif local_command_error:
-        events = command_failure_events("ibv_modify_qp", error_code, node, source, groups["local_hca"])
+        events = command_failure_events("ibv_modify_qp", error_code, node, source, local_hca)
     elif node is None:
         events = [_interesting(None, msg, source)]
     elif local_argument_error:
@@ -551,6 +557,26 @@ def ibv_modify_qp_failed_event(
                 source=source,
             )
         )
+
+    return events
+
+
+@rule_processor("applog:Call to ibv_modify_qp failed")
+def ibv_modify_qp_failed_event(
+    groups: Dict[str, str], node: str, source: Source, ctx: RuleContext
+) -> List[EventTriple]:
+    """Attribute the failure and retain endpoint details independently of node blame."""
+    node = command_source_node(node, source, ctx)
+    error_code = int(groups["error_code"])
+    remote_gid = groups["remote_gid"]
+    pair_ips, mapped_gids = _qp_gid_addresses(groups["local_gid"], remote_gid)
+    remote_ip = pair_ips.get("remote_dev_ip", remote_gid)
+    pair_peer = get_hostname(remote_ip) if remote_gid != "N/A" else None
+    peer_node = normalize_network_hostname(pair_peer) if pair_peer is not None else None
+    # Pair reports retain unmapped addresses; fault attribution requires a name.
+    pair_peer = peer_node or pair_peer
+    msg = _qp_failure_symptom(error_code, mapped_gids, ctx.job_script_content)
+    events = _qp_failure_attributions(error_code, mapped_gids, node, peer_node, groups["local_hca"], msg, source)
 
     # Keep complete-pair semantics for two mapped GIDs, retaining any available
     # canonical addresses in partial reports as well.

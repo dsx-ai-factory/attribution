@@ -169,7 +169,7 @@ match_re            = 'Process group watchdog thread terminated'
 processor           = "applog:pytorch_watchdog"
 
 # Local verbs failures do not identify a remote endpoint. Device-less events
-# remain available as evidence, but cannot satisfy device-scoped correlation.
+# can correlate through an unambiguous same-process/thread device anchor.
 [[extractor]]
 name = "LocalHcaCommandFailure"
 match_re = 'Call to (?P<verb>ibv_query_qp|ibv_create_cq|ibv_reg_mr|ibv_dereg_mr) failed with (?P<error>[^\r\n]+)'
