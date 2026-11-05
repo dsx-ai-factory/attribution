@@ -17,6 +17,48 @@ if TYPE_CHECKING:
 # Kubernetes queue schedulers that share rule semantics.
 KUBERNETES_SCHEDULER_TYPES = frozenset({Scheduler.KUEUE, Scheduler.KAI})
 
+# Bad symptoms a preempted job can carry without a failure: the fallback for a
+# job with no evidence, and the symptom of Slurm's "CANCELLED AT" step-log line,
+# which Slurm also writes for a preemption.
+_PREEMPTION_ONLY_SYMPTOMS = ("job failed", "Cancelled by user")
+
+
+def apply_preemption_pass(attribution_result: "AttributionResult", job_info: JobInfo) -> bool:
+    """Reclassify a preempted job to Pass when its evidence gives no failure verdict.
+
+    Preemption must not mask evidence-backed failures. Teardown noise near the
+    job end is demoted earlier by ExternalTerminationCascade, so a failure
+    verdict here comes from evidence before the preemption. The verdict counts
+    only while a bad symptom other than _PREEMPTION_ONLY_SYMPTOMS remains, because
+    refiners after the outcome calculation can demote the evidence that chose it.
+
+    Args:
+        attribution_result: Result whose outcome and symptoms are updated in place.
+        job_info: Job to check.
+
+    Returns:
+        True when the job was reclassified to Pass.
+    """
+    if job_info.attributed_cancellation is not None or job_info.state is None or job_info.state.upper() != "PREEMPTED":
+        return False
+    if attribution_result.outcome_attr.value().outcome.startswith("Fail") and any(
+        symptom not in _PREEMPTION_ONLY_SYMPTOMS for symptom in attribution_result.symptoms.symptoms()
+    ):
+        return False
+
+    previous_source = attribution_result.outcome_attr.one_source()
+    if previous_source is None:
+        previous_source = job_info.source(job_info.state, "slurm state")
+
+    attribution_result.outcome_attr = SourceSet(
+        OutcomeAttribution(outcome="Pass", hw_cause="Not Applicable", root_cause_symptom="SLURM preempted")
+    ).add(previous_source.derived(rule="reclassified: slurm preempted"))
+    # Show the preemption as the reason for the job end.
+    for symptom in _PREEMPTION_ONLY_SYMPTOMS:
+        attribution_result.symptoms.discard(symptom)
+    attribution_result.symptoms.add(job_info.source_value("Job preempted", job_info.state, "state preempted"))
+    return True
+
 
 def apply_user_cancellation_reclassification(
     attribution_result: "AttributionResult",
@@ -66,32 +108,7 @@ def apply_outcome_reclassification_rules(
 ) -> None:
     """Apply post-processing outcome reclassification rules."""
 
-    has_only_preemption_fallback = all(
-        symptom == "job failed" for symptom in attribution_result.symptoms.symptoms()
-    )
-
-    # Kubernetes scheduler preemption must not mask evidence-backed
-    # failures. Other scheduler types retain their original behavior.
-    if (
-        job_info.attributed_cancellation is None
-        and (job_info.scheduler not in KUBERNETES_SCHEDULER_TYPES or has_only_preemption_fallback)
-        and job_info.state is not None
-        and job_info.state.upper() == "PREEMPTED"
-    ):
-        previous_source = attribution_result.outcome_attr.one_source()
-
-        if previous_source is None:
-            previous_source = job_info.source(job_info.state, "slurm state")
-
-        new_outcome = OutcomeAttribution(
-            outcome="Pass",
-            hw_cause="Not Applicable",
-            root_cause_symptom="SLURM preempted",
-        )
-
-        attribution_result.outcome_attr = SourceSet(new_outcome).add(
-            previous_source.derived(rule="reclassified: slurm preempted")
-        )
+    if apply_preemption_pass(attribution_result, job_info):
         return
 
     # Conditions:

@@ -2516,6 +2516,14 @@ outcome_symptom(
     doc="job-requeued",
 )
 
+# Added after the outcome is set, when preemption explains the job end.
+outcome_symptom(
+    "Job preempted",
+    outcome="Pass",
+    priority=OutcomePriority.FALLBACK,
+    doc="slurm-preempted",
+)
+
 outcome_symptom(
     "sigkill_handler] Killing subprocess",
     outcome="Fail User",

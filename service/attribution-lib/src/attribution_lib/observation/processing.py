@@ -163,6 +163,30 @@ class EntrySourceBase(ABC, Generic[E, T_co]):
 _YEAR_ROLLBACK_AFTER_JOB_END = timedelta(days=182)
 
 
+def _in_job_year(timestamp: datetime, timezone: Optional[ZoneInfo], job_end_time: Optional[datetime]) -> datetime:
+    """Give a log timestamp that has no year the year of the job end.
+
+    Args:
+        timestamp: Naive timestamp parsed from the log, with any year.
+        timezone: Timezone of the log clock.
+        job_end_time: Job end time. None means the current year.
+
+    Returns:
+        The timestamp in the job end's year on the log clock, or in the year
+        before when that date is more than half a year after the job end.
+    """
+    if job_end_time is None:
+        return timestamp.replace(year=datetime.now().year, tzinfo=timezone)
+    # A job that ends on New Year's Eve in one timezone can end on New Year's Day in another.
+    end_year = job_end_time.astimezone(timezone).year if timezone is not None else job_end_time.year
+    dt = timestamp.replace(year=end_year, tzinfo=timezone)
+    # Processes keep logging for a short time after the job ends, so only a date
+    # far after the end means the job finished in the following year.
+    if dt - job_end_time > _YEAR_ROLLBACK_AFTER_JOB_END:
+        dt = dt.replace(year=end_year - 1)
+    return dt
+
+
 def _extract_timestamp_from_pytorch_format(
     line: str, timezone: Optional[ZoneInfo] = None, job_end_time: Optional[datetime] = None
 ) -> Optional[datetime]:
@@ -172,26 +196,31 @@ def _extract_timestamp_from_pytorch_format(
     pytorch_pattern = r"\[E(\d{1,2})(\d{2})\s+(\d{2}):(\d{2}):(\d{2})(?:\.(\d+))?\s+"
     match = re.search(pytorch_pattern, line)
     if match:
-        month = int(match.group(1))
-        day = int(match.group(2))
-        hour = int(match.group(3))
-        minute = int(match.group(4))
-        second = int(match.group(5))
-
-        # Determine the correct year:
-        # - If job_end_time is provided (from job's time interval), use its year
-        # - If no job_end_time, fall back to current year (legacy behavior)
-        if job_end_time is not None:
-            dt = datetime(job_end_time.year, month, day, hour, minute, second, tzinfo=timezone)
-            # Processes keep logging for a short time after the job ends, so only a date
-            # far after the end means the job finished in the following year.
-            if dt - job_end_time > _YEAR_ROLLBACK_AFTER_JOB_END:
-                dt = dt.replace(year=dt.year - 1)
-        else:
-            dt = datetime(datetime.now().year, month, day, hour, minute, second, tzinfo=timezone)
-
-        return dt
+        # 2000 is a leap year, so February 29 parses before the real year is set.
+        return _in_job_year(datetime(2000, *map(int, match.groups()[:5])), timezone, job_end_time)
     return None
+
+
+def _extract_timestamp_from_slurmstepd_format(
+    line: str, timezone: Optional[ZoneInfo] = None, job_end_time: Optional[datetime] = None
+) -> Optional[datetime]:
+    """Extract the timestamp that slurmstepd writes to the step log.
+
+    Example: [Jan 15 10:20:30.123456 4321 slurmstepd   0x1234] error: ...
+
+    Args:
+        line: The log line to parse.
+        timezone: Timezone of the timestamp.
+        job_end_time: Job end time, used to infer the year.
+
+    Returns:
+        The timestamp, or None when the line has no slurmstepd timestamp.
+    """
+    match = re.search(r"\[(\w{3} +\d{1,2} \d{2}:\d{2}:\d{2})(?:\.\d+)? \d+ slurmstepd\b", line)
+    if match is None:
+        return None
+    # The caller turns the ValueError for an unknown month name into None.
+    return _in_job_year(datetime.strptime(f"2000 {match.group(1)}", "%Y %b %d %H:%M:%S"), timezone, job_end_time)
 
 
 def _extract_timestamp_from_iso_format(line: str, timezone: Optional[ZoneInfo] = None) -> Optional[datetime]:
@@ -220,6 +249,7 @@ def _extract_timestamp_from_log_line(
     - PyTorch format: [E1214 06:59:25.800744155 ...] or [EMMDD HH:MM:SS...]
     - Standard ISO-like format: [2025-12-14 01:07:40]
     - NCCL format: [2025-12-14 01:07:40] (with brackets)
+    - slurmstepd format: [Jan 15 10:20:30.123456 4321 slurmstepd ...]
 
     Args:
         line: The log line to parse
@@ -234,6 +264,9 @@ def _extract_timestamp_from_log_line(
             return timestamp
 
         if timestamp := _extract_timestamp_from_iso_format(line, timezone):
+            return timestamp
+
+        if timestamp := _extract_timestamp_from_slurmstepd_format(line, timezone, job_end_time):
             return timestamp
     except (ValueError, IndexError):
         # Gracefully handle any parsing errors
