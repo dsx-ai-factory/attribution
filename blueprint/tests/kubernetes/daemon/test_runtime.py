@@ -3,6 +3,7 @@
 
 import sqlite3
 import threading
+import time
 from types import SimpleNamespace
 
 import pytest
@@ -47,6 +48,19 @@ def _pod() -> dict:
         "spec": {"nodeName": "node-a"},
         "status": {},
     }
+
+
+def _initialize_pod_coverage(store) -> None:
+    store.complete_watch_list(
+        cluster_id="cluster-a",
+        namespace="team-a",
+        source_name="pods",
+        api_version="v1",
+        kind="Pod",
+        resource_version="10",
+        completed_at="2026-10-14T00:00:00Z",
+        gap_id=None,
+    )
 
 
 class _OwnerResolver:
@@ -305,16 +319,20 @@ class _PodWatchSource:
 
 
 class _FinitePodWatchSource(_PodWatchSource):
-    def __init__(self, snapshots, events):
+    def __init__(self, snapshots, events, *, list_resource_version="10"):
         self.snapshots = snapshots
         self.events = events
+        self.list_resource_version = list_resource_version
+        self.list_calls = 0
+        self.stream_resource_versions = []
         self.daemon = None
 
     def list_resources(self):
-        return self.snapshots, "10"
+        self.list_calls += 1
+        return self.snapshots, self.list_resource_version
 
     def stream(self, resource_version, timeout_seconds):
-        assert resource_version == "10"
+        self.stream_resource_versions.append(resource_version)
         yield from self.events
         self.daemon.stop()
 
@@ -351,6 +369,38 @@ class _RetrySnapshotSource(_PodWatchSource):
         return ()
 
 
+class _ExpiredWatchSource(_PodWatchSource):
+    def __init__(self, snapshot):
+        self.snapshot = snapshot
+        self.stream_calls = 0
+        self.readiness_during_lists = []
+        self.daemon = None
+
+    def list_resources(self):
+        self.readiness_during_lists.append(self.daemon.health.ready())
+        return [self.snapshot], "10"
+
+    def stream(self, resource_version, timeout_seconds):
+        from kubernetes.client.exceptions import ApiException
+
+        self.stream_calls += 1
+        if self.stream_calls == 1:
+            raise ApiException(status=410, reason="resource version expired")
+        self.daemon.stop()
+        return ()
+
+
+class _AbsentJobSetWatchSource(_PodWatchSource):
+    name = "jobsets"
+    api_version = "jobset.x-k8s.io/v1alpha2"
+    kind = "JobSet"
+
+    def list_resources(self):
+        from kubernetes.client.exceptions import ApiException
+
+        raise ApiException(status=404, reason="the server could not find the requested resource")
+
+
 class _FailObservationOnceStore:
     def __init__(self, delegate, resource_version):
         self.delegate = delegate
@@ -370,6 +420,26 @@ class _FailObservationOnceStore:
         return getattr(self.delegate, name)
 
 
+class _FailPlacementOnceStore:
+    """The first atomic capture containing a placement fails."""
+
+    def __init__(self, delegate):
+        self.delegate = delegate
+        self.capture_calls = 0
+
+    def capture_observation(self, observation, **kwargs):
+        self.capture_calls += 1
+        if self.capture_calls == 1 and kwargs.get("placement") is not None:
+            raise OSError("synthetic placement storage failure")
+        return self.delegate.capture_observation(observation, **kwargs)
+
+    def get_by_pod_uid(self, pod_uid):
+        return self.delegate.get_by_pod_uid(pod_uid)
+
+    def __getattr__(self, name):
+        return getattr(self.delegate, name)
+
+
 class _NoWaitEvent(threading.Event):
     def wait(self, timeout=None):
         return self.is_set()
@@ -378,8 +448,10 @@ class _NoWaitEvent(threading.Event):
 def test_records_placement_before_any_resolution(tmp_path):
     store = SQLitePlacementStore(str(tmp_path / "placements.db"))
     daemon = KubernetesDaemon(core_api=None, store=store, namespace="team-a")
+    pod = _pod()
+    pod["metadata"]["resourceVersion"] = "1"
 
-    assert daemon._capture(_PodWatchSource(), _pod(), "SNAPSHOT") is True
+    assert daemon._capture(_PodWatchSource(), pod, "SNAPSHOT") is True
 
     record = store.get_by_pod_uid("pod-uid-1")
     assert record is not None
@@ -404,14 +476,16 @@ def test_transient_placement_read_failure_still_enriches_owner(tmp_path):
         namespace="team-a",
         owner_resolver=_OwnerResolver(),
     )
-    assert daemon._capture(_PodWatchSource(), _pod(), "SNAPSHOT") is True
+    pod = _pod()
+    pod["metadata"]["resourceVersion"] = "1"
+    assert daemon._capture(_PodWatchSource(), pod, "SNAPSHOT") is True
 
-    daemon._record(_pod())
+    daemon._record(pod)
 
     assert backing_store.get_by_pod_uid("pod-uid-1").owner.uid == "job-uid-1"
 
 
-def test_complete_listing_reconciles_absent_placements(mocker):
+def test_pod_snapshot_reconciles_absent_placements(mocker):
     store = mocker.Mock()
     daemon = KubernetesDaemon(core_api=None, store=store, namespace="team-a")
     pod = _pod()
@@ -585,8 +659,10 @@ def test_recording_attempt_does_not_retry_scheduler_resolution_inline(tmp_path):
         max_resolution_attempts=5,
     )
 
-    assert daemon._capture(_PodWatchSource(), _pod(), "SNAPSHOT") is True
-    daemon._record(_pod())
+    pod = _pod()
+    pod["metadata"]["resourceVersion"] = "1"
+    assert daemon._capture(_PodWatchSource(), pod, "SNAPSHOT") is True
+    daemon._record(pod)
 
     assert resolver.calls == 1
     record = store.get_by_pod_uid("pod-uid-1")
@@ -605,17 +681,20 @@ def test_reassigned_owner_refreshes_controller_reference_for_later_fallback(tmp_
         owner_resolver=resolver,
     )
     wait = mocker.patch.object(daemon.stop_event, "wait")
-    assert daemon._capture(_PodWatchSource(), _pod(), "SNAPSHOT") is True
-    daemon._record(_pod())
+
+    initial = _pod()
+    initial["metadata"]["resourceVersion"] = "1"
+    assert daemon._capture(_PodWatchSource(), initial, "SNAPSHOT") is True
+    daemon._record(initial)
     reassigned = _pod()
     reassigned["metadata"]["ownerReferences"][0]["uid"] = "job-uid-2"
     reassigned["metadata"]["resourceVersion"] = "2"
 
-    assert daemon._capture(_PodWatchSource(), reassigned, "MODIFIED") is True
+    assert daemon._capture(_PodWatchSource(), reassigned, "SNAPSHOT") is True
     daemon._record(reassigned)
-    reassigned = {**reassigned, "metadata": {**reassigned["metadata"], "resourceVersion": "3"}}
-    assert daemon._capture(_PodWatchSource(), reassigned, "MODIFIED") is True
-    daemon._record(reassigned)
+    pending = {**reassigned, "metadata": {**reassigned["metadata"], "resourceVersion": "3"}}
+    assert daemon._capture(_PodWatchSource(), pending, "SNAPSHOT") is True
+    daemon._record(pending)
 
     stored = store.get_by_pod_uid("pod-uid-1")
     assert resolver.calls == 3
@@ -798,7 +877,13 @@ def test_failed_capture_preserves_earlier_queued_generation(tmp_path, mocker):
 def test_stale_event_still_persists_failure_and_deletion_evidence(tmp_path):
     path = tmp_path / "placements.db"
     store = SQLitePlacementStore(str(path))
-    daemon = KubernetesDaemon(core_api=None, store=store, namespace="team-a")
+    _initialize_pod_coverage(store)
+    daemon = KubernetesDaemon(
+        core_api=None,
+        store=store,
+        namespace="team-a",
+        cluster_id="cluster-a",
+    )
     pod = _pod()
     pod["status"]["reason"] = "NodeLost"
 
@@ -878,13 +963,16 @@ def test_two_source_relist_stays_unready_until_both_sources_complete(mocker):
     assert daemon.health.ready() is True
 
 
-def test_resource_version_expiry_resets_readiness_before_relisting(mocker):
+def test_resource_version_expiry_resets_readiness_before_relisting(
+    tmp_path,
+    mocker,
+):
     """A relist triggered by an expired watch resourceVersion (HTTP 410) must
     clear `initial_list_complete` until the relist completes, so `/readyz`
     does not report ready while the daemon cannot currently reconcile."""
     from kubernetes.client.exceptions import ApiException
 
-    store = mocker.Mock()
+    store = SQLitePlacementStore(str(tmp_path / "placements.db"))
     core_api = mocker.Mock()
     daemon = KubernetesDaemon(core_api=core_api, store=store, namespace="team-a", workers=1)
 
@@ -922,15 +1010,19 @@ def test_projection_expansion_survives_expired_watch_relist(tmp_path, mocker):
     store = SQLitePlacementStore(str(tmp_path / "placements.db"))
     pod = _pod()
     pod["metadata"]["resourceVersion"] = "10"
-    old_observation = ResourceObservation.from_resource(
-        pod,
-        cluster_id="default",
-        event_type="SNAPSHOT",
-        status=selected_status("Pod", pod),
-        selected_metadata=None,
-        observed_at="2026-10-14T00:00:00Z",
+    core_api = mocker.Mock()
+    daemon = KubernetesDaemon(
+        core_api=core_api,
+        store=store,
+        namespace="team-a",
+        workers=1,
     )
-    store.append_observation(old_observation)
+    assert daemon._capture(_PodWatchSource(), pod, "SNAPSHOT") is True
+    [old_observation] = store.list_observations_for_uid(
+        "default",
+        "team-a",
+        "pod-uid-1",
+    )
 
     pod["metadata"]["labels"] = {
         "jobset.sigs.k8s.io/restart-attempt": "1",
@@ -939,14 +1031,7 @@ def test_projection_expansion_survives_expired_watch_relist(tmp_path, mocker):
         items=[pod],
         metadata=SimpleNamespace(resource_version="10"),
     )
-    core_api = mocker.Mock()
     core_api.list_namespaced_pod.return_value = listing
-    daemon = KubernetesDaemon(
-        core_api=core_api,
-        store=store,
-        namespace="team-a",
-        workers=1,
-    )
     observed_resource_versions = []
     watcher = mocker.Mock()
 
@@ -1046,6 +1131,55 @@ def test_retry_promotion_does_not_enqueue_work_after_stop(tmp_path):
     assert "pod-uid-1" not in daemon._pending
 
 
+def test_prune_expired_if_due_skips_within_interval(tmp_path, mocker):
+    store = SQLitePlacementStore(str(tmp_path / "placements.db"))
+    daemon = KubernetesDaemon(
+        core_api=None,
+        store=store,
+        namespace="team-a",
+        prune_interval_seconds=300,
+    )
+    prune = mocker.patch.object(store, "prune_expired")
+    daemon._last_pruned_at = time.monotonic()
+
+    daemon._prune_expired_if_due()
+
+    prune.assert_not_called()
+
+
+def test_prune_expired_if_due_runs_once_interval_elapses(tmp_path, mocker):
+    store = SQLitePlacementStore(str(tmp_path / "placements.db"))
+    daemon = KubernetesDaemon(
+        core_api=None,
+        store=store,
+        namespace="team-a",
+        prune_interval_seconds=300,
+    )
+    prune = mocker.patch.object(store, "prune_expired")
+    daemon._last_pruned_at = time.monotonic() - 301
+
+    daemon._prune_expired_if_due()
+
+    prune.assert_called_once()
+    # The clock resets so a second call within the interval is a no-op.
+    daemon._prune_expired_if_due()
+    prune.assert_called_once()
+
+
+def test_prune_expired_if_due_logs_and_continues_on_failure(tmp_path, mocker):
+    store = SQLitePlacementStore(str(tmp_path / "placements.db"))
+    daemon = KubernetesDaemon(
+        core_api=None,
+        store=store,
+        namespace="team-a",
+        prune_interval_seconds=300,
+    )
+    mocker.patch.object(store, "prune_expired", side_effect=OSError("synthetic prune failure"))
+    daemon._last_pruned_at = time.monotonic() - 301
+
+    daemon._prune_expired_if_due()  # must not raise
+
+
 def test_worker_survives_unexpected_recording_failure(tmp_path):
     store = SQLitePlacementStore(str(tmp_path / "placements.db"))
     daemon = KubernetesDaemon(core_api=None, store=store, namespace="team-a")
@@ -1143,7 +1277,7 @@ def test_newer_pod_event_waits_instead_of_racing_the_in_flight_attempt(tmp_path)
     reassigned = _pod()
     reassigned["metadata"]["ownerReferences"][0]["uid"] = "job-uid-2"
     reassigned["metadata"]["resourceVersion"] = "2"
-    assert daemon._capture(_PodWatchSource(), reassigned, "MODIFIED") is True
+    assert daemon._capture(_PodWatchSource(), reassigned, "SNAPSHOT") is True
 
     # The newer snapshot is queued for this Pod UID, but no worker may start
     # it while the older attempt is still in flight.
@@ -1270,6 +1404,7 @@ def test_capture_journals_unbound_pod_without_placement(tmp_path):
 
 def test_capture_journals_deletion_before_enqueuing_bound_pod(tmp_path):
     store = SQLitePlacementStore(str(tmp_path / "placements.db"))
+    _initialize_pod_coverage(store)
     daemon = KubernetesDaemon(core_api=None, store=store, namespace="team-a", cluster_id="cluster-a")
     pod = _pod()
     pod["metadata"]["resourceVersion"] = "15"
@@ -1293,8 +1428,37 @@ def test_capture_journals_deletion_before_enqueuing_bound_pod(tmp_path):
     assert daemon._pending["pod-uid-1"][0]["metadata"]["uid"] == "pod-uid-1"
 
 
+def test_failed_deleted_capture_leaves_no_partial_retention_marker(tmp_path, mocker):
+    """A failed atomic capture must not leave a deletion marker behind: the
+    observation, placement, and marker are one transaction, so a failure
+    rolls all of them back together instead of partially persisting. The
+    watch loop retries the whole capture from the last persisted checkpoint."""
+    path = tmp_path / "placements.db"
+    store = SQLitePlacementStore(str(path))
+    daemon = KubernetesDaemon(core_api=None, store=store, namespace="team-a", cluster_id="cluster-a")
+    pod = _pod()
+    pod["metadata"]["resourceVersion"] = "17"
+    store.create(PlacementRecord.for_pod(pod))
+    mocker.patch.object(
+        store,
+        "capture_observation",
+        side_effect=OSError("synthetic storage failure"),
+    )
+
+    assert daemon._capture(_PodWatchSource(), pod, "DELETED") is False
+
+    with sqlite3.connect(path) as connection:
+        marker = connection.execute(
+            "SELECT pod_uid FROM placement_deletion"
+        ).fetchone()
+    assert marker is None
+    assert daemon.health.persistence_failed is True
+    assert not daemon._pending and not daemon._in_flight
+
+
 def test_saturated_placement_queue_does_not_block_journal_capture(tmp_path):
     store = SQLitePlacementStore(str(tmp_path / "placements.db"))
+    _initialize_pod_coverage(store)
     daemon = KubernetesDaemon(
         core_api=None,
         store=store,
@@ -1313,7 +1477,27 @@ def test_saturated_placement_queue_does_not_block_journal_capture(tmp_path):
     observations = store.list_observations_for_uid("cluster-a", "team-a", "pod-uid-1")
     assert len(observations) == 1
     assert "pod-uid-1" not in daemon._pending
-    assert store.get_by_pod_uid("pod-uid-1") is not None
+    # The enrichment queue being full only defers owner/scheduler
+    # association; base placement must still be captured synchronously.
+    record = store.get_by_pod_uid("pod-uid-1")
+    assert record is not None
+    assert record.node_name == "node-a"
+
+
+def test_placement_persistence_failure_is_reported_and_blocks_advancement(tmp_path):
+    journal = SQLitePlacementStore(str(tmp_path / "placements.db"))
+    store = _FailPlacementOnceStore(journal)
+    daemon = KubernetesDaemon(core_api=None, store=store, namespace="team-a", cluster_id="cluster-a")
+    pod = _pod()
+    pod["metadata"]["resourceVersion"] = "20"
+
+    # Observation, placement, and checkpoint form one capture transaction.
+    # A placement failure therefore reports the whole resource version as
+    # uncaptured so the watch loop retries it.
+    assert daemon._capture(_PodWatchSource(), pod, "ADDED") is False
+    assert daemon.health.persistence_failed is True
+    assert store.get_by_pod_uid("pod-uid-1") is None
+    assert store.list_observations_for_uid("cluster-a", "team-a", "pod-uid-1") == []
 
 
 def test_watch_records_snapshots_updates_and_deletions(tmp_path):
@@ -1357,7 +1541,57 @@ def test_watch_records_snapshots_updates_and_deletions(tmp_path):
         "MODIFIED",
         "DELETED",
     ]
+    coverage = store.get_watch_coverage("cluster-a", "team-a", "pods")
+    assert coverage is not None
+    assert coverage.resource_version == "12"
     assert daemon.health.initial_list_complete is True
+
+
+def test_complete_watch_relist_marks_missing_resource_absent(tmp_path):
+    store = SQLitePlacementStore(str(tmp_path / "placements.db"))
+    retained = ResourceObservation(
+        cluster_id="cluster-a",
+        api_version="kueue.x-k8s.io/v1beta1",
+        kind="Workload",
+        namespace="team-a",
+        name="trainer",
+        uid="workload-uid-1",
+        resource_version="9",
+        event_type="MODIFIED",
+        observed_at="2026-10-14T00:00:00Z",
+        status={"conditions": [{"type": "Admitted", "status": "True"}]},
+    )
+    store.capture_observation(
+        retained,
+        source_name="workloads",
+        placement=None,
+        advance_checkpoint=False,
+    )
+    source = _FinitePodWatchSource([], [])
+    source.name = "workloads"
+    source.api_version = retained.api_version
+    source.kind = retained.kind
+    daemon = KubernetesDaemon(
+        core_api=None,
+        store=store,
+        namespace="team-a",
+        cluster_id="cluster-a",
+        watch_sources=(source,),
+    )
+    source.daemon = daemon
+
+    daemon._watch_source(source)
+
+    history = store.list_observations_for_uid(
+        "cluster-a",
+        "team-a",
+        retained.uid,
+    )
+    assert [observation.event_type for observation in history] == [
+        "MODIFIED",
+        "DELETED",
+    ]
+    assert (history[-1].selected_metadata or {}).get("deletionTimestamp") is None
 
 
 def test_watch_replays_failed_write_from_last_persisted_resource_version(tmp_path):
@@ -1417,3 +1651,180 @@ def test_initial_list_is_retried_before_watch_position_advances(tmp_path):
     assert source.list_calls == 2
     assert daemon.health.initial_list_complete is True
     assert daemon.health.persistence_failed is False
+
+
+def test_daemon_restart_resumes_from_durable_checkpoint_without_relist(tmp_path):
+    store = SQLitePlacementStore(str(tmp_path / "placements.db"))
+    pod = _pod()
+    pod["spec"] = {}
+    snapshot = {**pod, "metadata": {**pod["metadata"], "resourceVersion": "10"}}
+
+    event = {
+        "type": "MODIFIED",
+        "object": {
+            **pod,
+            "metadata": {**pod["metadata"], "resourceVersion": "11"},
+            "status": {"phase": "Running"},
+        },
+    }
+    first_source = _FinitePodWatchSource([snapshot], [event])
+    first_daemon = KubernetesDaemon(
+        core_api=None,
+        store=store,
+        namespace="team-a",
+        cluster_id="cluster-a",
+        watch_sources=(first_source,),
+    )
+    first_source.daemon = first_daemon
+    first_daemon._watch_source(first_source)
+    assert store.list_coverage_gaps("cluster-a", "team-a") == []
+
+    second_source = _FinitePodWatchSource([snapshot], [])
+    second_daemon = KubernetesDaemon(
+        core_api=None,
+        store=store,
+        namespace="team-a",
+        cluster_id="cluster-a",
+        watch_sources=(second_source,),
+    )
+    second_source.daemon = second_daemon
+    second_daemon._watch_source(second_source)
+
+    assert second_source.list_calls == 0
+    assert second_source.stream_resource_versions == ["11"]
+    assert store.list_coverage_gaps("cluster-a", "team-a") == []
+
+
+def test_daemon_restart_with_open_gap_forces_relist_and_closes_gap(tmp_path):
+    store = SQLitePlacementStore(str(tmp_path / "placements.db"))
+    store.complete_watch_list(
+        cluster_id="cluster-a",
+        namespace="team-a",
+        source_name="pods",
+        api_version="v1",
+        kind="Pod",
+        resource_version="10",
+        completed_at="2026-10-14T00:00:00Z",
+        gap_id=None,
+    )
+    gap_id = store.begin_coverage_gap(
+        cluster_id="cluster-a",
+        namespace="team-a",
+        source_name="pods",
+        api_version="v1",
+        kind="Pod",
+        reason="RESOURCE_VERSION_EXPIRED",
+        start_resource_version="10",
+        started_at="2026-10-14T00:00:00Z",
+        detected_at="2026-10-14T00:01:00Z",
+    )
+    source = _FinitePodWatchSource(
+        [],
+        [],
+        list_resource_version="20",
+    )
+    daemon = KubernetesDaemon(
+        core_api=None,
+        store=store,
+        namespace="team-a",
+        cluster_id="cluster-a",
+        watch_sources=(source,),
+    )
+    source.daemon = daemon
+
+    daemon._watch_source(source)
+
+    assert source.list_calls == 1
+    assert source.stream_resource_versions == ["20"]
+    [gap] = store.list_coverage_gaps("cluster-a", "team-a")
+    assert gap.id == gap_id
+    assert gap.started_at == "2026-10-14T00:00:00Z"
+    assert gap.detected_at == "2026-10-14T00:01:00Z"
+    assert gap.end_resource_version == "20"
+    assert gap.recovered_at is not None
+
+
+def test_expired_watch_records_coverage_gap_around_relist(tmp_path):
+    store = SQLitePlacementStore(str(tmp_path / "placements.db"))
+    pod = _pod()
+    pod["spec"] = {}
+    snapshot = {**pod, "metadata": {**pod["metadata"], "resourceVersion": "10"}}
+    source = _ExpiredWatchSource(snapshot)
+    daemon = KubernetesDaemon(
+        core_api=None,
+        store=store,
+        namespace="team-a",
+        cluster_id="cluster-a",
+        watch_sources=(source,),
+    )
+    source.daemon = daemon
+
+    daemon._watch_source(source)
+
+    assert source.readiness_during_lists == [False, False]
+    [gap] = store.list_coverage_gaps("cluster-a", "team-a")
+    assert gap.source_name == "pods"
+    assert gap.reason == "RESOURCE_VERSION_EXPIRED"
+    assert gap.start_resource_version == "10"
+    assert gap.started_at <= gap.detected_at
+    assert gap.end_resource_version == "10"
+    assert gap.recovered_at is not None
+
+
+def test_changed_watch_source_relists_instead_of_reusing_checkpoint(tmp_path):
+    store = SQLitePlacementStore(str(tmp_path / "placements.db"))
+    store.complete_watch_list(
+        cluster_id="cluster-a",
+        namespace="team-a",
+        source_name="pods",
+        api_version="v1",
+        kind="Pod",
+        resource_version="10",
+        completed_at="2026-10-14T00:00:00Z",
+        gap_id=None,
+    )
+    pod = _pod()
+    pod["apiVersion"] = "example.io/v2"
+    pod["spec"] = {}
+    snapshot = {**pod, "metadata": {**pod["metadata"], "resourceVersion": "20"}}
+    source = _FinitePodWatchSource(
+        [snapshot],
+        [],
+        list_resource_version="20",
+    )
+    source.api_version = "example.io/v2"
+    daemon = KubernetesDaemon(
+        core_api=None,
+        store=store,
+        namespace="team-a",
+        cluster_id="cluster-a",
+        watch_sources=(source,),
+    )
+    source.daemon = daemon
+
+    daemon._watch_source(source)
+
+    assert source.list_calls == 1
+    assert source.stream_resource_versions == ["20"]
+    [gap] = store.list_coverage_gaps("cluster-a", "team-a")
+    assert gap.reason == "WATCH_SOURCE_CHANGED"
+    assert gap.start_resource_version == "10"
+    assert gap.started_at == "2026-10-14T00:00:00Z"
+    assert gap.end_resource_version == "20"
+
+
+def test_absent_jobset_api_disables_watch_without_blocking_readiness(tmp_path):
+    store = SQLitePlacementStore(str(tmp_path / "placements.db"))
+    source = _AbsentJobSetWatchSource()
+    daemon = KubernetesDaemon(
+        core_api=None,
+        store=store,
+        namespace="team-a",
+        cluster_id="cluster-a",
+        watch_sources=(source,),
+    )
+
+    daemon._watch_source(source)
+
+    assert daemon.health.ready()
+    assert daemon.health.disabled_watch_status() == {"jobsets": "api-not-found"}

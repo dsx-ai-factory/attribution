@@ -29,7 +29,7 @@ above one replica or mount the database from multiple writers.
 
 Deleted placements and completed or deleted controller histories are removed
 after `retentionDays`; active histories are retained. The default is 30 days.
-Cleanup runs at startup and during normal store activity.
+Cleanup runs at startup and periodically, every five minutes by default.
 
 It does not retain Pod logs or Pod specifications.
 
@@ -85,8 +85,9 @@ Other useful chart settings are:
 - `jobsetVersion`
 
 Run the daemon on a system node outside the workload failure domain. JobSet
-ownership support is used when its API is installed; Jobs-only clusters do not
-need the JobSet CRD.
+watching is enabled by default. If the JobSet API is not installed, the daemon
+disables that optional watch, reports it through `/readyz`, and remains ready
+for ordinary Jobs. Set `watches.jobsets=false` to disable it explicitly.
 
 ### Configuring each adapter's endpoint
 

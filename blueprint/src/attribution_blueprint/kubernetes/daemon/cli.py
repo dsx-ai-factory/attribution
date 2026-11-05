@@ -84,6 +84,10 @@ def main() -> None:
     core_api = client.CoreV1Api(api_client)
     batch_api = client.BatchV1Api(api_client)
     custom_api = client.CustomObjectsApi(api_client)
+    placement_store = SQLitePlacementStore(
+        args.sqlite_path,
+        retention_days=args.retention_days,
+    )
     resource_resolvers = []
     watch_sources = []
     if args.watch_pods:
@@ -108,7 +112,12 @@ def main() -> None:
         )
 
         resource_resolvers.append(
-            KueueResourceResolver(custom_api, workload_version=args.kueue_workload_version)
+            KueueResourceResolver(
+                custom_api,
+                workload_version=args.kueue_workload_version,
+                journal=placement_store,
+                cluster_id=args.cluster_id,
+            )
         )
         watch_sources.append(
             custom_watch_source(
@@ -127,7 +136,12 @@ def main() -> None:
         )
 
         resource_resolvers.append(
-            KaiResourceResolver(custom_api, pod_group_version=args.kai_pod_group_version)
+            KaiResourceResolver(
+                custom_api,
+                pod_group_version=args.kai_pod_group_version,
+                journal=placement_store,
+                cluster_id=args.cluster_id,
+            )
         )
         watch_sources.append(
             custom_watch_source(
@@ -140,8 +154,6 @@ def main() -> None:
                 kind="PodGroup",
             )
         )
-
-    placement_store = SQLitePlacementStore(args.sqlite_path, retention_days=args.retention_days)
     daemon = KubernetesDaemon(
         core_api,
         placement_store,
@@ -150,6 +162,8 @@ def main() -> None:
             batch_api,
             custom_api,
             jobset_version=args.jobset_version,
+            journal=placement_store,
+            cluster_id=args.cluster_id,
         ),
         resource_resolvers=tuple(resource_resolvers),
         queue_size=args.queue_size,

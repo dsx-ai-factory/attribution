@@ -6,12 +6,14 @@ from __future__ import annotations
 import random
 import threading
 import time
+from datetime import datetime, timezone
 from itertools import count
 
 from loguru import logger
 
 from attribution_blueprint.kubernetes.daemon.health import HealthState
 from attribution_blueprint.kubernetes.daemon.models import (
+    CoverageGapReason,
     ObservationEventType,
     PlacementRecord,
     ResourceIdentity,
@@ -61,6 +63,7 @@ class KubernetesDaemon:
         watch_timeout_seconds: int = 60,
         max_resolution_attempts: int = 5,
         retry_poll_seconds: float = 1.0,
+        prune_interval_seconds: float = 300.0,
         cluster_id: str = "default",
         watch_sources: tuple[ResourceWatchSource, ...] | None = None,
     ):
@@ -70,6 +73,8 @@ class KubernetesDaemon:
             raise ValueError("workers must be positive")
         if max_resolution_attempts <= 0:
             raise ValueError("max_resolution_attempts must be positive")
+        if prune_interval_seconds <= 0:
+            raise ValueError("prune_interval_seconds must be positive")
         self.core_api = core_api
         self.store = store
         self.namespace = namespace
@@ -78,6 +83,8 @@ class KubernetesDaemon:
         self.watch_timeout_seconds = watch_timeout_seconds
         self.max_resolution_attempts = max_resolution_attempts
         self.retry_poll_seconds = retry_poll_seconds
+        self.prune_interval_seconds = prune_interval_seconds
+        self._last_pruned_at = time.monotonic()
         self.cluster_id = cluster_id
         self.watch_sources = watch_sources
         if self.watch_sources is None:
@@ -138,9 +145,68 @@ class KubernetesDaemon:
         from kubernetes.client.exceptions import ApiException
 
         resource_version = None
+        gap_id = None
+        checkpoint_loaded = False
+        pending_gap_reason: CoverageGapReason | None = None
+        pending_gap_resource_version: str | None = None
         backoff = 1.0
         while not self.stop_event.is_set():
             try:
+                if not checkpoint_loaded:
+                    coverage = self.store.get_watch_coverage(
+                        self.cluster_id,
+                        self.namespace,
+                        source.name,
+                    )
+                    open_gap = next(
+                        (
+                            gap
+                            for gap in self.store.list_coverage_gaps(
+                                self.cluster_id,
+                                self.namespace,
+                            )
+                            if gap.source_name == source.name
+                            and gap.recovered_at is None
+                        ),
+                        None,
+                    )
+                    if pending_gap_reason is not None:
+                        assert pending_gap_resource_version is not None
+                        assert coverage is not None
+                        gap_id = self.store.begin_coverage_gap(
+                            cluster_id=self.cluster_id,
+                            namespace=self.namespace,
+                            source_name=source.name,
+                            api_version=source.api_version,
+                            kind=source.kind,
+                            reason=pending_gap_reason,
+                            start_resource_version=pending_gap_resource_version,
+                            started_at=coverage.checkpointed_at,
+                            detected_at=_utc_now(),
+                        )
+                    elif open_gap is not None:
+                        gap_id = open_gap.id
+                    elif coverage is not None:
+                        if (
+                            coverage.api_version != source.api_version
+                            or coverage.kind != source.kind
+                        ):
+                            gap_id = self.store.begin_coverage_gap(
+                                cluster_id=self.cluster_id,
+                                namespace=self.namespace,
+                                source_name=source.name,
+                                api_version=source.api_version,
+                                kind=source.kind,
+                                reason="WATCH_SOURCE_CHANGED",
+                                start_resource_version=coverage.resource_version,
+                                started_at=coverage.checkpointed_at,
+                                detected_at=_utc_now(),
+                            )
+                        else:
+                            resource_version = coverage.resource_version
+                            self._mark_initial_list_complete(source.name)
+                    checkpoint_loaded = True
+
                 if resource_version is None:
                     resources, listed_resource_version = source.list_resources()
                     for resource in resources:
@@ -148,6 +214,25 @@ class KubernetesDaemon:
                             raise _ObservationPersistenceFailed
                     if source.kind == "Pod":
                         self._reconcile_active_pods(resources)
+                    completed_at = _utc_now()
+                    self.store.complete_watch_list(
+                        cluster_id=self.cluster_id,
+                        namespace=self.namespace,
+                        source_name=source.name,
+                        api_version=source.api_version,
+                        kind=source.kind,
+                        resource_version=listed_resource_version,
+                        completed_at=completed_at,
+                        gap_id=gap_id,
+                        active_resource_uids={
+                            uid
+                            for resource in resources
+                            if (uid := (resource.get("metadata") or {}).get("uid"))
+                        },
+                    )
+                    gap_id = None
+                    pending_gap_reason = None
+                    pending_gap_resource_version = None
                     resource_version = listed_resource_version
                     self._mark_initial_list_complete(source.name)
 
@@ -162,6 +247,7 @@ class KubernetesDaemon:
                         if event_resource_version:
                             resource_version = event_resource_version
                     elif event_type == "BOOKMARK" and event_resource_version:
+                        self._mark_watch_checkpoint(source, event_resource_version)
                         resource_version = event_resource_version
                     if self.stop_event.is_set():
                         break
@@ -174,9 +260,20 @@ class KubernetesDaemon:
             except ApiException as error:
                 if error.status == 410:
                     logger.warning(f"{source.name} watch resourceVersion expired; relisting")
-                    resource_version = None
+                    assert resource_version is not None
                     self._mark_initial_list_incomplete(source.name)
+                    checkpoint_loaded = False
+                    pending_gap_reason = "RESOURCE_VERSION_EXPIRED"
+                    pending_gap_resource_version = resource_version
+                    resource_version = None
                     continue
+                if error.status == 404 and source.kind == "JobSet":
+                    logger.warning(
+                        f"{source.name} Kubernetes API is absent; disabling the JobSet watch"
+                    )
+                    self.health.disable_watch(source.name, "api-not-found")
+                    self._mark_initial_list_complete(source.name)
+                    return
                 logger.warning(f"{source.name} watch failed: {error}")
             except RequiredPersistenceError as error:
                 logger.warning(f"{error}; replaying from the last persisted resourceVersion")
@@ -216,7 +313,9 @@ class KubernetesDaemon:
         try:
             result = self.store.capture_observation(
                 observation,
+                source_name=source.name,
                 placement=placement,
+                advance_checkpoint=event_type != "SNAPSHOT",
                 mark_deleted=placement is not None and event_type == "DELETED",
             )
         except Exception:
@@ -249,6 +348,23 @@ class KubernetesDaemon:
         with self._initial_lists_lock:
             self._initial_lists_complete.discard(source_name)
             self.health.update(initial_list_complete=False)
+
+    def _mark_watch_checkpoint(
+        self,
+        source: ResourceWatchSource,
+        resource_version: str,
+    ) -> None:
+        try:
+            self.store.mark_watch_checkpoint(
+                cluster_id=self.cluster_id,
+                namespace=self.namespace,
+                source_name=source.name,
+                resource_version=resource_version,
+                checkpointed_at=_utc_now(),
+            )
+        except Exception as error:
+            self.health.update(persistence_failed=True)
+            raise _ObservationPersistenceFailed from error
 
     def stop(self) -> None:
         self.stop_event.set()
@@ -334,7 +450,23 @@ class KubernetesDaemon:
     def _retry_loop(self) -> None:
         while not self.stop_event.is_set():
             self._promote_retries()
+            self._prune_expired_if_due()
             self.stop_event.wait(self.retry_poll_seconds)
+
+    def _prune_expired_if_due(self) -> None:
+        """Run the retention sweep at most once per `prune_interval_seconds`.
+
+        Reuses the already-running retry-loop thread instead of paying the
+        sweep's cost (a full observation-table scan and a recursive
+        owner-graph walk per expired candidate) on every store read/write."""
+        now = time.monotonic()
+        if now - self._last_pruned_at < self.prune_interval_seconds:
+            return
+        self._last_pruned_at = now
+        try:
+            self.store.prune_expired()
+        except Exception:
+            logger.exception("periodic retention sweep failed")
 
     def _promote_retries(self) -> None:
         """Move deferred retries back into pending.
@@ -545,3 +677,5 @@ def _stored_owner_matches_pod(record: PlacementRecord, pod: dict) -> bool:
         ]
         return len(job_references) == 1 and job_references[0].uid == controller_uid
     return False
+def _utc_now() -> str:
+    return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
