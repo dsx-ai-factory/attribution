@@ -30,7 +30,7 @@ from attribution_blueprint.kubernetes.daemon.sqlite_store import SQLitePlacement
 _RESTART_LABEL = "jobset.sigs.k8s.io/restart-attempt"
 
 
-def _owner(kind: str, name: str, uid: str) -> OwnerReference:
+def _owner_reference(kind: str, name: str, uid: str) -> OwnerReference:
     return OwnerReference(
         api_version=("jobset.x-k8s.io/v1alpha2" if kind == "JobSet" else "batch/v1"),
         kind=kind,
@@ -38,6 +38,51 @@ def _owner(kind: str, name: str, uid: str) -> OwnerReference:
         uid=uid,
         controller=True,
     )
+
+
+def _owner(kind: str, name: str, uid: str) -> dict:
+    return {
+        "apiVersion": (
+            "jobset.x-k8s.io/v1alpha2"
+            if kind == "JobSet"
+            else "batch/v1"
+        ),
+        "kind": kind,
+        "name": name,
+        "uid": uid,
+        "controller": True,
+    }
+
+
+def _pod_observation(
+    uid: str,
+    name: str,
+    observed_at: str,
+    *,
+    start_time: str,
+    restart: str | None = None,
+    pod_group_name: str = "pg-training",
+    node: str | None = None,
+    reason: str | None = None,
+) -> dict:
+    selected_metadata = {
+        "annotations": {"pod-group-name": pod_group_name}
+    }
+    if restart is not None:
+        selected_metadata["labels"] = {_RESTART_LABEL: restart}
+    status = {"startTime": start_time}
+    if reason is not None:
+        status["reason"] = reason
+    observation = {
+        "kind": "Pod",
+        "metadata": {"uid": uid, "name": name},
+        "selectedMetadata": selected_metadata,
+        "observedAt": observed_at,
+        "status": status,
+    }
+    if node is not None:
+        observation["spec"] = {"nodeName": node}
+    return observation
 
 
 def _observation(
@@ -115,7 +160,7 @@ def _capture(store: SQLitePlacementStore, observation: ResourceObservation) -> N
 
 
 def _seed_kai_restart_history(store: SQLitePlacementStore) -> None:
-    jobset_owner = _owner("JobSet", "training", "jobset-uid")
+    jobset_owner = _owner_reference("JobSet", "training", "jobset-uid")
     podgroup_owner = OwnerReference(
         api_version="jobset.x-k8s.io/v1alpha2",
         kind="JobSet",
@@ -123,8 +168,8 @@ def _seed_kai_restart_history(store: SQLitePlacementStore) -> None:
         uid="jobset-uid",
         controller=False,
     )
-    job0_owner = _owner("Job", "training-worker-0", "job-uid-0")
-    job1_owner = _owner("Job", "training-worker-1", "job-uid-1")
+    job0_owner = _owner_reference("Job", "training-worker-0", "job-uid-0")
+    job1_owner = _owner_reference("Job", "training-worker-1", "job-uid-1")
     top_owner = {
         "annotations": {
             "kai.scheduler/top-owner-metadata": (
@@ -374,13 +419,7 @@ def test_history_rejects_unsupported_owner_kinds_and_groups():
 
 
 def test_active_restart_carries_across_scheduling_boundaries():
-    owner = {
-        "apiVersion": "jobset.x-k8s.io/v1alpha2",
-        "kind": "JobSet",
-        "name": "training",
-        "uid": "jobset-uid",
-        "controller": True,
-    }
+    owner = _owner("JobSet", "training", "jobset-uid")
     history = {
         "observations": [
             _podgroup_observation(
@@ -388,16 +427,13 @@ def test_active_restart_carries_across_scheduling_boundaries():
                 "2026-10-14T10:00:00Z",
                 status={"lastStartTimestamp": "2026-10-14T10:00:00Z"},
             ),
-            {
-                "kind": "Pod",
-                "metadata": {"uid": "pod-old", "name": "old-pod"},
-                "selectedMetadata": {
-                    "annotations": {"pod-group-name": "pg-training"},
-                    "labels": {_RESTART_LABEL: "0"},
-                },
-                "observedAt": "2026-10-14T10:01:00Z",
-                "status": {"startTime": "2026-10-14T10:01:00Z"},
-            },
+            _pod_observation(
+                "pod-old",
+                "old-pod",
+                "2026-10-14T10:01:00Z",
+                start_time="2026-10-14T10:01:00Z",
+                restart="0",
+            ),
             _podgroup_observation(
                 owner,
                 "2026-10-14T11:00:00Z",
@@ -412,31 +448,25 @@ def test_active_restart_carries_across_scheduling_boundaries():
                 "observedAt": "2026-10-14T11:00:00Z",
                 "status": {"startTime": "2026-10-14T11:00:00Z"},
             },
-            {
-                "kind": "Pod",
-                "metadata": {"uid": "pod-new", "name": "new-pod"},
-                "selectedMetadata": {
-                    "annotations": {"pod-group-name": "pg-training"},
-                    "labels": {_RESTART_LABEL: "1"},
-                },
-                "observedAt": "2026-10-14T11:01:00Z",
-                "status": {"startTime": "2026-10-14T11:01:00Z"},
-            },
+            _pod_observation(
+                "pod-new",
+                "new-pod",
+                "2026-10-14T11:01:00Z",
+                start_time="2026-10-14T11:01:00Z",
+                restart="1",
+            ),
             _podgroup_observation(
                 owner,
                 "2026-10-14T12:00:00Z",
                 status={"lastStartTimestamp": "2026-10-14T12:00:00Z"},
             ),
-            {
-                "kind": "Pod",
-                "metadata": {"uid": "pod-latest", "name": "latest-pod"},
-                "selectedMetadata": {
-                    "annotations": {"pod-group-name": "pg-training"},
-                    "labels": {_RESTART_LABEL: "1"},
-                },
-                "observedAt": "2026-10-14T12:01:00Z",
-                "status": {"startTime": "2026-10-14T12:01:00Z"},
-            },
+            _pod_observation(
+                "pod-latest",
+                "latest-pod",
+                "2026-10-14T12:01:00Z",
+                start_time="2026-10-14T12:01:00Z",
+                restart="1",
+            ),
         ]
     }
 
@@ -461,13 +491,7 @@ def test_active_restart_carries_across_scheduling_boundaries():
 
 
 def test_restart_boundaries_are_scoped_to_podgroup_incarnation():
-    owner = {
-        "apiVersion": "jobset.x-k8s.io/v1alpha2",
-        "kind": "JobSet",
-        "name": "training",
-        "uid": "jobset-uid",
-        "controller": True,
-    }
+    owner = _owner("JobSet", "training", "jobset-uid")
     history = {
         "observations": [
             _podgroup_observation(
@@ -476,16 +500,13 @@ def test_restart_boundaries_are_scoped_to_podgroup_incarnation():
                 uid="podgroup-old",
                 status={"lastStartTimestamp": "2026-10-14T10:00:00Z"},
             ),
-            {
-                "kind": "Pod",
-                "metadata": {"uid": "pod-old", "name": "old-pod"},
-                "selectedMetadata": {
-                    "annotations": {"pod-group-name": "pg-training"},
-                    "labels": {_RESTART_LABEL: "0"},
-                },
-                "observedAt": "2026-10-14T10:01:00Z",
-                "status": {"startTime": "2026-10-14T10:01:00Z"},
-            },
+            _pod_observation(
+                "pod-old",
+                "old-pod",
+                "2026-10-14T10:01:00Z",
+                start_time="2026-10-14T10:01:00Z",
+                restart="0",
+            ),
             _podgroup_observation(
                 owner,
                 "2026-10-14T10:35:00Z",
@@ -499,16 +520,13 @@ def test_restart_boundaries_are_scoped_to_podgroup_incarnation():
                 uid="podgroup-new",
                 status={"lastStartTimestamp": "2026-10-14T10:30:00Z"},
             ),
-            {
-                "kind": "Pod",
-                "metadata": {"uid": "pod-new", "name": "new-pod"},
-                "selectedMetadata": {
-                    "annotations": {"pod-group-name": "pg-training"},
-                    "labels": {_RESTART_LABEL: "1"},
-                },
-                "observedAt": "2026-10-14T10:40:00Z",
-                "status": {"startTime": "2026-10-14T10:40:00Z"},
-            },
+            _pod_observation(
+                "pod-new",
+                "new-pod",
+                "2026-10-14T10:40:00Z",
+                start_time="2026-10-14T10:40:00Z",
+                restart="1",
+            ),
         ]
     }
 
@@ -587,29 +605,15 @@ def test_initial_boundary_preserves_nonzero_restart_evidence_time(
     expected_starts,
     expected_members,
 ):
-    owner = {
-        "apiVersion": "jobset.x-k8s.io/v1alpha2",
-        "kind": "JobSet",
-        "name": "training",
-        "uid": "jobset-uid",
-        "controller": True,
-    }
+    owner = _owner("JobSet", "training", "jobset-uid")
     initial_pods = (
         [
-            {
-                "kind": "Pod",
-                "metadata": {
-                    "uid": "pod-initial",
-                    "name": "initial-pod",
-                },
-                "selectedMetadata": {
-                    "annotations": {
-                        "pod-group-name": "pg-training"
-                    }
-                },
-                "observedAt": initial_pod_time,
-                "status": {"startTime": initial_pod_time},
-            }
+            _pod_observation(
+                "pod-initial",
+                "initial-pod",
+                initial_pod_time,
+                start_time=initial_pod_time,
+            )
         ]
         if initial_pod_time
         else []
@@ -624,16 +628,13 @@ def test_initial_boundary_preserves_nonzero_restart_evidence_time(
                 "observedAt": restart_time,
                 "status": {"startTime": restart_time},
             },
-            {
-                "kind": "Pod",
-                "metadata": {"uid": "pod-current", "name": "current-pod"},
-                "selectedMetadata": {
-                    "annotations": {"pod-group-name": "pg-training"},
-                    "labels": {_RESTART_LABEL: "2"},
-                },
-                "observedAt": pod_time,
-                "status": {"startTime": pod_time},
-            },
+            _pod_observation(
+                "pod-current",
+                "current-pod",
+                pod_time,
+                start_time=pod_time,
+                restart="2",
+            ),
             _podgroup_observation(
                 owner,
                 "2026-10-14T10:00:00Z",
@@ -658,25 +659,15 @@ def test_initial_boundary_preserves_nonzero_restart_evidence_time(
 
 
 def test_single_podgroup_includes_pod_that_predates_start():
-    owner = {
-        "apiVersion": "batch/v1",
-        "kind": "Job",
-        "name": "trainer",
-        "uid": "job-uid",
-        "controller": True,
-    }
+    owner = _owner("Job", "trainer", "job-uid")
     history = {
         "observations": [
-            {
-                "kind": "Pod",
-                "metadata": {
-                    "uid": "pod-uid",
-                    "name": "trainer-pod",
-                },
-                "selectedMetadata": {"annotations": {"pod-group-name": "pg-training"}},
-                "observedAt": "2026-10-14T10:06:00Z",
-                "status": {"startTime": "2026-10-14T10:00:00Z"},
-            },
+            _pod_observation(
+                "pod-uid",
+                "trainer-pod",
+                "2026-10-14T10:06:00Z",
+                start_time="2026-10-14T10:00:00Z",
+            ),
             _podgroup_observation(
                 owner,
                 "2026-10-14T10:06:00Z",
@@ -717,13 +708,7 @@ def test_deleted_podgroup_retains_later_owner_terminal_and_pods(
     deletion_timestamp,
     completion_status,
 ):
-    owner = {
-        "apiVersion": "batch/v1",
-        "kind": "Job",
-        "name": "trainer",
-        "uid": "job-uid",
-        "controller": True,
-    }
+    owner = _owner("Job", "trainer", "job-uid")
     history = {
         "observations": [
             _podgroup_observation(
@@ -731,16 +716,12 @@ def test_deleted_podgroup_retains_later_owner_terminal_and_pods(
                 "2026-10-14T10:00:00Z",
                 status={"lastStartTimestamp": "2026-10-14T10:00:00Z"},
             ),
-            {
-                "kind": "Pod",
-                "metadata": {
-                    "uid": "pod-uid",
-                    "name": "trainer-pod",
-                },
-                "selectedMetadata": {"annotations": {"pod-group-name": "pg-training"}},
-                "observedAt": "2026-10-14T10:01:00Z",
-                "status": {"startTime": "2026-10-14T10:01:00Z"},
-            },
+            _pod_observation(
+                "pod-uid",
+                "trainer-pod",
+                "2026-10-14T10:01:00Z",
+                start_time="2026-10-14T10:01:00Z",
+            ),
             _podgroup_observation(
                 owner,
                 "2026-10-14T10:15:00Z",
@@ -776,13 +757,7 @@ def test_deleted_podgroup_retains_later_owner_terminal_and_pods(
 
 
 def test_recreated_podgroups_with_same_restart_isolate_pods_and_terminal():
-    owner = {
-        "apiVersion": "jobset.x-k8s.io/v1alpha2",
-        "kind": "JobSet",
-        "name": "training",
-        "uid": "jobset-uid",
-        "controller": True,
-    }
+    owner = _owner("JobSet", "training", "jobset-uid")
     history = {
         "observations": [
             _podgroup_observation(
@@ -791,19 +766,13 @@ def test_recreated_podgroups_with_same_restart_isolate_pods_and_terminal():
                 uid="podgroup-old",
                 status={"lastStartTimestamp": "2026-10-14T10:00:00Z"},
             ),
-            {
-                "kind": "Pod",
-                "metadata": {
-                    "uid": "pod-old",
-                    "name": "trainer-old",
-                },
-                "selectedMetadata": {
-                    "annotations": {"pod-group-name": "pg-training"},
-                    "labels": {_RESTART_LABEL: "0"},
-                },
-                "observedAt": "2026-10-14T10:01:00Z",
-                "status": {"startTime": "2026-10-14T10:01:00Z"},
-            },
+            _pod_observation(
+                "pod-old",
+                "trainer-old",
+                "2026-10-14T10:01:00Z",
+                start_time="2026-10-14T10:01:00Z",
+                restart="0",
+            ),
             _podgroup_observation(
                 owner,
                 "2026-10-14T10:15:00Z",
@@ -817,19 +786,13 @@ def test_recreated_podgroups_with_same_restart_isolate_pods_and_terminal():
                 uid="podgroup-new",
                 status={"lastStartTimestamp": "2026-10-14T10:10:00Z"},
             ),
-            {
-                "kind": "Pod",
-                "metadata": {
-                    "uid": "pod-new",
-                    "name": "trainer-new",
-                },
-                "selectedMetadata": {
-                    "annotations": {"pod-group-name": "pg-training"},
-                    "labels": {_RESTART_LABEL: "0"},
-                },
-                "observedAt": "2026-10-14T10:16:00Z",
-                "status": {"startTime": "2026-10-14T10:11:00Z"},
-            },
+            _pod_observation(
+                "pod-new",
+                "trainer-new",
+                "2026-10-14T10:16:00Z",
+                start_time="2026-10-14T10:11:00Z",
+                restart="0",
+            ),
             {
                 "kind": "JobSet",
                 "metadata": {
@@ -969,25 +932,15 @@ def test_recreated_podgroups_with_same_restart_isolate_pods_and_terminal():
 
 
 def test_unstarted_replacement_keeps_closed_old_execution_recoverable():
-    owner = {
-        "apiVersion": "batch/v1",
-        "kind": "Job",
-        "name": "trainer",
-        "uid": "job-uid",
-        "controller": True,
-    }
+    owner = _owner("Job", "trainer", "job-uid")
     history = {
         "observations": [
-            {
-                "kind": "Pod",
-                "metadata": {
-                    "uid": "pod-old",
-                    "name": "trainer-old",
-                },
-                "selectedMetadata": {"annotations": {"pod-group-name": "pg-training"}},
-                "observedAt": "2026-10-14T10:01:00Z",
-                "status": {"startTime": "2026-10-14T10:01:00Z"},
-            },
+            _pod_observation(
+                "pod-old",
+                "trainer-old",
+                "2026-10-14T10:01:00Z",
+                start_time="2026-10-14T10:01:00Z",
+            ),
             _podgroup_observation(
                 owner, "2026-10-14T10:14:00Z", uid="podgroup-old", eventType="DELETED"
             ),
@@ -1029,13 +982,7 @@ def test_unstarted_replacement_keeps_closed_old_execution_recoverable():
 
 
 def test_next_scheduling_start_preserves_earlier_membership_after_gc():
-    owner = {
-        "apiVersion": "batch/v1",
-        "kind": "Job",
-        "name": "trainer",
-        "uid": "job-uid",
-        "controller": True,
-    }
+    owner = _owner("Job", "trainer", "job-uid")
     history = {
         "observations": [
             _podgroup_observation(
@@ -1044,32 +991,26 @@ def test_next_scheduling_start_preserves_earlier_membership_after_gc():
                 uid="podgroup-old",
                 status={"lastStartTimestamp": "2026-10-14T10:00:00Z"},
             ),
-            {
-                "kind": "Pod",
-                "metadata": {"uid": "pod-first", "name": "first-pod"},
-                "selectedMetadata": {
-                    "annotations": {"pod-group-name": "pg-training"},
-                    "labels": {_RESTART_LABEL: "0"},
-                },
-                "observedAt": "2026-10-14T10:01:00Z",
-                "status": {"startTime": "2026-10-14T10:01:00Z"},
-            },
+            _pod_observation(
+                "pod-first",
+                "first-pod",
+                "2026-10-14T10:01:00Z",
+                start_time="2026-10-14T10:01:00Z",
+                restart="0",
+            ),
             _podgroup_observation(
                 owner,
                 "2026-10-14T11:00:00Z",
                 uid="podgroup-old",
                 status={"lastStartTimestamp": "2026-10-14T11:00:00Z"},
             ),
-            {
-                "kind": "Pod",
-                "metadata": {"uid": "pod-second", "name": "second-pod"},
-                "selectedMetadata": {
-                    "annotations": {"pod-group-name": "pg-training"},
-                    "labels": {_RESTART_LABEL: "0"},
-                },
-                "observedAt": "2026-10-14T11:01:00Z",
-                "status": {"startTime": "2026-10-14T11:01:00Z"},
-            },
+            _pod_observation(
+                "pod-second",
+                "second-pod",
+                "2026-10-14T11:01:00Z",
+                start_time="2026-10-14T11:01:00Z",
+                restart="0",
+            ),
             _podgroup_observation(
                 owner, "2026-10-14T11:50:00Z", uid="podgroup-old", eventType="DELETED"
             ),
@@ -1109,13 +1050,7 @@ def test_next_scheduling_start_preserves_earlier_membership_after_gc():
 
 
 def test_unstarted_replacement_without_terminal_remains_uncertain():
-    owner = {
-        "apiVersion": "batch/v1",
-        "kind": "Job",
-        "name": "trainer",
-        "uid": "job-uid",
-        "controller": True,
-    }
+    owner = _owner("Job", "trainer", "job-uid")
     history = {
         "observations": [
             _podgroup_observation(
@@ -1146,13 +1081,7 @@ def test_unstarted_replacement_without_terminal_remains_uncertain():
 def test_retained_member_pod_node_loss_does_not_require_placement(
     completed, expected_state
 ):
-    owner = {
-        "apiVersion": "batch/v1",
-        "kind": "Job",
-        "name": "trainer",
-        "uid": "job-uid",
-        "controller": True,
-    }
+    owner = _owner("Job", "trainer", "job-uid")
     history = {
         "observations": [
             _podgroup_observation(
@@ -1160,16 +1089,13 @@ def test_retained_member_pod_node_loss_does_not_require_placement(
                 "2026-10-14T10:00:00Z",
                 status={"lastStartTimestamp": "2026-10-14T10:00:00Z"},
             ),
-            {
-                "kind": "Pod",
-                "metadata": {"uid": "lost-pod", "name": "lost-pod"},
-                "selectedMetadata": {"annotations": {"pod-group-name": "pg-training"}},
-                "observedAt": "2026-10-14T10:01:00Z",
-                "status": {
-                    "startTime": "2026-10-14T10:01:00Z",
-                    "reason": "NodeLost",
-                },
-            },
+            _pod_observation(
+                "lost-pod",
+                "lost-pod",
+                "2026-10-14T10:01:00Z",
+                start_time="2026-10-14T10:01:00Z",
+                reason="NodeLost",
+            ),
         ]
     }
     if completed:
