@@ -213,27 +213,36 @@ def test_assertion_priority_and_decision_graph(attribute_cycle, nvrx_line):
         "1: runtime.sh: line 42: 12345 Killed unsquashfs -f -d /work/cache image.sqsh",
     ],
 )
-def test_other_application_errors_keep_existing_nvrx_priority(attribute_cycle, line):
-    """This rule changes only the batch-size assertion's detection and priority."""
+def test_other_application_errors_outrank_generic_nvrx_failure(attribute_cycle, line):
+    """Rank a generic application error above NVRx detected failure.
+
+    The batch-size rule does not fire, so NVRx detected failure stays in the
+    symptoms but does not set the root cause.
+
+    Args:
+        attribute_cycle: Fixture that attributes one NVRx cycle.
+        line: Application error line reported with the NVRx failure.
+    """
     result, _ = attribute_cycle(line_entries([line, _NVRX]))
 
     assert _SYMPTOM not in result.symptoms
-    assert result.outcome_attr.value().outcome == "Fail MultiCategory"
-    assert result.outcome_attr.value().root_cause_symptom == "NVRx detected failure"
+    assert result.outcome_attr.value().root_cause_symptom != "NVRx detected failure"
+    assert "NVRx detected failure" in result.symptoms
 
 
 @pytest.mark.parametrize("watchdog", ["NCCL watchdog thread terminated", "Exception raised from ncclCommWatchdog"])
 @pytest.mark.parametrize(
-    "nvrx_line, fallback_symptom, fallback_outcome",
+    "nvrx_line, fallback_symptom, fallback_root, fallback_outcome",
     [
-        (_NVRX, "NVRx detected failure", "Fail MultiCategory"),
-        (_NO_PROGRESS, "NVRx no progress across restarts", "Fail MultiCategory"),
-        (_STEP_TIMEOUT, "NVRx step section timeout", "Fail MultiCategory"),
+        # NVRx detected failure ranks below the generic watchdog symptom.
+        (_NVRX, "NVRx detected failure", "PyTorch NCCL watchdog", "Fail MultiCategory"),
+        (_NO_PROGRESS, "NVRx no progress across restarts", "NVRx no progress across restarts", "Fail MultiCategory"),
+        (_STEP_TIMEOUT, "NVRx step section timeout", "NVRx step section timeout", "Fail MultiCategory"),
     ],
 )
 @pytest.mark.parametrize("has_assertion", [False, True])
 def test_watchdog_teardown_does_not_explain_nvrx_failure(
-    attribute_cycle, watchdog, nvrx_line, fallback_symptom, fallback_outcome, has_assertion
+    attribute_cycle, watchdog, nvrx_line, fallback_symptom, fallback_root, fallback_outcome, has_assertion
 ):
     lines = [nvrx_line, f"1: {watchdog}"]
     if has_assertion:
@@ -241,7 +250,7 @@ def test_watchdog_teardown_does_not_explain_nvrx_failure(
     result, graph = attribute_cycle(line_entries(lines))
 
     assert result.outcome_attr.value().outcome == ("Fail User" if has_assertion else fallback_outcome)
-    assert result.outcome_attr.value().root_cause_symptom == (_SYMPTOM if has_assertion else fallback_symptom)
+    assert result.outcome_attr.value().root_cause_symptom == (_SYMPTOM if has_assertion else fallback_root)
     dropped = has_assertion and fallback_symptom == "NVRx detected failure"
     assert (fallback_symptom in result.symptoms) is not dropped
 
@@ -262,12 +271,10 @@ def test_batch_sizes_share_a_label_and_preserve_each_source(attribute_cycle):
     "lines, job_options",
     [
         ([], {}),
-        (["1: Traceback (most recent call last):", '1:   File "/app/train.py", line 20, in worker'], {}),
         (["1: fatal"], {}),
         (["1: ValueError: unrecognized application-specific error"], {}),
         (["1: torch.distributed.DistBackendError: process group aborted during shutdown"], {}),
         (["1: RuntimeError: Gloo connectFullMesh failed"], {}),
-        ([], {"state": "TIMEOUT", "cancelled_by": "Timeout"}),
         ([], {"state": "CANCELLED", "cancelled_by": "test-user"}),
         ([], {"exit_code": 93}),
         ([], {"exit_code_signal": 15}),
@@ -280,6 +287,28 @@ def test_generic_nvrx_failure_is_multicategory(attribute_cycle, lines, job_optio
     assert result.outcome_attr.value().outcome == "Fail MultiCategory"
     assert result.outcome_attr.value().root_cause_symptom == "NVRx detected failure"
     assert result.outcome_attr.value().hw_cause == _UNAVAILABLE_REASON
+    assert "NVRx detected failure" in result.symptoms
+
+
+@pytest.mark.parametrize(
+    "lines, job_options",
+    [
+        (["1: Traceback (most recent call last):", '1:   File "/app/train.py", line 20, in worker'], {}),
+        ([], {"state": "TIMEOUT", "cancelled_by": "Timeout"}),
+    ],
+)
+def test_generic_user_failure_outranks_nvrx_failure(attribute_cycle, lines, job_options):
+    """Select Fail User when a generic user failure comes with an NVRx failure.
+
+    Args:
+        attribute_cycle: Fixture that attributes one NVRx cycle.
+        lines: Log lines reported with the NVRx failure.
+        job_options: Job metadata overrides for the cycle.
+    """
+    result, _ = attribute_cycle(line_entries([*lines, _NVRX]), **job_options)
+
+    assert result.outcome_attr.value().outcome == "Fail User"
+    assert result.outcome_attr.value().root_cause_symptom != "NVRx detected failure"
     assert "NVRx detected failure" in result.symptoms
 
 
@@ -402,5 +431,5 @@ def test_user_failure_replaces_generic_nvrx_failure(attribute_cycle, line, sympt
 def test_similar_lines_keep_generic_nvrx_failure(attribute_cycle, line):
     result, _ = attribute_cycle(line_entries([line, _NVRX]))
 
-    assert result.outcome_attr.value().root_cause_symptom == "NVRx detected failure"
+    assert result.outcome_attr.value().root_cause_symptom not in {symptom for _, symptom, _ in _USER_FAILURES}
     assert "NVRx detected failure" in result.symptoms
