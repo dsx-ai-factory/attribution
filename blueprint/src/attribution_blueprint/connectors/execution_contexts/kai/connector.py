@@ -81,10 +81,6 @@ _JOBSET_RESOURCE = "JobSet"
 _JOBSET_GROUP = "jobset.x-k8s.io"
 _JOBSET_NAME_LABEL = "jobset.sigs.k8s.io/jobset-name"
 
-_SHAPE_OWNED = "owned"
-_SHAPE_HIERARCHICAL = "hierarchical"
-
-
 class KaiExecutionContext(TypedDict):
     """Adapter-specific ExecutionContext shape.
 
@@ -107,7 +103,6 @@ class KaiExecutionContext(TypedDict):
     attempt_id: str
     namespace: str
     name: str
-    podgroup_shape: str
     owner_kind: str
     owner_name: str
     owner_uid: str
@@ -270,10 +265,6 @@ def _jobset_child_jobs(owner: dict, jobs: list[dict]) -> list[dict]:
     ]
 
 
-def _podgroup_shape(spec: dict) -> str:
-    return _SHAPE_HIERARCHICAL if spec.get("subGroups") else _SHAPE_OWNED
-
-
 def _non_negative_int(value: object) -> int | None:
     if isinstance(value, bool) or not isinstance(value, int) or value < 0:
         return None
@@ -401,7 +392,6 @@ def _base_context(
         "pod_group_uid": pod_group_uid,
         "namespace": namespace,
         "name": name,
-        "podgroup_shape": _podgroup_shape(spec),
         "owner_kind": owner["kind"],
         "owner_name": owner["name"],
         "owner_uid": owner["uid"],
@@ -533,9 +523,6 @@ def _parse_pod_group(
     if skip_reason is not None:
         logger.info(f"podgroup {namespace}/{name}: {skip_reason}; skipping")
         return None
-    shape = _podgroup_shape(podgroup.get("spec") or {})
-    if shape != _SHAPE_OWNED:
-        logger.info(f"podgroup {namespace}/{name}: {shape} PodGroup; recording its shape only")
     owner_end = _owner_end_time(owner, owner_object)
     if owner_end is None:
         logger.debug(f"podgroup {namespace}/{name}: owner {owner['kind']} still active; using now() for end_time")
