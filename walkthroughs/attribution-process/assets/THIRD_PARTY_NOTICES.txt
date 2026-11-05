@@ -165,6 +165,7 @@ Versions come from `blueprint/uv.lock`.
 
 | Package | Version | License | Source and license reference | Distribution |
 | --- | --- | --- | --- | --- |
+| aws-msk-iam-sasl-signer-python | 1.0.2 | Apache-2.0 | [Source](https://github.com/aws/aws-msk-iam-sasl-signer-python), [PyPI release](https://pypi.org/project/aws-msk-iam-sasl-signer-python/1.0.2/) | Installed separately (`kafka-aws` extra); included in the Blueprint container image |
 | loguru | 0.7.3 | MIT | [Source](https://github.com/Delgan/loguru), [PyPI release](https://pypi.org/project/loguru/0.7.3/) | Installed separately |
 | requests | 2.33.1 | Apache-2.0 | [Source](https://github.com/psf/requests), [PyPI release](https://pypi.org/project/requests/2.33.1/) | Installed separately |
 | fastapi | 0.139.0 | MIT | [Source](https://github.com/fastapi/fastapi), [PyPI release](https://pypi.org/project/fastapi/0.139.0/) | Installed separately (`web` extra) |
