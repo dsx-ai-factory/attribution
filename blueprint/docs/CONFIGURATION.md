@@ -518,7 +518,7 @@ treats the scheduler as unknown.
 ### `[eca.kafka]`
 
 Reads job-completion CloudEvents from a Kafka topic. Install the `kafka` extra
-(`confluent-kafka`). Each call reads at most `max_messages`, and the complete
+(`confluent-kafka`). Each `discover()` reads at most `max_messages`, and the complete
 read (assignment and fetching included) is bounded by `discovery_timeout_seconds`.
 An empty poll ends discovery only when all assigned partitions have reached
 broker end offsets. `poll_timeout_seconds` controls individual polls.
@@ -544,7 +544,8 @@ commit's broker outcome can be uncertain, so replay is not guaranteed.
 
 Delivery is best effort: commits happen before attribution. A later attribution
 or output failure does not automatically replay the event. Reset group offsets
-with Kafka tooling to replay; deferred acknowledgment is separate work.
+with Kafka tooling to replay. Long-lived callers can instead use the
+[explicit acknowledgement API](kafka_lifecycle.md) to control when offsets advance.
 
 Malformed, filtered, and within-batch duplicate events are intentional skips
 and their offsets commit too. Each call logs counts in `last_discovery_stats`
