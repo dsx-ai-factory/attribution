@@ -95,3 +95,64 @@ def parse_time(value: str) -> datetime:
         if parsed.tzinfo is None
         else parsed.astimezone(timezone.utc)
     )
+
+
+def resource_from_observation(observation: dict) -> dict:
+    """Restore the Kubernetes fields selected into a retained observation."""
+    metadata = dict(observation.get("metadata") or {})
+    selected = observation.get("selectedMetadata") or {}
+    for field in ("labels", "annotations", "deletionTimestamp"):
+        if selected.get(field):
+            metadata[field] = selected[field]
+    return {
+        "apiVersion": observation.get("apiVersion") or "",
+        "kind": observation.get("kind") or "",
+        "metadata": metadata,
+        "spec": observation.get("spec") or {},
+        "status": observation.get("status") or {},
+    }
+
+
+def retained_history_covers_window(
+    coverage: dict,
+    required_sources: set[str],
+    start: datetime,
+    end: datetime,
+) -> bool:
+    """Return whether retained watches continuously cover a time window."""
+    disabled = coverage.get("disabledWatches") or {}
+    sources = {
+        item.get("sourceName"): item
+        for item in coverage.get("sources") or []
+    }
+    for source_name in required_sources:
+        if source_name in disabled:
+            return False
+        source = sources.get(source_name)
+        if source is None:
+            return False
+        try:
+            coverage_start = parse_time(source["coverageStartedAt"])
+            checkpoint = parse_time(source["checkpointedAt"])
+        except (KeyError, TypeError, ValueError):
+            return False
+        if coverage_start > start or checkpoint < end:
+            return False
+
+    for gap in coverage.get("gaps") or []:
+        if gap.get("sourceName") not in required_sources:
+            continue
+        try:
+            gap_start = parse_time(gap["startedAt"])
+            gap_end = (
+                parse_time(gap["recoveredAt"])
+                if gap.get("recoveredAt")
+                else None
+            )
+        except (KeyError, TypeError, ValueError):
+            return False
+        if gap_start <= end and (
+            gap_end is None or gap_end >= start
+        ):
+            return False
+    return True
