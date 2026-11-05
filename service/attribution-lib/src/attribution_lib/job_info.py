@@ -55,6 +55,8 @@ class Scheduler(StrEnum):
     KUEUE = "kueue"
     # Identity only; attribution raises NotImplementedError until KAI rules land.
     KAI = "kai"
+    # Identity only; no scheduler-specific rules key off this value.
+    RUNAPI = "runapi"
 
 
 def normalize_scheduler_identity(raw: "str | None") -> Scheduler:
