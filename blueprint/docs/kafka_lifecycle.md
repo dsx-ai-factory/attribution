@@ -42,7 +42,8 @@ def receive(
         consumer.close()
 ```
 
-This sequential example assumes `handle` returns within Kafka's poll interval.
+This sequential example requires processing the entire batch, including all
+acknowledgements, within Kafka's `max.poll.interval.ms`.
 For slow processing or a telemetry delay, save pending work and process it
 separately; keep the intake thread polling and acknowledge on that same thread
 when required processing and outputs finish. Acknowledgements can arrive across

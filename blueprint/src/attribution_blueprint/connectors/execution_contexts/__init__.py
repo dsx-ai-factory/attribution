@@ -29,11 +29,30 @@ class InvalidReceiptError(ValueError):
 class ExecutionContextDelivery(Protocol):
     """A delivered event, execution context, and provider receipt metadata."""
 
-    topic: str
-    partition: int
-    offset: int
-    context: ExecutionContext
-    event: Mapping[str, object]
+    @property
+    def topic(self) -> str:
+        """Topic that delivered the event."""
+        ...
+
+    @property
+    def partition(self) -> int:
+        """Partition that owns the record's offset."""
+        ...
+
+    @property
+    def offset(self) -> int:
+        """Position of the delivered record within its partition."""
+        ...
+
+    @property
+    def context(self) -> ExecutionContext:
+        """Mapped workload context, without transport receipt metadata."""
+        ...
+
+    @property
+    def event(self) -> Mapping[str, object]:
+        """CloudEvent envelope and original JSON data."""
+        ...
 
 
 @runtime_checkable
