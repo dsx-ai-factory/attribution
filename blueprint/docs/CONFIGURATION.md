@@ -619,10 +619,30 @@ sasl_password_env = "KAFKA_PASSWORD"
 | `poll_timeout_seconds`       | No                | `5`         | Timeout for an individual poll; end offsets determine whether the batch is drained.      |
 | `discovery_timeout_seconds` | No | `60` | Maximum time for the complete discovery read, including assignment and fetching. |
 | `security_protocol`          | No                | `PLAINTEXT` | `PLAINTEXT`, `SSL`, `SASL_PLAINTEXT`, or `SASL_SSL`.                                     |
-| `sasl_mechanism`             | With `SASL_*`     | none        | `PLAIN`, `SCRAM-SHA-256`, or `SCRAM-SHA-512`.                                            |
-| `sasl_username_env`          | With `SASL_*`     | none        | Environment variable holding the SASL username.                                          |
-| `sasl_password_env`          | With `SASL_*`     | none        | Environment variable holding the SASL password.                                          |
+| `sasl_mechanism`             | With `SASL_*`     | none        | `PLAIN`, `SCRAM-SHA-256`, `SCRAM-SHA-512`, or `AWS_MSK_IAM`.                             |
+| `sasl_username_env`          | With `PLAIN` / `SCRAM-*` | none | Environment variable holding the SASL username.                                          |
+| `sasl_password_env`          | With `PLAIN` / `SCRAM-*` | none | Environment variable holding the SASL password.                                          |
 | `ssl_ca_location`            | No                | system CAs  | CA bundle for `SSL` / `SASL_SSL`.                                                        |
+| `aws_region`                 | With `AWS_MSK_IAM` | none       | AWS region of the MSK cluster.                                                           |
+
+`AWS_MSK_IAM` requires `security_protocol = "SASL_SSL"`, `aws_region`, and the
+`kafka-aws` extra (`nvidia-attribution-blueprint[kafka-aws]`). Use the cluster's
+[IAM listener](https://docs.aws.amazon.com/msk/latest/developerguide/port-info.html)
+bootstrap addresses. Credentials come from the standard AWS credential chain:
+environment variables, a shared credentials file, or a container or instance
+role. A sidecar can rotate a shared credentials file without restarting the
+client; changing another process's environment does not update this client.
+Images built from the Blueprint Dockerfile include the `kafka-aws` extra.
+
+```toml
+[eca.kafka]
+bootstrap_servers = "b-1.example.kafka.us-east-2.amazonaws.com:9098"
+topic = "job-completions"
+group_id = "attribution"
+security_protocol = "SASL_SSL"
+sasl_mechanism = "AWS_MSK_IAM"
+aws_region = "us-east-2"
+```
 
 ### `[workload]`
 
@@ -719,8 +739,8 @@ topic = "mfn.attribution.run-results"
 | `delivery_timeout_seconds` | `30` | Delivery wait and client retry budget; must be finite and in (0, 2147483.647] seconds. |
 
 Use the same [security settings as Kafka input](#ecakafka), including environment
-variable references for SASL credentials and `ssl_ca_location` for a CA file.
-IAM/OAUTHBEARER is not supported. Record overhead and broker/topic size limits
+variable references for SASL credentials, `ssl_ca_location` for a CA file, and
+`AWS_MSK_IAM` for Amazon MSK. Record overhead and broker/topic size limits
 also apply.
 
 For payload fields and delivery guarantees, see
