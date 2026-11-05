@@ -12,8 +12,11 @@ and [connection configuration](CONFIGURATION.md#ecakafka):
 
 The shared `AcknowledgingExecutionContextSource` and
 `AcknowledgingExecutionContextAdapter` protocols describe this optional lifecycle.
-Other ECAs need not implement it. A consumer uses the lifecycle selected by its
-first read; mixing `discover()` and `poll()` on one instance raises an error.
+The shared delivery contract exposes only `context` and provider `event` data;
+its lifecycle methods describe handling deliveries without assuming a transport.
+Kafka-specific provenance stays on `KafkaReceipt`, outside `ExecutionContext`.
+Other ECAs need not implement this lifecycle. A consumer uses the lifecycle
+selected by its first read; mixing `discover()` and `poll()` on one instance raises an error.
 
 ## Processing handoff
 
@@ -35,9 +38,9 @@ def receive(
     consumer = source.open_consumer()
     try:
         while not stop.is_set():
-            for receipt in consumer.poll(max_records=100, timeout_seconds=1):
-                handle(receipt)  # Application decides when work is handled.
-                consumer.ack(receipt)
+            for delivery in consumer.poll(max_records=100, timeout_seconds=1):
+                handle(delivery)  # Application decides when work is handled.
+                consumer.ack(delivery)
     finally:
         consumer.close()
 ```

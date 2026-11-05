@@ -235,7 +235,7 @@ class KafkaExecutionContextAdapter:
                 deliveries.append(delivery)
         return deliveries
 
-    def ack(self, receipt: object) -> None:
+    def ack(self, delivery: object) -> None:
         """Commit only the acknowledged prefix, even across many polls.
 
         The caller decides when work is handled. On commit failure, recreate
@@ -243,7 +243,7 @@ class KafkaExecutionContextAdapter:
         """
         if self._closed:
             raise InvalidReceiptError("kafka ECA: receipt belongs to a closed adapter")
-        key = self._acknowledgements.acknowledge(receipt)
+        key = self._acknowledgements.acknowledge(delivery)
         try:
             self._commit_acknowledged(key)
         except BaseException:

@@ -23,26 +23,15 @@ class ExecutionContextAdapter(Protocol):
 
 
 class InvalidReceiptError(ValueError):
-    """A receipt does not belong to this adapter's current ownership."""
+    """The adapter cannot acknowledge the supplied delivery."""
 
 
 class ExecutionContextDelivery(Protocol):
-    """A delivered event, execution context, and provider receipt metadata."""
+    """A delivered execution context awaiting acknowledgement.
 
-    @property
-    def topic(self) -> str:
-        """Topic that delivered the event."""
-        ...
-
-    @property
-    def partition(self) -> int:
-        """Partition that owns the record's offset."""
-        ...
-
-    @property
-    def offset(self) -> int:
-        """Position of the delivered record within its partition."""
-        ...
+    Providers may expose provenance or acknowledgement handles as extra
+    attributes on their delivery types.
+    """
 
     @property
     def context(self) -> ExecutionContext:
@@ -51,7 +40,7 @@ class ExecutionContextDelivery(Protocol):
 
     @property
     def event(self) -> Mapping[str, object]:
-        """CloudEvent envelope and original JSON data."""
+        """Original provider event data, without an assumed envelope format."""
         ...
 
 
@@ -64,23 +53,23 @@ class AcknowledgingExecutionContextAdapter(Protocol):
     """
 
     def poll(self, max_records: int, timeout_seconds: float) -> Sequence[ExecutionContextDelivery]:
-        """Read a bounded batch without committing offsets."""
+        """Return up to max_records deliveries without acknowledging them."""
         ...
 
-    def ack(self, receipt: ExecutionContextDelivery) -> None:
-        """Commit the acknowledged prefix; reject stale or foreign receipts."""
+    def ack(self, delivery: ExecutionContextDelivery) -> None:
+        """Mark one delivery handled; raise InvalidReceiptError if it cannot be."""
         ...
 
     def pause(self) -> None:
-        """Stop delivery while continuing to service group membership."""
+        """Stop returning new deliveries until resume(); keep calling poll()."""
         ...
 
     def resume(self) -> None:
-        """Resume delivery on the currently owned partitions."""
+        """Allow new deliveries after pause()."""
         ...
 
     def close(self) -> None:
-        """Release ownership without committing unfinished work."""
+        """Release resources without acknowledging unfinished deliveries."""
         ...
 
 
@@ -89,7 +78,7 @@ class AcknowledgingExecutionContextSource(Protocol):
     """Optional ECA factory for independent long-lived consumers."""
 
     def open_consumer(self) -> AcknowledgingExecutionContextAdapter:
-        """Open a new consumer using the configured topic and consumer group."""
+        """Open an independent consumer using this adapter's configuration."""
         ...
 
 

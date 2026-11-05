@@ -55,7 +55,7 @@ def stream():
         adapter.close()
 
 
-def test_poll_exposes_context_and_receipt_without_committing(stream):
+def test_poll_exposes_context_and_receipt_before_explicit_acknowledgement(stream):
     adapter, consumer = stream(_structured(_events()[:1]))
     delivery = _one(adapter)
 
@@ -69,6 +69,8 @@ def test_poll_exposes_context_and_receipt_without_committing(stream):
     assert "receipt" not in delivery.context
     assert consumer.commits == []
     assert not consumer.closed
+    adapter.ack(delivery=delivery)
+    assert consumer.commits == [{0: 1}]
 
 
 def test_out_of_order_acknowledgements_commit_only_the_accepted_prefix(stream):
