@@ -15,6 +15,7 @@ from attribution_blueprint.connectors.execution_contexts.kai.helpers import (
     resolve_owner,
 )
 from attribution_blueprint.kubernetes.attempts import (
+    controller_owner,
     kai_podgroup_start_timestamp,
     latest_pod_observations,
     observations_by_uid,
@@ -215,8 +216,24 @@ def attempts_from_podgroup_history(
                 key=lambda item: (parse_time(item[1]), item[0]),
             )
             scoped_restarts[active_restart] = active_timestamp
-        starts = _attempt_starts(podgroup_starts, scoped_restarts)
         recreated = len(podgroups) > 1
+        starts = _attempt_starts(
+            podgroup_starts,
+            scoped_restarts,
+            initial_execution_evidence=_has_initial_execution(
+                pod_events,
+                job_events,
+                pod_group_name=pod_group_name,
+                owner=owner,
+                start=lifetime_start,
+                end=min(
+                    scoped_restarts.values(),
+                    key=parse_time,
+                    default=None,
+                ),
+                allow_before_start=not recreated,
+            ),
+        )
         for index, start in enumerate(starts):
             first_attempt_for_restart = not any(
                 previous["restart_attempt"] == start["restart_attempt"]
@@ -464,9 +481,57 @@ def _podgroup_starts(timeline: list[dict]) -> list[dict]:
     return sorted(starts.values(), key=lambda item: parse_time(item["time"]))
 
 
+def _has_initial_execution(
+    pod_events: dict[str, dict],
+    job_events: dict[str, dict],
+    *,
+    pod_group_name: str,
+    owner: dict,
+    start: str,
+    end: str | None,
+    allow_before_start: bool,
+) -> bool:
+    """Reuse attempt membership rules to verify pre-restart execution."""
+    for pod in pod_events.values():
+        if _pod_in_attempt(
+            pod,
+            pod_group_name,
+            "0",
+            start,
+            end,
+            allow_unannotated=allow_before_start,
+            allow_before_start=allow_before_start,
+            allow_restart_before_start=allow_before_start,
+        ):
+            return True
+
+    for job in job_events.values():
+        metadata = job.get("metadata") or {}
+        if owner["kind"] == "Job":
+            verified = metadata.get("uid") == owner["uid"]
+        else:
+            controller = controller_owner(metadata)
+            verified = bool(
+                controller
+                and controller["kind"] == "JobSet"
+                and controller["uid"] == owner["uid"]
+            )
+        if verified and _resource_in_attempt(
+            job,
+            "0",
+            start,
+            end,
+            allow_before_start=allow_before_start,
+        ):
+            return True
+    return False
+
+
 def _attempt_starts(
     podgroup_starts: list[dict],
     restarts: dict[str, str],
+    *,
+    initial_execution_evidence: bool = False,
 ) -> list[dict]:
     starts = []
     ordered_restarts = sorted(
@@ -503,6 +568,7 @@ def _attempt_starts(
             and not active_at_boundary
             and changes_in_interval
             and changes_in_interval[0][0] != "0"
+            and not initial_execution_evidence
         )
         if not defer_initial_nonzero:
             starts.append(
