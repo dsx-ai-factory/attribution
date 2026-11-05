@@ -4854,6 +4854,32 @@ class TestOutcomeReclassification:
         assert result.outcome_attr.value().root_cause_symptom == "SLURM preempted"
         assert set(result.symptoms.symptoms()) == {"Job preempted"}
 
+    def test_preempted_with_only_ignored_metric_left_reclassified_to_pass(self, stream, obs_ctx):
+        # A metric that never selects an outcome does not support the stale verdict.
+        ji = _job_info_with(state="PREEMPTED")
+        result = AttributionResult(event_stream=stream, bad_nodes_attr=CalcBadNodesAttributionResult())
+        symptoms = _make_symptoms(obs_ctx, "Python Exception", "plr_tx_bw_loss_high_5m_1pct")
+        result.symptoms.update(symptoms)
+        result.symptoms.discard("Python Exception")
+        result.outcome_attr = _make_outcome("Fail User", root_cause="Python Exception")
+
+        _run_post_outcome(stream, ji, symptoms, outcome=result.outcome_attr, attribution_result=result)
+
+        assert result.outcome_attr.value().root_cause_symptom == "SLURM preempted"
+
+    def test_preempted_task_failure_keeps_failure(self, stream, obs_ctx):
+        # PostProcessSymptoms writes "job failed" for a task-failure cancellation.
+        # Unlike the status fallback, that is failure evidence.
+        ji = _job_info_with(state="PREEMPTED")
+        result = AttributionResult(event_stream=stream, bad_nodes_attr=CalcBadNodesAttributionResult())
+        result.symptoms.add(ji.source_value("job failed", "task failure", "task failure cancellation"))
+        result.outcome_attr = _make_outcome("Fail User", root_cause="Cancelled due to task failure")
+
+        _run_post_outcome(stream, ji, _make_symptoms(obs_ctx), outcome=result.outcome_attr, attribution_result=result)
+
+        assert result.outcome_attr.value().outcome == "Fail User"
+        assert "Job preempted" not in result.symptoms
+
     @pytest.mark.parametrize("scheduler", [Scheduler.SLURM, Scheduler.KUEUE, Scheduler.KAI])
     def test_preempted_does_not_override_failure_evidence(self, stream, obs_ctx, scheduler):
         ji = _job_info_with(state="PREEMPTED", scheduler=scheduler)

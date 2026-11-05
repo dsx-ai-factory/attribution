@@ -172,18 +172,22 @@ def _in_job_year(timestamp: datetime, timezone: Optional[ZoneInfo], job_end_time
         job_end_time: Job end time. None means the current year.
 
     Returns:
-        The timestamp in the job end's year on the log clock, or in the year
-        before when that date is more than half a year after the job end.
+        The timestamp in the year that puts it within half a year of the job end
+        on the log clock.
     """
     if job_end_time is None:
         return timestamp.replace(year=datetime.now().year, tzinfo=timezone)
     # A job that ends on New Year's Eve in one timezone can end on New Year's Day in another.
     end_year = job_end_time.astimezone(timezone).year if timezone is not None else job_end_time.year
     dt = timestamp.replace(year=end_year, tzinfo=timezone)
-    # Processes keep logging for a short time after the job ends, so only a date
-    # far after the end means the job finished in the following year.
+    # A date far after the end was logged in the year before the job end, such
+    # as a December line of a job that ended in January. A date far before the
+    # end was logged in the next year, such as a January teardown line of a job
+    # that ended on December 31.
     if dt - job_end_time > _YEAR_ROLLBACK_AFTER_JOB_END:
         dt = dt.replace(year=end_year - 1)
+    elif job_end_time - dt > _YEAR_ROLLBACK_AFTER_JOB_END:
+        dt = dt.replace(year=end_year + 1)
     return dt
 
 

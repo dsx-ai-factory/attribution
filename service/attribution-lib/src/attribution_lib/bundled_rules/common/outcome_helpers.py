@@ -3,6 +3,7 @@
 
 from typing import TYPE_CHECKING
 
+import attribution_lib
 from attribution_lib.events import EventStream
 
 _SYSTEM_CANCEL_FLAGS = frozenset({"root", "Timeout", "PyTorch NCCL watchdog"})
@@ -21,6 +22,28 @@ KUBERNETES_SCHEDULER_TYPES = frozenset({Scheduler.KUEUE, Scheduler.KAI})
 # job with no evidence, and the symptom of Slurm's "CANCELLED AT" step-log line,
 # which Slurm also writes for a preemption.
 _PREEMPTION_ONLY_SYMPTOMS = ("job failed", "Cancelled by user")
+# PostProcessSymptoms also writes "job failed" for a task-failure cancellation,
+# which is failure evidence.
+_TASK_FAILURE_RULE = "task failure cancellation"
+
+
+def _has_failure_evidence(attribution_result: "AttributionResult") -> bool:
+    """Return whether the remaining bad symptoms still select a failure outcome.
+
+    Args:
+        attribution_result: Result after the post-outcome refiners.
+
+    Returns:
+        True when the bad symptoms, other than _PREEMPTION_ONLY_SYMPTOMS from
+        the preemption itself, map to a Fail outcome.
+    """
+    evidence = [
+        symptom
+        for symptom, sources in attribution_result.symptoms.items()
+        if symptom not in _PREEMPTION_ONLY_SYMPTOMS or any(source.rule == _TASK_FAILURE_RULE for source in sources)
+    ]
+    match = attribution_lib.get_symptom_registry().outcome_for(evidence)
+    return match is not None and match.outcome.startswith("Fail")
 
 
 def apply_preemption_pass(attribution_result: "AttributionResult", job_info: JobInfo) -> bool:
@@ -29,7 +52,7 @@ def apply_preemption_pass(attribution_result: "AttributionResult", job_info: Job
     Preemption must not mask evidence-backed failures. Teardown noise near the
     job end is demoted earlier by ExternalTerminationCascade, so a failure
     verdict here comes from evidence before the preemption. The verdict counts
-    only while a bad symptom other than _PREEMPTION_ONLY_SYMPTOMS remains, because
+    only while the remaining bad symptoms still select a failure, because
     refiners after the outcome calculation can demote the evidence that chose it.
 
     Args:
@@ -41,9 +64,7 @@ def apply_preemption_pass(attribution_result: "AttributionResult", job_info: Job
     """
     if job_info.attributed_cancellation is not None or job_info.state is None or job_info.state.upper() != "PREEMPTED":
         return False
-    if attribution_result.outcome_attr.value().outcome.startswith("Fail") and any(
-        symptom not in _PREEMPTION_ONLY_SYMPTOMS for symptom in attribution_result.symptoms.symptoms()
-    ):
+    if attribution_result.outcome_attr.value().outcome.startswith("Fail") and _has_failure_evidence(attribution_result):
         return False
 
     previous_source = attribution_result.outcome_attr.one_source()
