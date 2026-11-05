@@ -25,11 +25,13 @@ revocation/loss, and propagation of programming and native client errors.
 
 Live tests cover both CloudEvent encodings, source-scoped redeliveries, restarts
 from committed offsets, partial commit failure, delayed fetching, and two
-consumers rebalancing without missing/overlapping contexts. One structured-event
-smoke test checks real Service attribution and SQLite persistence of correlation
-metadata. Expanded payload combinations and repeated-batch pipeline attribution
-are separate Blueprint integration follow-up work. Service/output failures
-explicitly verify the documented commit-before-attribution limitation.
+consumers rebalancing without missing/overlapping contexts. The base connector
+PR retains one structured completion smoke through real Service and SQLite.
+This Blueprint integration follow-up expands it into a full-payload matrix
+(structured/binary, single/multiple failed nodes, and empty/operator cancellation)
+and verifies latest-trigger correlation across later batches. It is independent
+of MFN Runtime integration. Service/output failures explicitly verify the
+documented commit-before-attribution limitation.
 
 Each discovery closes the consumer before attribution starts. Filtered-only
 batches succeed with visible counts; invalid pod-to-node mappings are skipped.

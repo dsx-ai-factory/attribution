@@ -66,6 +66,11 @@ CREATE TABLE IF NOT EXISTS execution_context (
 );
 ```
 
+`attempt_id` is connector-supplied: Slurm uses SLUID and Kueue uses a
+`kueue:v1:...` ID derived from Workload UID, admission, and restart generation.
+After upgrading, old UID-based Kueue rows can coexist with canonical-ID rows;
+no automatic migration or schema-version change is applied.
+
 `nodes_json` contains the scheduler node list serialized as a JSON array, for
 example `["node-a", "node-b"]`. It is distinct from the Attribution Service v2
 `workload.nodes` payload, which the Blueprint builds as a node-to-ranks map

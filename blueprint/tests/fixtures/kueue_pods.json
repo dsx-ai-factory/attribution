@@ -8,6 +8,7 @@
       "metadata": {
         "name": "train-mnist-abc12-0",
         "namespace": "team-alpha",
+        "uid": "pod-train-mnist-0",
         "labels": {
           "batch.kubernetes.io/controller-uid": "owner-1001",
           "batch.kubernetes.io/job-name": "train-mnist"
@@ -27,6 +28,7 @@
       "metadata": {
         "name": "llama-7b-pretrain-xyz77-0",
         "namespace": "team-alpha",
+        "uid": "pod-llama-0",
         "labels": {
           "batch.kubernetes.io/controller-uid": "owner-1002",
           "batch.kubernetes.io/job-name": "llama-7b-pretrain"
@@ -43,6 +45,7 @@
       "metadata": {
         "name": "llama-7b-pretrain-xyz77-1",
         "namespace": "team-alpha",
+        "uid": "pod-llama-1",
         "labels": {
           "batch.kubernetes.io/controller-uid": "owner-1002",
           "batch.kubernetes.io/job-name": "llama-7b-pretrain"
@@ -59,6 +62,7 @@
       "metadata": {
         "name": "llama-7b-pretrain-xyz77-2",
         "namespace": "team-alpha",
+        "uid": "pod-llama-2",
         "labels": {
           "batch.kubernetes.io/controller-uid": "owner-1002",
           "batch.kubernetes.io/job-name": "llama-7b-pretrain"
@@ -73,6 +77,7 @@
       "metadata": {
         "name": "hpl-bench-pp99-0",
         "namespace": "team-beta",
+        "uid": "pod-hpl-0",
         "labels": {
           "batch.kubernetes.io/controller-uid": "owner-1003",
           "batch.kubernetes.io/job-name": "hpl-bench"
@@ -87,6 +92,7 @@
       "metadata": {
         "name": "still-running-qq01-0",
         "namespace": "team-alpha",
+        "uid": "pod-running-0",
         "labels": {
           "batch.kubernetes.io/controller-uid": "owner-1004",
           "batch.kubernetes.io/job-name": "still-running"
