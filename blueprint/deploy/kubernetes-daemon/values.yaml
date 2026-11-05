@@ -6,11 +6,17 @@ image:
   tag: local
   pullPolicy: IfNotPresent
 
+clusterId: default
 queueSize: 1000
 workers: 2
 watchTimeoutSeconds: 60
 jobsetVersion: v1alpha2
 retentionDays: 30
+
+watches:
+  pods: true
+  jobs: true
+  jobsets: true
 
 integrations:
   kueue:
