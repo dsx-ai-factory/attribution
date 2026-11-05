@@ -1057,9 +1057,10 @@ def test_time_range_bounds_retained_history_query(mocker):
 
 def test_started_live_and_retained_resources_share_canonical_attempt(mocker):
     started = "2026-05-01T12:00:00Z"
-    podgroup = _podgroup(
-        status={"lastStartTimestamp": started},
-    )
+    podgroup = _podgroup()
+    podgroup["metadata"]["annotations"][
+        "kai.scheduler/last-start-timestamp"
+    ] = started
     owner = _job("pg-a-job", "uid-job-uid-pg-a")
     live_pod = _pod(
         "live-pod",
@@ -1074,6 +1075,16 @@ def test_started_live_and_retained_resources_share_canonical_attempt(mocker):
         [live_pod],
         [owner],
     )
+    [live_context] = KaiExecutionContextAdapter().discover_by_ids(
+        ["team-alpha/pg-a"]
+    )
+    assert live_context["attempt_id"] == attempt_id_for(
+        "uid-pg-a",
+        started,
+        "0",
+    )
+    assert live_context["nodes"] == ["node-b"]
+
     history_reader = mocker.Mock()
     history_reader.find_histories.return_value = [
         {
@@ -1091,7 +1102,7 @@ def test_started_live_and_retained_resources_share_canonical_attempt(mocker):
                         ]
                     },
                     "observedAt": started,
-                    "status": {"lastStartTimestamp": started},
+                    "status": {},
                 },
                 {
                     "kind": "Pod",
