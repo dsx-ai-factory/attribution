@@ -467,48 +467,58 @@ def _attempt_starts(
     restarts: dict[str, str],
 ) -> list[dict]:
     starts = []
+    ordered_restarts = sorted(
+        restarts.items(),
+        key=lambda item: (parse_time(item[1]), item[0]),
+    )
+    active_restart = "0"
     for index, podgroup_start in enumerate(podgroup_starts):
-        previous_podgroup_start = (
-            podgroup_starts[index - 1]["time"]
-            if index > 0
-            else None
-        )
+        boundary_time = podgroup_start["time"]
         next_podgroup_start = (
             podgroup_starts[index + 1]["time"]
             if index + 1 < len(podgroup_starts)
             else None
         )
-        scoped_restarts = [
+        active_at_boundary = [
             (restart, timestamp)
-            for restart, timestamp in restarts.items()
-            if (
-                parse_time(timestamp)
-                <= parse_time(podgroup_start["time"])
-                and (
-                    previous_podgroup_start is None
-                    or parse_time(timestamp)
-                    > parse_time(previous_podgroup_start)
-                )
-            )
-            or (
+            for restart, timestamp in ordered_restarts
+            if parse_time(timestamp) <= parse_time(boundary_time)
+        ]
+        if active_at_boundary:
+            active_restart = active_at_boundary[-1][0]
+        changes_in_interval = [
+            (restart, timestamp)
+            for restart, timestamp in ordered_restarts
+            if parse_time(timestamp) > parse_time(boundary_time)
+            and (
                 next_podgroup_start is None
-                and parse_time(timestamp)
-                >= parse_time(podgroup_start["time"])
+                or parse_time(timestamp)
+                < parse_time(next_podgroup_start)
             )
-        ] or [("0", podgroup_start["time"])]
-        for restart, timestamp in sorted(
-            scoped_restarts,
-            key=lambda item: (parse_time(item[1]), item[0]),
-        ):
+        ]
+        defer_initial_nonzero = (
+            index == 0
+            and not active_at_boundary
+            and changes_in_interval
+            and changes_in_interval[0][0] != "0"
+        )
+        if not defer_initial_nonzero:
+            starts.append(
+                {
+                    "start_key": podgroup_start["key"],
+                    "restart_attempt": active_restart,
+                    "time": boundary_time,
+                }
+            )
+        for restart, timestamp in changes_in_interval:
+            if restart == active_restart:
+                continue
+            active_restart = restart
             starts.append(
                 {
                     "start_key": podgroup_start["key"],
                     "restart_attempt": restart,
-                    "time": max(
-                        podgroup_start["time"],
-                        timestamp,
-                        key=parse_time,
-                    ),
+                    "time": timestamp,
                 }
             )
     return starts
