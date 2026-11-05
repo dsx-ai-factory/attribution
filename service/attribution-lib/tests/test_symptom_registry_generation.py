@@ -425,7 +425,23 @@ def test_nvrx_detected_failure_maps_to_fail_multicategory():
 
     assert match is not None
     assert match.outcome == "Fail MultiCategory"
-    assert match.tier_index == OUTCOME_PRIORITIES.index(OutcomePriority.LOW_GENERIC)
+    assert match.tier_index == OUTCOME_PRIORITIES.index(OutcomePriority.LOW_FALLBACK)
+
+
+@pytest.mark.parametrize("symptom", ["Python Exception", "No such file or directory", "error: pyxis"])
+def test_user_failure_outranks_generic_nvrx_failure(symptom):
+    """Select a co-occurring user failure over the generic NVRx detected failure.
+
+    Args:
+        symptom: Fail User symptom reported with the NVRx failure.
+    """
+    registry = _load_committed_registry()
+
+    match = registry.outcome_for(["NVRx detected failure", symptom])
+
+    assert match is not None
+    assert match.symptom == symptom
+    assert match.outcome == "Fail User"
 
 
 def test_nvrx_unhealthy_node_maps_to_fail_multicategory():

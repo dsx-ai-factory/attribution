@@ -297,6 +297,11 @@ def _run_config(
     if aggregate_runs is not None:
         aggregate_runs.append((stats, summaries))
     _write_run_summary(stats, summaries)
+    # Kafka can return committed contexts despite a later commit/close failure.
+    # Process those contexts, then surface the incomplete discovery.
+    if any(getattr(adapter, "discovery_incomplete", False) is True for adapter in config.execution_context_adapters):
+        logger.error("attribution run incomplete: execution-context discovery did not complete cleanly")
+        return 1
     if attempted > 0 and succeeded == 0:
         logger.error(f"attribution run failed: 0/{attempted} contexts succeeded")
         return 1
@@ -355,6 +360,16 @@ def _write_run_summary(stats: dict[str, int], summaries: list[dict[str, str]]) -
         logger.warning(
             f"{incomplete} of {len(verdicts)} verdicts were issued with incomplete evidence; "
             "see connector_reports and ingestion_reports in the saved result."
+        )
+    incomplete_history = sum(
+        1
+        for summary in verdicts
+        if summary.get("history_complete") == "false"
+    )
+    if incomplete_history > 0:
+        logger.warning(
+            f"{incomplete_history} of {len(verdicts)} verdicts may have incomplete "
+            "scheduler history."
         )
 
 

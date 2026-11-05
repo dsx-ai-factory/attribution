@@ -68,7 +68,7 @@ def test_node_regex_does_not_backslash_escape_hyphens(mocker):
         auth=TokenAuth("tok"),
         cluster="example-cluster",
         source=Source.NODE_METRICS,
-        templates={Source.NODE_METRICS: {"my_metric": '{name}{{net_host_name=~"{nodes}"}}'}},
+        templates={Source.NODE_METRICS: {"my_metric": "{name}{{net_host_name=~`{nodes}`}}"}},
     )
 
     conn.collect(_ctx(nodes=("example-node-014", "host.example.com")))
@@ -76,7 +76,7 @@ def test_node_regex_does_not_backslash_escape_hyphens(mocker):
     query = post.call_args.kwargs["data"]["query"]
     assert "\\-" not in query
     assert "example-node-014" in query
-    assert "host\\.example\\.com" in query
+    assert r"host\.example\.com" in query
 
 
 def test_uses_seconds_for_time_window(mocker):
@@ -285,7 +285,7 @@ def test_bundled_templates_render_with_no_overrides(mocker):
     assert any("node_network_carrier_down_changes_total" in q for q in queries)
     assert any("ib_roce_adp_retrans" in q for q in queries)
     assert any('s_cluster="example-cluster"' in q for q in queries)
-    assert any('net_host_name=~"n1"' in q for q in queries)
+    assert any("net_host_name=~`n1`" in q for q in queries)
 
 
 def test_bundled_carrier_down_template_uses_changes_threshold_gt_zero(mocker):
@@ -307,7 +307,15 @@ def test_bundled_carrier_down_template_uses_changes_threshold_gt_zero(mocker):
     assert "> 0" in carrier[0]
 
 
-def test_node_names_are_regex_escaped(mocker):
+@pytest.mark.parametrize("bundled", [True, False])
+@pytest.mark.parametrize(
+    ("nodes", "regex"),
+    [
+        (("host.example.com",), r"host\.example\.com"),
+        (("host.example.com", "host[01].cluster"), r"host\.example\.com|host\[01\]\.cluster"),
+    ],
+)
+def test_node_names_are_regex_escaped(mocker, bundled, nodes, regex):
     """FQDN hostnames must not over-match under `=~` - `.` is regex 'any char'."""
     post = _mock_response(mocker, [])
     conn = PromQLMetricsConnector(
@@ -315,16 +323,14 @@ def test_node_names_are_regex_escaped(mocker):
         auth=TokenAuth("tok"),
         cluster="c",
         source=Source.NODE_METRICS,
-        templates={Source.NODE_METRICS: {"m": '{name}{{net_host_name=~"{nodes}"}}'}},
+        **({} if bundled else {"templates": {Source.NODE_METRICS: {"m": "{name}{{net_host_name=~`{nodes}`}}"}}}),
     )
-    conn.collect(_ctx(nodes=("host.example.com", "host[01].cluster")))
-    _, kwargs = post.call_args
+    conn.collect(_ctx(nodes=nodes))
     # `.` and `[`, `]` must be escaped; the pipe between alternates stays.
-    query = kwargs["data"]["query"]
-    assert r"host\.example\.com" in query
-    assert r"host\[01\]\.cluster" in query
-    # Plain pipe-join (which would let "hostXexample-com" match) must NOT appear.
-    assert "host.example.com|host[01].cluster" not in query
+    for call in post.call_args_list:
+        query = call.kwargs["data"]["query"]
+        assert f"net_host_name=~`{regex}`" in query
+        assert "host.example.com" not in query
 
 
 def test_cluster_falls_back_to_self_cluster_when_label_dropped(mocker):

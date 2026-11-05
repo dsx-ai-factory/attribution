@@ -12,9 +12,8 @@ Wire-format mapping vs. the Slurm adapter:
     Slurm field        Kueue analog
     -----------------  -----------------------------------------------------
     sluid              Workload.metadata.uid (carried as `workload_uid`)
-    attempt_id         Workload.metadata.uid (per-attempt: Kueue creates a
-                       new Workload per requeue, so its uid is the natural
-                       attempt key — analogous to Slurm's SLUID)
+    attempt_id         Canonical Workload UID + admission boundary + JobSet
+                       restart generation identity
     job_id             "<namespace>/<name>" of the Workload object
     state              Service-facing scheduler state. Terminal Kueue states
                        are normalized to COMPLETED, FAILED, TIMEOUT,
@@ -43,58 +42,44 @@ path because the local_file log connector needs one; in Kubernetes, pod
 stdout is fetched via `kubectl logs` and belongs to a future log connector,
 not the ECA.
 
-Pod ownership is resolved via the **standard batch/v1 Job pod labels**,
-not the Kueue label. `kueue.x-k8s.io/job-uid` is set by Kueue on the
-**Workload** object (carrying the owner Job's UID so callers can link a
-Workload back to its Job. The pods are created by the Kubernetes Job
-controller, which stamps the `batch.kubernetes.io/controller-uid=<job.uid>`
-and `batch.kubernetes.io/job-name=<job.name>` labels.
-This adapter pulls the owner Job's UID out of the Workload's
-`ownerReferences` and selects pods with
-`batch.kubernetes.io/controller-uid=<owner_uid>`.
-
-The JobSet pod label carries only a name, which is unique per namespace
-but not cluster-wide, so `_pod_selector_for`/`_pod_matches_selector`
-always scope matching to the Workload's own namespace.
-
-Owner Jobs/JobSet children are looked up by namespace/name, but names are
-reusable after deletion. `_jobs_for_workload` confirms the fetched
-object's uid against the ownerReference's uid before trusting it as the
-real owner.
+Pod ownership is resolved via the standard batch/v1 Job pod labels, not the
+Kueue label — see `pod_selector_for` in helpers.py for the selector logic
+and `_jobs_for_workload` for how owner Jobs are verified by uid, not name.
 """
 
 from __future__ import annotations
 
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import NamedTuple, NotRequired, TypedDict
 
 from loguru import logger
 
-from attribution_blueprint.connectors.execution_contexts.kubernetes_client import (
-    KubernetesClient,
-    KubernetesClientError,
-)
-from attribution_blueprint.connectors.execution_contexts.kubernetes_helpers import (
-    earliest_job_failure_reason as _earliest_job_failure_reason,
-    job_time_limit_minutes as _job_time_limit_minutes,
+from attribution_blueprint.connectors.execution_contexts.kueue.attempts import (
+    WorkloadAttempt,
+    attempts_from_live_resources,
+    attempts_from_workload_history,
+    merge_attempts,
 )
 from attribution_blueprint.connectors.execution_contexts.kueue.helpers import (
     POD_JOBSET_LABEL as _POD_JOBSET_LABEL,
-    jobs_for_workload as _jobs_for_workload,
-    owner_job_uids as _owner_job_uids,
-    pod_matches_selector as _pod_matches_selector,
-    pod_selector_for as _pod_selector_for,
+    POD_OWNER_LABEL as _POD_OWNER_LABEL,
+    controller_owner as _controller_owner,
 )
-from attribution_blueprint.connectors.execution_contexts.kueue.pod_placement.models import (
+from attribution_blueprint.connectors.execution_contexts.kueue.prometheus_placement import (
     PlacementQuery,
-)
-from attribution_blueprint.connectors.execution_contexts.kueue.pod_placement.store import (
     PlacementResolver,
+)
+from attribution_blueprint.kubernetes.client import (
+    KubernetesClient,
+    KubernetesClientError,
 )
 from attribution_blueprint.kubernetes.daemon.models import PlacementRecord, PodPlacement
 from attribution_blueprint.kubernetes.daemon.store import PlacementReader
 from attribution_blueprint.kubernetes.helpers import (
     NODE_LOSS_DISRUPTION_REASONS as _NODE_LOSS_DISRUPTION_REASONS,
+    earliest_job_failure_reason as _earliest_job_failure_reason,
+    job_time_limit_minutes as _job_time_limit_minutes,
     pod_node_failure_reason as _pod_node_failure_reason,
 )
 from attribution_blueprint.types import assert_aware
@@ -138,14 +123,40 @@ class KueueExecutionContext(TypedDict):
     queue_name: NotRequired[str]
     priority_class: NotRequired[int]
     gpu_count: NotRequired[int]
+    admission_key: NotRequired[str | None]
+    restart_attempt: NotRequired[str]
+    owner_job_uids: NotRequired[list[str]]
+    attempt_pod_uids: NotRequired[list[str]]
+    attempt_identity_resolved: NotRequired[bool]
     # Pod names belonging to this Workload at the time of discovery. Empty
     # list when the owner type isn't supported or all pods have been
     # garbage-collected.
     pod_names: NotRequired[list[str]]
     pod_placements: NotRequired[list[PodPlacement]]
+    history_complete: NotRequired[bool]
     # Pod name -> `.spec.nodeName`, for connectors that need per-pod node
     # identity. Unscheduled pods are absent.
     pod_nodes: NotRequired[dict[str, str]]
+
+
+@dataclass
+class _AttemptEvidence:
+    """Inputs for one admitted execution, keyed by canonical attempt ID."""
+
+    attempt: WorkloadAttempt
+    workload: dict | None = None
+    pods: dict[str, dict] = field(default_factory=dict)
+    jobs: dict[str, dict] = field(default_factory=dict)
+    placements: dict[str, PlacementRecord] = field(default_factory=dict)
+    retained_coverage: list[dict] = field(default_factory=list)
+
+    def merge(self, other: _AttemptEvidence) -> None:
+        if other.workload is not None:
+            self.workload = other.workload
+        self.pods.update(other.pods)
+        self.jobs.update(other.jobs)
+        self.placements.update(other.placements)
+        self.retained_coverage.extend(other.retained_coverage)
 
 
 # Kueue's Workload condition vocabulary. Stable since Kueue v0.6 and described
@@ -161,6 +172,58 @@ _COND_REQUEUED = "Requeued"
 # Native Workload Evicted reasons from the Kueue v1beta1 API.
 _EVICTED_PREEMPTED = "EVICTED_PREEMPTED"
 _EVICTED_NODE_FAILURES = "EVICTED_NODEFAILURES"
+
+
+def _pod_selector_for(workload: dict) -> tuple[str, str, str] | None:
+    """Return the namespace-scoped Pod selector for a supported owner."""
+    owner = _controller_owner(workload)
+    if owner is None:
+        return None
+    namespace = (workload.get("metadata") or {}).get("namespace") or "default"
+    if owner.get("kind") == "Job" and owner.get("uid"):
+        return namespace, _POD_OWNER_LABEL, owner["uid"]
+    if owner.get("kind") == "JobSet" and owner.get("name"):
+        return namespace, _POD_JOBSET_LABEL, owner["name"]
+    return None
+
+
+def _pod_matches_selector(pod: dict, selector: tuple[str, str, str]) -> bool:
+    """Return whether a Pod matches a namespace-scoped owner selector."""
+    namespace, label_key, label_value = selector
+    metadata = pod.get("metadata") or {}
+    return metadata.get("namespace") == namespace and (metadata.get("labels") or {}).get(label_key) == label_value
+
+
+def _jobset_owner_uid(job: dict) -> str | None:
+    """Return the UID of the JobSet that controls a Job."""
+    owner = _controller_owner(job, "JobSet")
+    return owner.get("uid") if owner else None
+
+
+def _jobs_for_workload(workload: dict, owner_jobs: dict[str, dict]) -> list[dict]:
+    """Return UID-verified direct or JobSet child Jobs for one Workload."""
+    owner = _controller_owner(workload)
+    if owner is None:
+        return []
+    namespace = (workload.get("metadata") or {}).get("namespace") or ""
+    owner_name = owner.get("name")
+    owner_uid = owner.get("uid")
+    if not owner_name:
+        return []
+    if owner.get("kind") == "Job":
+        job = owner_jobs.get(f"{namespace}/{owner_name}")
+        if job is None or (job.get("metadata") or {}).get("uid") != owner_uid:
+            return []
+        return [job]
+    if owner.get("kind") == "JobSet":
+        return [
+            job
+            for job in owner_jobs.values()
+            if (job.get("metadata") or {}).get("namespace") == namespace
+            and ((job.get("metadata") or {}).get("labels") or {}).get(_POD_JOBSET_LABEL) == owner_name
+            and _jobset_owner_uid(job) == owner_uid
+        ]
+    return []
 
 
 def _parse_dt(value: str | None) -> datetime | None:
@@ -261,37 +324,37 @@ class _PodEvidence(NamedTuple):
     failed_node: str | None
     pod_names: list[str]
     pod_nodes: dict[str, str]
+    placements: list[PodPlacement]
+    node_loss_nodes: frozenset[str]
+    has_node_failure: bool
 
 
 def _collect_pod_evidence(
     pods: list[dict],
     selector: tuple[str, str, str] | None,
+    *,
+    members_verified: bool = False,
 ) -> _PodEvidence:
     """Return sorted unique nodes, the lex-smallest failed_node, sorted pod
-    names, and the pod -> node mapping for pods matching `selector`.
+    names, the pod -> node mapping, bound Pod placements, the node-loss node
+    set, and whether any member Pod reports node loss at all.
 
-    The caller is responsible for narrowing the input list to pods that
-    might belong to this workload — typically via the kubectl label
-    selector in `_fetch_pods_for`. This function still re-checks each pod
-    against `_pod_matches_selector` as a defensive filter (namespace +
-    label), since cluster-wide discovery can pool pods across namespaces.
-
-    Pod names are returned alongside the node evidence so downstream
-    connectors (e.g. `kubectl_logs`) don't have to re-derive the
-    per-owner pod selector and re-fetch the pod list.
-
-    Returns empty evidence when `selector` is None — Workloads without
-    a recognised owner have no pods to attribute.
+    Re-checks each pod against `_pod_matches_selector` as a defensive filter
+    when a selector is available, since live discovery can pool pods from
+    other namespaces. Already-verified retained members can be processed
+    without a selector.
     """
-    if not selector:
-        return _PodEvidence([], None, [], {})
+    if selector is None and not members_verified:
+        return _PodEvidence([], None, [], {}, [], frozenset(), False)
     nodes: set[str] = set()
     node_loss_nodes: set[str] = set()
     exit_code_nodes: set[str] = set()
     pod_names: set[str] = set()
     pod_nodes: dict[str, str] = {}
+    placements: list[PodPlacement] = []
+    has_node_failure = False
     for pod in pods:
-        if not _pod_matches_selector(pod, selector):
+        if selector is not None and not _pod_matches_selector(pod, selector):
             continue
         meta = pod.get("metadata") or {}
         pod_name = meta.get("name")
@@ -304,14 +367,25 @@ def _collect_pod_evidence(
             if pod_name:
                 pod_nodes[pod_name] = node_name
         status = pod.get("status") or {}
-        if _pod_reports_node_failure(pod) and node_name:
-            node_loss_nodes.add(node_name)
+        if _pod_reports_node_failure(pod):
+            has_node_failure = True
+            if node_name:
+                node_loss_nodes.add(node_name)
         for cs in status.get("containerStatuses") or []:
             terminated = (cs.get("state") or {}).get("terminated") or {}
             exit_code = terminated.get("exitCode")
             if isinstance(exit_code, int) and exit_code != 0 and node_name:
                 exit_code_nodes.add(node_name)
                 break
+        if meta.get("uid") and pod_name and node_name:
+            placements.append(
+                {
+                    "pod_uid": meta["uid"],
+                    "pod_name": pod_name,
+                    "node_name": node_name,
+                    "source": "live_pod",
+                }
+            )
     # `failed_node` is the lexicographically smallest node within the
     # strongest evidence tier available, so the result is stable across
     # API response orderings. Node-loss evidence outranks a generic
@@ -322,44 +396,15 @@ def _collect_pod_evidence(
         failed_node = min(exit_code_nodes)
     else:
         failed_node = None
-    return _PodEvidence(sorted(nodes), failed_node, sorted(pod_names), pod_nodes)
-
-
-def _live_node_loss_nodes(
-    pods: list[dict],
-    selector: tuple[str, str, str] | None,
-) -> set[str]:
-    if selector is None:
-        return set()
-    return {
-        node_name
-        for pod in pods
-        if _pod_matches_selector(pod, selector)
-        and (node_name := (pod.get("spec") or {}).get("nodeName"))
-        and _pod_reports_node_failure(pod)
-    }
-
-
-def _live_pod_placements(pods: list[dict], selector: tuple[str, str, str] | None) -> list[PodPlacement]:
-    """Return bound Pod placements matching one Workload owner selector."""
-    if selector is None:
-        return []
-    placements: list[PodPlacement] = []
-    for pod in pods:
-        if not _pod_matches_selector(pod, selector):
-            continue
-        metadata = pod.get("metadata") or {}
-        node_name = (pod.get("spec") or {}).get("nodeName")
-        if metadata.get("uid") and metadata.get("name") and node_name:
-            placements.append(
-                {
-                    "pod_uid": metadata["uid"],
-                    "pod_name": metadata["name"],
-                    "node_name": node_name,
-                    "source": "live_pod",
-                }
-            )
-    return placements
+    return _PodEvidence(
+        sorted(nodes),
+        failed_node,
+        sorted(pod_names),
+        pod_nodes,
+        placements,
+        frozenset(node_loss_nodes),
+        has_node_failure,
+    )
 
 
 def _event_is_in_context(event: dict, context: KueueExecutionContext) -> bool:
@@ -423,18 +468,6 @@ def _node_from_scheduled_events(
     return None
 
 
-def _has_node_failure_pod(pods: list[dict], selector: tuple[str, str, str] | None) -> bool:
-    """Return whether a selected Pod reports a Kubernetes node-loss signal."""
-    if selector is None:
-        return False
-    for pod in pods:
-        if not _pod_matches_selector(pod, selector):
-            continue
-        if _pod_reports_node_failure(pod):
-            return True
-    return False
-
-
 def _workload_condition_is_true(workload: dict, condition_type: str) -> bool:
     conditions = (workload.get("status") or {}).get("conditions") or []
     condition = _condition(conditions, condition_type)
@@ -449,17 +482,22 @@ _CURRENT_ADMISSION_OR_RESERVATION_STATES = frozenset({"ADMITTED", "RUNNING", "QU
 def _service_state(
     kueue_state: str,
     workload: dict,
-    pods: list[dict],
+    has_node_failure: bool,
     owner_jobs: dict[str, dict],
 ) -> str:
-    """Normalize Kueue states for service refiners."""
+    """Normalize Kueue states for service refiners.
+
+    `has_node_failure` is the caller's already-computed verdict on whether a
+    verified member Pod reports a Kubernetes node-loss signal — this never
+    re-scans Pods itself.
+    """
     if kueue_state == "FINISHED_SUCCEEDED":
         return "COMPLETED"
     if kueue_state in {_EVICTED_PREEMPTED, "PREEMPTED"}:
         return "PREEMPTED"
     if kueue_state == _EVICTED_NODE_FAILURES:
         return "NODE_FAIL"
-    if _has_node_failure_pod(pods, _pod_selector_for(workload)):
+    if has_node_failure:
         return "NODE_FAIL"
     # Requeued=True can stay True after re-admission, so gate on kueue_state instead
     currently_admitted_or_reserved = kueue_state in _CURRENT_ADMISSION_OR_RESERVATION_STATES
@@ -488,14 +526,7 @@ def _extract_time_limit(workload: dict, owner_jobs: dict[str, dict]) -> int | No
 
 
 def _non_negative_int(value: object) -> int | None:
-    """Coerce Kubernetes resource quantities that should be plain integers.
-
-    Args:
-        value: Raw Kubernetes resource value.
-
-    Returns:
-        A non-negative integer, or None when no integer is present.
-    """
+    """Coerce a raw Kubernetes resource value to a non-negative int, or None."""
     if isinstance(value, bool):
         return None
     if isinstance(value, int) and value >= 0:
@@ -506,14 +537,7 @@ def _non_negative_int(value: object) -> int | None:
 
 
 def _resource_gpu_count(resources: object) -> int:
-    """Return GPU count from one Kubernetes resources map.
-
-    Args:
-        resources: Container ``resources.requests`` or ``resources.limits``.
-
-    Returns:
-        Sum of GPU-like extended resources in the map.
-    """
+    """Return the sum of GPU-like extended resources in one `requests`/`limits` map."""
     if not isinstance(resources, dict):
         return 0
     total = 0
@@ -528,14 +552,7 @@ def _resource_gpu_count(resources: object) -> int:
 
 
 def _container_gpu_count(container: object) -> int:
-    """Return GPU count requested by one Kubernetes container.
-
-    Args:
-        container: Pod template container object.
-
-    Returns:
-        Requested GPU count, falling back to limits when requests are absent.
-    """
+    """Return GPU count requested by one container, falling back to limits when requests are absent."""
     if not isinstance(container, dict):
         return 0
     resources = container.get("resources")
@@ -548,15 +565,10 @@ def _container_gpu_count(container: object) -> int:
 
 
 def _workload_gpu_count(workload: dict) -> int | None:
-    """Return total GPU count requested by a Kueue Workload.
+    """Return total GPU count across all pod sets.
 
-    Args:
-        workload: Kueue Workload API object.
-
-    Returns:
-        Total GPUs across all pod sets. Returns 0 when the Workload pod sets
-        are parseable but no GPU resource is declared, or None when the
-        Workload shape is missing.
+    Returns 0 when pod sets are parseable but no GPU resource is declared,
+    or None when the Workload shape itself is missing/malformed.
     """
     total = 0
     spec = workload.get("spec")
@@ -591,16 +603,11 @@ def _workload_gpu_count(workload: dict) -> int | None:
 
 
 def _workload_window(workload: dict, now: datetime) -> tuple[datetime, datetime] | None:
-    """Return `(start_time, end_time)` for a Workload using ONLY data carried
-    on the Workload object itself — no pod or owner-Job fetches.
+    """Return `(start_time, end_time)` for a Workload using only data carried
+    on the Workload object — no pod or owner-Job fetches.
 
-    Used by `discover_by_time_range` to filter the cluster-wide listing by
-    time window BEFORE issuing per-workload Pod/owner-Job API round-trips.
-    The full `_parse_workload` computes the
-    same window plus pod/node/time-limit evidence; this helper short-circuits
-    when the caller only needs to know "does this workload overlap [start,
-    end]?". Returns `None` if no start time can be derived (the workload
-    would be skipped by the full parse anyway).
+    Cheap pre-filter for `discover_by_time_range`, before full attempt
+    reconstruction. Returns `None` if no start time can be derived.
     """
     meta = workload.get("metadata") or {}
     if not meta.get("uid") or not meta.get("name"):
@@ -621,123 +628,257 @@ def _workload_window(workload: dict, now: datetime) -> tuple[datetime, datetime]
     return start_time, end_time
 
 
-def _parse_workload(
-    workload: dict,
-    pods: list[dict],
-    owner_jobs: dict[str, dict],
-    now: datetime,
-) -> KueueExecutionContext | None:
-    """Normalize one Workload object into our wire format.
+def _context_from_attempt_evidence(
+    evidence: _AttemptEvidence,
+) -> KueueExecutionContext:
+    """Build one admitted context after live and retained evidence is united."""
+    attempt = evidence.attempt
+    workload = evidence.workload
+    member_pods = list(evidence.pods.values())
+    selector = _pod_selector_for(workload) if workload is not None else None
+    pod_evidence = _collect_pod_evidence(
+        member_pods,
+        selector,
+        members_verified=True,
+    )
+    state, kueue_state = _history_attempt_state(attempt)
+    jobs_by_name = {
+        (f"{(job.get('metadata') or {}).get('namespace') or ''}/{(job.get('metadata') or {}).get('name') or ''}"): job
+        for job in evidence.jobs.values()
+    }
+    if workload is not None and attempt.terminal is None:
+        live_kueue_state = _derive_state((workload.get("status") or {}).get("conditions") or [])
+        state = _service_state(
+            live_kueue_state,
+            workload,
+            pod_evidence.has_node_failure,
+            jobs_by_name,
+        )
+        kueue_state = live_kueue_state
 
-    Returns None when the workload has no UID/name (malformed object) or
-    has no parseable start time — without a start the orchestrator can't
-    build a valid attributor window, so the workload is skipped with a
-    warning, matching the Slurm adapter's behavior for rows with
-    unparseable Start/End.
-    """
-    meta = workload.get("metadata") or {}
-    uid = meta.get("uid")
-    name = meta.get("name")
-    namespace = meta.get("namespace") or "default"
-    if not uid or not name:
-        logger.warning(f"workload missing uid/name; skipping: {meta!r}")
-        return None
+    owner_job_uids = {uid for job in evidence.jobs.values() if (uid := (job.get("metadata") or {}).get("uid"))}
+    if workload is not None:
+        owner = _controller_owner(workload)
+        if owner and owner.get("kind") == "Job" and owner.get("uid"):
+            owner_job_uids.add(owner["uid"])
 
-    status = workload.get("status") or {}
-    conditions = status.get("conditions") or []
-    kueue_state = _derive_state(conditions)
-    state = _service_state(kueue_state, workload, pods, owner_jobs)
+    placements: dict[str, PodPlacement] = {placement["pod_uid"]: placement for placement in pod_evidence.placements}
+    retained_node_loss_nodes: set[str] = set()
+    retained_exit_nodes: set[str] = set()
+    for record in evidence.placements.values():
+        if record.pod_uid not in attempt.pod_uids:
+            resource_uids = {
+                resource.uid
+                for resource in (
+                    *record.owner_references,
+                    *record.associated_resources,
+                )
+            }
+            if record.owner is not None:
+                resource_uids.add(record.owner.uid)
+            scheduled_at = _parse_dt(record.scheduled_at)
+            if (
+                not owner_job_uids.intersection(resource_uids)
+                or scheduled_at is None
+                or not (attempt.start_time <= scheduled_at <= attempt.end_time)
+            ):
+                continue
+        placements.setdefault(
+            record.pod_uid,
+            {
+                "pod_uid": record.pod_uid,
+                "pod_name": record.pod_name,
+                "node_name": record.node_name,
+                "source": "kubernetes_daemon",
+            },
+        )
+        if record.node_failure_reason == "NodeLost" or record.node_failure_reason in _NODE_LOSS_DISRUPTION_REASONS:
+            retained_node_loss_nodes.add(record.node_name)
+        elif record.node_failure_reason:
+            retained_exit_nodes.add(record.node_name)
 
-    start_time = _earliest_condition_time(conditions, _COND_ADMITTED)
-    end_time = _condition_time(conditions, _COND_FINISHED)
-    if end_time is None:
-        evicted = _condition_time(conditions, _COND_EVICTED)
-        if evicted is not None:
-            end_time = evicted
-    if start_time is None:
-        # Fall back to the workload's creationTimestamp — for never-admitted
-        # workloads it's the only timestamp Kubernetes guarantees to populate.
-        start_time = _parse_dt(meta.get("creationTimestamp"))
+    node_loss_nodes = retained_node_loss_nodes | set(pod_evidence.node_loss_nodes)
+    has_node_failure = bool(retained_node_loss_nodes) or pod_evidence.has_node_failure
+    if has_node_failure and state not in {
+        "COMPLETED",
+        "PREEMPTED",
+        "NODE_FAIL",
+    }:
+        state = "NODE_FAIL"
 
-    if start_time is None:
-        logger.warning(f"workload {namespace}/{name} has no start time; skipping")
-        return None
-
-    if end_time is None:
-        # Active workload — substitute now() as the evidence-collection end,
-        # mirroring the Slurm adapter's behavior for RUNNING ExecutionContexts. Re-running
-        # attribution on a still-active workload will produce a sliding window.
-        end_time = now
-        logger.debug(f"workload {namespace}/{name} not finished; substituting now() for end_time")
-
-    # `pods` is pooled across every workload in the batch. The JobSet label is
-    # only unique within a namespace, so a same-named JobSet elsewhere would
-    # otherwise leak its pods (and overwrite `pod_nodes`) into this workload.
-    own_pods = [pod for pod in pods if ((pod.get("metadata") or {}).get("namespace") or "default") == namespace]
-    evidence = _collect_pod_evidence(own_pods, _pod_selector_for(workload))
-
-    ctx: KueueExecutionContext = {
-        "id": uid,
-        # V2 accepts scheduler identity as a string, allowing service rules and
-        # provenance to distinguish Kueue from other execution-context sources.
+    nodes = {placement["node_name"] for placement in placements.values()}
+    nodes.update(pod_evidence.nodes)
+    pod_names = {placement["pod_name"] for placement in placements.values()}
+    pod_names.update(pod_evidence.pod_names)
+    context: KueueExecutionContext = {
+        "id": attempt.attempt_id,
+        "attempt_id": attempt.attempt_id,
         "workload_type": "kueue",
-        # BP-internal connector identity. SQLite's `scheduler_type` column
-        # reads this in preference to the service-facing `workload_type`.
         "scheduler": "kueue",
-        "nodes": evidence.nodes,
-        "start_time": start_time,
-        "end_time": end_time,
-        "job_id": f"{namespace}/{name}",
-        "workload_uid": uid,
-        # `attempt_id` is the scheduler-agnostic per-attempt key used by
-        # the sqlite output's unique-row constraint. Kueue creates a new
-        # Workload per requeue, so its uid is the natural attempt key.
-        "attempt_id": uid,
-        "namespace": namespace,
+        "job_id": f"{attempt.namespace}/{attempt.workload_name}",
+        "workload_uid": attempt.workload_uid,
+        "admission_key": attempt.admission_key,
+        "restart_attempt": attempt.restart_attempt,
+        "namespace": attempt.namespace,
+        "name": attempt.workload_name,
+        "nodes": sorted(nodes),
+        "start_time": attempt.start_time,
+        "end_time": attempt.end_time,
         "state": state,
         "kueue_state": kueue_state,
-        "name": name,
+        "owner_job_uids": sorted(owner_job_uids),
+        "attempt_pod_uids": sorted(attempt.pod_uids),
+        "attempt_identity_resolved": attempt.boundary_resolved,
     }
+    if placements:
+        context["pod_placements"] = [placements[pod_uid] for pod_uid in sorted(placements)]
+    if pod_names:
+        context["pod_names"] = sorted(pod_names)
+    if pod_evidence.pod_nodes:
+        context["pod_nodes"] = pod_evidence.pod_nodes
+    if node_loss_nodes:
+        context["failed_node"] = min(node_loss_nodes)
+    elif pod_evidence.failed_node:
+        context["failed_node"] = pod_evidence.failed_node
+    elif retained_exit_nodes:
+        context["failed_node"] = min(retained_exit_nodes)
+
+    if evidence.retained_coverage:
+        context["history_complete"] = any(
+            _history_complete(attempt, coverage) for coverage in evidence.retained_coverage
+        )
+    if workload is None:
+        return context
 
     spec = workload.get("spec") or {}
-    queue_name = spec.get("queueName")
-    if queue_name:
-        ctx["queue_name"] = queue_name
-    priority = spec.get("priority")
-    if isinstance(priority, int):
-        ctx["priority_class"] = priority
+    if queue_name := spec.get("queueName"):
+        context["queue_name"] = queue_name
+    if isinstance(spec.get("priority"), int):
+        context["priority_class"] = spec["priority"]
     gpu_count = _workload_gpu_count(workload)
     if gpu_count is not None:
-        ctx["gpu_count"] = gpu_count
-
-    if evidence.failed_node:
-        ctx["failed_node"] = evidence.failed_node
-
-    if len(evidence.pod_names) > 0:
-        ctx["pod_names"] = evidence.pod_names
-    if len(evidence.pod_nodes) > 0:
-        ctx["pod_nodes"] = evidence.pod_nodes
-    pod_placements = _live_pod_placements(own_pods, _pod_selector_for(workload))
-    if pod_placements:
-        ctx["pod_placements"] = pod_placements
-
-    time_limit = _extract_time_limit(workload, owner_jobs)
-    if time_limit is not None:
-        ctx["time_limit"] = time_limit
-
-    labels = meta.get("labels") or {}
-    for key in ("user", "username", "kueue.x-k8s.io/user", "app.kubernetes.io/created-by"):
-        value = labels.get(key)
-        if value:
-            ctx["user_name"] = value
+        context["gpu_count"] = gpu_count
+    if time_limit := _extract_time_limit(workload, jobs_by_name):
+        context["time_limit"] = time_limit
+    labels = (workload.get("metadata") or {}).get("labels") or {}
+    for key in (
+        "user",
+        "username",
+        "kueue.x-k8s.io/user",
+        "app.kubernetes.io/created-by",
+    ):
+        if value := labels.get(key):
+            context["user_name"] = value
             break
+    return context
 
-    return ctx
+
+def _parse_never_admitted_workload(
+    workload: dict,
+    now: datetime,
+) -> KueueExecutionContext | None:
+    """Build the explicit live-only context for a never-admitted Workload."""
+    metadata = workload.get("metadata") or {}
+    uid = metadata.get("uid")
+    name = metadata.get("name")
+    created = _parse_dt(metadata.get("creationTimestamp"))
+    if not uid or not name or created is None:
+        return None
+    namespace = metadata.get("namespace") or "default"
+    conditions = (workload.get("status") or {}).get("conditions") or []
+    context: KueueExecutionContext = {
+        "id": f"kueue:pre:v1:{uid}",
+        "attempt_id": f"kueue:pre:v1:{uid}",
+        "workload_type": "kueue",
+        "scheduler": "kueue",
+        "job_id": f"{namespace}/{name}",
+        "workload_uid": uid,
+        "namespace": namespace,
+        "name": name,
+        "nodes": [],
+        "start_time": created,
+        "end_time": now,
+        "state": _service_state(
+            _derive_state(conditions),
+            workload,
+            False,
+            {},
+        ),
+        "kueue_state": _derive_state(conditions),
+        "attempt_identity_resolved": False,
+        "owner_job_uids": [],
+    }
+    return context
 
 
 def _split_csv(value: str) -> list[str]:
     """CSV-split a string, stripping whitespace and dropping empty entries."""
     return [piece.strip() for piece in value.split(",") if piece.strip()]
+
+
+def _history_attempt_state(
+    attempt: WorkloadAttempt,
+) -> tuple[str, str]:
+    terminal = attempt.terminal
+    if terminal is None:
+        return ("RUNNING", "RUNNING") if attempt.open else ("UNKNOWN", "UNKNOWN")
+    terminal_type = terminal["type"]
+    reason = str(terminal.get("reason") or "")
+    if terminal["kind"] == "JobSet":
+        if terminal_type == "Completed":
+            return "COMPLETED", "FINISHED_SUCCEEDED"
+        return "FAILED", "FINISHED_FAILED"
+    if terminal["kind"] == "Job":
+        if terminal_type == "Complete":
+            return "COMPLETED", "FINISHED_SUCCEEDED"
+        if reason == "DeadlineExceeded":
+            return "TIMEOUT", "FINISHED_FAILED"
+        return "FAILED", "FINISHED_FAILED"
+    if terminal_type == "Finished":
+        return ("FAILED", "FINISHED_FAILED") if "fail" in reason.lower() else ("COMPLETED", "FINISHED_SUCCEEDED")
+    if reason.lower() == "preempted":
+        return "PREEMPTED", "EVICTED_PREEMPTED"
+    if reason.lower() == "nodefailures":
+        return "NODE_FAIL", "EVICTED_NODEFAILURES"
+    return "EVICTED", (f"EVICTED_{reason.upper()}" if reason else "EVICTED")
+
+
+def _history_complete(
+    attempt: WorkloadAttempt,
+    coverage: dict,
+) -> bool:
+    if not attempt.boundary_resolved:
+        return False
+    required_sources = {"kueue-workloads", "jobs", "pods"}
+    if attempt.owner_kind == "JobSet":
+        required_sources.add("jobsets")
+    disabled = coverage.get("disabledWatches") or {}
+    sources = {item.get("sourceName"): item for item in coverage.get("sources") or []}
+    for source_name in required_sources:
+        if source_name in disabled:
+            return False
+        source = sources.get(source_name)
+        if source is None:
+            return False
+        coverage_start = _parse_dt(source.get("coverageStartedAt"))
+        checkpoint = _parse_dt(source.get("checkpointedAt"))
+        if (
+            coverage_start is None
+            or checkpoint is None
+            or coverage_start > attempt.start_time
+            or checkpoint < attempt.end_time
+        ):
+            return False
+    for gap in coverage.get("gaps") or []:
+        if gap.get("sourceName") not in required_sources:
+            continue
+        gap_start = _parse_dt(gap.get("startedAt"))
+        gap_end = _parse_dt(gap.get("recoveredAt"))
+        if gap_start is None:
+            return False
+        if gap_start <= attempt.end_time and (gap_end is None or gap_end >= attempt.start_time):
+            return False
+    return True
 
 
 class KueueExecutionContextAdapter:
@@ -749,11 +890,8 @@ class KueueExecutionContextAdapter:
     (KUBECONFIG env var, ~/.kube/config) or, if neither resolves, in-cluster
     service-account credentials. `namespace` selects a single namespace; the
     empty string queries every namespace. `workload_api_version` pins the
-    Kueue Workload CRD's `<group>/<version>` the adapter reads; Kueue versions
-    this API, so there is no runtime "ask the cluster for its preferred
-    version" step — the default tracks the Workload API version Kueue has
-    shipped as `v1beta1` since 0.6, and callers running a cluster that serves
-    a different version configure this directly.
+    Kueue Workload CRD's `<group>/<version>` the adapter reads (see
+    `_DEFAULT_WORKLOAD_API_VERSION` above).
     """
 
     def __init__(
@@ -782,6 +920,12 @@ class KueueExecutionContextAdapter:
             raise ValueError("placement_records_enabled must be a bool")
         self.placement_records_enabled = placement_records_enabled
         self.placement_reader = placement_reader
+        self.history_reader = (
+            placement_reader
+            if placement_records_enabled
+            and callable(getattr(placement_reader, "find_histories", None))
+            else None
+        )
         self.event_max_age_seconds = event_max_age_seconds
         self.prometheus_placement_resolver = prometheus_placement_resolver
 
@@ -806,6 +950,7 @@ class KueueExecutionContextAdapter:
         unknown names.
         """
         workloads: list[dict] = []
+        retained_evidence: list[_AttemptEvidence] = []
         for ref in ids:
             ns, _, name = ref.partition("/")
             if not name:
@@ -816,16 +961,126 @@ class KueueExecutionContextAdapter:
                         f"use `<namespace>/<name>` or configure eca.kueue.namespace"
                     )
                 ns, name = self.namespace, ref
-            try:
-                workloads.append(
-                    self._kubernetes.get_one(
-                        "Workload", name, namespace=ns, api_version=self.workload_api_version
+            histories = []
+            if self.history_reader is not None:
+                histories = self.history_reader.find_histories(
+                    ns,
+                    "Workload",
+                    name=name,
+                )
+                if histories:
+                    retained_evidence.extend(
+                        self._evidence_from_histories(
+                            histories,
+                            workload_name=name,
+                        )
                     )
+            try:
+                obj = self._kubernetes.get_one(
+                    "Workload",
+                    name,
+                    namespace=ns,
+                    api_version=self.workload_api_version,
                 )
             except KubernetesClientError as error:
-                if error.status != 404:
-                    raise
-        return self._finalize(workloads)
+                if histories:
+                    logger.warning(f"live Workload lookup failed for {ns}/{name}; using retained history")
+                    continue
+                if error.status == 404:
+                    continue
+                raise
+            if obj is not None:
+                workloads.append(obj)
+        return self._finalize(workloads, retained_evidence)
+
+    @staticmethod
+    def _resource_from_observation(observation: dict) -> dict:
+        metadata = dict(observation.get("metadata") or {})
+        selected = observation.get("selectedMetadata") or {}
+        for metadata_field in ("labels", "annotations"):
+            if selected.get(metadata_field):
+                metadata[metadata_field] = selected[metadata_field]
+        return {
+            "apiVersion": observation.get("apiVersion") or "",
+            "kind": observation.get("kind") or "",
+            "metadata": metadata,
+            "spec": observation.get("spec") or {},
+            "status": observation.get("status") or {},
+        }
+
+    def _evidence_from_histories(
+        self,
+        histories: list[dict],
+        *,
+        workload_name: str | None,
+    ) -> list[_AttemptEvidence]:
+        assert self.placement_reader is not None
+        now = datetime.now(tz=timezone.utc)
+        evidence_items: list[_AttemptEvidence] = []
+        for history in histories:
+            workloads = {
+                metadata["uid"]: metadata["name"]
+                for observation in history.get("observations") or []
+                if observation.get("kind") == "Workload"
+                and (metadata := observation.get("metadata") or {}).get("uid")
+                and metadata.get("name")
+                and (workload_name is None or metadata["name"] == workload_name)
+            }
+            history_placements: dict[str, PlacementRecord] = {}
+            for resource in history.get("placements") or []:
+                placement = PlacementRecord.from_resource(resource)
+                history_placements[placement.pod_uid] = placement
+            resources_by_uid = {
+                metadata["uid"]: self._resource_from_observation(observation)
+                for observation in history.get("observations") or []
+                if (metadata := observation.get("metadata") or {}).get("uid")
+            }
+            for retained_name in sorted(set(workloads.values())):
+                for attempt in attempts_from_workload_history(
+                    history,
+                    workload_name=retained_name,
+                    now=now,
+                ):
+                    evidence_items.append(
+                        _AttemptEvidence(
+                            attempt=attempt,
+                            pods={uid: resources_by_uid[uid] for uid in attempt.pod_uids if uid in resources_by_uid},
+                            jobs={uid: resources_by_uid[uid] for uid in attempt.job_uids if uid in resources_by_uid},
+                            placements=history_placements,
+                            retained_coverage=[history.get("coverage") or {}],
+                        )
+                    )
+        return evidence_items
+
+    @staticmethod
+    def _combine_attempt_evidence(
+        evidence_items: list[_AttemptEvidence],
+    ) -> list[_AttemptEvidence]:
+        grouped: dict[str, list[_AttemptEvidence]] = {}
+        for evidence in evidence_items:
+            grouped.setdefault(evidence.attempt.attempt_id, []).append(evidence)
+
+        combined = []
+        for items in grouped.values():
+            first = items[0]
+            merged = _AttemptEvidence(
+                attempt=merge_attempts([item.attempt for item in items]),
+                workload=first.workload,
+                pods=dict(first.pods),
+                jobs=dict(first.jobs),
+                placements=dict(first.placements),
+                retained_coverage=list(first.retained_coverage),
+            )
+            for item in items[1:]:
+                merged.merge(item)
+            combined.append(merged)
+        return sorted(
+            combined,
+            key=lambda evidence: (
+                evidence.attempt.start_time,
+                evidence.attempt.attempt_id,
+            ),
+        )
 
     def discover_by_time_range(
         self,
@@ -836,27 +1091,41 @@ class KueueExecutionContextAdapter:
         """List workloads, then filter by (start_time, end_time) intersection.
 
         Kueue's API does NOT support server-side time filtering on Workloads,
-        so we list and filter client-side — same pattern as a sacct call
-        without `--jobs`. The `nodelist` argument intersects against the
-        observed pod nodes; empty intersection drops the workload. Each list
-        entry may be a CSV of plain k8s node names — Kueue parses comma lists
-        here rather than at the CLI layer so the orchestrator's contract stays
-        scheduler-agnostic.
-
-        `start` and `end` must be tz-aware. Naive datetimes would crash the
-        per-workload comparison against (tz-aware) parsed condition times.
+        so we list and filter client-side. `nodelist` entries may be CSVs of
+        plain node names; a workload survives only if its nodes intersect.
+        `start`/`end` must be tz-aware to compare against parsed condition
+        times.
         """
         assert_aware(start, "discover_by_time_range.start")
         assert_aware(end, "discover_by_time_range.end")
-        listing = self._kubernetes.list(
-            "Workload",
-            namespace=self.namespace or None,
-            api_version=self.workload_api_version,
-        )
+        histories = []
+        retained_evidence: list[_AttemptEvidence] = []
+        if self.history_reader is not None:
+            if not self.namespace:
+                raise ValueError("kueue retained-history time-range discovery requires eca.kueue.namespace")
+            histories = self.history_reader.find_histories(
+                self.namespace,
+                "Workload",
+                start=start,
+                end=end,
+            )
+            retained_evidence = self._evidence_from_histories(
+                histories,
+                workload_name=None,
+            )
+        try:
+            listing = self._kubernetes.list(
+                "Workload",
+                namespace=self.namespace or None,
+                api_version=self.workload_api_version,
+            )
+        except KubernetesClientError:
+            if not histories:
+                raise
+            logger.warning("live Workload list failed; using retained history")
+            listing = []
         # parse only the timestamps each workload object
         # already carries (conditions + creationTimestamp).
-        from datetime import timezone
-
         now = datetime.now(tz=timezone.utc)
         survivors: list[dict] = []
         for wl in listing:
@@ -867,7 +1136,8 @@ class KueueExecutionContextAdapter:
             if wl_start <= end and wl_end >= start:
                 survivors.append(wl)
         # Full parse (which fetches pods + owner Jobs) only on survivors.
-        filtered = self._finalize(survivors)
+        contexts = self._finalize(survivors, retained_evidence)
+        filtered = [context for context in contexts if context["start_time"] <= end and context["end_time"] >= start]
         if not nodelist:
             return filtered
         wanted: set[str] = set()
@@ -957,24 +1227,20 @@ class KueueExecutionContextAdapter:
         self,
         workload: dict,
         context: KueueExecutionContext,
-        owner_jobs: dict[str, dict],
     ) -> tuple[list[str], list[str]]:
         """Recover `(nodes, pod_names)` from short-lived Kubernetes Events.
 
         Queries only the exact owner Job UID(s)' `SuccessfulCreate` Events,
-        then only the resulting pod names' `Scheduled` Events, via
-        `--field-selector` — never a namespace-wide Event list. This keeps
-        the RBAC/scale/retention footprint bounded to this one workload
-        one Events query per owner Job UID and per pod name.
-        Skips entirely (no calls) once `context["end_time"]` is older than
-        `event_max_age_seconds`.
+        then the resulting pod names' `Scheduled` Events, via
+        `--field-selector` — never a namespace-wide list. Skips entirely once
+        `context["end_time"]` is older than `event_max_age_seconds`.
         """
         age = datetime.now(tz=timezone.utc) - context["end_time"]
         if age.total_seconds() > self.event_max_age_seconds:
             return [], []
 
         namespace = context["namespace"]
-        job_uids = _owner_job_uids(workload, owner_jobs)
+        job_uids = set(context.get("owner_job_uids") or [])
         if not job_uids:
             return [], []
 
@@ -1030,41 +1296,6 @@ class KueueExecutionContextAdapter:
         except Exception as error:
             raise RuntimeError(f"KubernetesDaemon placement lookup failed: {error}") from error
 
-    def _merge_placement_records(
-        self,
-        context: KueueExecutionContext,
-        live_node_loss_nodes: set[str] | None = None,
-    ) -> None:
-        placements: list[PodPlacement] = []
-        retained_node_loss_nodes: set[str] = set()
-        exit_code_nodes: set[str] = set()
-        for record in self._fetch_placement_records(context):
-            placements.append(
-                {
-                    "pod_uid": record.pod_uid,
-                    "pod_name": record.pod_name,
-                    "node_name": record.node_name,
-                    "source": "placement_record",
-                }
-            )
-            reason = record.node_failure_reason
-            if reason == "NodeLost" or reason in _NODE_LOSS_DISRUPTION_REASONS:
-                retained_node_loss_nodes.add(record.node_name)
-            elif reason:
-                exit_code_nodes.add(record.node_name)
-        self._merge_placements(context, placements)
-        # PlacementRecords are the only post-GC source for Pod status evidence.
-        # Preserve the same precedence as `_service_state`.
-        if retained_node_loss_nodes and context.get("state") not in {"COMPLETED", "PREEMPTED", "NODE_FAIL"}:
-            context["state"] = "NODE_FAIL"
-        # Explicit node-loss evidence outranks generic exit-code evidence,
-        # regardless of whether it came from a live Pod or a retained record.
-        node_loss_nodes = set(live_node_loss_nodes or ()) | retained_node_loss_nodes
-        if node_loss_nodes:
-            context["failed_node"] = min(node_loss_nodes)
-        elif exit_code_nodes and not context.get("failed_node"):
-            context["failed_node"] = min(exit_code_nodes)
-
     @staticmethod
     def _merge_placements(context: KueueExecutionContext, additions: list[PodPlacement]) -> None:
         by_uid = {
@@ -1084,16 +1315,23 @@ class KueueExecutionContextAdapter:
     def _merge_prometheus_placements_batched(
         self,
         parsed: list[tuple[dict, KueueExecutionContext]],
-        owner_jobs: dict[str, dict],
     ) -> None:
         if self.prometheus_placement_resolver is None:
             return
 
         queries: list[PlacementQuery] = []
         contexts_by_workload_uid: dict[str, KueueExecutionContext] = {}
-        for workload, context in parsed:
-            owner_job_uids = _owner_job_uids(workload, owner_jobs)
+        latest_resolved: dict[str, KueueExecutionContext] = {}
+        for _, context in parsed:
+            if context.get("attempt_identity_resolved") is False:
+                continue
             workload_uid = context["workload_uid"]
+            previous = latest_resolved.get(workload_uid)
+            if previous is None or context["start_time"] > previous["start_time"]:
+                latest_resolved[workload_uid] = context
+        for context in latest_resolved.values():
+            workload_uid = context["workload_uid"]
+            owner_job_uids = set(context.get("owner_job_uids") or [])
             if not owner_job_uids or not workload_uid:
                 continue
             queries.append(
@@ -1117,22 +1355,86 @@ class KueueExecutionContextAdapter:
         for workload_uid, placements in placements_by_workload.items():
             context = contexts_by_workload_uid.get(workload_uid)
             if context is not None:
+                if context.get("attempt_identity_resolved"):
+                    verified_pod_uids = set(context.get("attempt_pod_uids") or [])
+                    placements = [
+                        placement for placement in placements if placement.get("pod_uid") in verified_pod_uids
+                    ]
                 self._merge_placements(context, placements)
 
-    def _finalize(self, workloads: list[dict]) -> list[KueueExecutionContext]:
-        if not workloads:
+    def _finalize(
+        self,
+        workloads: list[dict],
+        retained_evidence: list[_AttemptEvidence] | None = None,
+    ) -> list[KueueExecutionContext]:
+        if not workloads and not retained_evidence:
             return []
-        pods = self._fetch_pods_for(workloads)
-        owner_jobs = self._fetch_owner_jobs(workloads)
+        pods = self._fetch_pods_for(workloads) if workloads else []
+        owner_jobs = self._fetch_owner_jobs(workloads) if workloads else {}
         now = datetime.now(tz=timezone.utc)
+        evidence_items = list(retained_evidence or [])
+        pending_contexts: list[tuple[dict, KueueExecutionContext]] = []
+        workloads_by_uid: dict[str, dict] = {}
+        for workload in workloads:
+            metadata = workload.get("metadata") or {}
+            workload_uid = metadata.get("uid")
+            if workload_uid:
+                workloads_by_uid[workload_uid] = workload
+            selector = _pod_selector_for(workload)
+            member_pods = [pod for pod in pods if selector is not None and _pod_matches_selector(pod, selector)]
+            jobs = _jobs_for_workload(workload, owner_jobs)
+            attempts = attempts_from_live_resources(
+                workload,
+                member_pods,
+                jobs,
+                now=now,
+            )
+            if not attempts:
+                if _workload_condition_is_true(
+                    workload,
+                    _COND_ADMITTED,
+                ):
+                    continue
+                pending = _parse_never_admitted_workload(workload, now)
+                if pending is not None:
+                    pending_contexts.append((workload, pending))
+                continue
+            records = self._fetch_placement_records(
+                {
+                    "namespace": metadata.get("namespace") or "default",
+                    "workload_uid": workload_uid,
+                }
+            )
+            pods_by_uid = {uid: pod for pod in member_pods if (uid := (pod.get("metadata") or {}).get("uid"))}
+            jobs_by_uid = {uid: job for job in jobs if (uid := (job.get("metadata") or {}).get("uid"))}
+            for attempt in attempts:
+                evidence_items.append(
+                    _AttemptEvidence(
+                        attempt=attempt,
+                        workload=workload,
+                        pods={uid: pods_by_uid[uid] for uid in attempt.pod_uids if uid in pods_by_uid},
+                        jobs={uid: jobs_by_uid[uid] for uid in attempt.job_uids if uid in jobs_by_uid},
+                        placements={record.pod_uid: record for record in records},
+                    )
+                )
+
         parsed: list[tuple[dict, KueueExecutionContext]] = []
-        for wl in workloads:
-            ctx = _parse_workload(wl, pods, owner_jobs, now=now)
-            if ctx is not None:
-                live_node_loss_nodes = _live_node_loss_nodes(pods, _pod_selector_for(wl))
-                self._merge_placement_records(ctx, live_node_loss_nodes)
-                parsed.append((wl, ctx))
-        self._merge_prometheus_placements_batched(parsed, owner_jobs)
+        retained_only: list[KueueExecutionContext] = []
+        for evidence in self._combine_attempt_evidence(evidence_items):
+            context = _context_from_attempt_evidence(evidence)
+            workload = workloads_by_uid.get(context["workload_uid"])
+            if workload is None:
+                retained_only.append(context)
+            else:
+                parsed.append((workload, context))
+        admitted_workload_uids = {context["workload_uid"] for context in retained_only}
+        admitted_workload_uids.update(context["workload_uid"] for _, context in parsed)
+        parsed.extend(
+            (workload, context)
+            for workload, context in pending_contexts
+            if context["workload_uid"] not in admitted_workload_uids
+        )
+        self._merge_prometheus_placements_batched(parsed)
 
         missing = [
             (workload, ctx)
@@ -1141,12 +1443,15 @@ class KueueExecutionContextAdapter:
             and (not ctx["nodes"] or not ctx.get("pod_names"))
         ]
         if not missing:
-            return [ctx for _, ctx in parsed]
+            return [*retained_only, *(ctx for _, ctx in parsed)]
 
         for workload, ctx in missing:
             metadata = workload.get("metadata") or {}
             namespace = ctx["namespace"]
-            recovered_nodes, recovered_pods = self._recover_pod_evidence_from_events(workload, ctx, owner_jobs)
+            recovered_nodes, recovered_pods = self._recover_pod_evidence_from_events(
+                workload,
+                ctx,
+            )
             if recovered_nodes:
                 ctx["nodes"] = sorted(set(ctx["nodes"]) | set(recovered_nodes))
             if recovered_pods:
@@ -1162,4 +1467,4 @@ class KueueExecutionContextAdapter:
                     f"workload {namespace}/{metadata.get('name')}: "
                     f"{' and '.join(unavailable)} unavailable from live pods and Kubernetes Events"
                 )
-        return [ctx for _, ctx in parsed]
+        return [*retained_only, *(ctx for _, ctx in parsed)]

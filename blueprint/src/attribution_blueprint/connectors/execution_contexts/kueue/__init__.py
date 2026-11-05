@@ -1,23 +1,21 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-import os
-
 from attribution_blueprint import mca_registry as _registry
-from attribution_blueprint.connectors.auth import MTLSAuth, TokenAuth
-from attribution_blueprint.connectors.execution_contexts.kubernetes_daemon import (
-    build_kubernetes_daemon_client,
-)
+from attribution_blueprint.connectors.auth import build_auth
 from attribution_blueprint.connectors.execution_contexts.kueue.connector import (
     KueueExecutionContext,
     KueueExecutionContextAdapter,
 )
 from attribution_blueprint.exceptions import MCAError
+from attribution_blueprint.kubernetes.daemon.config import (
+    build_kubernetes_daemon_client,
+)
 from attribution_blueprint.mca_registry import _PARAM
 
 
 def _build_prometheus_metrics(spec: dict):
-    from attribution_blueprint.connectors.execution_contexts.kueue.pod_placement.prometheus_resolver import (
+    from attribution_blueprint.connectors.execution_contexts.kueue.prometheus_placement import (
         PrometheusPlacementResolver,
     )
     from attribution_blueprint.mca import _coerce_float, _coerce_int
@@ -26,28 +24,8 @@ def _build_prometheus_metrics(spec: dict):
     if not endpoint:
         raise MCAError("eca.kueue.prometheus_metrics requires endpoint")
 
-    auth = None
     auth_spec = spec.get("auth")
-    if auth_spec is not None:
-        auth_type = auth_spec.get("type")
-        if auth_type == "token":
-            env_name = auth_spec.get("token_env")
-            if not env_name:
-                raise MCAError("eca.kueue.prometheus_metrics.auth type=token requires token_env")
-            if env_name not in os.environ:
-                raise MCAError(f"auth.token_env references unset environment variable: {env_name}")
-            auth = TokenAuth(token=os.environ[env_name], org_id=auth_spec.get("org_id"))
-        elif auth_type == "mtls":
-            if not auth_spec.get("cert_path") or not auth_spec.get("key_path"):
-                raise MCAError("eca.kueue.prometheus_metrics.auth type=mtls requires cert_path and key_path")
-            auth = MTLSAuth(
-                cert_path=auth_spec["cert_path"],
-                key_path=auth_spec["key_path"],
-                ca_cert_path=auth_spec.get("ca_cert_path"),
-                org_id=auth_spec.get("org_id"),
-            )
-        else:
-            raise MCAError(f"unknown Prometheus placement auth type: {auth_type!r}")
+    auth = build_auth(auth_spec, "eca.kueue.prometheus_metrics") if auth_spec is not None else None
 
     timeout = _coerce_float(spec.get("timeout_seconds", 60.0), "eca.kueue.prometheus_metrics.timeout_seconds")
     padding = _coerce_int(
@@ -133,9 +111,7 @@ def _build(spec: dict, ctx: dict) -> KueueExecutionContextAdapter:
     workload_api_version = spec.get("workload_api_version")
     if workload_api_version is not None:
         if not isinstance(workload_api_version, str) or not workload_api_version:
-            raise MCAError(
-                f"eca.kueue.workload_api_version must be a non-empty string, got {workload_api_version!r}"
-            )
+            raise MCAError(f"eca.kueue.workload_api_version must be a non-empty string, got {workload_api_version!r}")
         kwargs["workload_api_version"] = workload_api_version
     return KueueExecutionContextAdapter(**kwargs)
 

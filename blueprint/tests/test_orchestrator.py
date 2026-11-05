@@ -146,6 +146,18 @@ def test_analyze_records_run_summaries():
     ]
 
 
+def test_analyze_summary_preserves_incomplete_scheduler_history():
+    ctx = _make_ctx("history-gap")
+    ctx["history_complete"] = False
+    eca = MagicMock()
+    eca.discover_by_ids.return_value = [ctx]
+    pipeline = _make_pipeline(eca, [])
+
+    pipeline.analyze(ids=["history-gap"])
+
+    assert pipeline.last_run_summaries[0]["history_complete"] == "false"
+
+
 # Required keys per the generated client's AttributorWorkloadInfoV2 (workload)
 # and AttributorMetadata (metadata).
 _REQUIRED_WORKLOAD_KEYS = {
