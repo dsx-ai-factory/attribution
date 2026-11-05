@@ -144,8 +144,6 @@ class _WorkloadEvidence:
     observed_until: datetime
     podgroup: dict | None = None
     owner_object: dict | None = None
-    pods: dict[str, dict] = field(default_factory=dict)
-    jobs: dict[str, dict] = field(default_factory=dict)
     placements: dict[str, PlacementRecord] = field(default_factory=dict)
     retained_coverage: list[dict] = field(default_factory=list)
     observations: list[dict] = field(default_factory=list)
@@ -858,42 +856,24 @@ class KaiExecutionContextAdapter:
             retained_coverage: list[dict] = []
             live_podgroups: dict[str, dict] = {}
             live_owners: dict[str, dict] = {}
-            live_owner_sources: list[tuple[str, dict]] = []
+            latest_attempts = {
+                attempt.pod_group_uid: attempt
+                for attempt in attempts
+            }
             for item in items:
-                pods.update(item.pods)
-                jobs.update(item.jobs)
                 placements.update(item.placements)
                 retained_coverage.extend(item.retained_coverage)
-                if item.podgroup is not None:
-                    pod_group_uid = (
-                        item.podgroup.get("metadata") or {}
-                    ).get("uid")
-                    if pod_group_uid:
-                        live_podgroups[pod_group_uid] = item.podgroup
-                if item.owner_object is not None:
-                    pod_group_uid = (
-                        item.podgroup.get("metadata") or {}
-                    ).get("uid") if item.podgroup is not None else None
-                    if pod_group_uid:
-                        live_owner_sources.append(
-                            (pod_group_uid, item.owner_object)
-                        )
-
-            for pod_group_uid, owner_object in live_owner_sources:
-                candidates = [
-                    attempt
-                    for attempt in attempts
-                    if attempt.pod_group_uid == pod_group_uid
-                ]
-                if candidates:
-                    current = max(
-                        candidates,
-                        key=lambda attempt: (
-                            attempt.start_time,
-                            attempt.attempt_id,
-                        ),
+                pod_group_uid = (
+                    (item.podgroup.get("metadata") or {}).get(
+                        "uid"
                     )
-                    live_owners[current.attempt_id] = owner_object
+                    if item.podgroup is not None
+                    else None
+                )
+                if pod_group_uid:
+                    live_podgroups[pod_group_uid] = item.podgroup
+                    if item.owner_object is not None:
+                        live_owners[pod_group_uid] = item.owner_object
 
             for attempt in attempts:
                 allowed_job_uids = attempt.job_uids | (
@@ -901,15 +881,20 @@ class KaiExecutionContextAdapter:
                     if attempt.owner_kind == "Job"
                     else set()
                 )
+                latest = latest_attempts.get(attempt.pod_group_uid)
+                owner_object = (
+                    live_owners.get(attempt.pod_group_uid)
+                    if latest
+                    and latest.attempt_id == attempt.attempt_id
+                    else None
+                )
                 combined.append(
                     _AttemptEvidence(
                         attempt=attempt,
                         podgroup=live_podgroups.get(
                             attempt.pod_group_uid
                         ),
-                        owner_object=live_owners.get(
-                            attempt.attempt_id
-                        ),
+                        owner_object=owner_object,
                         pods={
                             uid: pods[uid]
                             for uid in attempt.pod_uids
@@ -1141,20 +1126,6 @@ class KaiExecutionContextAdapter:
                         "pod_group_uid": meta.get("uid") or "",
                     }
                 )
-                pods_by_uid = {
-                    uid: pod
-                    for pod in members
-                    if (
-                        uid := (pod.get("metadata") or {}).get("uid")
-                    )
-                }
-                jobs_by_uid = {
-                    uid: job
-                    for job in owner_jobs
-                    if (
-                        uid := (job.get("metadata") or {}).get("uid")
-                    )
-                }
                 evidence_items.append(
                     _WorkloadEvidence(
                         namespace=namespace,
@@ -1162,8 +1133,6 @@ class KaiExecutionContextAdapter:
                         observed_until=now,
                         podgroup=podgroup,
                         owner_object=owner_object,
-                        pods=pods_by_uid,
-                        jobs=jobs_by_uid,
                         placements={
                             record.pod_uid: record
                             for record in records

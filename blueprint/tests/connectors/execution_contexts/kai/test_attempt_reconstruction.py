@@ -907,7 +907,6 @@ def test_recreated_podgroups_with_same_restart_isolate_pods_and_terminal():
                 observed_until=now,
                 podgroup=live_podgroup,
                 owner_object=live_owner,
-                pods={pod["metadata"]["uid"]: pod for pod in live_pods},
                 observations=live_observations,
             ),
         ]
