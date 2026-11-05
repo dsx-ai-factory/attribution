@@ -373,7 +373,7 @@ def test_history_rejects_unsupported_owner_kinds_and_groups():
         )
 
 
-def test_same_restart_label_does_not_cross_scheduling_boundary():
+def test_active_restart_carries_across_scheduling_boundaries():
     owner = {
         "apiVersion": "jobset.x-k8s.io/v1alpha2",
         "kind": "JobSet",
@@ -404,14 +404,38 @@ def test_same_restart_label_does_not_cross_scheduling_boundary():
                 status={"lastStartTimestamp": "2026-10-14T11:00:00Z"},
             ),
             {
+                "kind": "Job",
+                "metadata": {"uid": "job-new", "name": "new-job"},
+                "selectedMetadata": {
+                    "labels": {_RESTART_LABEL: "1"}
+                },
+                "observedAt": "2026-10-14T11:00:00Z",
+                "status": {"startTime": "2026-10-14T11:00:00Z"},
+            },
+            {
                 "kind": "Pod",
                 "metadata": {"uid": "pod-new", "name": "new-pod"},
                 "selectedMetadata": {
                     "annotations": {"pod-group-name": "pg-training"},
-                    "labels": {_RESTART_LABEL: "0"},
+                    "labels": {_RESTART_LABEL: "1"},
                 },
                 "observedAt": "2026-10-14T11:01:00Z",
                 "status": {"startTime": "2026-10-14T11:01:00Z"},
+            },
+            _podgroup_observation(
+                owner,
+                "2026-10-14T12:00:00Z",
+                status={"lastStartTimestamp": "2026-10-14T12:00:00Z"},
+            ),
+            {
+                "kind": "Pod",
+                "metadata": {"uid": "pod-latest", "name": "latest-pod"},
+                "selectedMetadata": {
+                    "annotations": {"pod-group-name": "pg-training"},
+                    "labels": {_RESTART_LABEL: "1"},
+                },
+                "observedAt": "2026-10-14T12:01:00Z",
+                "status": {"startTime": "2026-10-14T12:01:00Z"},
             },
         ]
     }
@@ -419,15 +443,21 @@ def test_same_restart_label_does_not_cross_scheduling_boundary():
     attempts = attempts_from_podgroup_history(
         history,
         pod_group_name="pg-training",
-        now=datetime(2026, 10, 14, 12, 0, tzinfo=timezone.utc),
+        now=datetime(2026, 10, 14, 13, 0, tzinfo=timezone.utc),
     )
 
-    assert len(attempts) == 2
+    assert len(attempts) == 3
+    assert [attempt.restart_attempt for attempt in attempts] == [
+        "0",
+        "1",
+        "1",
+    ]
     assert attempts[0].pod_uids == frozenset({"pod-old"})
     assert attempts[1].pod_uids == frozenset({"pod-new"})
-
-    assert attempts[0].attempt_id != attempts[1].attempt_id
+    assert attempts[2].pod_uids == frozenset({"pod-latest"})
+    assert len({attempt.attempt_id for attempt in attempts}) == 3
     assert attempts[0].end_time == attempts[1].start_time
+    assert attempts[1].end_time == attempts[2].start_time
 
 
 def test_restart_boundaries_are_scoped_to_podgroup_incarnation():
@@ -499,7 +529,27 @@ def test_restart_boundaries_are_scoped_to_podgroup_incarnation():
     assert all(attempt.end_time >= attempt.start_time for attempt in attempts)
 
 
-def test_initial_boundary_preserves_latest_active_nonzero_restart():
+@pytest.mark.parametrize(
+    ("restart_time", "pod_time", "expected_start"),
+    [
+        (
+            "2026-10-14T09:55:00Z",
+            "2026-10-14T09:56:00Z",
+            datetime(2026, 10, 14, 10, 0, tzinfo=timezone.utc),
+        ),
+        (
+            "2026-10-14T10:30:00Z",
+            "2026-10-14T10:31:00Z",
+            datetime(2026, 10, 14, 10, 30, tzinfo=timezone.utc),
+        ),
+    ],
+    ids=["active-before-boundary", "first-seen-after-boundary"],
+)
+def test_initial_boundary_preserves_nonzero_restart_evidence_time(
+    restart_time,
+    pod_time,
+    expected_start,
+):
     owner = {
         "apiVersion": "jobset.x-k8s.io/v1alpha2",
         "kind": "JobSet",
@@ -511,17 +561,10 @@ def test_initial_boundary_preserves_latest_active_nonzero_restart():
         "observations": [
             {
                 "kind": "Job",
-                "metadata": {"uid": "job-old", "name": "old-child"},
-                "selectedMetadata": {"labels": {_RESTART_LABEL: "0"}},
-                "observedAt": "2026-10-14T09:00:00Z",
-                "status": {"startTime": "2026-10-14T09:00:00Z"},
-            },
-            {
-                "kind": "Job",
                 "metadata": {"uid": "job-current", "name": "current-child"},
                 "selectedMetadata": {"labels": {_RESTART_LABEL: "2"}},
-                "observedAt": "2026-10-14T09:55:00Z",
-                "status": {"startTime": "2026-10-14T09:55:00Z"},
+                "observedAt": restart_time,
+                "status": {"startTime": restart_time},
             },
             {
                 "kind": "Pod",
@@ -530,8 +573,8 @@ def test_initial_boundary_preserves_latest_active_nonzero_restart():
                     "annotations": {"pod-group-name": "pg-training"},
                     "labels": {_RESTART_LABEL: "2"},
                 },
-                "observedAt": "2026-10-14T09:56:00Z",
-                "status": {"startTime": "2026-10-14T09:56:00Z"},
+                "observedAt": pod_time,
+                "status": {"startTime": pod_time},
             },
             _podgroup_observation(
                 owner,
@@ -549,6 +592,7 @@ def test_initial_boundary_preserves_latest_active_nonzero_restart():
 
     assert len(attempts) == 1
     assert attempts[0].restart_attempt == "2"
+    assert attempts[0].start_time == expected_start
     assert attempts[0].pod_uids == frozenset({"pod-current"})
 
 
