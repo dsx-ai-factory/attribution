@@ -158,7 +158,10 @@ def _copy_optional_fields(ctx: KafkaExecutionContext, data: dict, event_id: str)
     for key in ("time_limit", "gpu_count"):
         value = data.get(key)
         if value is not None:
-            ctx[key] = _non_negative_int(value, key, event_id)
+            value = _non_negative_int(value, key, event_id)
+            # The Service accepts only positive deadlines; zero carries no limit.
+            if key != "time_limit" or value > 0:
+                ctx[key] = value
 
     failed_nodes = data.get("failed_nodes")
     if failed_nodes:

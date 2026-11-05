@@ -458,3 +458,18 @@ def test_acknowledgements_remain_valid_across_idle_polls_and_shutdown_is_noncomm
     assert consumer.commits == []
     with pytest.raises(InvalidReceiptError):
         adapter.ack(first)
+
+
+@pytest.mark.parametrize("limit", [None, 0, 120])
+def test_optional_time_limit_is_service_compatible_without_changing_the_event(stream, limit):
+    """Zero is not a Service deadline; keep the original CloudEvent unchanged."""
+    event = _events()[0]
+    event["data"]["time_limit"] = limit
+    adapter, consumer = stream(_structured([event]))
+    receipt = _one(adapter)
+    assert receipt.event["data"]["time_limit"] == limit
+    if limit:
+        assert receipt.context["time_limit"] == limit
+    else:
+        assert "time_limit" not in receipt.context
+    assert consumer.commits == []

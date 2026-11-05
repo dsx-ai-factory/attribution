@@ -564,7 +564,8 @@ The event `data` object uses ExecutionContext field names: `id`, `start_time`,
 `failed_nodes`, `failed_node`, `std_out`, `std_err`, `namespace`, `pod_names`,
 `pod_nodes`, and `cluster` are optional. `failed_node` is used when `failed_nodes`
 is absent or empty; otherwise, the lexicographically first entry in
-`failed_nodes` supplies `failed_node`.
+`failed_nodes` supplies `failed_node`. A zero `time_limit` is treated as
+unspecified; positive limits are forwarded to the Service.
 CloudEvent `subject`, when it is a non-empty string, is retained as
 `event_subject`; any other value is ignored without skipping the event. `cluster`
 is retained unchanged. `pod_nodes` must be an object whose pod names and node
