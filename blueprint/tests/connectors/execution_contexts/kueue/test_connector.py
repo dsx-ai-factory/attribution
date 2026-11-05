@@ -2399,9 +2399,12 @@ class TestPlacementReader:
     def test_disabled_records_do_not_query_reader(self, mocker):
         reader = mocker.Mock()
         eca = KueueExecutionContextAdapter(placement_reader=reader)
+        mocker.patch.object(eca._kubernetes, "get_one", return_value=None)
 
         assert eca._fetch_placement_records({"namespace": "ns", "workload_uid": "wl-uid"}) == []
+        assert eca.discover_by_ids(["ns/workload"]) == []
         reader.list_for_resource.assert_not_called()
+        reader.find_histories.assert_not_called()
 
     def test_enabled_records_query_reader(self, mocker):
         reader = mocker.Mock()

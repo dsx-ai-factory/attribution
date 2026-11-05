@@ -918,7 +918,12 @@ class KueueExecutionContextAdapter:
             raise ValueError("placement_records_enabled must be a bool")
         self.placement_records_enabled = placement_records_enabled
         self.placement_reader = placement_reader
-        self.history_reader = placement_reader if callable(getattr(placement_reader, "find_histories", None)) else None
+        self.history_reader = (
+            placement_reader
+            if placement_records_enabled
+            and callable(getattr(placement_reader, "find_histories", None))
+            else None
+        )
         self.event_max_age_seconds = event_max_age_seconds
         self.prometheus_placement_resolver = prometheus_placement_resolver
 
