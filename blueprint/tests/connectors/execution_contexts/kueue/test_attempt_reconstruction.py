@@ -1387,6 +1387,7 @@ def test_retained_node_loss_placement_restores_failed_node():
     assert context["state"] == "NODE_FAIL"
     assert context["failed_node"] == "node-failed"
     assert context["nodes"] == ["node-failed"]
+    assert context["attempt_pod_uids"] == ["failed-pod-uid"]
 
 
 @pytest.mark.parametrize(

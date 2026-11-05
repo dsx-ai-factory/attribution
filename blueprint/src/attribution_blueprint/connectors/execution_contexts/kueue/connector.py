@@ -126,6 +126,7 @@ class KueueExecutionContext(TypedDict):
     admission_key: NotRequired[str | None]
     restart_attempt: NotRequired[str]
     owner_job_uids: NotRequired[list[str]]
+    attempt_pod_uids: NotRequired[list[str]]
     attempt_identity_resolved: NotRequired[bool]
     # Pod names belonging to this Workload at the time of discovery. Empty
     # list when the owner type isn't supported or all pods have been
@@ -726,6 +727,7 @@ def _context_from_attempt_evidence(
         "state": state,
         "kueue_state": kueue_state,
         "owner_job_uids": sorted(owner_job_uids),
+        "attempt_pod_uids": sorted(attempt.pod_uids),
         "attempt_identity_resolved": attempt.boundary_resolved,
     }
     if placements:
@@ -1354,11 +1356,7 @@ class KueueExecutionContextAdapter:
             context = contexts_by_workload_uid.get(workload_uid)
             if context is not None:
                 if context.get("attempt_identity_resolved"):
-                    verified_pod_uids = {
-                        placement["pod_uid"]
-                        for placement in context.get("pod_placements") or []
-                        if placement.get("pod_uid")
-                    }
+                    verified_pod_uids = set(context.get("attempt_pod_uids") or [])
                     placements = [
                         placement for placement in placements if placement.get("pod_uid") in verified_pod_uids
                     ]

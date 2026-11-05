@@ -2189,6 +2189,13 @@ class TestMergePrometheusPlacements:
             "end_time": datetime(2026, 5, 1, 1, tzinfo=timezone.utc),
         }
         ctx.update(overrides)
+        ctx.setdefault(
+            "attempt_pod_uids",
+            [
+                placement["pod_uid"]
+                for placement in ctx.get("pod_placements") or []
+            ],
+        )
         return ctx
 
     @staticmethod
@@ -2358,10 +2365,16 @@ class TestMergePrometheusPlacements:
         assert first["nodes"] == ["node-a"]
         assert second["nodes"] == ["node-b"]
 
-    def test_resolved_attempt_rejects_unverified_prometheus_pod(self, mocker):
+    def test_resolved_attempt_recovers_only_verified_prometheus_pods(self, mocker):
         resolver = mocker.Mock()
         resolver.placements_for_many.return_value = {
             "workload-uid-1": [
+                {
+                    "pod_uid": "missing-pod-uid",
+                    "pod_name": "missing-pod",
+                    "node_name": "node-recovered",
+                    "source": "prometheus",
+                },
                 {
                     "pod_uid": "old-pod-uid",
                     "pod_name": "old-pod",
@@ -2374,7 +2387,7 @@ class TestMergePrometheusPlacements:
             prometheus_placement_resolver=resolver,
         )
         context = self._context(
-            attempt_identity_resolved=True,
+            attempt_pod_uids=["current-pod-uid", "missing-pod-uid"],
             nodes=["node-current"],
             pod_names=["current-pod"],
             pod_placements=[
@@ -2390,9 +2403,12 @@ class TestMergePrometheusPlacements:
             [(self._workload(), context)],
         )
 
-        assert context["nodes"] == ["node-current"]
-        assert context["pod_names"] == ["current-pod"]
-        assert {placement["pod_uid"] for placement in context["pod_placements"]} == {"current-pod-uid"}
+        assert context["nodes"] == ["node-current", "node-recovered"]
+        assert context["pod_names"] == ["current-pod", "missing-pod"]
+        assert {
+            placement["pod_uid"]
+            for placement in context["pod_placements"]
+        } == {"current-pod-uid", "missing-pod-uid"}
 
 
 class TestPlacementReader:
