@@ -113,6 +113,27 @@ def resource_from_observation(observation: dict) -> dict:
     }
 
 
+def kai_podgroup_start_timestamp(resource: dict) -> str | None:
+    """Read KAI's PodGroup start from projected status or source metadata."""
+    status_value = (resource.get("status") or {}).get(
+        "lastStartTimestamp"
+    )
+    if status_value:
+        return str(status_value)
+    metadata_annotations = (
+        (resource.get("metadata") or {}).get("annotations") or {}
+    )
+    retained_annotations = (
+        (resource.get("selectedMetadata") or {}).get("annotations") or {}
+    )
+    value = metadata_annotations.get(
+        "kai.scheduler/last-start-timestamp",
+    ) or retained_annotations.get(
+        "kai.scheduler/last-start-timestamp"
+    )
+    return str(value) if value else None
+
+
 def retained_history_covers_window(
     coverage: dict,
     required_sources: set[str],

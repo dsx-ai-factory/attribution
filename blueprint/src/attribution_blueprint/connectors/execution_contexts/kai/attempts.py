@@ -15,6 +15,7 @@ from attribution_blueprint.connectors.execution_contexts.kai.helpers import (
     resolve_owner,
 )
 from attribution_blueprint.kubernetes.attempts import (
+    kai_podgroup_start_timestamp,
     latest_pod_observations,
     observations_by_uid,
     parse_time,
@@ -88,7 +89,7 @@ def observations_from_live_resources(
         return []
 
     fallback = (
-        (podgroup.get("status") or {}).get("lastStartTimestamp")
+        kai_podgroup_start_timestamp(podgroup)
         or metadata.get("creationTimestamp")
         or now.isoformat()
     )
@@ -104,6 +105,14 @@ def observations_from_live_resources(
             selected_metadata["deletionTimestamp"] = resource_metadata[
                 "deletionTimestamp"
             ]
+        status = resource.get("status") or {}
+        if kind == "PodGroup" and (
+            last_start := kai_podgroup_start_timestamp(resource)
+        ):
+            status = {
+                **status,
+                "lastStartTimestamp": last_start,
+            }
         return {
             "apiVersion": resource.get("apiVersion") or "",
             "kind": kind,
@@ -123,7 +132,7 @@ def observations_from_live_resources(
             ),
             "selectedMetadata": selected_metadata or None,
             "spec": resource.get("spec") or {},
-            "status": resource.get("status") or {},
+            "status": status,
         }
 
     resources: dict[tuple[str, str], dict] = {}
@@ -444,9 +453,7 @@ def _podgroup_owner(metadata: dict) -> dict | None:
 def _podgroup_starts(timeline: list[dict]) -> list[dict]:
     starts = {}
     for observation in timeline:
-        timestamp = (observation.get("status") or {}).get(
-            "lastStartTimestamp"
-        )
+        timestamp = kai_podgroup_start_timestamp(observation)
         if timestamp:
             starts[str(timestamp)] = {
                 "key": str(timestamp),
