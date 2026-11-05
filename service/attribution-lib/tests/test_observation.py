@@ -755,7 +755,7 @@ class TestTimestampExtraction:
             pytest.param(
                 "0: [Jan 15 10:20:30.123456 4321 slurmstepd   0x1234] error: *** STEP 7.0 ON node01 "
                 "CANCELLED AT 2026-01-15T10:20:30 DUE to SIGNAL Terminated ***",
-                (2026, 1, 15, 10, 20, 30),
+                (2026, 1, 15, 10, 20, 30, 123456),
                 id="cancel_line",
             ),
             pytest.param(
@@ -784,7 +784,7 @@ class TestTimestampExtraction:
 
         result = _extract_timestamp_from_log_line(line, timezone, datetime(2026, 12, 31, 23, 59, 59, tzinfo=timezone))
 
-        assert result == datetime(2027, 1, 1, 0, 0, 1, tzinfo=timezone)
+        assert result == datetime(2027, 1, 1, 0, 0, 1, 500000, tzinfo=timezone)
 
     def test_extract_timestamp_from_log_line_pytorch_single_digit_month(self, timezone):
         """Test the main extraction function with PyTorch single-digit month format."""

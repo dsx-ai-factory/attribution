@@ -220,11 +220,13 @@ def _extract_timestamp_from_slurmstepd_format(
     Returns:
         The timestamp, or None when the line has no slurmstepd timestamp.
     """
-    match = re.search(r"\[(\w{3} +\d{1,2} \d{2}:\d{2}:\d{2})(?:\.\d+)? \d+ slurmstepd\b", line)
+    match = re.search(r"\[(\w{3} +\d{1,2} \d{2}:\d{2}:\d{2})(\.\d{1,6})? \d+ slurmstepd\b", line)
     if match is None:
         return None
+    fraction = match.group(2) if match.group(2) is not None else ".0"
     # The caller turns the ValueError for an unknown month name into None.
-    return _in_job_year(datetime.strptime(f"2000 {match.group(1)}", "%Y %b %d %H:%M:%S"), timezone, job_end_time)
+    timestamp = datetime.strptime(f"2000 {match.group(1)}{fraction}", "%Y %b %d %H:%M:%S.%f")
+    return _in_job_year(timestamp, timezone, job_end_time)
 
 
 def _extract_timestamp_from_iso_format(line: str, timezone: Optional[ZoneInfo] = None) -> Optional[datetime]:

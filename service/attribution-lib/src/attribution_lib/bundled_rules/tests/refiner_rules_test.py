@@ -4837,7 +4837,10 @@ class TestOutcomeReclassification:
         assert result.outcome_attr.value().outcome == "Pass"
         assert result.outcome_attr.value().root_cause_symptom == "SLURM preempted"
         assert "Job preempted" in result.symptoms
-        assert "job failed" not in result.symptoms
+        if symptom == "job failed":
+            assert "job failed" not in result.symptoms
+        else:
+            assert symptom in result.symptoms
 
     def test_preempted_with_demoted_failure_evidence_reclassified_to_pass(self, stream, obs_ctx):
         # PostProcessSymptoms demotes a generic Python exception next to the cancel

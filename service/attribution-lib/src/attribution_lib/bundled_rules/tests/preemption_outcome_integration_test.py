@@ -247,6 +247,7 @@ def test_failure_before_preemption_teardown_boundary(
     result = _attribute(request, event_manager, job_info, *observations)
 
     assert _is_preemption_pass(result) is expect_preemption_pass
+    assert result.outcome_attr.value().outcome.startswith("Fail") is not expect_preemption_pass
     assert ("Job preempted" in result.symptoms) is expect_preemption_pass
     assert "Cancelled by user" not in result.symptoms
     assert result.bad_nodes_attr.my_bad_nodes[_FAILED_NODE].attributions.has_bad() is not expect_preemption_pass
@@ -304,6 +305,7 @@ def test_early_failure_with_unknown_recovery_keeps_failure(request, event_manage
     result = _attribute(request, event_manager, job_info, _xid_syslog(job_info, timezone, failure_time))
 
     assert not _is_preemption_pass(result)
+    assert result.outcome_attr.value().outcome.startswith("Fail")
     assert result.bad_nodes_attr.my_bad_nodes[_FAILED_NODE].attributions.has_bad()
 
 
@@ -348,6 +350,7 @@ def test_early_failure_with_training_progress(
     )
 
     assert _is_preemption_pass(result) is expect_preemption_pass
+    assert result.outcome_attr.value().outcome.startswith("Fail") is not expect_preemption_pass
 
 
 @pytest.mark.parametrize(
@@ -427,4 +430,5 @@ def test_untimed_teardown_lines_after_slurmstepd_cancel(
     )
 
     assert _is_preemption_pass(result) is expect_preemption_pass
+    assert result.outcome_attr.value().outcome.startswith("Fail") is not expect_preemption_pass
     assert ("No such file or directory" in result.symptoms) is not expect_preemption_pass
