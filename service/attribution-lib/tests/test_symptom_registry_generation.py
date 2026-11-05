@@ -425,7 +425,23 @@ def test_nvrx_detected_failure_maps_to_fail_multicategory():
 
     assert match is not None
     assert match.outcome == "Fail MultiCategory"
-    assert match.tier_index == OUTCOME_PRIORITIES.index(OutcomePriority.LOW_GENERIC)
+    assert match.tier_index == OUTCOME_PRIORITIES.index(OutcomePriority.LOW_FALLBACK)
+
+
+@pytest.mark.parametrize("symptom", ["Python Exception", "No such file or directory", "error: pyxis"])
+def test_user_failure_outranks_generic_nvrx_failure(symptom):
+    """Select a co-occurring user failure over the generic NVRx detected failure.
+
+    Args:
+        symptom: Fail User symptom reported with the NVRx failure.
+    """
+    registry = _load_committed_registry()
+
+    match = registry.outcome_for(["NVRx detected failure", symptom])
+
+    assert match is not None
+    assert match.symptom == symptom
+    assert match.outcome == "Fail User"
 
 
 def test_nvrx_unhealthy_node_maps_to_fail_multicategory():
@@ -1119,6 +1135,8 @@ def test_bad_nic_state_outcome_metadata():
     assert match is not None
     assert match.doc == "detected-bad-nic-state"
     assert match.hw_cause == "NIC firmware initialization failure"
+
+
 @pytest.mark.parametrize("symptom", ["NV_ERR_RESET_REQUIRED", "NV_ERR_RESET_REQUIRED kernel_channel.c"])
 def test_gpu_reset_outcome_retains_documentation(symptom: str) -> None:
     """Check that GPU-reset variants retain their declared documentation.

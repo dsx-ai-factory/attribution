@@ -317,6 +317,5 @@ def test_generic_nvrx_failure_does_not_invent_compilation_failure(attribute_logs
     result, graph = attribute_logs(line_entries([*lines, _NVRX]))
 
     assert _SYMPTOM not in result.symptoms
-    assert result.outcome_attr.value().outcome == "Fail MultiCategory"
-    assert result.outcome_attr.value().root_cause_symptom == "NVRx detected failure"
+    assert "NVRx detected failure" in result.symptoms
     assert not any(n.rule_name == _RULE for n in graph.nodes)
