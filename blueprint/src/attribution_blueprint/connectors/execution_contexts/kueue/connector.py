@@ -1330,17 +1330,22 @@ class KueueExecutionContextAdapter:
                     ]
                 self._merge_placements(context, placements)
 
-    def _finalize(
+    def _collect_live_evidence(
         self,
         workloads: list[dict],
-        retained_evidence: list[_AttemptEvidence] | None = None,
-    ) -> list[KueueExecutionContext]:
-        if not workloads and not retained_evidence:
-            return []
-        pods = self._fetch_pods_for(workloads) if workloads else []
-        owner_jobs = self._fetch_owner_jobs(workloads) if workloads else {}
-        now = datetime.now(tz=timezone.utc)
-        evidence_items = list(retained_evidence or [])
+        *,
+        now: datetime,
+    ) -> tuple[
+        list[_AttemptEvidence],
+        list[tuple[dict, KueueExecutionContext]],
+        dict[str, dict],
+    ]:
+        """Collect live admitted-attempt evidence and pending contexts."""
+        if not workloads:
+            return [], [], {}
+        pods = self._fetch_pods_for(workloads)
+        owner_jobs = self._fetch_owner_jobs(workloads)
+        evidence_items: list[_AttemptEvidence] = []
         pending_contexts: list[tuple[dict, KueueExecutionContext]] = []
         workloads_by_uid: dict[str, dict] = {}
         for workload in workloads:
@@ -1386,6 +1391,25 @@ class KueueExecutionContextAdapter:
                     )
                 )
 
+        return evidence_items, pending_contexts, workloads_by_uid
+
+    def _finalize(
+        self,
+        workloads: list[dict],
+        retained_evidence: list[_AttemptEvidence] | None = None,
+    ) -> list[KueueExecutionContext]:
+        if not workloads and not retained_evidence:
+            return []
+        live_evidence, pending_contexts, workloads_by_uid = (
+            self._collect_live_evidence(
+                workloads,
+                now=datetime.now(tz=timezone.utc),
+            )
+        )
+        evidence_items = [
+            *(retained_evidence or []),
+            *live_evidence,
+        ]
         parsed: list[tuple[dict, KueueExecutionContext]] = []
         retained_only: list[KueueExecutionContext] = []
         for evidence in self._combine_attempt_evidence(evidence_items):
