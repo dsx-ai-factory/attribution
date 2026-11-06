@@ -17,6 +17,7 @@ from attribution_blueprint.connectors.attribution import (
     ObservationConflictError,
 )
 from attribution_blueprint.orchestrator import AttributionOrchestrator
+from attribution_blueprint.webui.attribution_detail import _validate_graph
 
 FIXTURES = json.loads((Path(__file__).parents[2] / "fixtures" / "service_responses.json").read_text())
 
@@ -211,15 +212,16 @@ def test_get_attribution_keeps_decision_graph(mocker):
         "action": "CREATED",
     }
     response["verdict"]["decision_graph"] = {
-        "nodes": [node],
+        "nodes": [{**node, "node_id": "n0", "node_type": "EXTRACTION"}, node],
         "edges": [{"parent_id": "n0", "child_id": "n1", "edge_type": "match"}],
     }
     _transport(mocker, _FakeResponse(HTTPStatus.OK, response))
 
     graph = AttributionConnector("http://svc:8000").get_attribution("attr-7")["verdict"]["decision_graph"]
 
-    assert graph["nodes"][0]["node_id"] == "n1"
+    assert [n["node_id"] for n in graph["nodes"]] == ["n0", "n1"]
     assert graph["edges"] == [{"parent_id": "n0", "child_id": "n1", "edge_type": "match"}]
+    _validate_graph(graph)  # the web UI accepts this graph
 
 
 def test_delete_attributor_returns_none(mocker):
