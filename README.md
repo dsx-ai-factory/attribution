@@ -168,6 +168,12 @@ blueprint/scripts/webui.sh --db "$ATTRIBUTION_DB" --port "$ATTRIBUTION_WEB_PORT"
 
 Without `--db`, the helper seeds and serves a demo database. Run it with `--help` for all options, and see [Web UI Flags](blueprint/docs/CONFIGURATION.md#web-ui-flags) for the underlying `nvidia-attribution-blueprint-web` command.
 
+The build step needs Node.js and pnpm. Git does not track the built assets in `blueprint/src/attribution_blueprint/webui/static/`. On a host without Node.js, build the assets one time on a different host and copy the `static/` directory to the same path. Then serve them with `--no-build`:
+
+```None
+blueprint/scripts/webui.sh --no-build --db "$ATTRIBUTION_DB" --port "$ATTRIBUTION_WEB_PORT"
+```
+
 ## Where to go for more
 
 * Start here for operators: [Overview](docs/overview.md)
