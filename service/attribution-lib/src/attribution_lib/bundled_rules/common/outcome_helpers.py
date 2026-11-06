@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Optional
 
 import attribution_lib
 from attribution_lib.events import EventStream
@@ -14,6 +14,7 @@ from attribution_lib.sources import SourceSet
 
 if TYPE_CHECKING:
     from attribution_lib.core import AttributionResult
+    from attribution_lib.symptoms.registry_generation import GeneratedOutcomeMatch
 
 # Kubernetes queue schedulers that share rule semantics.
 KUBERNETES_SCHEDULER_TYPES = frozenset({Scheduler.KUEUE, Scheduler.KAI})
@@ -27,15 +28,15 @@ _PREEMPTION_ONLY_SYMPTOMS = ("job failed", "Cancelled by user")
 _TASK_FAILURE_RULE = "task failure cancellation"
 
 
-def _has_failure_evidence(attribution_result: "AttributionResult") -> bool:
-    """Return whether the remaining bad symptoms still select a failure outcome.
+def _failure_evidence(attribution_result: "AttributionResult") -> Optional["GeneratedOutcomeMatch"]:
+    """Return the failure outcome that the remaining bad symptoms select.
 
     Args:
         attribution_result: Result after the post-outcome refiners.
 
     Returns:
-        True when the bad symptoms, other than _PREEMPTION_ONLY_SYMPTOMS from
-        the preemption itself, map to a Fail outcome.
+        The outcome match of the bad symptoms, other than _PREEMPTION_ONLY_SYMPTOMS
+        from the preemption itself, when it is a Fail outcome. Otherwise None.
     """
     evidence = [
         symptom
@@ -43,7 +44,9 @@ def _has_failure_evidence(attribution_result: "AttributionResult") -> bool:
         if symptom not in _PREEMPTION_ONLY_SYMPTOMS or any(source.rule == _TASK_FAILURE_RULE for source in sources)
     ]
     match = attribution_lib.get_symptom_registry().outcome_for(evidence)
-    return match is not None and match.outcome.startswith("Fail")
+    if match is None or not match.outcome.startswith("Fail"):
+        return None
+    return match
 
 
 def apply_preemption_pass(attribution_result: "AttributionResult", job_info: JobInfo) -> bool:
@@ -51,9 +54,9 @@ def apply_preemption_pass(attribution_result: "AttributionResult", job_info: Job
 
     Preemption must not mask evidence-backed failures. Teardown noise near the
     job end is demoted earlier by ExternalTerminationCascade, so a failure
-    verdict here comes from evidence before the preemption. The verdict counts
-    only while the remaining bad symptoms still select a failure, because
-    refiners after the outcome calculation can demote the evidence that chose it.
+    verdict here comes from evidence before the preemption. The decision uses
+    the remaining bad symptoms, not the outcome, because refiners after the
+    outcome calculation can remove the symptom that chose it.
 
     Args:
         attribution_result: Result whose outcome and symptoms are updated in place.
@@ -64,7 +67,23 @@ def apply_preemption_pass(attribution_result: "AttributionResult", job_info: Job
     """
     if job_info.attributed_cancellation is not None or job_info.state is None or job_info.state.upper() != "PREEMPTED":
         return False
-    if attribution_result.outcome_attr.value().outcome.startswith("Fail") and _has_failure_evidence(attribution_result):
+    failure = _failure_evidence(attribution_result)
+    if failure is not None:
+        # The outcome can come from a symptom that post-processing removed, such
+        # as "Cancelled by user" next to a sigkill_handler failure in the same tier.
+        if not attribution_result.outcome_attr.value().outcome.startswith("Fail"):
+            restored = SourceSet(
+                OutcomeAttribution(
+                    outcome=failure.outcome,
+                    hw_cause=failure.hw_cause,
+                    root_cause_symptom=failure.symptom,
+                    doc=failure.doc,
+                )
+            )
+            source = attribution_result.symptoms[failure.symptom].one_source()
+            if source is not None:
+                restored.add(source)
+            attribution_result.outcome_attr = restored
         return False
 
     previous_source = attribution_result.outcome_attr.one_source()

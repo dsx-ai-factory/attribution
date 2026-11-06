@@ -4870,6 +4870,21 @@ class TestOutcomeReclassification:
 
         assert result.outcome_attr.value().root_cause_symptom == "SLURM preempted"
 
+    def test_preempted_failure_restored_after_cancel_symptom_removed(self, stream, obs_ctx):
+        # "Cancelled by user" and the sigkill_handler failure share a tier, so the
+        # cancel line selects the outcome. PostProcessSymptoms then removes it.
+        ji = _job_info_with(state="PREEMPTED")
+        result = AttributionResult(event_stream=stream, bad_nodes_attr=CalcBadNodesAttributionResult())
+        symptoms = _make_symptoms(obs_ctx, "sigkill_handler] Killing subprocess")
+        result.symptoms.update(symptoms)
+        result.outcome_attr = _make_outcome("Cancelled by User", root_cause="Cancelled by user")
+
+        _run_post_outcome(stream, ji, symptoms, outcome=result.outcome_attr, attribution_result=result)
+
+        assert result.outcome_attr.value().outcome == "Fail User"
+        assert result.outcome_attr.value().root_cause_symptom == "sigkill_handler] Killing subprocess"
+        assert "Job preempted" not in result.symptoms
+
     def test_preempted_task_failure_keeps_failure(self, stream, obs_ctx):
         # PostProcessSymptoms writes "job failed" for a task-failure cancellation.
         # Unlike the status fallback, that is failure evidence.
