@@ -3,6 +3,7 @@
 
 import json
 import os
+from dataclasses import replace
 from datetime import datetime, timezone
 
 import pytest
@@ -106,6 +107,40 @@ def test_run_to_react_includes_bad_pairs(tmp_path):
     r = bootstrap.run_to_react(run)
 
     assert r["errorPairs"] == bad_pairs
+
+
+@pytest.mark.parametrize(
+    "symptom,catalog_id",
+    [
+        ("XID-69-GR_CLASS_ERROR", "xid-69"),
+        ("NVRx ft_launcher exit 0", "nvrx-ft-launcher-exit-0"),
+    ],
+)
+def test_run_to_react_resolves_exact_catalog_fallbacks(tmp_path, symptom, catalog_id):
+    """Show guidance for known verdicts that arrive without catalog IDs."""
+    run = _seed_one(tmp_path, symptom=symptom, rule="unmapped-rule")
+    card = bootstrap.run_to_react(run)["diagnose"]
+    assert card["hasPersona"] is True
+    assert card["catalogId"] == catalog_id
+    assert card["action"] != ""
+    assert card["supportDetails"] != []
+    assert card["severity"] is not None
+    if catalog_id == "nvrx-ft-launcher-exit-0":
+        run = replace(run, outcome="Pass")
+        run.raw_result["verdict"]["attribution_outcome"] = "Pass"
+        payload = bootstrap.run_to_react(run)
+        assert payload["outcome"] == "pass"
+        assert "No corrective action is required" in payload["diagnose"]["action"]
+
+    run.raw_result["verdict"]["root_symptom"]["catalog_id"] = "python-exception"
+    assert bootstrap.run_to_react(run)["diagnose"]["catalogId"] == "python-exception"
+
+
+@pytest.mark.parametrize("symptom", ["XID-690-OTHER", "NVRx ft_launcher exit 0 unexpected suffix"])
+def test_run_to_react_catalog_fallbacks_do_not_match_other_verdicts(tmp_path, symptom):
+    """Avoid assigning the new guidance to similarly named verdicts."""
+    run = _seed_one(tmp_path, symptom=symptom, rule="unmapped-rule")
+    assert bootstrap.run_to_react(run)["diagnose"]["hasPersona"] is False
 
 
 def test_run_to_react_shows_jit_compilation_tenant_guidance(tmp_path):
