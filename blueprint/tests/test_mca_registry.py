@@ -232,6 +232,7 @@ def test_built_schema_has_expected_shape():
             "query",
             "queries",
             "node_field",
+            "cluster_from_context",
             "auth",
             "query_kwargs",
         }

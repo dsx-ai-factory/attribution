@@ -258,9 +258,9 @@ def test_short_polls_wait_for_delayed_real_fetch(kafka_spec, completion_event, p
             self.paused = []
             self.empty_polls = 0
 
-        def subscribe(self, topics, **callbacks):
+        def subscribe(self, topics, *, on_assign, **callbacks):
             def assigned(consumer, partitions):
-                consumer.assign(partitions)
+                on_assign(consumer, partitions)
                 consumer.pause(partitions)
                 self.paused = partitions
 
@@ -323,9 +323,9 @@ def test_paused_native_partition_has_bounded_discovery_wait(kafka_spec, completi
     class PausedFetch(ConsumerProxy):
         assigned = False
 
-        def subscribe(self, topics, **callbacks):
+        def subscribe(self, topics, *, on_assign, **callbacks):
             def assigned(consumer, partitions):
-                consumer.assign(partitions)
+                on_assign(consumer, partitions)
                 consumer.pause(partitions)
                 self.assigned = True
 

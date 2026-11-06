@@ -353,3 +353,75 @@ def test_cluster_falls_back_to_self_cluster_when_label_dropped(mocker):
     body = json.loads(obs[0]["body"])
     assert len(body) == 1
     assert "cluster: example-cluster," in body[0]["body"]
+
+
+def _cluster_connector(**kwargs):
+    return PromQLMetricsConnector(
+        endpoint="https://prom.example",
+        cluster="cluster-a",
+        source=Source.NODE_METRICS,
+        templates={Source.NODE_METRICS: {"up": '{name}{{{cluster_label}="{cluster}"}}'}},
+        **kwargs,
+    )
+
+
+def _cluster_ctx(cluster=None):
+    ctx = _ctx(nodes=("n1",))
+    if cluster is not None:
+        ctx["cluster"] = cluster
+    return ctx
+
+
+def _queries(post):
+    return [call.kwargs["data"]["query"] for call in post.call_args_list]
+
+
+@pytest.mark.parametrize("context_cluster", [None, "", "cluster-b"])
+def test_cluster_from_context_disabled_uses_configured_cluster(mocker, context_cluster):
+    post = _mock_response(mocker, [])
+
+    _cluster_connector().collect(_cluster_ctx(context_cluster))
+
+    assert _queries(post) == ['up{s_cluster="cluster-a"}']
+
+
+def test_cluster_from_context_uses_each_context_cluster(mocker):
+    post = _mock_response(mocker, [])
+    conn = _cluster_connector(cluster_from_context=True, cluster_label="cluster")
+
+    conn.collect(_cluster_ctx("cluster-b"))
+    conn.collect(_cluster_ctx("cluster-c"))
+    conn.collect(_cluster_ctx())
+
+    assert _queries(post) == ['up{cluster="cluster-b"}', 'up{cluster="cluster-c"}', 'up{cluster="cluster-a"}']
+
+
+@pytest.mark.parametrize("context_cluster", [None, "", 7])
+def test_cluster_from_context_falls_back_without_context_cluster(mocker, context_cluster):
+    post = _mock_response(mocker, [])
+
+    _cluster_connector(cluster_from_context=True).collect(_cluster_ctx(context_cluster))
+
+    assert _queries(post) == ['up{s_cluster="cluster-a"}']
+
+
+@pytest.mark.parametrize(
+    ("cluster_from_context", "expected"),
+    [(False, "cluster-a"), (True, "cluster-b")],
+)
+def test_dropped_cluster_label_falls_back_to_queried_cluster(mocker, cluster_from_context, expected):
+    _mock_response(mocker, [{"metric": {"net_host_name": "n1"}, "values": [["1744734450", "1"]]}])
+
+    obs = _cluster_connector(cluster_from_context=cluster_from_context).collect(_cluster_ctx("cluster-b"))
+
+    body = json.loads(obs[0]["body"])
+    assert f"cluster: {expected}," in body[0]["body"]
+
+
+@pytest.mark.parametrize("context_cluster", ['cluster-b", s_cluster=~".*', "cluster\\b", "cluster'b", "cluster\x7fb"])
+def test_cluster_from_context_rejects_unsafe_context_cluster(mocker, context_cluster):
+    post = _mock_response(mocker, [])
+
+    with pytest.raises(ValueError, match="context cluster"):
+        _cluster_connector(cluster_from_context=True).collect(_cluster_ctx(context_cluster))
+    post.assert_not_called()
