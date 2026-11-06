@@ -174,9 +174,19 @@ class PromQLMetricsConnector:
         return self._observation(context, entries)
 
     def collect_batch(self, contexts: Sequence[ExecutionContext]) -> dict[str, list[Observation]]:
-        """Query the union of the batch's nodes once per template and slice per context."""
-        contexts = list(contexts)
-        cluster = self._cluster
+        """Query the union of the batch's nodes once per template and cluster, and slice per context."""
+        by_cluster: dict[str, list[ExecutionContext]] = {}
+        for ctx in contexts:
+            cluster = query_cluster(ctx, self._cluster, from_context=self._cluster_from_context)
+            by_cluster.setdefault(cluster, []).append(ctx)
+        result: dict[str, list[Observation]] = {}
+        for cluster, group in by_cluster.items():
+            result.update(self._collect_batch_for_cluster(group, cluster))
+        return result
+
+    def _collect_batch_for_cluster(
+        self, contexts: list[ExecutionContext], cluster: str
+    ) -> dict[str, list[Observation]]:
         if not contexts:
             return {}
         windows = {
