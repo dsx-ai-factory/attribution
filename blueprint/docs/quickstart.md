@@ -70,7 +70,7 @@ docker run -d --rm \
   -e ATTRIBUTION_DB="/data/$(basename "$ATTRIBUTION_DB")" \
   -p "127.0.0.1:$ATTRIBUTION_SERVICE_PORT:8000" \
   -p "127.0.0.1:$ATTRIBUTION_WEB_PORT:8080" \
-  -v "$(cd "$(dirname "$ATTRIBUTION_DB")" && pwd):/data" \
+  -v "$(CDPATH= cd "$(dirname "$ATTRIBUTION_DB")" && pwd):/data" \
   "$ATTRIBUTION_IMAGE"
 ```
 
