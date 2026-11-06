@@ -749,6 +749,63 @@ class TestTimestampExtraction:
         assert result is not None
         assert result.year == expected_year
 
+    @pytest.mark.parametrize(
+        ("line", "expected"),
+        [
+            pytest.param(
+                "0: [Jan 15 10:20:30.123456 4321 slurmstepd   0x1234] error: *** STEP 7.0 ON node01 "
+                "CANCELLED AT 2026-01-15T10:20:30 DUE to SIGNAL Terminated ***",
+                (2026, 1, 15, 10, 20, 30, 123456),
+                id="cancel_line",
+            ),
+            pytest.param(
+                "16: [Jan 5 10:20:40 5678 slurmstepd   0x5678] error: pyxis: child 1 terminated",
+                (2026, 1, 5, 10, 20, 40),
+                id="no_fraction",
+            ),
+            pytest.param(
+                "0: [Jan 15 10:20:30.123456789 4321 slurmstepd   0x1234] error: *** STEP 7.0 CANCELLED ***",
+                (2026, 1, 15, 10, 20, 30, 123456),
+                id="nanoseconds",
+            ),
+            pytest.param(
+                "0: [Jan 15 10:20:30.11173  478453 slurmstepd   0x1234] error: *** STEP 7.0 CANCELLED ***",
+                (2026, 1, 15, 10, 20, 30, 11173),
+                id="slurm_padded_microseconds",
+            ),
+            pytest.param(
+                "0: [Jan 15 10:20:30.600    299314 slurmstepd   0x1234] error: *** STEP 7.0 CANCELLED ***",
+                (2026, 1, 15, 10, 20, 30, 600),
+                id="slurm_three_digit_microseconds",
+            ),
+            pytest.param(
+                "0: Jan 15 10:20:30.123456 4321 slurmstepd: error: *** STEP 7.0 CANCELLED ***",
+                (2026, 1, 15, 10, 20, 30, 123456),
+                id="no_brackets",
+            ),
+            pytest.param("43: [Jan 15 10:20:40] no slurmstepd marker", None, id="other_tool"),
+            pytest.param("43: [Foo 04 03:23:43.1 1 slurmstepd] bad month", None, id="bad_month"),
+        ],
+    )
+    def test_slurmstepd_format(self, timezone, line, expected):
+        """slurmstepd lines in the step log carry their own timestamp."""
+
+        result = _extract_timestamp_from_log_line(line, timezone, datetime(2026, 1, 15, 10, 20, 50, tzinfo=timezone))
+
+        if expected is None:
+            assert result is None
+        else:
+            assert result == datetime(*expected, tzinfo=timezone)
+
+    def test_slurmstepd_line_after_new_year(self, timezone):
+        """A teardown line logged on January 1 after a December 31 job end gets the next year."""
+
+        line = "0: [Jan 01 00:00:01.500000 4321 slurmstepd   0x1234] error: *** STEP 7.0 CANCELLED ***"
+
+        result = _extract_timestamp_from_log_line(line, timezone, datetime(2026, 12, 31, 23, 59, 59, tzinfo=timezone))
+
+        assert result == datetime(2027, 1, 1, 0, 0, 1, 500000, tzinfo=timezone)
+
     def test_extract_timestamp_from_log_line_pytorch_single_digit_month(self, timezone):
         """Test the main extraction function with PyTorch single-digit month format."""
 
