@@ -483,6 +483,21 @@ def test_date_bounds_span_runs_the_rollup_table_left_behind(tmp_path):
     assert payload["metrics"]["windowedRuns"] == 1
 
 
+def test_runs_search_matches_allocated_node_and_attempt_uid(tmp_path):
+    """Free-text search covers allocated nodes and the attempt UID, as the search box promises."""
+    p = tmp_path / "search.db"
+    out = SQLiteOutput(str(p))
+    out.write(_ctx("100", "attempt-uid-7", nodes=("alloc-node-7", "node-a")), _attr("Fail InfraHW"))
+    out.write(_ctx("101", "sluid-B"), _attr("Fail InfraHW"))
+    out.close()
+    client = TestClient(create_app(str(p)))
+
+    for query in ("alloc-node-7", "attempt-uid-7"):
+        payload = client.get("/api/v1/runs", params={"q": query}).json()
+        assert payload["total"] == 1, query
+        assert payload["runs"][0]["jobId"] == "100", query
+
+
 def test_dashboard_rejects_malformed_dates(tmp_path):
     p = tmp_path / "invalid-dates.db"
     out = SQLiteOutput(str(p))
