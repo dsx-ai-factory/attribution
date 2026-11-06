@@ -473,6 +473,19 @@ class TestV2WorkloadValidation:
         response = client.post("/v2/attributor", content=json.dumps(info_dict))
         self._assert_validation_error_shape(response)
 
+    def test_runapi_scheduler_is_accepted(self, client):
+        """`runapi` is a recognized scheduler identity, so the request is accepted and
+        attribution runs for it."""
+        info_dict = json.loads(make_up_attributor_info("v2").model_dump_json())
+        info_dict["workload"]["scheduler"] = "runapi"
+
+        response = client.post("/v2/attributor", content=json.dumps(info_dict))
+        assert response.status_code == http.HTTPStatus.CREATED, response.text
+
+        att_id = response.json()["attributor_id"]
+        attribution = client.get(f"/v2/attributor/{att_id}/attribution")
+        assert attribution.status_code == http.HTTPStatus.OK, attribution.text
+
     def test_empty_nodes_dict_is_accepted_as_never_ran(self, client):
         """Mirroring the lib, empty `nodes` mapping is a valid workload representing a job that
         never received an allocation."""
@@ -492,7 +505,7 @@ class TestSchedulerIdentityTranslation:
     V2 carries the explicit field and never derives it from `type`; V1 has no
     wire change, so its conversion maps the legacy `type` to a scheduler."""
 
-    @pytest.mark.parametrize("scheduler", ["kueue", "kai"])
+    @pytest.mark.parametrize("scheduler", ["kueue", "kai", "runapi"])
     def test_v2_explicit_scheduler_is_set_on_job_info(self, scheduler):
         info = make_up_attributor_info("v2", type="anything", scheduler=scheduler)
 

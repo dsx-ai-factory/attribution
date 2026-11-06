@@ -40,7 +40,7 @@ class ExecutionContextDelivery(Protocol):
 
     @property
     def event(self) -> Mapping[str, object]:
-        """Original provider event data, without an assumed envelope format."""
+        """Original provider event data."""
         ...
 
 

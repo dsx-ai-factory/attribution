@@ -226,6 +226,17 @@ def test_discover_maps_structured_event_to_context():
     assert consumer.commits == [{0: 2}]
 
 
+def test_discover_omits_zero_time_limit():
+    event = _events()[0]
+    event["data"]["time_limit"] = 0
+    eca, _ = _make_eca(_structured([event]))
+
+    contexts = eca.discover()
+
+    assert [ctx["id"] for ctx in contexts] == ["job-a1"]
+    assert "time_limit" not in contexts[0]
+
+
 def test_discover_reads_binary_mode_event():
     event = _events()[1]
     eca, _ = _make_eca([_binary(event)])

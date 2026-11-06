@@ -481,6 +481,8 @@ class TestNormalizeSchedulerIdentity:
             pytest.param("slurm", Scheduler.SLURM, id="slurm"),
             pytest.param("kueue", Scheduler.KUEUE, id="kueue"),
             pytest.param("kai", Scheduler.KAI, id="kai"),
+            pytest.param("runapi", Scheduler.RUNAPI, id="runapi"),
+            pytest.param("RunAPI", Scheduler.RUNAPI, id="runapi case-insensitive"),
             pytest.param("SLURM", Scheduler.SLURM, id="case-insensitive"),
             pytest.param(" kueue ", Scheduler.KUEUE, id="trims surrounding whitespace"),
             pytest.param("", Scheduler.UNKNOWN, id="empty is unknown"),
