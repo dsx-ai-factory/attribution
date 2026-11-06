@@ -1,0 +1,74 @@
+{
+  "schema_version": 1,
+  "commit_sha": "d5c1d1dcd86e352ae20a88a2de1051d24c1bc022",
+  "declarations": [
+    {
+      "prefix": "detected bad NIC state",
+      "doc": "detected-bad-nic-state",
+      "outcome": "Fail InfraSW"
+    },
+    {
+      "prefix": "irisc not responding",
+      "doc": "irisc-not-responding",
+      "outcome": "Fail InfraSW"
+    }
+  ],
+  "documents": [
+    {
+      "id": "detected-bad-nic-state",
+      "title": "detected bad NIC state",
+      "aliases": [
+        "mlx5 firmware in initialization state",
+        "mlx5 device initialization failed"
+      ]
+    },
+    {
+      "id": "irisc-not-responding",
+      "title": "irisc not responding"
+    }
+  ],
+  "dynamic": [
+    {
+      "name": "NV_ERR_RESET_REQUIRED kernel_channel.c",
+      "expected_doc": "gpu-reset-required",
+      "doc": "gpu-reset-required",
+      "prefix": "NV_ERR_RESET_REQUIRED"
+    },
+    {
+      "name": "NV_ERR_NO_MEMORY mem_multicast_fabric.c",
+      "expected_doc": "nv-err-no-memory",
+      "doc": "nv-err-no-memory",
+      "prefix": "NV_ERR_NO_MEMORY mem_multicast_fabric.c"
+    },
+    {
+      "name": "NV_ERR_INVALID_STATE nv_gpu_ops.c",
+      "expected_doc": "nv-err-invalid-state",
+      "doc": "nv-err-invalid-state",
+      "prefix": "NV_ERR_INVALID_STATE"
+    },
+    {
+      "name": "NV_ERR_INSUFFICIENT_RESOURCES mem_multicast_fabric.c",
+      "expected_doc": "nv-err-insufficient-resources",
+      "doc": "nv-err-insufficient-resources",
+      "prefix": "NV_ERR_INSUFFICIENT_RESOURCES"
+    },
+    {
+      "name": "exit code signal 15",
+      "expected_doc": "exit-code-signal",
+      "doc": "exit-code-signal",
+      "prefix": "exit code signal"
+    },
+    {
+      "name": "IB Error-12 (IBV_WC_RETRY_EXC_ERR)",
+      "expected_doc": "ib-error-12",
+      "doc": "ib-error-12",
+      "prefix": "IB Error-12"
+    },
+    {
+      "name": "IB Error-12 Vendor-129 (IBV_WC_RETRY_EXC_ERR)",
+      "expected_doc": "ib-error-12-vendor-129",
+      "doc": "ib-error-12-vendor-129",
+      "prefix": "IB Error-12 Vendor-129"
+    }
+  ]
+}
