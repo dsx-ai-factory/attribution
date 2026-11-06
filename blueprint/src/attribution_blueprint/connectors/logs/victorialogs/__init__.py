@@ -17,7 +17,7 @@ from attribution_blueprint.types import Source
 
 
 def _build(spec: dict, ctx: dict) -> VictoriaLogsConnector:
-    from attribution_blueprint.mca import _coerce_float, _coerce_int
+    from attribution_blueprint.mca import _coerce_bool, _coerce_float, _coerce_int
 
     source: Source = ctx["source"]
     endpoint = spec.get("endpoint")
@@ -37,6 +37,10 @@ def _build(spec: dict, ctx: dict) -> VictoriaLogsConnector:
     node_field = spec.get("node_field", DEFAULT_NODE_FIELD)
     if node_field == "":
         node_field = None
+    cluster_from_context = _coerce_bool(
+        spec.get("cluster_from_context", False),
+        f"log.{source.name.lower()}.victorialogs.cluster_from_context",
+    )
     kwargs: dict[str, Any] = dict(
         endpoint=endpoint,
         auth=auth,
@@ -45,6 +49,7 @@ def _build(spec: dict, ctx: dict) -> VictoriaLogsConnector:
         timeout_seconds=timeout,
         limit=limit,
         node_field=node_field,
+        cluster_from_context=cluster_from_context,
     )
     if queries is not None:
         kwargs["templates"] = {source: list(queries)}
@@ -61,6 +66,7 @@ _registry.register_component(
         "query": _PARAM,
         "queries": _PARAM,
         "node_field": _PARAM,
+        "cluster_from_context": _PARAM,
         "auth": {
             "type": _PARAM,
             "cert_path": _PARAM,
