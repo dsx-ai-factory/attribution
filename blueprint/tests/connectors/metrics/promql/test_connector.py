@@ -409,6 +409,28 @@ def test_collect_batch_queries_union_of_nodes_once_and_slices_per_context(mocker
     assert sorted(_node_and_value(entry) for entry in body_b) == [("n1", "2"), ("n2", "3")]
 
 
+def test_collect_batch_queries_each_context_cluster_separately(mocker):
+    t0 = datetime(2026, 5, 1, 12, 0, tzinfo=timezone.utc)
+    result = [{"metric": {"net_host_name": "n1", "s_cluster": "c"}, "values": [[int(t0.timestamp()), "1"]]}]
+    conn, post = _batch_conn(mocker, result, cluster_from_context=True)
+    end = t0 + timedelta(minutes=5)
+    contexts = [
+        {**_batch_ctx("a", ["n1"], start=t0, end=end), "cluster": "c0"},
+        {**_batch_ctx("b", ["n2"], start=t0, end=end), "cluster": "c1"},
+        {**_batch_ctx("c", ["n3"], start=t0, end=end), "cluster": "c0"},
+        _batch_ctx("d", ["n4"], start=t0, end=end),
+    ]
+
+    observations = conn.collect_batch(contexts)
+
+    assert sorted(call.kwargs["data"]["query"] for call in post.call_args_list) == [
+        'm{s_cluster="c", net_host_name=~"n4"}',
+        'm{s_cluster="c0", net_host_name=~"n1|n3"}',
+        'm{s_cluster="c1", net_host_name=~"n2"}',
+    ]
+    assert sorted(observations) == ["a", "b", "c", "d"]
+
+
 def test_collect_batch_chunks_nodes_and_keeps_successful_chunks(mocker):
     t0 = datetime(2026, 5, 1, 12, 0, tzinfo=timezone.utc)
 

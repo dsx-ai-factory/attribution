@@ -1133,7 +1133,7 @@ Fields:
 | ------------------- | -------- | ----------------------------------------------------------------------------------------------------------------------- |
 | `endpoint`          | Yes      | Prometheus-compatible HTTP API base URL.                                                                                |
 | `cluster`           | Yes      | Cluster label value used by bundled PromQL templates.                                                                   |
-| `cluster_from_context` | No | When `true`, a non-empty `cluster` on the execution context replaces `cluster` for that context's queries. Defaults to `false`. |
+| `cluster_from_context` | No | When `true`, a non-empty `cluster` on the execution context replaces `cluster` for that context's queries. In batch mode, contexts are grouped by cluster and each group is queried separately. Defaults to `false`. |
 | `auth.type`         | No       | Optional. If present, `token` or `mtls`; same auth fields as Loki. Omit the `auth` block for unauthenticated endpoints. |
 | `step_seconds`      | No       | Query step size. Defaults to `60`.                                                                                      |
 | `timeout_seconds`   | No       | HTTP timeout. Defaults to `60.0`.                                                                                       |
