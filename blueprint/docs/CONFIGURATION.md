@@ -1014,7 +1014,7 @@ Use `kubectl_logs` to collect pod stdout as APPLOG or SYSLOG observations. It
 reads `namespace` and `pod_names` from the execution context and runs
 `kubectl logs` for each pod. Entries are attributed to the pod's node via the
 context's `pod_nodes` mapping (pod name to node). The Kueue adapter populates all
-three fields, as does the KAI adapter when Pods are available.
+three fields.
 
 ```toml
 [log.applog]

@@ -100,7 +100,7 @@ defines retention and recovery limits.
 - Hierarchical PodGroups are emitted with `podgroup_shape = "hierarchical"`;
   subgroup-specific attempt semantics are not inferred.
 
-Even with `kubernetes-daemon` enabled, discovery requires the PodGroup and its
-owning Job or JobSet to remain live. The adapter reads retained placement, but
-not retained controller history. Run attribution within the owner-retention
-window.
+The PodGroup and its owning Job or JobSet must still exist when discovery
+runs. The KAI adapter uses daemon evidence for placement recovery, not
+discovery of deleted PodGroups. Run attribution within both resources'
+retention windows.
