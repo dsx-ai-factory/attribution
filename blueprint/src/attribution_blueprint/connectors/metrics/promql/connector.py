@@ -84,6 +84,14 @@ def _timeseries_entry(sample: PrometheusMetricEntry) -> TimeseriesEntry:
     }
 
 
+class _ClusterQueriesFailed(Exception):
+    """Every batch query for one cluster failed; `cause` is the first failure."""
+
+    def __init__(self, cause: Exception):
+        super().__init__(str(cause))
+        self.cause = cause
+
+
 class PromQLMetricsConnector:
     """Collector for a Prometheus-compatible backend, including VictoriaMetrics.
 
@@ -176,24 +184,41 @@ class PromQLMetricsConnector:
     def collect_batch(self, contexts: Sequence[ExecutionContext]) -> dict[str, list[Observation] | Exception]:
         """Query the union of the batch's nodes once per template and cluster, and slice per context.
 
-        A cluster whose queries all fail does not fail the batch: each of its
-        contexts maps to an exception naming the cluster, and every other
-        cluster keeps its observations.
+        When every queried cluster fails, raise the first failure, as a batch
+        with one cluster always has. When only some clusters fail, the healthy
+        ones keep their observations and each context of a failed cluster maps
+        to an exception naming that cluster.
         """
         by_cluster: dict[str, list[ExecutionContext]] = {}
         for ctx in contexts:
             cluster = query_cluster(ctx, self._cluster, from_context=self._cluster_from_context)
             by_cluster.setdefault(cluster, []).append(ctx)
         result: dict[str, list[Observation] | Exception] = {}
+        failed: dict[str, Exception] = {}
+        any_cluster_succeeded = False
         for cluster, group in by_cluster.items():
-            result.update(self._collect_batch_for_cluster(group, cluster))
+            try:
+                observations, queried = self._collect_batch_for_cluster(group, cluster)
+            except _ClusterQueriesFailed as exc:
+                failed[cluster] = exc.cause
+                error = RuntimeError(f"promql batch collection failed for cluster {cluster!r}: {exc.cause}")
+                result.update({str(ctx["id"]): error for ctx in group})
+                continue
+            any_cluster_succeeded = any_cluster_succeeded or queried
+            result.update(observations)
+        if failed and not any_cluster_succeeded:
+            raise next(iter(failed.values()))
         return result
 
     def _collect_batch_for_cluster(
         self, contexts: list[ExecutionContext], cluster: str
-    ) -> dict[str, list[Observation] | Exception]:
+    ) -> tuple[dict[str, list[Observation]], bool]:
+        """Collect one cluster's contexts; return their observations and whether any query ran.
+
+        Raises `_ClusterQueriesFailed` when every query for the cluster fails.
+        """
         if not contexts:
-            return {}
+            return {}, False
         windows = {
             str(ctx["id"]): (
                 assert_aware(ctx["start_time"], "start_time"),
@@ -204,7 +229,7 @@ class PromQLMetricsConnector:
         nodes = sorted({node for ctx in contexts for node in (ctx.get("nodes") or []) if node})
         if not nodes:
             logger.info(f"promql batch cluster={cluster!r}: jobs={len(contexts)} queries=0 failed=0 series=0 (no nodes)")
-            return {str(ctx["id"]): [] for ctx in contexts}
+            return {str(ctx["id"]): [] for ctx in contexts}, False
         start = min(window[0] for window in windows.values())
         end = max(window[1] for window in windows.values())
         chunks = [
@@ -218,9 +243,8 @@ class PromQLMetricsConnector:
             f"failed={len(failures)} series={series}"
         )
         if failures and len(failures) == len(queries):
-            error = RuntimeError(f"promql batch collection failed for cluster {cluster!r}: {failures[0]}")
-            return {str(ctx["id"]): error for ctx in contexts}
-        result: dict[str, list[Observation] | Exception] = {}
+            raise _ClusterQueriesFailed(failures[0])
+        result: dict[str, list[Observation]] = {}
         for ctx in contexts:
             ctx_id = str(ctx["id"])
             window_start, window_end = windows[ctx_id]
@@ -233,7 +257,7 @@ class PromQLMetricsConnector:
                 if entry["node"].lower() in ctx_nodes and start_s <= entry["timestamp"] <= end_s
             ]
             result[ctx_id] = self._observation(ctx, selected)
-        return result
+        return result, bool(queries)
 
     def _render(self, nodes: list[str], cluster: str) -> list[tuple[str, str]]:
         rendered: list[tuple[str, str]] = []
