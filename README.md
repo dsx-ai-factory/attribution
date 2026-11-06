@@ -168,7 +168,7 @@ blueprint/scripts/webui.sh --db "$ATTRIBUTION_DB" --port "$ATTRIBUTION_WEB_PORT"
 
 Without `--db`, the helper seeds and serves a demo database. Run it with `--help` for all options, and see [Web UI Flags](blueprint/docs/CONFIGURATION.md#web-ui-flags) for the underlying `nvidia-attribution-blueprint-web` command.
 
-The build step needs pnpm and Node.js 20.19 or later (22.12 or later on Node.js 22). Git does not track the built assets in `blueprint/src/attribution_blueprint/webui/static/`. On a host without Node.js, build the assets one time on a different host and copy the `static/` directory to the same path. Build and copy it again each time you update the checkout. Then serve the assets with `--no-build`:
+The build step needs pnpm and Node.js 20.19 or later within version 20, or Node.js 22.12 or later. Git does not track the built assets in `blueprint/src/attribution_blueprint/webui/static/`. On a host without Node.js, build the assets one time on a different host and copy the `static/` directory to the same path. Build the assets from the same Git revision as the server, and build and copy them again each time you update the checkout. Then serve the assets with `--no-build`:
 
 ```None
 blueprint/scripts/webui.sh --no-build --db "$ATTRIBUTION_DB" --port "$ATTRIBUTION_WEB_PORT"
