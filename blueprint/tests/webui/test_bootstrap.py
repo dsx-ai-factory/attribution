@@ -339,7 +339,7 @@ def test_run_to_react_treats_cpu_only_slurm_alloc_tres_as_zero_gpus(tmp_path):
     assert r["gpuCount"] == 0
 
 
-@pytest.mark.parametrize(("attempt_ordinal", "expected"), [(None, 1), (0, 1), (1, 2), (2, 3)])
+@pytest.mark.parametrize(("attempt_ordinal", "expected"), [(None, 1), (0, 1), (1, 2), (2, 3), ("2", 3), ("²", 1)])
 def test_run_to_react_displays_one_based_attempt_ordinal(tmp_path, attempt_ordinal, expected):
     """Show the zero-based Slurm attempt ordinal as a one-based attempt number."""
     run = _seed_one(tmp_path, attempt_ordinal=attempt_ordinal)

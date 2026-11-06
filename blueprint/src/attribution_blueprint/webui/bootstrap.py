@@ -208,7 +208,7 @@ def _positive_int(value: Any) -> int | None:
         return None
     if isinstance(value, int) and value > 0:
         return value
-    if isinstance(value, str) and value.strip().isdigit():
+    if isinstance(value, str) and value.strip().isdecimal():
         parsed = int(value.strip())
         if parsed > 0:
             return parsed
@@ -228,7 +228,7 @@ def _non_negative_int(value: Any) -> int | None:
         return None
     if isinstance(value, int) and value >= 0:
         return value
-    if isinstance(value, str) and value.strip().isdigit():
+    if isinstance(value, str) and value.strip().isdecimal():
         return int(value.strip())
     return None
 
