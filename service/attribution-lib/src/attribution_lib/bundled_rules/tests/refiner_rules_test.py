@@ -4872,10 +4872,11 @@ class TestOutcomeReclassification:
 
     def test_preempted_failure_restored_after_cancel_symptom_removed(self, stream, obs_ctx):
         # "Cancelled by user" and the sigkill_handler failure share a tier, so the
-        # cancel line selects the outcome. PostProcessSymptoms then removes it.
+        # cancel line selects the outcome. Whether or not PostProcessSymptoms then
+        # removes it, the cancel symptom is not failure evidence and the failure stays.
         ji = _job_info_with(state="PREEMPTED")
         result = AttributionResult(event_stream=stream, bad_nodes_attr=CalcBadNodesAttributionResult())
-        symptoms = _make_symptoms(obs_ctx, "sigkill_handler] Killing subprocess")
+        symptoms = _make_symptoms(obs_ctx, "sigkill_handler] Killing subprocess", "Cancelled by user")
         result.symptoms.update(symptoms)
         result.outcome_attr = _make_outcome("Cancelled by User", root_cause="Cancelled by user")
 
