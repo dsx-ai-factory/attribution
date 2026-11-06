@@ -13,6 +13,9 @@ make a change. For product behavior and architecture, use
 `docs/ARCHITECTURE.md`, `docs/attribution.md`, and the implementation as the
 sources of truth. Do not copy that material into this file.
 
+Follow `docs/style-guide.md` when you write Python and
+`docs/repo-conventions.md` for where code goes and how the repository works.
+
 ## Permitted operations
 
 - Read and search repository files and local Git history.
