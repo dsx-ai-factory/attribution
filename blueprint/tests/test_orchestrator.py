@@ -517,6 +517,18 @@ def test_wire_carries_slurm_scheduler():
     assert info["workload"]["scheduler"] == "slurm"
 
 
+def test_wire_carries_runapi_scheduler():
+    """`runapi` is a recognized service scheduler identity, so it is forwarded
+    on the wire instead of being dropped."""
+    ctx = _make_ctx("ctx-7")
+    ctx["scheduler"] = "runapi"
+    pipeline = _make_pipeline(MagicMock(), [])
+
+    info = _wire(pipeline._build_attributor_info(ctx))
+
+    assert info["workload"]["scheduler"] == "runapi"
+
+
 def test_wire_omits_connector_only_scheduler_identity():
     """The static adapter uses `scheduler="static"` for local provenance, not
     as a service scheduler, so it is omitted from the wire."""
