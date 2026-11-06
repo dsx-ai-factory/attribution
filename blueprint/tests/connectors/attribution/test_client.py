@@ -199,6 +199,29 @@ def test_get_attribution_returns_full_dict(mocker):
     assert args == ("GET", "http://svc:8000/v2/attributor/attr-7/attribution?include_decision_graph=true")
 
 
+def test_get_attribution_keeps_decision_graph(mocker):
+    """A graph in the service response reaches the returned result."""
+    response = deepcopy(FIXTURES["attribution_response"])
+    node = {
+        "node_id": "n1",
+        "node_type": "OUTCOME",
+        "hostname": None,
+        "symptom": "Xid79",
+        "rule_name": None,
+        "action": "CREATED",
+    }
+    response["verdict"]["decision_graph"] = {
+        "nodes": [node],
+        "edges": [{"parent_id": "n0", "child_id": "n1", "edge_type": "match"}],
+    }
+    _transport(mocker, _FakeResponse(HTTPStatus.OK, response))
+
+    graph = AttributionConnector("http://svc:8000").get_attribution("attr-7")["verdict"]["decision_graph"]
+
+    assert graph["nodes"][0]["node_id"] == "n1"
+    assert graph["edges"] == [{"parent_id": "n0", "child_id": "n1", "edge_type": "match"}]
+
+
 def test_delete_attributor_returns_none(mocker):
     request = _transport(mocker, _FakeResponse(HTTPStatus.NO_CONTENT, None))
 
