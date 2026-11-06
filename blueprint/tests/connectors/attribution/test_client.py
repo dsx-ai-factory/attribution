@@ -17,6 +17,7 @@ from attribution_blueprint.connectors.attribution import (
     ObservationConflictError,
 )
 from attribution_blueprint.orchestrator import AttributionOrchestrator
+from attribution_blueprint.webui.attribution_detail import _validate_graph
 
 FIXTURES = json.loads((Path(__file__).parents[2] / "fixtures" / "service_responses.json").read_text())
 
@@ -196,7 +197,31 @@ def test_get_attribution_returns_full_dict(mocker):
     expected["verdict"]["root_symptom"]["catalog_id"] = None
     assert result == expected
     args, _ = request.call_args
-    assert args == ("GET", "http://svc:8000/v2/attributor/attr-7/attribution")
+    assert args == ("GET", "http://svc:8000/v2/attributor/attr-7/attribution?include_decision_graph=true")
+
+
+def test_get_attribution_keeps_decision_graph(mocker):
+    """A graph in the service response reaches the returned result."""
+    response = deepcopy(FIXTURES["attribution_response"])
+    node = {
+        "node_id": "n1",
+        "node_type": "OUTCOME",
+        "hostname": None,
+        "symptom": "Xid79",
+        "rule_name": None,
+        "action": "CREATED",
+    }
+    response["verdict"]["decision_graph"] = {
+        "nodes": [{**node, "node_id": "n0", "node_type": "EXTRACTION"}, node],
+        "edges": [{"parent_id": "n0", "child_id": "n1", "edge_type": "match"}],
+    }
+    _transport(mocker, _FakeResponse(HTTPStatus.OK, response))
+
+    graph = AttributionConnector("http://svc:8000").get_attribution("attr-7")["verdict"]["decision_graph"]
+
+    assert [n["node_id"] for n in graph["nodes"]] == ["n0", "n1"]
+    assert graph["edges"] == [{"parent_id": "n0", "child_id": "n1", "edge_type": "match"}]
+    _validate_graph(graph)  # the web UI accepts this graph
 
 
 def test_delete_attributor_returns_none(mocker):
