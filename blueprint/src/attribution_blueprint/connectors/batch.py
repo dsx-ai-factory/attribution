@@ -12,8 +12,9 @@ collector fetches the union once and slices the result per context.
 
 Collectors opt in by exposing `collect_batch(contexts)`, which returns
 observations keyed by context id; a missing id means nothing was found for that
-context, an exception in place of a context's observations fails that context
-alone, and raising aborts the batch for that collector only. Collectors
+context, and raising aborts the batch for that collector only. A collector
+whose failure covers only part of the batch, such as one cluster of several,
+may map those contexts to an exception instead, which fails them alone. Collectors
 without `collect_batch` keep working per context inside the same batch.
 """
 
