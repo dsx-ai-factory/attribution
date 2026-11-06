@@ -200,12 +200,13 @@ class AttributionOrchestrator:
         logger.info(f"collection: {len(contexts)} contexts in {len(batches)} batch(es)")
         return batches
 
-    def collect_batch(self, contexts: list[dict], collectors: list) -> dict[int, Mapping[str, list[dict]] | Exception]:
+    def collect_batch(self, contexts: list[dict], collectors: list) -> dict[int, Mapping[str, list[dict] | Exception] | Exception]:
         """Run `collect_batch` once per batch-capable collector.
 
         Returns per-collector results keyed by the collector's position in
-        `collectors`: a mapping of context id to observations, or the exception
-        the collector raised. Collectors without `collect_batch`, and every
+        `collectors`: a mapping of context id to observations (or to the
+        exception that failed that context alone), or the exception the
+        collector raised. Collectors without `collect_batch`, and every
         collector in context mode, are absent and run per context instead.
         """
         precollected: dict[int, Mapping[str, list[dict]] | Exception] = {}
@@ -221,14 +222,18 @@ class AttributionOrchestrator:
                 logger.warning(f"batch collector {source} failed for {len(contexts)} contexts: {e}")
                 precollected[index] = e
                 continue
-            precollected[index] = {str(ctx_id): list(observations) for ctx_id, observations in result.items()}
+            # A collector reports a per-context failure by mapping the id to an exception.
+            precollected[index] = {
+                str(ctx_id): observations if isinstance(observations, Exception) else list(observations)
+                for ctx_id, observations in result.items()
+            }
         return precollected
 
     def _process_one(
         self,
         ctx: dict,
         collectors: list,
-        precollected: Mapping[int, Mapping[str, list[dict]] | Exception] | None = None,
+        precollected: Mapping[int, Mapping[str, list[dict] | Exception] | Exception] | None = None,
     ) -> tuple[dict, bool] | None:
         # Scheduler accounting can record an end before the start. Telemetry
         # cannot be attributed to that window, and swapping or clamping the
@@ -250,7 +255,12 @@ class AttributionOrchestrator:
                 batches.append((connector_reports[-1], []))
                 continue
             if batch_result is not None:
-                collected = list(batch_result.get(str(ctx["id"]), []))
+                collected = batch_result.get(str(ctx["id"]), [])
+                if isinstance(collected, Exception):
+                    connector_reports.append(_connector_report(collector, "error", str(collected), 0))
+                    batches.append((connector_reports[-1], []))
+                    continue
+                collected = list(collected)
                 connector_reports.append(_connector_report(collector, "ok", "", len(collected)))
                 batches.append((connector_reports[-1], collected))
                 continue

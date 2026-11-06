@@ -173,20 +173,25 @@ class PromQLMetricsConnector:
             entries.extend(self._client.query_range(name, query, start, end, step_seconds=self._step, cluster=cluster))
         return self._observation(context, entries)
 
-    def collect_batch(self, contexts: Sequence[ExecutionContext]) -> dict[str, list[Observation]]:
-        """Query the union of the batch's nodes once per template and cluster, and slice per context."""
+    def collect_batch(self, contexts: Sequence[ExecutionContext]) -> dict[str, list[Observation] | Exception]:
+        """Query the union of the batch's nodes once per template and cluster, and slice per context.
+
+        A cluster whose queries all fail does not fail the batch: each of its
+        contexts maps to an exception naming the cluster, and every other
+        cluster keeps its observations.
+        """
         by_cluster: dict[str, list[ExecutionContext]] = {}
         for ctx in contexts:
             cluster = query_cluster(ctx, self._cluster, from_context=self._cluster_from_context)
             by_cluster.setdefault(cluster, []).append(ctx)
-        result: dict[str, list[Observation]] = {}
+        result: dict[str, list[Observation] | Exception] = {}
         for cluster, group in by_cluster.items():
             result.update(self._collect_batch_for_cluster(group, cluster))
         return result
 
     def _collect_batch_for_cluster(
         self, contexts: list[ExecutionContext], cluster: str
-    ) -> dict[str, list[Observation]]:
+    ) -> dict[str, list[Observation] | Exception]:
         if not contexts:
             return {}
         windows = {
@@ -198,6 +203,7 @@ class PromQLMetricsConnector:
         }
         nodes = sorted({node for ctx in contexts for node in (ctx.get("nodes") or []) if node})
         if not nodes:
+            logger.info(f"promql batch cluster={cluster!r}: jobs={len(contexts)} queries=0 failed=0 series=0 (no nodes)")
             return {str(ctx["id"]): [] for ctx in contexts}
         start = min(window[0] for window in windows.values())
         end = max(window[1] for window in windows.values())
@@ -205,8 +211,16 @@ class PromQLMetricsConnector:
             nodes[offset : offset + self._node_chunk_size] for offset in range(0, len(nodes), self._node_chunk_size)
         ]
         queries = [(name, query) for chunk in chunks for name, query in self._render(chunk, cluster)]
-        entries = self._query_batch(queries, start, end, cluster)
-        result: dict[str, list[Observation]] = {}
+        entries, failures = self._query_batch(queries, start, end, cluster)
+        series = len({(entry["metric"], entry["node"], tuple(sorted(entry["labels"].items()))) for entry in entries})
+        logger.info(
+            f"promql batch cluster={cluster!r}: jobs={len(contexts)} queries={len(queries)} "
+            f"failed={len(failures)} series={series}"
+        )
+        if failures and len(failures) == len(queries):
+            error = RuntimeError(f"promql batch collection failed for cluster {cluster!r}: {failures[0]}")
+            return {str(ctx["id"]): error for ctx in contexts}
+        result: dict[str, list[Observation] | Exception] = {}
         for ctx in contexts:
             ctx_id = str(ctx["id"])
             window_start, window_end = windows[ctx_id]
@@ -244,7 +258,8 @@ class PromQLMetricsConnector:
 
     def _query_batch(
         self, queries: list[tuple[str, str]], start: datetime, end: datetime, cluster: str
-    ) -> list[PrometheusMetricEntry]:
+    ) -> tuple[list[PrometheusMetricEntry], list[Exception]]:
+        """Run the queries concurrently; return the samples of those that succeeded and the failures of the rest."""
         failures: list[Exception] = []
 
         def run(item: tuple[str, str]) -> list[PrometheusMetricEntry]:
@@ -252,7 +267,7 @@ class PromQLMetricsConnector:
             try:
                 return self._client.query_range(name, query, start, end, step_seconds=self._step, cluster=cluster)
             except Exception as exc:
-                logger.warning(f"promql batch query {name!r} failed: {exc}")
+                logger.warning(f"promql batch cluster={cluster!r} query {name!r} failed: {exc}")
                 failures.append(exc)
                 return []
 
@@ -261,9 +276,7 @@ class PromQLMetricsConnector:
         else:
             with ThreadPoolExecutor(max_workers=min(_MAX_IN_FLIGHT, len(queries))) as executor:
                 pages = list(executor.map(run, queries))
-        if failures and len(failures) == len(queries):
-            raise failures[0]
-        return [entry for page in pages for entry in page]
+        return [entry for page in pages for entry in page], failures
 
     def _observation(self, context: ExecutionContext, entries: list[PrometheusMetricEntry]) -> list[Observation]:
         if not entries:

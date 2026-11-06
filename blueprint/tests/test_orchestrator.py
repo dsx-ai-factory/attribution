@@ -1059,6 +1059,28 @@ def test_batch_mode_reports_batch_failure_for_every_context_in_batch():
         ]
 
 
+def test_batch_mode_reports_a_per_context_error_without_failing_the_batch():
+    contexts = [_make_batch_ctx("1", end_hours=0), _make_batch_ctx("2", end_hours=0.5)]
+    eca = MagicMock()
+    eca.discover_by_ids.return_value = contexts
+    collector = _BatchCollector(per_context={"1": [_make_obs()], "2": RuntimeError("cluster 'c1' down")})
+    attr = _make_attribution_mock()
+    pipeline = AttributionOrchestrator(
+        execution_context_adapters=[eca],
+        log_connectors=[collector],
+        metrics_connectors=[],
+        attribution=attr,
+        outputs=[_ListOutput()],
+        collection_mode="batch",
+    )
+
+    results = pipeline.analyze(ids=["1", "2"])
+
+    reports = {r["connector_reports"][0]["observation_count"]: r["connector_reports"][0] for r in results}
+    assert reports[1]["status"] == "ok"
+    assert reports[0]["status"] == "error" and "cluster 'c1' down" in reports[0]["reason"]
+
+
 def test_context_mode_ignores_collect_batch():
     contexts = [_make_batch_ctx("1", end_hours=0), _make_batch_ctx("2", end_hours=1)]
     eca = MagicMock()

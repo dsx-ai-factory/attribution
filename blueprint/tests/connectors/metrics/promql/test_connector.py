@@ -5,6 +5,7 @@ import json
 from datetime import datetime, timedelta, timezone
 
 import pytest
+from loguru import logger
 
 from attribution_blueprint.connectors.auth import MTLSAuth, TokenAuth
 from attribution_blueprint.connectors.metrics.promql import PromQLMetricsConnector
@@ -462,15 +463,59 @@ def test_collect_batch_chunks_nodes_and_keeps_successful_chunks(mocker):
     assert [json.loads(obs["body"])[0]["resources"][0]["hostname"] for obs in observations["a"]] == ["n1"]
 
 
-def test_collect_batch_raises_when_every_query_fails(mocker):
+def test_collect_batch_reports_every_context_when_the_only_cluster_fails(mocker):
     t0 = datetime(2026, 5, 1, 12, 0, tzinfo=timezone.utc)
     conn, _post = _batch_conn(mocker, [])
     fake = mocker.Mock()
     fake.raise_for_status.side_effect = RuntimeError("down")
     mocker.patch("requests.Session.post", return_value=fake)
 
-    with pytest.raises(RuntimeError, match="down"):
-        conn.collect_batch([_batch_ctx("a", ["n1"], start=t0, end=t0 + timedelta(minutes=5))])
+    result = conn.collect_batch([_batch_ctx("a", ["n1"], start=t0, end=t0 + timedelta(minutes=5))])
+
+    assert isinstance(result["a"], RuntimeError)
+    assert "cluster 'c'" in str(result["a"]) and "down" in str(result["a"])
+
+
+def test_collect_batch_isolates_a_failing_cluster_and_logs_per_cluster(mocker):
+    t0 = datetime(2026, 5, 1, 12, 0, tzinfo=timezone.utc)
+
+    def respond(*_args, **kwargs):
+        fake = mocker.Mock()
+        fake.raise_for_status = mocker.Mock()
+        if 's_cluster="c1"' in kwargs["data"]["query"]:
+            fake.raise_for_status.side_effect = RuntimeError("c1 down")
+            return fake
+        fake.json.return_value = {
+            "status": "success",
+            "data": {
+                "result": [
+                    {"metric": {"net_host_name": "n1", "s_cluster": "c0"}, "values": [[int(t0.timestamp()), "1"]]}
+                ]
+            },
+        }
+        return fake
+
+    conn, _ = _batch_conn(mocker, [], cluster_from_context=True)
+    mocker.patch("requests.Session.post", side_effect=respond)
+    end = t0 + timedelta(minutes=5)
+    contexts = [
+        {**_batch_ctx("a", ["n1"], start=t0, end=end), "cluster": "c0"},
+        {**_batch_ctx("b", ["n2"], start=t0, end=end), "cluster": "c1"},
+        {**_batch_ctx("c", ["n3"], start=t0, end=end), "cluster": "c1"},
+    ]
+    lines: list[str] = []
+    sink = logger.add(lambda message: lines.append(message.record["message"]), level="INFO")
+    try:
+        result = conn.collect_batch(contexts)
+    finally:
+        logger.remove(sink)
+
+    assert json.loads(result["a"][0]["body"])
+    assert isinstance(result["b"], RuntimeError) and isinstance(result["c"], RuntimeError)
+    assert "cluster 'c1'" in str(result["b"])
+    assert "promql batch cluster='c1' query 'm' failed: c1 down" in lines
+    assert "promql batch cluster='c0': jobs=1 queries=1 failed=0 series=1" in lines
+    assert "promql batch cluster='c1': jobs=2 queries=1 failed=1 series=0" in lines
 
 
 def test_collect_batch_without_nodes_or_contexts(mocker):
