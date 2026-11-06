@@ -32,6 +32,7 @@ rows = [
   { key = "No CUDA runtime is found", symptom = "No CUDA runtime is found", rule = "alias else", demotion = "alias else" },
   { key = "Disk quota exceeded", symptom = "Disk quota exceeded", rule = "alias else", demotion = "alias else" },
   { key = "ncclUnhandledCudaError", symptom = "ncclUnhandledCudaError", rule = "alias else", demotion = "alias else" },
+  { key = "NCCL Error 2: unhandled system error", symptom = "ncclSystemError", rule = "alias else", demotion = "alias else" },
   { key = "ncclSystemError", symptom = "ncclSystemError", rule = "alias else", demotion = "alias else" },
   { key = "ncclInternalError", symptom = "ncclInternalError", rule = "alias else", demotion = "alias else" },
   { key = "ncclInvalidArgument", symptom = "ncclInvalidArgument", rule = "alias else", demotion = "alias else" },

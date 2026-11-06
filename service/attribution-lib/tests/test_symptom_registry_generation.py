@@ -672,6 +672,7 @@ def test_generated_registry_resolves_all_declared_fallback_families():
         "EFA Error-7 something": "EFA Error-",
         "bad kernel stack frame pointer in some_dynamic_tool": "bad kernel stack frame pointer",
         "Call to ibv_modify_qp failed: eno 9999": "Call to ibv_modify_qp failed",
+        "Local HCA command failure (ibv_query_qp eno 110)": "Local HCA command failure",
         "NVRx node health check failed: example_gpu_check": "NVRx node health check failed",
         "NVRx GPU recovery action: Requires a node reboot to recover": "NVRx GPU recovery action",
     }
@@ -1135,6 +1136,37 @@ def test_bad_nic_state_outcome_metadata():
     assert match is not None
     assert match.doc == "detected-bad-nic-state"
     assert match.hw_cause == "NIC firmware initialization failure"
+
+
+@pytest.mark.parametrize(
+    "independent",
+    ["Node unexpectedly rebooted", "Page Retirement", "RDMA fabric flap"],
+)
+def test_corroborated_hca_preserves_independent_outcomes(independent):
+    """A NIC compound must retain existing independent root-cause precedence."""
+    registry = _load_committed_registry()
+    baseline = registry.outcome_for([independent])
+    symptoms = [independent, "Corroborated local HCA command failure"]
+    for ordered in (symptoms, list(reversed(symptoms))):
+        assert registry.outcome_for(ordered) == baseline
+
+
+@pytest.mark.parametrize(
+    "secondary",
+    [
+        "Local HCA command failure (ibv_modify_qp eno 11)",
+        "Local HCA command failure (ibv_modify_qp eno 110)",
+        "Call to ibv_modify_qp failed: eno 110 timeout",
+        "Call to ibv_modify_qp failed: eno 22 invalid argument",
+        "ibv_open_device failed",
+    ],
+)
+def test_corroborated_hca_does_not_suppress_unscoped_outcomes(secondary):
+    """Flat symptom IDs cannot establish that command evidence belongs to a compound."""
+    registry = _load_committed_registry()
+    compound = "Corroborated local HCA command failure"
+    for ordered in ([secondary, compound], [compound, secondary]):
+        assert registry.outcome_for(ordered) == registry.outcome_for([secondary])
 
 
 @pytest.mark.parametrize("symptom", ["NV_ERR_RESET_REQUIRED", "NV_ERR_RESET_REQUIRED kernel_channel.c"])
