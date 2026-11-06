@@ -95,9 +95,11 @@ class FakeConsumer:
         self.polls = 0
         self.commits = []
         self.closed = False
+        self.paused_partitions = set()
 
-    def subscribe(self, topics, *, on_revoke, on_lost):
+    def subscribe(self, topics, *, on_revoke, on_lost, on_assign=None):
         assert topics == [TOPIC]
+        self.on_assign = on_assign
         self.on_revoke = on_revoke
         self.on_lost = on_lost
 
@@ -105,6 +107,8 @@ class FakeConsumer:
         self.polls += 1
         while self._script and callable(self._script[0]):
             self._script.pop(0)(self)
+        if self.partitions and self.partitions <= self.paused_partitions:
+            return None
         message = self._script.pop(0) if self._script else None
         if message is not None and message.error() is None:
             self._positions[message.partition()] = message.offset() + 1
@@ -114,6 +118,18 @@ class FakeConsumer:
         if self.polls <= self._unassigned_polls:
             return []
         return [TP(TOPIC, p) for p in sorted(self.partitions)]
+
+    def assign(self, partitions):
+        """Replace assignment when the native on_assign callback requests it."""
+        self.partitions = {tp.partition for tp in partitions}
+
+    def pause(self, partitions):
+        """Retain queued records while servicing rebalance callbacks."""
+        self.paused_partitions.update(tp.partition for tp in partitions)
+
+    def resume(self, partitions):
+        """Allow queued records from these partitions again."""
+        self.paused_partitions.difference_update(tp.partition for tp in partitions)
 
     def commit(self, *, offsets, asynchronous):
         assert asynchronous is False
