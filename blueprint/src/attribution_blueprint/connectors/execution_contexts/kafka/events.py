@@ -13,8 +13,9 @@ CloudEvent id and source are retained as event_id and event_source. Kubernetes
 namespace, pod_names, and pod_nodes remain extensions, as in the Kueue adapter.
 failed_nodes keeps the full list and supplies the lexicographically first
 failed_node, also matching the Kueue convention. Numeric allocation fields
-must be non-negative integers. Invalid events raise EventError; callers decide
-whether to skip them and how to account for their offsets.
+must be non-negative integers; a time_limit of 0 means no limit and is
+dropped. Invalid events raise EventError; callers decide whether to skip them
+and how to account for their offsets.
 """
 
 from __future__ import annotations
@@ -156,6 +157,10 @@ def _copy_optional_fields(ctx: KafkaExecutionContext, data: dict, event_id: str)
         value = data.get(key)
         if value is not None:
             ctx[key] = _non_negative_int(value, key, event_id)
+    # A zero time limit means no limit, as in the Slurm adapter. The service
+    # rejects a time limit that is not positive.
+    if ctx.get("time_limit") == 0:
+        del ctx["time_limit"]
 
     failed_nodes = data.get("failed_nodes")
     if failed_nodes:
