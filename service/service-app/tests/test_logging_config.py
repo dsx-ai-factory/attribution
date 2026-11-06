@@ -85,3 +85,12 @@ def test_no_warn_when_protocol_unset(monkeypatch):
 def test_no_warn_when_protocol_grpc(monkeypatch, protocol):
     monkeypatch.setenv(otlp_protocol_key, protocol)
     assert not _collect_warnings(monkeypatch)
+
+
+def test_warns_and_falls_back_to_info_on_invalid_log_level(monkeypatch):
+    monkeypatch.setenv("LOG_LEVEL", "nonsense")
+    warnings = []
+    logger.add(warnings.append, level="WARNING", format="{message}")
+
+    assert logcfg._resolve_log_level() == "INFO"
+    assert any("NONSENSE" in str(w) for w in warnings)

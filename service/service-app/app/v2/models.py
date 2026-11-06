@@ -93,8 +93,11 @@ class AttributorInfoV2(HashableModel):
             timezone=w.timezone,
             node_to_ranks=w.nodes,
         )
-        if w.scheduler is not None:
-            builder.scheduler(w.scheduler)
+        scheduler = w.scheduler
+        if scheduler is None and w.type in Scheduler:
+            # No explicit scheduler: use `type` when it names one, so `type: "kai"` is not attributed as Slurm.
+            scheduler = Scheduler(w.type)
+        builder.scheduler(scheduler)  # None leaves the scheduler unset
         if w.interest_start_time:
             builder.interest_start_time(w.interest_start_time)
         if w.interest_end_time:

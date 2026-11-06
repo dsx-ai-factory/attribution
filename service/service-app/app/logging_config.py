@@ -44,6 +44,7 @@ def _resolve_log_level() -> str:
     try:
         return logger.level(level).name
     except ValueError:
+        logger.warning(f"LOG_LEVEL={level!r} is not a valid log level; using {default_level}.")
         return default_level
 
 

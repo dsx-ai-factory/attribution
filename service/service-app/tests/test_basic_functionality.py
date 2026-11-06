@@ -502,8 +502,9 @@ class TestV2WorkloadValidation:
 class TestSchedulerIdentityTranslation:
     """workload.scheduler -> JobInfo.scheduler.
 
-    V2 carries the explicit field and never derives it from `type`; V1 has no
-    wire change, so its conversion maps the legacy `type` to a scheduler."""
+    V2 carries the explicit field and falls back to `type` only when the field
+    is unset; V1 has no wire change, so its conversion maps the legacy `type`
+    to a scheduler."""
 
     @pytest.mark.parametrize("scheduler", ["kueue", "kai", "runapi"])
     def test_v2_explicit_scheduler_is_set_on_job_info(self, scheduler):
@@ -514,13 +515,22 @@ class TestSchedulerIdentityTranslation:
         assert job_info.scheduler == scheduler
         assert job_info.type == "anything"  # type is preserved verbatim regardless
 
-    def test_v2_missing_scheduler_is_unknown_even_when_type_names_one(self):
-        info = make_up_attributor_info("v2", type="slurm", scheduler=None)
+    @pytest.mark.parametrize(
+        "workload_type,expected",
+        [("slurm", "slurm"), ("kueue", "kueue"), ("kai", "kai"), ("runapi", "runapi"), ("anything", "")],
+    )
+    def test_v2_missing_scheduler_falls_back_to_type(self, workload_type, expected):
+        info = make_up_attributor_info("v2", type=workload_type, scheduler=None)
 
         job_info = info.to_lib_jobinfo()
 
-        assert job_info.scheduler == ""  # Scheduler.UNKNOWN
-        assert job_info.type == "slurm"
+        assert job_info.scheduler == expected  # "" is Scheduler.UNKNOWN
+        assert job_info.type == workload_type
+
+    def test_v2_explicit_scheduler_wins_over_type(self):
+        info = make_up_attributor_info("v2", type="kai", scheduler="slurm")
+
+        assert info.to_lib_jobinfo().scheduler == "slurm"
 
     @pytest.mark.parametrize(
         "workload_type,expected",
