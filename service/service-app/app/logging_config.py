@@ -22,7 +22,7 @@ def setup_logging() -> Optional[LoggerProvider]:
     Returns
         The OTLP provider (so the caller can flush/shutdown it) or None for stdout-only.
     """
-    level = _resolve_log_level()
+    level, rejected = _resolve_log_level()
     logger.remove()
     logger.add(
         sys.stdout,
@@ -34,18 +34,22 @@ def setup_logging() -> Optional[LoggerProvider]:
     if provider is not None:
         logger.add(LoggingHandler(logger_provider=provider), level=level, format="{message}")
 
+    if rejected is not None:
+        logger.warning(f"LOG_LEVEL={rejected!r} is not a valid log level; using {level}.")
     return provider
 
 
-def _resolve_log_level() -> str:
-    """Resolve LOG_LEVEL env var to loguru level name, falling back to INFO on anything it rejects."""
-    default_level = "INFO"
-    level = os.environ.get("LOG_LEVEL", default_level).strip().upper()
+def _resolve_log_level() -> tuple[str, Optional[str]]:
+    """Resolve the LOG_LEVEL env var to a loguru level name.
+
+    Returns
+        The level name (INFO when loguru rejects the value), and the rejected value or None.
+    """
+    level = os.environ.get("LOG_LEVEL", "INFO").strip().upper()
     try:
-        return logger.level(level).name
+        return logger.level(level).name, None
     except ValueError:
-        logger.warning(f"LOG_LEVEL={level!r} is not a valid log level; using {default_level}.")
-        return default_level
+        return "INFO", level
 
 
 def _build_exporter(endpoint: str, token: Optional[str]) -> LogRecordExporter:
