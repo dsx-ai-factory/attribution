@@ -83,7 +83,7 @@ docker run -d --rm \
   -e ATTRIBUTION_WEB_PORT \
   -p "127.0.0.1:$ATTRIBUTION_SERVICE_PORT:$ATTRIBUTION_SERVICE_PORT" \
   -p "127.0.0.1:$ATTRIBUTION_WEB_PORT:$ATTRIBUTION_WEB_PORT" \
-  -v "$PWD/$(dirname "$ATTRIBUTION_DB"):/data" \
+  -v "$(cd "$(dirname "$ATTRIBUTION_DB")" && pwd):/data" \
   "$ATTRIBUTION_IMAGE"
 ```
 
