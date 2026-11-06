@@ -1231,7 +1231,7 @@ uv run --project blueprint --extra web nvidia-attribution-blueprint-web --db ./a
 ```
 
 The front-end build needs pnpm (or `corepack pnpm`) and Node.js 20.19 or later
-(22.12 or later on Node.js 22). The build
+within version 20, or Node.js 22.12 or later. The build
 writes the bundle to `blueprint/src/attribution_blueprint/webui/static/`, and
 Git does not track that directory. To build only the bundle, run these commands
 on a host that has Node.js and pnpm:
@@ -1242,6 +1242,7 @@ pnpm --dir blueprint/src/attribution_blueprint/webui/frontend build
 ```
 
 On a host without Node.js, copy the built `static/` directory to the same path.
-Build and copy it again each time you update the checkout.
+Build the assets from the same Git revision as the server, and build and copy
+them again each time you update the checkout.
 Then start the server with `blueprint/scripts/webui.sh --no-build`, or run the
 binary directly with the `uv run` command above.
