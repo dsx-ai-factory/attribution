@@ -8,6 +8,7 @@ from typing import NotRequired, TypedDict
 from loguru import logger
 
 from attribution_blueprint.connectors.auth import Auth
+from attribution_blueprint.connectors.cluster import query_cluster
 from attribution_blueprint.connectors.metrics.promql.client import (
     PrometheusClient,
     re2_escape,
@@ -88,7 +89,9 @@ class PromQLMetricsConnector:
     Each instance handles exactly one Source. For multiple Sources from the same
     backend, instantiate per Source — failure isolation lives at the instance
     boundary. Templates are bundled with the connector; the customer supplies a
-    cluster name and (optionally) a templates dict to extend or override.
+    cluster name and (optionally) a templates dict to extend or override. With
+    `cluster_from_context`, a non-empty context `cluster` replaces the configured
+    cluster for that context's queries.
     """
 
     def __init__(
@@ -96,6 +99,7 @@ class PromQLMetricsConnector:
         *,
         endpoint: str,
         cluster: str,
+        cluster_from_context: bool = False,
         auth: Auth | None = None,
         source: Source = Source.NODE_METRICS,
         templates: dict[Source, dict[str, str]] = TEMPLATES,
@@ -113,6 +117,7 @@ class PromQLMetricsConnector:
         self._templates = templates[source]
         self._endpoint = endpoint.rstrip("/")
         self._cluster = cluster
+        self._cluster_from_context = cluster_from_context
         self._node_label = node_label
         self._cluster_label = cluster_label
         self._timeout = timeout_seconds
@@ -133,8 +138,8 @@ class PromQLMetricsConnector:
     def collect(self, context: ExecutionContext) -> list[Observation]:
         """Render queries and combine samples into one observation, or none without nodes/data.
 
-        Missing template keys are logged and skipped; query, time-validation and
-        sample-conversion exceptions propagate.
+        Missing template keys are logged and skipped; query, time-validation,
+        context-cluster and sample-conversion exceptions propagate.
         """
         # Drop empty strings: `re.escape("")` is `""`, which would render the
         # selector as `net_host_name=~""` and match every series in the cluster.
@@ -147,6 +152,7 @@ class PromQLMetricsConnector:
         end = assert_aware(context["end_time"], "end_time")
         start_s = int(start.timestamp())
         end_s = int(end.timestamp())
+        cluster = query_cluster(context, self._cluster, from_context=self._cluster_from_context)
         samples: list[PrometheusMetricEntry] = []
         # Escape RE2 metacharacters without escaping hyphens. Bundled templates
         # place this regex in a backtick raw string to preserve its backslashes.
@@ -155,7 +161,7 @@ class PromQLMetricsConnector:
             try:
                 query = tmpl.format(
                     name=name,
-                    cluster=self._cluster,
+                    cluster=cluster,
                     nodes=nodes_regex,
                     node_label=self._node_label,
                     cluster_label=self._cluster_label,
@@ -163,7 +169,7 @@ class PromQLMetricsConnector:
             except KeyError as e:
                 logger.warning(f"promql template {name!r} missing kwarg {e}; skipping")
                 continue
-            samples.extend(self._query_range(name, query, start_s, end_s))
+            samples.extend(self._query_range(name, query, start_s, end_s, cluster))
 
         if not samples:
             return []
@@ -177,7 +183,9 @@ class PromQLMetricsConnector:
             }
         ]
 
-    def _query_range(self, name: str, query: str, start_s: int, end_s: int) -> list[PrometheusMetricEntry]:
+    def _query_range(
+        self, name: str, query: str, start_s: int, end_s: int, queried_cluster: str
+    ) -> list[PrometheusMetricEntry]:
         """Fetch and map range samples, skipping missing node labels and invalid timestamps.
 
         API error statuses and non-list results are logged and skipped by the
@@ -201,9 +209,9 @@ class PromQLMetricsConnector:
                 # unscoped points.
                 continue
             # Templates that aggregate (e.g. `max by (<node label>) (...)`)
-            # drop the cluster label, so fall back to the configured
+            # drop the cluster label, so fall back to the queried
             # cluster — the value is known either way.
-            cluster = labels.get(self._cluster_label) or self._cluster
+            cluster = labels.get(self._cluster_label) or queried_cluster
             component = labels.get(DEFAULT_COMPONENT_LABEL)
             for ts, val in series.get("values", []) or []:
                 try:
