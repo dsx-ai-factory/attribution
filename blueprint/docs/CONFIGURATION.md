@@ -139,7 +139,7 @@ uv run --project blueprint --frozen nvidia-attribution-blueprint --config ./attr
   --connector eca slurm nodelist "node[001-004]"
 ```
 
-Runtime selector rules, validated on the merged configuration before the run starts, for `slurm` and `kueue`:
+Runtime selector rules, validated before the run for `slurm`, `kueue`, and `kai`:
 
 - `ids` and `start_time` are mutually exclusive.
 - `start_time` and `end_time` must be set together.
@@ -512,8 +512,8 @@ preselect the desired attribution outcome.
 `workload_type` is the legacy free-form workload token sent as `workload.type`.
 Scheduler identity comes from the execution context's `scheduler` value, which
 Blueprint sends as `workload.scheduler` when it is a supported scheduler
-(`slurm` or `kueue`). Other values, such as `static`, are omitted and the service
-treats the scheduler as unknown.
+(`slurm`, `kueue`, or `kai`). Other values, such as `static`, are omitted and
+the service treats the scheduler as unknown.
 
 ### `[eca.kafka]`
 
@@ -1014,7 +1014,7 @@ Use `kubectl_logs` to collect pod stdout as APPLOG or SYSLOG observations. It
 reads `namespace` and `pod_names` from the execution context and runs
 `kubectl logs` for each pod. Entries are attributed to the pod's node via the
 context's `pod_nodes` mapping (pod name to node). The Kueue adapter populates all
-three fields.
+three fields, as does the KAI adapter when Pods are available.
 
 ```toml
 [log.applog]
