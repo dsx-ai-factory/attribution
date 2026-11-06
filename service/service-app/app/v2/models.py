@@ -52,7 +52,7 @@ class AttributorWorkloadInfoV2(HashableModel):
 
     id: str
     type: str
-    # Explicit scheduler identity (e.g. "slurm", "kueue", "kai").
+    # Explicit scheduler identity (e.g. "slurm", "kueue", "kai", "runapi").
     scheduler: Optional[Scheduler] = None
     srun_cmd: Optional[str] = "dummy"
     job_start_time: AwareDatetime
