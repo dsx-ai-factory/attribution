@@ -91,9 +91,9 @@ class AttributionConnector:
         return response
 
     def get_attribution(self, attributor_id: str) -> dict:
-        """GET /v2/attributor/{attributor_id}/attribution. Returns response JSON."""
+        """GET /v2/attributor/{attributor_id}/attribution with the decision graph. Returns response JSON."""
         response = self._api.attribute_v2_attributor_att_id_attribution_get(
-            attributor_id, _request_timeout=self._request_timeout
+            attributor_id, include_decision_graph=True, _request_timeout=self._request_timeout
         )
         # to_dict() would leave datetimes, which aren't JSON-serializable.
         return json.loads(response.to_json())

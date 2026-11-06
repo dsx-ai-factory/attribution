@@ -196,7 +196,7 @@ def test_get_attribution_returns_full_dict(mocker):
     expected["verdict"]["root_symptom"]["catalog_id"] = None
     assert result == expected
     args, _ = request.call_args
-    assert args == ("GET", "http://svc:8000/v2/attributor/attr-7/attribution")
+    assert args == ("GET", "http://svc:8000/v2/attributor/attr-7/attribution?include_decision_graph=true")
 
 
 def test_delete_attributor_returns_none(mocker):
