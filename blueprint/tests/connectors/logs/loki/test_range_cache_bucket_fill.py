@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
 """Filling fetched entries into buckets must stay faithful and sub-quadratic.
 
 `LokiRangeCache.query` used to rescan the whole fetched list once per bucket,
