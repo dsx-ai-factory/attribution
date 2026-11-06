@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
 """A shared lookup directory must not outlive every process that can reach it.
 
 `attribution_lib.events` gives each process one `attribution_lib_shared_lookup_*`
