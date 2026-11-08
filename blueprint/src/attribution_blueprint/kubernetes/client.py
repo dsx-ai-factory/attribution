@@ -11,6 +11,9 @@ from attribution_blueprint.telemetry import track
 
 _STREAMING_QUERY_KEYS = frozenset({"watch", "follow"})
 
+# Read size when streaming a pod log; bounds how much is held beyond the tail.
+_LOG_CHUNK_BYTES = 64 * 1024
+
 
 class KubernetesClientError(RuntimeError):
     """A Kubernetes API read failed.
@@ -109,6 +112,60 @@ class KubernetesClient:
             raise KubernetesClientError(f"Kubernetes API query for {kind!r} returned an unexpected response shape")
         return items
 
+    def read_pod_log(
+        self,
+        name: str,
+        *,
+        namespace: str,
+        container: str | None = None,
+        previous: bool = False,
+        timestamps: bool = False,
+        since_seconds: int | None = None,
+        max_bytes: int | None = None,
+    ) -> str:
+        """Read one container's log as text, raising `KubernetesClientError`
+        on any failure (`.status == 404` when the pod is gone).
+
+        With `max_bytes` set, only the trailing `max_bytes` bytes are kept and
+        the response is streamed, so memory stays bounded however long the
+        log is. Crash symptoms land near the end of a log, so the tail is the
+        part worth keeping. `max_bytes` must be positive; `ValueError` otherwise.
+
+        Building the API client (loading a kubeconfig or the in-cluster
+        credentials) is part of the read, so a failure there is a
+        `KubernetesClientError` too, not a raw exception.
+        """
+        if max_bytes is not None and max_bytes <= 0:
+            raise ValueError(f"max_bytes must be positive, got {max_bytes}")
+        try:
+            from kubernetes import client as kubernetes_client
+
+            api = kubernetes_client.CoreV1Api(self._client().client)
+            response = api.read_namespaced_pod_log(
+                name,
+                namespace,
+                container=container,
+                previous=previous or None,
+                timestamps=timestamps or None,
+                since_seconds=since_seconds,
+                _preload_content=False,
+                _request_timeout=self.timeout_seconds,
+            )
+        except Exception as error:
+            raise self._query_error(error) from error
+
+        tail = bytearray()
+        try:
+            for chunk in response.stream(_LOG_CHUNK_BYTES):
+                tail += chunk
+                if max_bytes is not None and len(tail) > max_bytes:
+                    del tail[: len(tail) - max_bytes]
+        except Exception as error:
+            raise self._query_error(error) from error
+        finally:
+            response.release_conn()
+        return bytes(tail).decode("utf-8", errors="replace")
+
     @staticmethod
     def _query_error(error: Exception) -> KubernetesClientError:
         # bare exception keeps the raw API response body out of logs.
@@ -176,9 +233,15 @@ def _set_default_request_timeout(api_client, timeout_seconds: float) -> None:
         method = args[1] if len(args) > 1 else kwargs["method"]
         with track("kubernetes", method) as call:
             response = call_api(*args, **kwargs)
+            resource_path = args[0] if args else kwargs.get("resource_path")
             query_params = args[3] if len(args) > 3 else kwargs.get("query_params")
-            # Watch and follow bodies are streams; reading .data consumes them. Add new streaming calls to the skip set.
-            if kwargs.get("_preload_content") is False and _STREAMING_QUERY_KEYS.isdisjoint(dict(query_params or ())):
+            # Watch and follow bodies are streams; reading .data consumes them. So is a pod log, which
+            # read_pod_log streams to keep only its tail. Add new streaming calls to the skip set.
+            if (
+                kwargs.get("_preload_content") is False
+                and _STREAMING_QUERY_KEYS.isdisjoint(dict(query_params or ()))
+                and not str(resource_path or "").endswith("/log")
+            ):
                 data = getattr(response, "data", None)
                 if isinstance(data, bytes):
                     call.response_bytes = len(data)
