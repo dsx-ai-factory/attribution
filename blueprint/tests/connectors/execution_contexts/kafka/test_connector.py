@@ -242,7 +242,7 @@ def test_kafka_topology_reaches_service_and_output(mocker, binary, per_node, mov
     attribution.create_attributor.return_value = "attributor-1"
     attribution.get_attribution.return_value = {"verdict": {"attribution_outcome": "Fail User"}}
     output = mocker.Mock()
-    pipeline = AttributionOrchestrator([eca], [], [], attribution, [output], gpus_per_node=8)
+    pipeline = AttributionOrchestrator([eca], [], [], attribution, [output], gpus_per_node=7)
 
     pipeline.analyze()
 
