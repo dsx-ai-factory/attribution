@@ -139,7 +139,7 @@ uv run --project blueprint --frozen nvidia-attribution-blueprint --config ./attr
   --connector eca slurm nodelist "node[001-004]"
 ```
 
-Runtime selector rules, validated on the merged configuration before the run starts, for `slurm` and `kueue`:
+Runtime selector rules, validated before the run for `slurm`, `kueue`, and `kai`:
 
 - `ids` and `start_time` are mutually exclusive.
 - `start_time` and `end_time` must be set together.
@@ -512,13 +512,13 @@ preselect the desired attribution outcome.
 `workload_type` is the legacy free-form workload token sent as `workload.type`.
 Scheduler identity comes from the execution context's `scheduler` value, which
 Blueprint sends as `workload.scheduler` when it is a supported scheduler
-(`slurm` or `kueue`). Other values, such as `static`, are omitted and the service
-treats the scheduler as unknown.
+(`slurm`, `kueue`, or `kai`). Other values, such as `static`, are omitted and
+the service treats the scheduler as unknown.
 
 ### `[eca.kafka]`
 
 Reads job-completion CloudEvents from a Kafka topic. Install the `kafka` extra
-(`confluent-kafka`). Each call reads at most `max_messages`, and the complete
+(`confluent-kafka`). Each `discover()` reads at most `max_messages`, and the complete
 read (assignment and fetching included) is bounded by `discovery_timeout_seconds`.
 An empty poll ends discovery only when all assigned partitions have reached
 broker end offsets. `poll_timeout_seconds` controls individual polls.
@@ -544,7 +544,8 @@ commit's broker outcome can be uncertain, so replay is not guaranteed.
 
 Delivery is best effort: commits happen before attribution. A later attribution
 or output failure does not automatically replay the event. Reset group offsets
-with Kafka tooling to replay; deferred acknowledgment is separate work.
+with Kafka tooling to replay. Long-lived callers can instead use the
+[explicit acknowledgement API](kafka_lifecycle.md) to control when offsets advance.
 
 Malformed, filtered, and within-batch duplicate events are intentional skips
 and their offsets commit too. Each call logs counts in `last_discovery_stats`
@@ -563,10 +564,13 @@ The event `data` object uses ExecutionContext field names: `id`, `start_time`,
 `failed_nodes`, `failed_node`, `std_out`, `std_err`, `namespace`, `pod_names`,
 `pod_nodes`, and `cluster` are optional. `failed_node` is used when `failed_nodes`
 is absent or empty; otherwise, the lexicographically first entry in
-`failed_nodes` supplies `failed_node`.
+`failed_nodes` supplies `failed_node`. A `time_limit` of 0 means no limit, and
+the context omits it.
 CloudEvent `subject`, when it is a non-empty string, is retained as
 `event_subject`; any other value is ignored without skipping the event. `cluster`
-is retained unchanged. `pod_nodes` must be an object whose pod names and node
+is retained unchanged; the VictoriaLogs and PromQL connectors query it when
+`cluster_from_context` is enabled (see
+[Cluster From The Execution Context](#cluster-from-the-execution-context)). `pod_nodes` must be an object whose pod names and node
 names are non-empty strings; values are not coerced to strings. See
 `tests/fixtures/kafka_completion_events.json`. Send `timezone` as an IANA key
 whenever the timestamps' UTC offset is not a whole hour or the job crosses a
@@ -974,6 +978,7 @@ Fields:
 | `auth.key_path` | For mTLS | Client private key path. |
 | `auth.ca_cert_path` | No | CA bundle path for mTLS. |
 | `query_kwargs` | Usually | Values used by the bundled LogsQL templates. |
+| `cluster_from_context` | No | When `true`, a non-empty `cluster` on the execution context replaces `query_kwargs.cluster` for that context's `{cluster}` placeholder. Defaults to `false`. |
 | `query` | No | One custom LogsQL template replacing the bundled templates for this source. |
 | `queries` | No | Custom LogsQL template list replacing the bundled templates; takes precedence over `query`. |
 
@@ -983,6 +988,25 @@ in `query_kwargs`. LogsQL queries are paginated backward in time when a response
 reaches `limit`; rows at a page boundary are deduplicated. If more than `limit`
 records share one timestamp, the connector warns that some records may be
 truncated.
+
+The bundled templates do not use `{cluster}`. A custom template can scope its
+query to a cluster with `{cluster}` and a `cluster` entry in `query_kwargs`.
+When one deployment receives execution contexts from several clusters, for
+example through [`[eca.kafka]`](#ecakafka) events that carry `data.cluster`, set
+`cluster_from_context = true` to query each context's own cluster:
+
+```toml
+[log.syslog.victorialogs]
+endpoint = "http://127.0.0.1:9428"
+query = 'cluster:="{cluster}" service_name:="{service_name}"'
+query_kwargs = { cluster = "cluster-a", service_name = "example-service" }
+cluster_from_context = true
+```
+
+A context with `cluster = "cluster-b"` is then queried with `cluster:="cluster-b"`.
+A context without a `cluster`, or with an empty one, uses `query_kwargs.cluster`.
+Enable the setting only when the context's `cluster` values match the values in
+your log fields; see [Cluster From The Execution Context](#cluster-from-the-execution-context).
 
 ### Kubectl Pod Logs
 
@@ -1070,6 +1094,7 @@ Fields:
 | ----------------- | -------- | ----------------------------------------------------------------------------------------------------------------------- |
 | `endpoint`        | Yes      | Prometheus-compatible HTTP API base URL.                                                                                |
 | `cluster`         | Yes      | Cluster label value used by bundled PromQL templates.                                                                   |
+| `cluster_from_context` | No | When `true`, a non-empty `cluster` on the execution context replaces `cluster` for that context's queries. Defaults to `false`. |
 | `node_label`      | No       | Label containing node names, used in queries and results. Defaults to `net_host_name`.                                   |
 | `cluster_label`   | No       | Label containing the cluster name, used in queries and results. Defaults to `s_cluster`.                                |
 | `auth.type`       | No       | Optional. If present, `token` or `mtls`; same auth fields as Loki. Omit the `auth` block for unauthenticated endpoints. |
@@ -1082,10 +1107,19 @@ Both `node_label` and `cluster_label` must match `^[a-zA-Z_][a-zA-Z0-9_]*$` (unq
 
 The bundled PromQL templates use the configured node and cluster labels. Returned
 series must retain the node label. If an aggregation drops the cluster label,
-the connector uses the configured `cluster` value for the observation.
+the connector uses the queried cluster value for the observation.
+
+When one deployment receives execution contexts from several clusters, for
+example through [`[eca.kafka]`](#ecakafka) events that carry `data.cluster`, set
+`cluster_from_context = true`. A context with `cluster = "cluster-b"` is then
+queried with `{cluster_label}="cluster-b"`. A context without a `cluster`, or
+with an empty one, uses the configured `cluster`, so `cluster` stays required.
+The setting is also available as
+`--connector metrics node_metrics promql cluster_from_context true` or
+`NVAB_METRICS_NODE_METRICS_PROMQL_CLUSTER_FROM_CONTEXT=true`.
 
 Each template may use `{name}` (the template's own name), `{cluster}` (the
-configured cluster value), `{nodes}` (an RE2-escaped alternation of the context's node
+queried cluster value), `{nodes}` (an RE2-escaped alternation of the context's node
 names; use a backtick raw string, or double quotes only for hostnames without regex metacharacters),
 `{node_label}`, and `{cluster_label}` (the configured label names).
 Literal `{` and `}` in PromQL label selectors must be doubled (`{{`, `}}`).
@@ -1122,6 +1156,17 @@ The same mapping is available through
 `NVAB_METRICS_NODE_METRICS_PROMQL_CLUSTER_LABEL`). See the complete
 [VictoriaMetrics example](../examples/victoriametrics.toml), which uses a static
 workload context; adjust its nodes and time window to match your data.
+
+### Cluster From The Execution Context
+
+The VictoriaLogs and PromQL connectors accept `cluster_from_context`. It is off
+by default because only some execution-context adapters set `cluster`, and the
+value must equal the field or label value in your telemetry. The Kafka adapter
+copies `data.cluster` unchanged, and a static `contexts_path` file passes
+through any `cluster` key. The Slurm, Kueue, and KAI adapters do not set it, so
+their contexts always use the configured value. A context `cluster` that
+contains a quote, backslash, or control character is rejected: the connector
+reports an error for that context instead of querying another cluster.
 
 ## Environment Variables
 
