@@ -13,6 +13,10 @@ make a change. For product behavior and architecture, use
 `docs/ARCHITECTURE.md`, `docs/attribution.md`, and the implementation as the
 sources of truth. Do not copy that material into this file.
 
+For documentation and catalog prose, follow
+[Documentation review in CONTRIBUTING.md](CONTRIBUTING.md#documentation-review).
+Apply it to authored text, references, signals, examples, and rendered output.
+
 ## Permitted operations
 
 - Read and search repository files and local Git history.
