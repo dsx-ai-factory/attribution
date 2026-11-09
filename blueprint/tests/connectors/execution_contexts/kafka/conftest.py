@@ -15,22 +15,30 @@ import pytest
 
 
 @pytest.fixture
-def kafka_topic():
+def kafka_broker_topic():
+    """Create an isolated topic for tests that need Kafka without the Service."""
     brokers = os.environ.get("ATTRIBUTION_TEST_KAFKA_BOOTSTRAP_SERVERS")
-    service_url = os.environ.get("ATTRIBUTION_TEST_SERVICE_URL")
-    if not brokers or not service_url:
-        pytest.skip(
-            "set ATTRIBUTION_TEST_KAFKA_BOOTSTRAP_SERVERS and ATTRIBUTION_TEST_SERVICE_URL to disposable services"
-        )
+    if not brokers:
+        pytest.skip("set ATTRIBUTION_TEST_KAFKA_BOOTSTRAP_SERVERS to a disposable broker")
     from confluent_kafka.admin import AdminClient, NewTopic
 
     admin = AdminClient({"bootstrap.servers": brokers, "socket.timeout.ms": 10000})
     topic = f"blueprint-completion-contract-{uuid4().hex}"
     admin.create_topics([NewTopic(topic, num_partitions=2, replication_factor=1)], request_timeout=15)[topic].result(20)
     try:
-        yield brokers, service_url, topic
+        yield brokers, topic
     finally:
         admin.delete_topics([topic], request_timeout=15)[topic].result(20)
+
+
+@pytest.fixture
+def kafka_topic(request):
+    """Add the Service endpoint only for tests that exercise attribution."""
+    service_url = os.environ.get("ATTRIBUTION_TEST_SERVICE_URL")
+    if not service_url:
+        pytest.skip("set ATTRIBUTION_TEST_SERVICE_URL to a disposable Attribution Service")
+    brokers, topic = request.getfixturevalue("kafka_broker_topic")
+    return brokers, service_url, topic
 
 
 @pytest.fixture
@@ -44,8 +52,8 @@ def completion_event():
 
 
 @pytest.fixture
-def kafka_spec(kafka_topic):
-    brokers, _, topic = kafka_topic
+def kafka_spec(kafka_broker_topic):
+    brokers, topic = kafka_broker_topic
     return {
         "bootstrap_servers": brokers,
         "topic": topic,
@@ -57,10 +65,10 @@ def kafka_spec(kafka_topic):
 
 
 @pytest.fixture
-def publish_event(kafka_topic):
+def publish_event(kafka_broker_topic):
     from confluent_kafka import Producer
 
-    brokers, _, topic = kafka_topic
+    brokers, topic = kafka_broker_topic
     producer = Producer({"bootstrap.servers": brokers})
 
     def publish(event, *, partition=0, encoding="structured"):
