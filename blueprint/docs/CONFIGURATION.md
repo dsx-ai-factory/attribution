@@ -652,15 +652,19 @@ aws_region = "us-east-2"
 
 This section controls workload shape sent to the attribution service.
 
-**Important:** `workload.gpus_per_node` defaults to `4`. This is also the
-ranks-per-node value. In the supported training model, one rank runs on one GPU,
-so GPUs per node and ranks per node are the same number. Review this for your
-cluster before deploying; mismatches silently break rank-to-node attribution.
+When a context supplies a positive integer `gpu_count` that divides evenly by
+its non-empty node list, that job's GPUs per node determines its rank mapping.
+For example, 8 GPUs across 2 nodes gives 4 ranks per node, while 16 GPUs across
+2 nodes gives 8. Mixed jobs can therefore use different mappings in one run.
+
+Otherwise, `workload.gpus_per_node` supplies the fallback (default `4`). In the
+supported training model, one rank runs on one GPU. Review the fallback before
+deploying, especially for contexts with missing, zero, or uneven GPU counts.
 
 
 | Field           | Required | Default | Meaning                                                                                                                                                                                                                                                                                                                                     |
 | --------------- | -------- | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `gpus_per_node` | No       | `4`     | GPUs per node (ranks per node). The blueprint uses this to build the service v2 node-to-ranks payload. Default: `4`, applied when this key is unset. **You should review and override this for your cluster.** Clusters with a different GPU count per node will produce incorrect rank-to-node attribution if this is left at the default. |
+| `gpus_per_node` | No       | `4`     | Fallback GPUs per node (ranks per node) when the context does not provide a positive, uniformly divisible GPU count. |
 
 
 Example:
