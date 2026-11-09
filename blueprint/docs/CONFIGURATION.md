@@ -560,12 +560,14 @@ Unexpected exceptions propagate; they are not classified as invalid events.
 The event `data` object uses ExecutionContext field names: `id`, `start_time`,
 `end_time` (with UTC offset) and a non-empty `nodes` list are required;
 `job_id`, `attempt_id`, `scheduler`, `state`, `name`, `user_name`,
-`workload_framework`, `timezone`, `time_limit`, `gpu_count`, `cancelled_by`,
+`workload_framework`, `timezone`, `time_limit`, `gpu_count`, `gpus_per_node`, `cancelled_by`,
 `failed_nodes`, `failed_node`, `std_out`, `std_err`, `namespace`, `pod_names`,
 `pod_nodes`, and `cluster` are optional. `failed_node` is used when `failed_nodes`
 is absent or empty; otherwise, the lexicographically first entry in
 `failed_nodes` supplies `failed_node`. A `time_limit` of 0 means no limit, and
-the context omits it.
+the context omits it. Optional `gpus_per_node` must be a positive integer and
+overrides inferred or configured rank topology; booleans, floats, and strings
+are rejected. `gpu_count` remains the job's total allocated GPU count.
 CloudEvent `subject`, when it is a non-empty string, is retained as
 `event_subject`; any other value is ignored without skipping the event. `cluster`
 is retained unchanged; the VictoriaLogs and PromQL connectors query it when
