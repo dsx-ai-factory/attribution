@@ -17,8 +17,8 @@ uv run --project blueprint --frozen --extra dev --extra kafka pytest \
 ```
 
 The repository Blueprint gate installs the `kafka` extra so native-exception
-coverage runs even without a broker. Without the endpoint settings above, live
-tests skip. Unit tests still check payload mapping,
+coverage runs even without a broker. Broker-only tests need just the Kafka
+endpoint; tests that attribute jobs also need the Service endpoint. Unit tests check payload mapping,
 malformed/filtered events, exact `(source, id)` redeliveries, latest-attempt selection,
 cross-partition warnings, timeouts, commit boundaries,
 revocation/loss, and propagation of programming and native client errors.
@@ -38,7 +38,17 @@ batches succeed with visible counts; invalid pod-to-node mappings are skipped.
 The adapter closes instead of seeking or retrying after failures. Retry tests construct a new consumer and verify that only
 uncommitted records replay. Rebalance callbacks never commit. Native Kafka
 exceptions are injected separately from programming errors, which must escape.
-The only catch-all performs failure cleanup and re-raises, including cancellation.
+Catch-all handlers only perform failure cleanup and re-raise, including cancellation.
+
+Deferred-acknowledgement tests additionally cover prefix commits, offset gaps,
+stale receipts, and intentionally skipped records. Real-broker streaming tests
+verify replay after restart, out-of-order acknowledgements, and reassignment:
+
+```bash
+ATTRIBUTION_TEST_KAFKA_BOOTSTRAP_SERVERS=127.0.0.1:39093 \
+uv run --project blueprint --frozen --extra dev --extra kafka pytest \
+  blueprint/tests/connectors/execution_contexts/kafka/test_streaming_delivery.py -q
+```
 
 Optional infrastructure tests:
 
@@ -52,8 +62,9 @@ Optional infrastructure tests:
   READ-deny ACL, checks failure without a commit, removes it, and retries.
 
 Run sequentially, without pytest-xdist. The source is split between `events.py`
-(payload decoding/mapping), `connector.py` (batch and ownership lifecycle), and
-`__init__.py` (MCA registration and native client settings). Runtime storage and
-deferred acknowledgment remain follow-up work. Kafka result publishing is
+(payload decoding/mapping), `connector.py` (discovery and streaming lifecycle),
+`receipts.py` (acknowledged offsets and ownership), and `__init__.py` (MCA settings).
+The [acknowledgement API](../../../../docs/kafka_lifecycle.md) is available;
+Runtime durable storage and its integration remain follow-up work. Kafka result publishing is
 implemented by `output.kafka` and covered in the
 [Kafka output tests](../../outputs/kafka/).

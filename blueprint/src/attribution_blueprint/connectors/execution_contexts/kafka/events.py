@@ -13,8 +13,9 @@ CloudEvent id and source are retained as event_id and event_source. Kubernetes
 namespace, pod_names, and pod_nodes remain extensions, as in the Kueue adapter.
 failed_nodes keeps the full list and supplies the lexicographically first
 failed_node, also matching the Kueue convention. Numeric allocation fields
-must be non-negative integers. Invalid events raise EventError; callers decide
-whether to skip them and how to account for their offsets.
+must be non-negative integers; a time_limit of 0 means no limit and is
+dropped. Invalid events raise EventError; callers decide whether to skip them
+and how to account for their offsets.
 """
 
 from __future__ import annotations
@@ -60,8 +61,8 @@ class EventError(ValueError):
 def _read_cloudevent(
     raw: bytes | None,
     headers: list[tuple[str, bytes | str | None]] | None,
-) -> tuple[str, str, dict, str | None, str]:
-    """Return (id, type, data, subject, source) from either CloudEvent encoding."""
+) -> tuple[str, str, dict, str | None, str, dict]:
+    """Return validated attributes, data, and the complete CloudEvent envelope."""
     if raw is None:
         raise EventError("message has no value")
     try:
@@ -72,6 +73,8 @@ def _read_cloudevent(
     headers = dict(headers or [])
     if "ce_type" in headers:
         attrs = {key[3:]: _header_str(value) for key, value in headers.items() if key.startswith("ce_")}
+        if "content-type" in headers:
+            attrs["datacontenttype"] = _header_str(headers["content-type"])
         data = body
     else:
         if not isinstance(body, dict):
@@ -97,7 +100,8 @@ def _read_cloudevent(
     subject = attrs.get("subject")
     if not isinstance(subject, str) or not subject:
         subject = None
-    return event_id, event_type, data, subject, source
+    event = {**attrs, "data": data}
+    return event_id, event_type, data, subject, source, event
 
 
 def _header_str(value: bytes | str | None) -> str:
@@ -156,6 +160,10 @@ def _copy_optional_fields(ctx: KafkaExecutionContext, data: dict, event_id: str)
         value = data.get(key)
         if value is not None:
             ctx[key] = _non_negative_int(value, key, event_id)
+    # A zero time limit means no limit, as in the Slurm adapter. The service
+    # rejects a time limit that is not positive.
+    if ctx.get("time_limit") == 0:
+        del ctx["time_limit"]
 
     failed_nodes = data.get("failed_nodes")
     if failed_nodes:

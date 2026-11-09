@@ -1,11 +1,14 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
+from functools import partial
+
 from attribution_blueprint import mca_registry as _registry
 from attribution_blueprint.connectors.execution_contexts.kafka.connector import (
     KafkaExecutionContext,
     KafkaExecutionContextAdapter,
 )
+from attribution_blueprint.connectors.execution_contexts.kafka.receipts import KafkaReceipt
 from attribution_blueprint.connectors.kafka_client import SECURITY_SCHEMA_KEYS, security_config
 from attribution_blueprint.exceptions import MCAError
 from attribution_blueprint.mca_registry import _PARAM
@@ -50,10 +53,9 @@ def _build(spec: dict, ctx: dict) -> KafkaExecutionContextAdapter:
         from confluent_kafka import Consumer, KafkaException, TopicPartition
     except ImportError as exc:
         raise MCAError("eca.kafka requires the kafka extra: install nvidia-attribution-blueprint[kafka]") from exc
-    consumer = Consumer(config)
     try:
         return KafkaExecutionContextAdapter(
-            consumer=consumer,
+            consumer_factory=partial(Consumer, config),
             consumer_error=KafkaException,
             topic=str(spec["topic"]),
             topic_partition=TopicPartition,
@@ -65,7 +67,6 @@ def _build(spec: dict, ctx: dict) -> KafkaExecutionContextAdapter:
             discovery_timeout_seconds=timeout,
         )
     except ValueError as exc:
-        consumer.close()
         raise MCAError(str(exc)) from exc
 
 
@@ -97,4 +98,4 @@ _registry.register_component(
 )
 
 
-__all__ = ["KafkaExecutionContext", "KafkaExecutionContextAdapter"]
+__all__ = ["KafkaExecutionContext", "KafkaExecutionContextAdapter", "KafkaReceipt"]

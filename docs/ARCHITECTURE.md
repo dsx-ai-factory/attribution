@@ -29,10 +29,12 @@ flowchart TD
         ECASlurm[slurm]
         ECAStatic[static]
         ECAKueue[kueue]
+        ECAKai[kai]
         ECAKafka[kafka]
         ECA --> ECASlurm
         ECA --> ECAStatic
         ECA --> ECAKueue
+        ECA --> ECAKai
         ECA --> ECAKafka
 
         Log[log]
@@ -82,7 +84,11 @@ for durable Pod-to-node placement before post-hoc Kubernetes attribution.
 
 ## End-to-end flow for one workload
 
-1. **Discover.** Execution-context adapters return one or more `ExecutionContext` objects. Slurm queries `sacct`, Kueue queries `kubectl`, Static uses supplied workload metadata, and Kafka reads a bounded batch of completion CloudEvents. Kafka commits offsets per partition before attribution. Only contexts from successfully committed partitions are returned.
+This is the bounded CLI flow. Long-lived applications can instead use the
+[explicit acknowledgement API](https://github.com/dsx-ai-factory/attribution/blob/main/blueprint/docs/kafka_lifecycle.md)
+to keep consuming while processing separately, then acknowledge handled work.
+
+1. **Discover.** Execution-context adapters return one or more `ExecutionContext` objects. Slurm queries `sacct`, Kueue and KAI query Kubernetes APIs, Static uses supplied workload metadata, and Kafka reads a bounded batch of completion CloudEvents. Kafka commits offsets per partition before attribution. Only contexts from successfully committed partitions are returned.
 2. **Collect.** For each context, every configured log and metric collector runs `collect(ctx)` and returns zero or more `Observation` objects. Each `Observation` carries a `Source` enum value (`applog`, `syslog`, `node_metrics`) and an `entry_timeseries` body; the entry shape is in [Observation entry format](https://github.com/dsx-ai-factory/attribution/blob/main/service/service-app/docs/api/observation-format.md).
 3. **Open attributor.** `POST /v2/attributor` creates a per-context handle. On a duplicate-session 409, the connector raises `AttributorConflictError` with the original HTTP error as its cause. The Blueprint preserves the existing session, records that context as `conflicted` in the run statistics and summaries, and continues with other contexts. Retry after the existing session's owner finishes and deletes it.
 4. **Submit observations.** Each `Observation` goes via `POST /v2/attributor/{id}/observation`. Individual failures are logged and skipped. A duplicate-observation 409 counts as delivered. Per-connector delivery outcomes land in `ingestion_reports`.
@@ -117,7 +123,7 @@ The Blueprint's configuration model is patterned on Open MPI's Modular Component
 
 | Framework | Components today | Shape | Sources |
 |---|---|---|---|
-| eca (execution context adapter) | slurm, kueue, static, kafka | component-selector | (none) |
+| eca (execution context adapter) | slurm, kueue, kai, static, kafka | component-selector | (none) |
 | log | loki, victorialogs, local_file, kubectl_logs | per-source component-selector | applog, syslog |
 | metrics | promql | per-source component-selector | node_metrics |
 | output | stdout, sqlite, kafka | per-instance component-selector | (none) |

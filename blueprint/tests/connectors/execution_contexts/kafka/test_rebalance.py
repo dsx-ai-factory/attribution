@@ -33,7 +33,7 @@ class ObservedConsumer:
     def __getattr__(self, name):
         return getattr(self.consumer, name)
 
-    def subscribe(self, topics, *, on_revoke, on_lost):
+    def subscribe(self, topics, *, on_revoke, on_lost, on_assign):
         def revoke(consumer, partitions):
             committed_before = len(self.commits)
             on_revoke(consumer, partitions)
@@ -47,7 +47,7 @@ class ObservedConsumer:
             if self.delivered:
                 self.rebalanced.set()
 
-        self.consumer.subscribe(topics, on_revoke=revoke, on_lost=on_lost)
+        self.consumer.subscribe(topics, on_assign=on_assign, on_revoke=revoke, on_lost=on_lost)
 
     def commit(self, *, offsets, asynchronous):
         result = self.consumer.commit(offsets=offsets, asynchronous=asynchronous)
