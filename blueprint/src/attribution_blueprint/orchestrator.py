@@ -323,7 +323,8 @@ class AttributionOrchestrator:
         # model, that is the same as ranks per node because each rank maps to
         # one GPU. Attribution-service v2 transports this as explicit
         # node-to-ranks entries.
-        ranks_per_node = 4 if self.gpus_per_node is None else self.gpus_per_node
+        inferred = _gpus_per_node_for_context(ctx, self.gpus_per_node)
+        ranks_per_node = 4 if inferred is None else inferred
         if ranks_per_node <= 0:
             raise ValueError(f"gpus_per_node must be positive, got {ranks_per_node}")
         node_to_ranks = {
@@ -393,18 +394,44 @@ def _observation_source(obs: dict) -> str:
     return str(source.value if hasattr(source, "value") else source)
 
 
+def _gpus_per_node_for_context(ctx: dict, fallback: int | None) -> int | None:
+    """Use a positive uniform job allocation, otherwise retain the configured fallback.
+
+    Args:
+        ctx: Execution context with an optional total GPU count and node list.
+        fallback: Configured ranks per node when the allocation is unavailable or uneven.
+
+    Returns:
+        The job's GPUs per node, or the unchanged fallback.
+    """
+    total = ctx.get("gpu_count")
+    nodes = ctx.get("nodes")
+    if (
+        isinstance(total, int)
+        and not isinstance(total, bool)
+        and total > 0
+        and isinstance(nodes, list)
+        and len(nodes) > 0
+    ):
+        per_node, remainder = divmod(total, len(nodes))
+        if remainder == 0:
+            return per_node
+    return fallback
+
+
 def _context_with_workload_gpu_defaults(ctx: dict, gpus_per_node: int | None) -> dict:
     """Add workload GPU metadata to the output context when available.
 
     Args:
         ctx: Execution context discovered by a scheduler adapter.
-        gpus_per_node: Effective workload GPUs-per-node value from config.
+        gpus_per_node: Fallback workload GPUs-per-node value from config.
 
     Returns:
         A shallow context copy for output sinks. Existing scheduler-provided
         values are preserved.
     """
     output_ctx = dict(ctx)
+    gpus_per_node = _gpus_per_node_for_context(ctx, gpus_per_node)
     if gpus_per_node is None:
         return output_ctx
     if "gpus_per_node" not in output_ctx:

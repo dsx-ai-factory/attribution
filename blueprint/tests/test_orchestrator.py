@@ -577,6 +577,53 @@ def test_build_attributor_info_rejects_non_positive_gpus_per_node():
         pipeline._build_attributor_info(ctx)
 
 
+@pytest.mark.parametrize("fallback", [None, 8])
+def test_mixed_gpu_jobs_use_per_context_topology(fallback):
+    """A mixed batch must use each job's allocation for both ranks and output metadata."""
+    contexts = [{**_make_ctx(str(gpus)), "gpu_count": gpus} for gpus in (8, 16)]
+    eca = MagicMock()
+    eca.discover.return_value = contexts
+    attribution = _make_attribution_mock()
+    output = _ListOutput()
+    pipeline = _make_pipeline(eca, [], attribution=attribution, output=output)
+    pipeline.gpus_per_node = fallback
+
+    pipeline.analyze()
+
+    for index, gpus in enumerate((8, 16)):
+        ranks = gpus // 2
+        info = _wire(attribution.create_attributor.call_args_list[index].args[0])
+        assert info["workload"]["nodes"] == {
+            contexts[index]["nodes"][0]: list(range(ranks)),
+            contexts[index]["nodes"][1]: list(range(ranks, gpus)),
+        }
+        assert output.entries[index][0]["gpus_per_node"] == ranks
+        assert output.entries[index][0]["gpu_count"] == gpus
+        assert "gpus_per_node" not in contexts[index]
+    assert pipeline.gpus_per_node == fallback
+
+
+@pytest.mark.parametrize("gpu_count", [None, 0, -2, True, 8.0, "8", 1, 7])
+def test_unusable_gpu_total_keeps_configured_rank_topology(gpu_count):
+    """Missing, invalid, zero, and uneven totals retain the configured rank map."""
+    ctx = {**_make_ctx("fallback"), "gpu_count": gpu_count}
+    pipeline = _make_pipeline(MagicMock(), [])
+    pipeline.gpus_per_node = 8
+
+    nodes = _wire(pipeline._build_attributor_info(ctx))["workload"]["nodes"]
+
+    assert list(nodes.values()) == [list(range(8)), list(range(8, 16))]
+
+
+@pytest.mark.parametrize("nodes", [None, []])
+def test_gpu_total_without_nodes_keeps_fallback(nodes):
+    """An absent node list cannot establish per-node topology."""
+    ctx = {**_make_ctx("no-nodes"), "nodes": nodes, "gpu_count": 8}
+    pipeline = _make_pipeline(MagicMock(), [])
+
+    assert _wire(pipeline._build_attributor_info(ctx))["workload"]["nodes"] == {}
+
+
 def test_outputs_receive_workload_gpu_defaults():
     contexts = [_make_ctx("ctx-gpu")]
     eca = MagicMock()
@@ -600,7 +647,7 @@ def test_outputs_receive_workload_gpu_defaults():
 
 def test_outputs_preserve_scheduler_gpu_count():
     ctx = _make_ctx("ctx-partial")
-    ctx["gpu_count"] = 6
+    ctx["gpu_count"] = 7
     contexts = [ctx]
     eca = MagicMock()
     eca.discover_by_ids.return_value = contexts
@@ -618,7 +665,7 @@ def test_outputs_preserve_scheduler_gpu_count():
 
     output_ctx = output.entries[0][0]
     assert output_ctx["gpus_per_node"] == 8
-    assert output_ctx["gpu_count"] == 6
+    assert output_ctx["gpu_count"] == 7
 
 
 def test_failing_ingest_is_recorded_and_does_not_block_other_observations():
