@@ -499,7 +499,7 @@ contexts_path = "path/to/static-contexts.json"
 | `workload_type`      | No                           | empty string       | Workload type sent unchanged to service v2. The v2 schema accepts any string. Examples include `slurm`, `runai`, and `kueue`; the empty string means unspecified.                                                                                               |
 | `workload_framework` | No                           | none               | Optional framework label, such as `pytorch`.                                                                                                                                                                                                                    |
 | `attempt_id`         | No                           | `0`                | Attempt key used by outputs.                                                                                                                                                                                                                                    |
-| `gpu_count`          | No                           | none               | Optional allocated GPU count used by outputs and the web UI.                                                                                                                                                                                                    |
+| `gpu_count`          | No                           | none               | Optional total allocated GPUs across all `nodes`, used by outputs and the web UI. A total alone does not establish per-node placement. |
 
 
 `state` is an open scheduler string, not a closed enum. Its value can affect
@@ -652,19 +652,26 @@ aws_region = "us-east-2"
 
 This section controls workload shape sent to the attribution service.
 
-When a context supplies a positive integer `gpu_count` that divides evenly by
-its non-empty node list, that job's GPUs per node determines its rank mapping.
+An explicit positive integer `gpus_per_node` in a context (including static JSON
+input) takes precedence for both the service rank mapping and output metadata.
+
+For `scheduler = "runapi"`, a positive integer `gpu_count` that divides evenly by
+the non-empty node list determines that job's GPUs per node when no explicit
+context value is supplied and `history_complete` is not explicitly false.
+This assumes RunAPI jobs supply a complete node list and use a uniform allocation.
 For example, 8 GPUs across 2 nodes gives 4 ranks per node, while 16 GPUs across
 2 nodes gives 8. Mixed jobs can therefore use different mappings in one run.
 
-Otherwise, `workload.gpus_per_node` supplies the fallback (default `4`). In the
+For other schedulers, or an unusable RunAPI total, `workload.gpus_per_node`
+supplies the fallback (default `4`). Aggregate GPU requests alone do not prove
+equal placement across nodes, so Kueue, KAI, and Slurm totals are not averaged. In the
 supported training model, one rank runs on one GPU. Review the fallback before
 deploying, especially for contexts with missing, zero, or uneven GPU counts.
 
 
 | Field           | Required | Default | Meaning                                                                                                                                                                                                                                                                                                                                     |
 | --------------- | -------- | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `gpus_per_node` | No       | `4`     | Fallback GPUs per node (ranks per node) when the context does not provide a positive, uniformly divisible GPU count. |
+| `gpus_per_node` | No       | `4`     | Fallback GPUs per node (ranks per node) when neither explicit context topology nor a usable uniform RunAPI allocation is available. |
 
 
 Example:
