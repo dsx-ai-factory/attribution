@@ -91,14 +91,14 @@ class BodyFallbacks:
     - `parse_timestamp` only: the timestamp is read from the body if possible, else untimed
     - both: the timestamp is read from the body, else the entry is dropped
 
-    `year_fallback` only matters for year-less formats (`[E1231 23:57:09 ...]`): its year is used,
-    and a parsed date more than half a year after it rolls back a year. None (job end unknown)
+    `job_span` (job start, job end) only matters for year-less formats (`[E1231 23:57:09 ...]`):
+    a parsed date gets the year that puts it inside the job, or closest to it. None (no job)
     means current year.
     """
 
     parse_node: bool = False
     parse_timestamp: bool = False
-    year_fallback: Optional[datetime] = None
+    job_span: Optional[tuple[datetime, datetime]] = None
     require_node: bool = False
     require_timestamp: bool = False
 
@@ -160,39 +160,40 @@ class EntrySourceBase(ABC, Generic[E, T_co]):
     def make_line_base(self, pos: int, line: E) -> T_co: ...
 
 
-_YEAR_ROLLBACK_AFTER_JOB_END = timedelta(days=182)
-
-
-def _in_job_year(timestamp: datetime, timezone: Optional[ZoneInfo], job_end_time: Optional[datetime]) -> datetime:
-    """Give a log timestamp that has no year the year of the job end.
+def _in_job_year(
+    timestamp: datetime, timezone: Optional[ZoneInfo], job_span: Optional[tuple[datetime, datetime]]
+) -> datetime:
+    """Give a log timestamp that has no year the year that puts it in the job.
 
     Args:
         timestamp: Naive timestamp parsed from the log, with any year.
         timezone: Timezone of the log clock.
-        job_end_time: Job end time. None means the current year.
+        job_span: Job start and job end. None means no job, and the current year is used.
 
     Returns:
-        The timestamp in the year that puts it within half a year of the job end
-        on the log clock.
+        The timestamp in the year that puts it inside the job, or closest to it.
+        A teardown line logged on January 1 after a December 31 job end gets the next year.
+
+    Raises:
+        ValueError: The date is February 29 and no candidate year is a leap year.
     """
-    if job_end_time is None:
+    if job_span is None:
         return timestamp.replace(year=datetime.now().year, tzinfo=timezone)
+    start, end = job_span
     # A job that ends on New Year's Eve in one timezone can end on New Year's Day in another.
-    end_year = job_end_time.astimezone(timezone).year if timezone is not None else job_end_time.year
-    dt = timestamp.replace(year=end_year, tzinfo=timezone)
-    # A date far after the end was logged in the year before the job end, such
-    # as a December line of a job that ended in January. A date far before the
-    # end was logged in the next year, such as a January teardown line of a job
-    # that ended on December 31.
-    if dt - job_end_time > _YEAR_ROLLBACK_AFTER_JOB_END:
-        dt = dt.replace(year=end_year - 1)
-    elif job_end_time - dt > _YEAR_ROLLBACK_AFTER_JOB_END:
-        dt = dt.replace(year=end_year + 1)
-    return dt
+    end_year = end.astimezone(timezone).year if timezone is not None else end.year
+    candidates = []
+    for year in (end_year - 1, end_year, end_year + 1):
+        try:
+            candidates.append(timestamp.replace(year=year, tzinfo=timezone))
+        except ValueError:
+            pass  # February 29 exists only in leap years.
+    # Distance from the job: zero inside it, else the gap to the nearer end.
+    return min(candidates, key=lambda dt: max(start - dt, dt - end, timedelta(0)))
 
 
 def _extract_timestamp_from_pytorch_format(
-    line: str, timezone: Optional[ZoneInfo] = None, job_end_time: Optional[datetime] = None
+    line: str, timezone: Optional[ZoneInfo] = None, job_span: Optional[tuple[datetime, datetime]] = None
 ) -> Optional[datetime]:
     # Pattern 1: PyTorch error log format [EMMDD HH:MM:SS.nnnnnnnnn ...]
     # Example: [E1214 06:59:25.800744155 ProcessGroupNCCL.cpp:1923] (Dec 14)
@@ -201,12 +202,12 @@ def _extract_timestamp_from_pytorch_format(
     match = re.search(pytorch_pattern, line)
     if match:
         # 2000 is a leap year, so February 29 parses before the real year is set.
-        return _in_job_year(datetime(2000, *map(int, match.groups()[:5])), timezone, job_end_time)
+        return _in_job_year(datetime(2000, *map(int, match.groups()[:5])), timezone, job_span)
     return None
 
 
 def _extract_timestamp_from_slurmstepd_format(
-    line: str, timezone: Optional[ZoneInfo] = None, job_end_time: Optional[datetime] = None
+    line: str, timezone: Optional[ZoneInfo] = None, job_span: Optional[tuple[datetime, datetime]] = None
 ) -> Optional[datetime]:
     """Extract the timestamp that slurmstepd writes to the step log.
 
@@ -216,7 +217,7 @@ def _extract_timestamp_from_slurmstepd_format(
     Args:
         line: The log line to parse.
         timezone: Timezone of the timestamp.
-        job_end_time: Job end time, used to infer the year.
+        job_span: Job start and job end, used to infer the year.
 
     Returns:
         The timestamp, or None when the line has no slurmstepd timestamp.
@@ -233,7 +234,7 @@ def _extract_timestamp_from_slurmstepd_format(
         # ".600    299314" is 600 us. More than six digits can only be a decimal
         # fraction, so keep its first six digits.
         timestamp = timestamp.replace(microsecond=int(digits[:6]))
-    return _in_job_year(timestamp, timezone, job_end_time)
+    return _in_job_year(timestamp, timezone, job_span)
 
 
 def _extract_timestamp_from_iso_format(line: str, timezone: Optional[ZoneInfo] = None) -> Optional[datetime]:
@@ -254,7 +255,7 @@ def _extract_timestamp_from_iso_format(line: str, timezone: Optional[ZoneInfo] =
 
 
 def _extract_timestamp_from_log_line(
-    line: str, timezone: Optional[ZoneInfo] = None, job_end_time: Optional[datetime] = None
+    line: str, timezone: Optional[ZoneInfo] = None, job_span: Optional[tuple[datetime, datetime]] = None
 ) -> Optional[datetime]:
     """
     Extract timestamp from various log line formats.
@@ -267,19 +268,19 @@ def _extract_timestamp_from_log_line(
     Args:
         line: The log line to parse
         timezone: Optional timezone for the timestamp
-        job_end_time: Optional job end time (e.g., job end time) to infer year for formats
-                       that don't include year (like PyTorch format)
+        job_span: Optional job start and job end, to infer the year for formats
+                  that don't include year (like PyTorch format)
 
     Returns None gracefully if no timestamp pattern matches.
     """
     try:
-        if timestamp := _extract_timestamp_from_pytorch_format(line, timezone, job_end_time):
+        if timestamp := _extract_timestamp_from_pytorch_format(line, timezone, job_span):
             return timestamp
 
         if timestamp := _extract_timestamp_from_iso_format(line, timezone):
             return timestamp
 
-        if timestamp := _extract_timestamp_from_slurmstepd_format(line, timezone, job_end_time):
+        if timestamp := _extract_timestamp_from_slurmstepd_format(line, timezone, job_span):
             return timestamp
     except (ValueError, IndexError):
         # Gracefully handle any parsing errors
@@ -401,7 +402,7 @@ class TimeseriesEntryObj(EntryBase):
         if self._ts is None:
             if self._body_fallbacks.parse_timestamp:
                 return _extract_timestamp_from_log_line(
-                    self._body, timezone=self._context.timezone, job_end_time=self._body_fallbacks.year_fallback
+                    self._body, timezone=self._context.timezone, job_span=self._body_fallbacks.job_span
                 )
             return None
         # `ts` represents "entry occurred no later than this time". A datetime holds microseconds
