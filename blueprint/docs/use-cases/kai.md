@@ -4,6 +4,29 @@ The KAI execution-context adapter discovers PodGroups owned by Kubernetes
 `Job` or `JobSet` resources. It validates owner UIDs, joins member Pods, and
 uses the owner lifecycle to report completion, failure, timeout, and end time.
 
+## Prerequisites
+
+The Kubernetes identity used by the Blueprint needs `get` and `list` access to
+KAI PodGroups and Pods, `get` access to Jobs, and, for JobSets, `get` access to
+JobSets plus `list` access to their Jobs. Confirm the PodGroup CRD and access:
+
+```bash
+kubectl get crd podgroups.scheduling.run.ai \
+  -o jsonpath='{.spec.versions[?(@.served==true)].name}{"\n"}'
+kubectl auth can-i get podgroups.scheduling.run.ai -n team-a
+kubectl auth can-i list podgroups.scheduling.run.ai -n team-a
+kubectl auth can-i list pods -n team-a
+kubectl auth can-i get jobs.batch -n team-a
+# JobSet-owned PodGroups only:
+kubectl auth can-i get jobsets.jobset.x-k8s.io -n team-a
+kubectl auth can-i list jobs.batch -n team-a
+```
+
+Use the served PodGroup version for
+`integrations.kai.podGroupVersion` when deploying `kubernetes-daemon`.
+
+## Configure and run
+
 Configure the adapter with:
 
 ```toml
@@ -18,6 +41,12 @@ context = "CHANGE_ME_CONTEXT"
 
 Use `<namespace>/<podgroup-name>` for ID discovery. Time-range discovery
 requires `eca.kai.namespace`.
+
+```bash
+uv run --project blueprint --frozen nvidia-attribution-blueprint \
+  --config ./attribution-blueprint.toml \
+  --connector eca kai ids "team-a/podgroup-a"
+```
 
 ## Recover Pod placement after deletion
 
@@ -68,9 +97,10 @@ defines retention and recovery limits.
 - `PREEMPTED`, `EVICTED`, and `REQUEUED` are not detected yet.
 - A context represents the lifetime of one PodGroup incarnation, not an
   individual scheduling attempt.
+- Hierarchical PodGroups are emitted with `podgroup_shape = "hierarchical"`;
+  subgroup-specific attempt semantics are not inferred.
 
-The owning Job or JobSet must still exist when discovery runs. KAI PodGroups
-do not retain authoritative completion state or end time, so the adapter skips
-a PodGroup after its owner is deleted even if Pods or placement evidence
-remain. Run attribution within the owner-retention window. Retaining owner
-lifecycle metadata for later historical attribution is planned follow-up work.
+The PodGroup and its owning Job or JobSet must still exist when discovery
+runs. The KAI adapter uses daemon evidence for placement recovery, not
+discovery of deleted PodGroups. Run attribution within both resources'
+retention windows.
