@@ -114,6 +114,10 @@ The blueprint assumes one training rank per GPU and uses this value to build the
 rank-to-node mapping sent to the Attribution Service. Omitting it silently uses
 the default of four GPUs per node.
 
+Kueue's aggregate GPU request does not establish equal placement across nodes,
+so the Blueprint does not infer per-node ranks by dividing that total. An
+explicit `gpus_per_node` in an execution context overrides the configured value.
+
 If node syslogs are unavailable, remove the complete `[log.syslog]`,
 `[log.syslog.loki]`, and `[log.syslog.loki.auth]` sections. Pod-log attribution
 can still run, but hardware diagnoses that depend on kernel logs, including

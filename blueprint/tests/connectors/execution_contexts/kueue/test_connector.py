@@ -17,6 +17,7 @@ from attribution_blueprint.connectors.execution_contexts.kueue.attempts import (
 from attribution_blueprint.kubernetes.client import (
     KubernetesClientError,
 )
+from attribution_blueprint.orchestrator import AttributionOrchestrator
 
 FIXTURES = Path(__file__).parent.parent.parent.parent / "fixtures"
 WORKLOADS = json.loads((FIXTURES / "kueue_workloads.json").read_text())
@@ -464,6 +465,31 @@ def test_discover_by_ids_carries_kueue_gpu_count(mocker):
     contexts = KueueExecutionContextAdapter().discover_by_ids(["team-alpha/job-train-mnist-abc12"])
 
     assert contexts[0]["gpu_count"] == 6
+
+
+def test_unequal_pod_set_gpu_requests_keep_configured_rank_topology(mocker):
+    """A GPU pod and a CPU pod on distinct nodes must not turn four GPUs into two per node."""
+    workloads = deepcopy(WORKLOADS)
+    pod_sets = workloads["items"][0]["spec"]["podSets"]
+    pod_sets[0]["template"]["spec"]["containers"][0]["resources"] = {"requests": {"nvidia.com/gpu": 4}}
+    cpu_set = deepcopy(pod_sets[0])
+    cpu_set["name"] = "cpu"
+    cpu_set["template"]["spec"]["containers"][0].pop("resources")
+    pod_sets.append(cpu_set)
+    pods = deepcopy(PODS)
+    cpu_pod = deepcopy(pods["items"][0])
+    cpu_pod["metadata"].update(name="train-mnist-cpu", uid="pod-train-mnist-cpu")
+    cpu_pod["spec"]["nodeName"] = "node006"
+    pods["items"].append(cpu_pod)
+    _wire_kubectl(mocker, workloads_payload=workloads, pods_payload=pods)
+    context = KueueExecutionContextAdapter().discover_by_ids(["team-alpha/job-train-mnist-abc12"])[0]
+    orchestrator = AttributionOrchestrator([], [], [], None, [], gpus_per_node=4)
+
+    info = orchestrator._build_attributor_info(context)
+
+    assert context["gpu_count"] == 4
+    assert context["nodes"] == ["node005", "node006"]
+    assert info.workload.nodes == {"node005": list(range(4)), "node006": list(range(4, 8))}
 
 
 def test_discover_by_ids_carries_zero_gpu_count_for_cpu_only_kueue_workload(mocker):
