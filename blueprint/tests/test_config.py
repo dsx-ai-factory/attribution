@@ -289,6 +289,25 @@ def test_loki_health_check_without_queries_is_a_config_error(monkeypatch, tmp_pa
         load_config(p)
 
 
+def test_loki_empty_queries_still_override_bundled_templates(monkeypatch, tmp_path):
+    """For a source with bundled templates, `queries = []` keeps meaning "run no query".
+
+    Only HEALTH_CHECK, which has no bundled set, treats an empty list as an error.
+    """
+    monkeypatch.setenv("ATTRIBUTION_TEST_TOKEN", "x")
+    p = tmp_path / "c.toml"
+    p.write_text(
+        '[attribution]\nservice_url = "http://x"\n'
+        '[eca]\ncomponent = "slurm"\n'
+        '[output.console]\ncomponent = "stdout"\n'
+        '[log.syslog]\ncomponent = "loki"\n'
+        '[log.syslog.loki]\nendpoint = "https://loki.example"\nqueries = []\n'
+        '[log.syslog.loki.auth]\ntype = "token"\ntoken_env = "ATTRIBUTION_TEST_TOKEN"\n'
+    )
+    cfg = load_config(p)
+    assert cfg.log_connectors[0]._templates == []
+
+
 def test_loki_unset_token_env_raises_mca_error(monkeypatch, tmp_path):
     """Unset token_env surfaces as MCAError so the CLI's parser.error path
     produces a clean usage message and exit code 2, rather than a Python

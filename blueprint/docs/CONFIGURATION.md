@@ -1031,7 +1031,15 @@ type = "token"
 token_env = "LOKI_TOKEN"
 ```
 
-With `local_file`, each line must carry its own syslog timestamp; the service drops an undated `HEALTH_CHECK` entry.
+With `local_file`, the layout is the same as [Local File SYSLOG](#local-file-syslog): each configured path is a base directory with one child directory per execution-context node, and every entry is tagged with that directory's node. The service can read a hostname only out of an RFC 3164 line, so this keeps ISO 8601 and RFC 5424 lines. Each line must carry its own timestamp; the service drops an undated `HEALTH_CHECK` entry.
+
+```toml
+[log.health_check]
+component = "local_file"
+
+[log.health_check.local_file]
+paths = ["/path/to/health-check"]   # reads /path/to/health-check/<node>/*
+```
 
 ### Kubectl Pod Logs
 

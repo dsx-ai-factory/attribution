@@ -50,6 +50,7 @@ HEALTH_CHECK_GRACE = timedelta(minutes=10)
 
 
 def _health_check_window(context: ExecutionContext) -> TimeInterval:
+    """The context interval extended by `HEALTH_CHECK_GRACE` past its end."""
     return TimeInterval(start=context["start_time"], end=context["end_time"] + HEALTH_CHECK_GRACE)
 
 
