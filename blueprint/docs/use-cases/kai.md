@@ -4,6 +4,9 @@ The KAI execution-context adapter discovers PodGroups owned by Kubernetes
 `Job` or `JobSet` resources. It validates owner UIDs, joins member Pods, and
 uses the owner lifecycle to report completion, failure, timeout, and end time.
 
+To run the Blueprint inside the cluster instead of from an operator host, see
+[Run the Blueprint in a cluster](./in-cluster.md).
+
 ## Prerequisites
 
 The Kubernetes identity used by the Blueprint needs `get` and `list` access to
