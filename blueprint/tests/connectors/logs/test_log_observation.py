@@ -21,7 +21,9 @@ def test_entry_format_is_explicit_and_accepted_by_both_service_models(source):
 
     assert obs["context"]["format"] == "entry_timeseries"
     assert ObservationV1.model_validate(obs).to_dict()["context"]["format"] == "entry_timeseries"
-    assert ObservationV2.model_validate(obs).body == obs["body"]
+    v2_wire = ObservationV2.model_validate(obs).to_dict()
+    assert v2_wire["body"] == obs["body"]
+    assert "format" not in v2_wire["context"]
 
 
 def test_applog_defaults_to_unbounded_interval():
