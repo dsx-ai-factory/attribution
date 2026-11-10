@@ -16,6 +16,8 @@ from nvidia_attribution_client import (
     ObservationV2,
 )
 
+from attribution_blueprint.telemetry import track
+
 # Set to "slightly larger than a multiple of 3" as per
 # https://requests.readthedocs.io/en/latest/user/advanced/#timeouts
 _CONNECT_TIMEOUT_SECONDS = 3.05
@@ -58,6 +60,22 @@ class AttributionConnector:
         configuration = Configuration(host=self.service_url, retries=3)
         self._api = DefaultApi(ApiClient(configuration))
 
+    def _call(self, operation, api_method, *args):
+        """Measure a service call and return its decoded data.
+
+        Args:
+            operation: Fixed client method name for metrics.
+            api_method: Generated method that returns HTTP response details.
+            *args: Arguments for the generated method.
+
+        Returns:
+            The decoded response data.
+        """
+        with track("attribution_service", operation) as call:
+            response = api_method(*args, _request_timeout=self._request_timeout)
+            call.response_bytes = len(response.raw_data or b"")
+            return response.data
+
     def create_attributor(self, info: AttributorInfoV2) -> str:
         """POST /v2/attributor. Return a newly created attributor's id.
 
@@ -66,7 +84,9 @@ class AttributionConnector:
         chaining the original service error. Other service errors propagate.
         """
         try:
-            response = self._api.new_attribution_v2_attributor_post(info, _request_timeout=self._request_timeout)
+            response = self._call(
+                "create_attributor", self._api.new_attribution_v2_attributor_post_with_http_info, info
+            )
         except ApiException as e:
             if e.status == HTTPStatus.CONFLICT and isinstance(e.data, DuplicateAttributorError):
                 raise AttributorConflictError(e.data.att_id) from e
@@ -80,8 +100,11 @@ class AttributionConnector:
             ObservationConflictError: The service rejected the POST as a duplicate (HTTP 409).
         """
         try:
-            response = self._api.ingest_v2_attributor_att_id_observation_post(
-                attributor_id, observation, _request_timeout=self._request_timeout
+            response = self._call(
+                "ingest_observation",
+                self._api.ingest_v2_attributor_att_id_observation_post_with_http_info,
+                attributor_id,
+                observation,
             )
         except ApiException as e:
             if e.status == HTTPStatus.CONFLICT and isinstance(e.data, DuplicateObservationError):
@@ -92,8 +115,8 @@ class AttributionConnector:
 
     def get_attribution(self, attributor_id: str) -> dict:
         """GET /v2/attributor/{attributor_id}/attribution. Returns response JSON."""
-        response = self._api.attribute_v2_attributor_att_id_attribution_get(
-            attributor_id, _request_timeout=self._request_timeout
+        response = self._call(
+            "get_attribution", self._api.attribute_v2_attributor_att_id_attribution_get_with_http_info, attributor_id
         )
         # to_dict() would leave datetimes, which aren't JSON-serializable.
         return json.loads(response.to_json())
@@ -102,8 +125,10 @@ class AttributionConnector:
         """DELETE /v2/attributor/{attributor_id}. 404 is silently tolerated: the
         server's 24h TTL can expire an attributor before cleanup runs."""
         try:
-            self._api.delete_attribution_v2_attributor_att_id_delete(
-                attributor_id, _request_timeout=self._request_timeout
+            self._call(
+                "delete_attributor",
+                self._api.delete_attribution_v2_attributor_att_id_delete_with_http_info,
+                attributor_id,
             )
         except ApiException as e:
             if e.status != HTTPStatus.NOT_FOUND:
