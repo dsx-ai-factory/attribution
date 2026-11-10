@@ -1,0 +1,38 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+# A complete Blueprint configuration for examples/user-provided-toml.yaml. The
+# Service URL and the results database path must match the chart: the bundled
+# Service is at http://127.0.0.1:8000 and the dashboard reads
+# /data/attributions.db (dashboard.databasePath).
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: attribution-blueprint
+data:
+  blueprint.toml: |
+    [attribution]
+    service_url = "http://127.0.0.1:8000"
+    timeout_seconds = 60
+
+    [workload]
+    gpus_per_node = 8
+
+    [eca]
+    component = "kueue"
+
+    [eca.kueue]
+    timeout_seconds = 60
+
+    [log.applog]
+    component = "kubectl_logs"
+
+    [log.applog.kubectl_logs]
+    timestamps = false
+    since_context_start = true
+
+    [output.db]
+    component = "sqlite"
+
+    [output.db.sqlite]
+    path = "/data/attributions.db"

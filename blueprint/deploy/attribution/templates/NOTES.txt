@@ -1,0 +1,18 @@
+NVIDIA Attribution is deployed to {{ .Release.Namespace }}:
+{{- if .Values.service.enabled }} service{{ if .Values.service.api.enabled }} (API exposed as {{ include "attribution.fullname" . }}-api:{{ .Values.service.port }}){{ end }}{{ end }}
+{{- if .Values.runner.enabled }} runner{{ end }}
+{{- if .Values.dashboard.enabled }} dashboard{{ end }}.
+{{- if .Values.dashboard.enabled }}
+
+Open the dashboard without an Ingress:
+
+  kubectl -n {{ .Release.Namespace }} port-forward statefulset/{{ include "attribution.fullname" . }} {{ .Values.dashboard.port }}:{{ .Values.dashboard.port }}
+{{- end }}
+{{- if .Values.runner.enabled }}
+
+See what the runner is doing:
+
+  kubectl -n {{ .Release.Namespace }} logs statefulset/{{ include "attribution.fullname" . }} -c runner
+
+The runner attributes workloads in {{ join ", " .Values.namespaces }} every {{ .Values.runner.intervalSeconds | int64 }}s, over a window that ends {{ .Values.runner.settleSeconds | int64 }}s before the pass starts.
+{{- end }}
