@@ -566,7 +566,7 @@ The event `data` object uses ExecutionContext field names: `id`, `start_time`,
 is absent or empty; otherwise, the lexicographically first entry in
 `failed_nodes` supplies `failed_node`. A `time_limit` of 0 means no limit, and
 the context omits it. Optional `gpus_per_node` must be a positive integer and
-overrides inferred or configured rank topology; booleans, floats, and strings
+overrides the configured rank topology; booleans, floats, and strings
 are rejected. `gpu_count` remains the job's total allocated GPU count.
 CloudEvent `subject`, when it is a non-empty string, is retained as
 `event_subject`; any other value is ignored without skipping the event. `cluster`
