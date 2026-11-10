@@ -657,26 +657,21 @@ This section controls workload shape sent to the attribution service.
 An explicit positive integer `gpus_per_node` in a context (including static JSON
 input) takes precedence for both the service rank mapping and output metadata.
 
-For `scheduler = "runapi"`, a positive integer `gpu_count` that divides evenly by
-the non-empty node list determines that job's GPUs per node when no explicit
-context value is supplied. Every listed `pod_names` entry must have a `pod_nodes`
-placement, and the current placement nodes must match the unique `nodes` list.
-Missing placements or historical-only nodes use the configured fallback.
-This still assumes RunAPI jobs use a uniform allocation; `history_complete`
-describes scheduler-history coverage and does not control this calculation.
-For example, 8 GPUs across 2 nodes gives 4 ranks per node, while 16 GPUs across
-2 nodes gives 8. Mixed jobs can therefore use different mappings in one run.
+Without an explicit context value, `workload.gpus_per_node` supplies the
+fallback (default `4`). GPU totals are preserved but are not divided by the
+node count: pod placements can include CPU-only pods or historical nodes.
+Neither placement coverage nor `history_complete` establishes GPU allocation.
 
-For other schedulers, or an unusable RunAPI total, `workload.gpus_per_node`
-supplies the fallback (default `4`). Aggregate GPU requests alone do not prove
-equal placement across nodes, so Kueue, KAI, and Slurm totals are not averaged. In the
-supported training model, one rank runs on one GPU. Review the fallback before
-deploying, especially for contexts with missing, zero, or uneven GPU counts.
+This uniform rank model assumes one rank per GPU on every listed node. Review
+both the node list and the per-node value before deploying. Mixed GPU/CPU node
+layouts require allocation-aware topology support; the fallback does not model
+them. Automatic RunAPI topology detection requires additional allocation data.
+
 
 
 | Field           | Required | Default | Meaning                                                                                                                                                                                                                                                                                                                                     |
 | --------------- | -------- | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `gpus_per_node` | No       | `4`     | Fallback GPUs per node (ranks per node) when neither explicit context topology nor a usable uniform RunAPI allocation is available. |
+| `gpus_per_node` | No       | `4`     | Fallback GPUs per node (ranks per node) when no explicit context topology is supplied. |
 
 
 Example:

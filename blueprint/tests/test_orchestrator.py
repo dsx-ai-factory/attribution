@@ -579,11 +579,11 @@ def test_build_attributor_info_rejects_non_positive_gpus_per_node():
 
 @pytest.mark.parametrize("fallback", [None, 8])
 def test_mixed_gpu_jobs_use_per_context_topology(fallback):
-    """A mixed batch must use each job's allocation for both ranks and output metadata."""
-    contexts = [{**_make_ctx(str(gpus)), "scheduler": "runapi", "gpu_count": gpus} for gpus in (8, 16)]
-    for ctx in contexts:
-        ctx["pod_names"] = ["worker-0", "worker-1"]
-        ctx["pod_nodes"] = dict(zip(ctx["pod_names"], ctx["nodes"]))
+    """A mixed batch must use explicit topology for both ranks and output metadata."""
+    contexts = [
+        {**_make_ctx(str(gpus)), "scheduler": "runapi", "gpu_count": gpus, "gpus_per_node": gpus // 2}
+        for gpus in (8, 16)
+    ]
     eca = MagicMock()
     eca.discover.return_value = contexts
     attribution = _make_attribution_mock()
@@ -602,13 +602,13 @@ def test_mixed_gpu_jobs_use_per_context_topology(fallback):
         }
         assert output.entries[index][0]["gpus_per_node"] == ranks
         assert output.entries[index][0]["gpu_count"] == gpus
-        assert "gpus_per_node" not in contexts[index]
+        assert contexts[index]["gpus_per_node"] == ranks
     assert pipeline.gpus_per_node == fallback
 
 
-@pytest.mark.parametrize("gpu_count", [None, 0, -2, True, 8.0, "8", 1, 7])
-def test_unusable_gpu_total_keeps_configured_rank_topology(gpu_count):
-    """Missing, invalid, zero, and uneven totals retain the configured rank map."""
+@pytest.mark.parametrize("gpu_count", [None, 0, -2, True, 8.0, "8", 1, 7, 4, 8, 16])
+def test_gpu_total_does_not_override_configured_rank_topology(gpu_count):
+    """An aggregate total and complete placements do not prove uniform allocation."""
     ctx = {**_make_ctx("fallback"), "scheduler": "runapi", "gpu_count": gpu_count}
     ctx["pod_names"] = ["worker-0", "worker-1"]
     ctx["pod_nodes"] = dict(zip(ctx["pod_names"], ctx["nodes"]))
@@ -671,40 +671,31 @@ def test_invalid_explicit_gpu_topology_is_rejected(per_node):
         pipeline._build_attributor_info({**_make_ctx("invalid"), "gpus_per_node": per_node})
 
 
-@pytest.mark.parametrize(
-    ("placements", "expected"),
-    [
-        (None, 4),
-        ({}, 4),
-        ({"worker-0": "node-partial-1"}, 4),
-        ({"worker-0": "node-partial-2", "worker-1": "node-partial-2"}, 4),
-        ({"worker-0": "node-partial-1", "worker-1": "node-partial-2"}, 8),
-    ],
-)
-def test_runapi_placement_coverage_controls_inference(placements, expected):
-    """Missing or moved pods use fallback; history coverage does not determine topology."""
+def test_runapi_pod_coverage_does_not_establish_gpu_allocation():
+    """A CPU helper's placement must not trigger averaging or change history metadata."""
     ctx = {
-        **_make_ctx("partial"),
+        **_make_ctx("mixed"),
         "scheduler": "runapi",
-        "gpu_count": 16,
+        "gpu_count": 4,
         "history_complete": False,
-        "pod_names": ["worker-0", "worker-1"],
-        "pod_nodes": placements,
+        "pod_names": ["gpu-worker", "cpu-helper"],
+        "pod_nodes": {"gpu-worker": "node-mixed-1", "cpu-helper": "node-mixed-2"},
     }
     eca = MagicMock()
     eca.discover.return_value = [ctx]
     attribution = _make_attribution_mock()
     output = _ListOutput()
     pipeline = _make_pipeline(eca, [], attribution=attribution, output=output)
-    pipeline.gpus_per_node = 4
+    pipeline.gpus_per_node = 7
 
     pipeline.analyze()
 
     info = _wire(attribution.create_attributor.call_args.args[0])
-    assert list(info["workload"]["nodes"].values()) == [list(range(expected)), list(range(expected, 2 * expected))]
-    assert output.entries[0][0]["gpus_per_node"] == expected
+    assert list(info["workload"]["nodes"].values()) == [list(range(7)), list(range(7, 14))]
+    assert output.entries[0][0]["gpus_per_node"] == 7
+    assert output.entries[0][0]["gpu_count"] == 4
     assert output.entries[0][0]["history_complete"] is False
-    assert ctx["history_complete"] is False
+    assert "gpus_per_node" not in ctx
 
 
 def test_outputs_receive_workload_gpu_defaults():

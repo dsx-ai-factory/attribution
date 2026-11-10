@@ -246,7 +246,7 @@ def test_kafka_topology_reaches_service_and_output(mocker, binary, per_node, mov
 
     pipeline.analyze()
 
-    expected = (7 if moved else 8) if per_node is None else per_node
+    expected = 7 if per_node is None else per_node
     info = attribution.create_attributor.call_args.args[0]
     assert list(info.workload.nodes.values()) == [list(range(expected)), list(range(expected, expected * 2))]
     context = output.write.call_args.args[0]
