@@ -446,8 +446,58 @@ def test_attribution_create_response_size(reader, mocker):
     assert size.attributes == {"connector": "attribution_service", "operation": "create_attributor"}
 
 
-def test_kubernetes_timeout_without_reading_response_body(reader, mocker):
-    """Retain timeouts and request metrics without reading response bodies.
+def test_kubernetes_response_size(reader, mocker):
+    """Measure bytes for a DynamicClient request that does not stream.
+
+    Args:
+        reader: Metric reader for this process.
+        mocker: Pytest mock helper.
+    """
+    from attribution_blueprint.kubernetes.client import _set_default_request_timeout
+
+    response = mocker.Mock(data=b"body")
+    client = SimpleNamespace(call_api=mocker.Mock(return_value=response))
+    _set_default_request_timeout(client, 15)
+    assert (
+        client.call_api("/api/v1/pods", "GET", {}, [("labelSelector", "a=b")], {}, _preload_content=False) is response
+    )
+    (size,) = [
+        point for point in points(reader, "kubernetes", "response.size") if point.attributes["operation"] == "GET"
+    ]
+    assert size.value == 4
+    assert size.attributes == {"connector": "kubernetes", "operation": "GET"}
+
+
+@pytest.mark.parametrize("query_params", [[("watch", True)], [("follow", True)]])
+@pytest.mark.parametrize("keyword", [False, True])
+def test_kubernetes_stream_without_reading_response_body(reader, mocker, query_params, keyword):
+    """Leave watch and log-follow response bodies unread.
+
+    Args:
+        reader: Metric reader for this process.
+        mocker: Pytest mock helper.
+        query_params: Query parameters that identify a stream.
+        keyword: Whether to pass query parameters by keyword.
+    """
+    from attribution_blueprint.kubernetes.client import _set_default_request_timeout
+
+    response = mocker.Mock()
+    type(response).data = mocker.PropertyMock(side_effect=AssertionError("Response body must not be read"))
+    client = SimpleNamespace(call_api=mocker.Mock(return_value=response))
+    _set_default_request_timeout(client, 15)
+    method = f"STREAM_{query_params[0][0]}_{keyword}"
+    if keyword is True:
+        result = client.call_api("/api/v1/pods", method, query_params=query_params, _preload_content=False)
+    else:
+        result = client.call_api("/api/v1/pods", method, {}, query_params, {}, _preload_content=False)
+    assert result is response
+    assert [
+        point for point in points(reader, "kubernetes", "response.size") if point.attributes["operation"] == method
+    ] == []
+
+
+def test_kubernetes_timeout_without_reading_preloaded_response(reader, mocker):
+    """Retain timeouts and method forms without reading preloaded responses.
 
     Args:
         reader: Metric reader for this process.
@@ -465,8 +515,9 @@ def test_kubernetes_timeout_without_reading_response_body(reader, mocker):
     _set_default_request_timeout(client, 15)
     assert client.call_api("/apis", "GET", _request_timeout=None) is response
     transport.assert_called_once_with("/apis", "GET", _request_timeout=15)
-    assert points(reader, "kubernetes", "response.size") == []
-    assert client.call_api(resource_path="/apis", method="POST", _preload_content=False, _request_timeout=3) is response
-    transport.assert_called_with(resource_path="/apis", method="POST", _preload_content=False, _request_timeout=3)
-    assert points(reader, "kubernetes", "response.size") == []
+    assert client.call_api(resource_path="/apis", method="POST", _preload_content=True, _request_timeout=3) is response
+    transport.assert_called_with(resource_path="/apis", method="POST", _preload_content=True, _request_timeout=3)
+    assert [
+        point for point in points(reader, "kubernetes", "response.size") if point.attributes["operation"] == "POST"
+    ] == []
     assert any(point.attributes["operation"] == "POST" for point in points(reader, "kubernetes", "requests"))

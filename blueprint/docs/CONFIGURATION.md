@@ -1203,7 +1203,7 @@ uppercase HTTP method, so resource IDs do not become labels.
 Response size measures the decoded body, not compressed bytes on the wire.
 Command calls measure encoded stdout. Streamed HTTP responses omit size.
 Kafka output records no response size.
-The Kubernetes API records no response size, so metrics never read a body that the Kubernetes client may stream.
+Kubernetes watch and log-follow calls record no response size, because their bodies are streams that the metrics must not read.
 The Kafka input consumer is not measured.
 The `kubernetes-daemon` watch process is not measured because its watch streams are long-lived.
 
