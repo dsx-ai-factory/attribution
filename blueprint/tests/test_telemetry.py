@@ -297,6 +297,46 @@ with urlopen(f"http://127.0.0.1:{port}/metrics", timeout=5) as response:
     assert 'error_type="ValueError"' in result.stdout
 
 
+def test_prometheus_endpoint_bind_error(mocker):
+    """Report the address without setting a provider when the server cannot bind.
+
+    Args:
+        mocker: Pytest mock helper.
+
+    Returns:
+        None.
+    """
+    pytest.importorskip("opentelemetry.exporter.prometheus")
+    error = OSError(98, "Address already in use")
+    mocker.patch("prometheus_client.start_http_server", side_effect=error)
+    set_provider = mocker.patch.object(metrics, "set_meter_provider")
+    with pytest.raises(RuntimeError, match=r"127\.0\.0\.1:9464.*Address already in use") as raised:
+        telemetry.enable_prometheus_endpoint("127.0.0.1", 9464)
+    assert raised.value.__cause__ is error
+    set_provider.assert_not_called()
+
+
+def test_cli_prometheus_endpoint_bind_error(monkeypatch, mocker):
+    """Turn a metrics bind failure into a CLI argument error.
+
+    Args:
+        monkeypatch: Pytest patch helper.
+        mocker: Pytest mock helper.
+
+    Returns:
+        None.
+    """
+    pytest.importorskip("opentelemetry.exporter.prometheus")
+    from attribution_blueprint.cli import main
+
+    mocker.patch("prometheus_client.start_http_server", side_effect=OSError(98, "Address already in use"))
+    mocker.patch.object(metrics, "set_meter_provider")
+    monkeypatch.setenv("ATTRIBUTION_METRICS_ADDR", "127.0.0.1:9464")
+    with pytest.raises(SystemExit) as raised:
+        main(["--config", "/nonexistent.toml"])
+    assert raised.value.code == 2
+
+
 def test_missing_metrics_extra(monkeypatch):
     """Explain how to install a missing exporter.
 
@@ -406,16 +446,20 @@ def test_attribution_create_response_size(reader, mocker):
     assert size.attributes == {"connector": "attribution_service", "operation": "create_attributor"}
 
 
-def test_kubernetes_timeout_and_response_size(reader, mocker):
-    """Measure raw responses and retain positional and keyword call support.
+def test_kubernetes_timeout_without_reading_response_body(reader, mocker):
+    """Retain timeouts and request metrics without reading response bodies.
 
     Args:
         reader: Metric reader for this process.
         mocker: Pytest mock helper.
+
+    Returns:
+        None.
     """
     from attribution_blueprint.kubernetes.client import _set_default_request_timeout
 
-    response = SimpleNamespace(data=b"body")
+    response = mocker.Mock()
+    type(response).data = mocker.PropertyMock(side_effect=AssertionError("Response body must not be read"))
     transport = mocker.Mock(return_value=response)
     client = SimpleNamespace(call_api=transport)
     _set_default_request_timeout(client, 15)
@@ -424,6 +468,5 @@ def test_kubernetes_timeout_and_response_size(reader, mocker):
     assert points(reader, "kubernetes", "response.size") == []
     assert client.call_api(resource_path="/apis", method="POST", _preload_content=False, _request_timeout=3) is response
     transport.assert_called_with(resource_path="/apis", method="POST", _preload_content=False, _request_timeout=3)
-    (size,) = points(reader, "kubernetes", "response.size")
-    assert size.value == 4
-    assert size.attributes == {"connector": "kubernetes", "operation": "POST"}
+    assert points(reader, "kubernetes", "response.size") == []
+    assert any(point.attributes["operation"] == "POST" for point in points(reader, "kubernetes", "requests"))

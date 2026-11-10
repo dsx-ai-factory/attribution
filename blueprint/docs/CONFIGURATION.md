@@ -1202,7 +1202,10 @@ HTTP connectors use only the listed URL path suffixes. Other paths use the
 uppercase HTTP method, so resource IDs do not become labels.
 Response size measures the decoded body, not compressed bytes on the wire.
 Command calls measure encoded stdout. Streamed HTTP responses omit size.
-Kafka output records no response size. The Kafka input consumer is not measured.
+Kafka output records no response size.
+The Kubernetes API records no response size, so metrics never read a body that the Kubernetes client may stream.
+The Kafka input consumer is not measured.
+The `kubernetes-daemon` watch process is not measured because its watch streams are long-lived.
 
 ### Built-in Scrape Endpoint
 

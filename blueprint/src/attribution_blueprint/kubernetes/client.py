@@ -172,12 +172,7 @@ def _set_default_request_timeout(api_client, timeout_seconds: float) -> None:
         if kwargs.get("_request_timeout") is None:
             kwargs["_request_timeout"] = timeout_seconds
         method = args[1] if len(args) > 1 else kwargs["method"]
-        with track("kubernetes", method) as call:
-            response = call_api(*args, **kwargs)
-            # A raw urllib3 response caches .data, so the caller's later read reuses these bytes.
-            data = getattr(response, "data", None) if kwargs.get("_preload_content", True) is False else None
-            if isinstance(data, bytes):
-                call.response_bytes = len(data)
-            return response
+        with track("kubernetes", method):
+            return call_api(*args, **kwargs)
 
     api_client.call_api = call_api_with_timeout

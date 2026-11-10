@@ -67,8 +67,12 @@ def enable_prometheus_endpoint(host: str, port: int) -> None:
         raise RuntimeError(
             "The metrics extra is not installed; install nvidia-attribution-blueprint[metrics]"
         ) from error
-    metrics.set_meter_provider(MeterProvider(metric_readers=[PrometheusMetricReader()]))
-    start_http_server(port, addr=host)
+    reader = PrometheusMetricReader()
+    try:
+        start_http_server(port, addr=host)
+    except OSError as error:
+        raise RuntimeError(f"Cannot start the metrics endpoint on {host}:{port}: {error.strerror or error}") from error
+    metrics.set_meter_provider(MeterProvider(metric_readers=[reader]))
     logger.info("Connector metrics endpoint listening on {}:{}", host, port)
 
 
