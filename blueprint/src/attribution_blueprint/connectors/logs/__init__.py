@@ -69,6 +69,7 @@ def log_observation(
         "context": {
             "time_interval": time_interval,
             "source": source,
+            "format": "entry_timeseries",
         },
         "body": json.dumps(entries),
     }

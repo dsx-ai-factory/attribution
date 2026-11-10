@@ -117,6 +117,7 @@ def test_bundled_query_range_replay(mocker, replay, node_label, cluster_label):
     assert observations[0]["context"] == {
         "source": Source.NODE_METRICS,
         "time_interval": {"start": context["start_time"], "end": context["end_time"]},
+        "format": "entry_timeseries",
     }
     assert json.loads(observations[0]["body"]) == expected
     assert len(expected) == 24

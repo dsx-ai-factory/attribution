@@ -82,6 +82,8 @@ class TimeInterval(TypedDict):
 class ObservationContext(TypedDict):
     time_interval: TimeInterval
     source: Source
+    # Identify normalized entries for consumers that also accept legacy formats.
+    format: NotRequired[Literal["entry_timeseries"]]
 
 
 class NodeResource(TypedDict):

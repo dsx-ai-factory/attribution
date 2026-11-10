@@ -178,6 +178,7 @@ class PromQLMetricsConnector:
                 "context": {
                     "time_interval": {"start": context["start_time"], "end": context["end_time"]},
                     "source": self._source,
+                    "format": "entry_timeseries",
                 },
                 "body": json.dumps([_timeseries_entry(sample) for sample in samples]),
             }

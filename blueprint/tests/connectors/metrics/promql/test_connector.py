@@ -173,6 +173,7 @@ def test_body_is_one_timeseries_entry_per_sample(mocker):
     assert o["context"] == {
         "time_interval": {"start": ctx["start_time"], "end": ctx["end_time"]},
         "source": Source.NODE_METRICS,
+        "format": "entry_timeseries",
     }
     decoded = json.loads(o["body"])
     assert decoded == [
