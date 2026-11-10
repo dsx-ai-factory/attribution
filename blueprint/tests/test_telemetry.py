@@ -124,6 +124,34 @@ def test_track_exception(reader, error, error_type):
     assert duration.attributes == labels
 
 
+@pytest.mark.parametrize(
+    "body, response_bytes, expected_size", [("héllo", None, 6), (None, None, None), (b"ignored", 3, 3)]
+)
+def test_track_exception_response_size(reader, body, response_bytes, expected_size):
+    """Measure error bodies without replacing a recorded size.
+
+    Args:
+        reader: Metric reader for this process.
+        body: Error body supplied by the client.
+        response_bytes: Size already recorded by the connector.
+        expected_size: Expected byte count, or None when no size is recorded.
+    """
+    connector = f"error_body_{expected_size}"
+    error = StatusError()
+    error.body = body
+    with pytest.raises(StatusError) as raised:
+        with telemetry.track(connector, "read") as call:
+            call.response_bytes = response_bytes
+            raise error
+    assert raised.value is error
+    sizes = points(reader, connector, "response.size")
+    if expected_size is None:
+        assert sizes == []
+    else:
+        (size,) = sizes
+        assert size.value == expected_size
+
+
 class FakeAdapter(requests.adapters.BaseAdapter):
     """Return a response or raise without opening a connection."""
 
@@ -446,6 +474,98 @@ def test_attribution_create_response_size(reader, mocker):
     assert size.attributes == {"connector": "attribution_service", "operation": "create_attributor"}
 
 
+@pytest.mark.parametrize("status", [422, 503])
+def test_attribution_error_response_size(reader, mocker, status):
+    """Count error response bytes through the generated client.
+
+    Args:
+        reader: Metric reader for this process.
+        mocker: Pytest mock helper.
+        status: HTTP error status to measure.
+    """
+    from nvidia_attribution_client import ApiException, AttributorInfoV2
+
+    from attribution_blueprint.connectors.attribution import AttributionConnector
+
+    body = b'{"detail":[]}'
+    mocker.patch(
+        "nvidia_attribution_client.rest.RESTClientObject.request",
+        return_value=SimpleNamespace(
+            status=status, reason="Error", data=body, headers={"content-type": "application/json"}, read=lambda: body
+        ),
+    )
+    info = AttributorInfoV2.model_validate(
+        {
+            "workload": {
+                "id": "metrics-test",
+                "type": "slurm",
+                "status": "FAILED",
+                "name": "test",
+                "username": "test",
+                "framework": "",
+                "nodes": {},
+                "timezone": "UTC",
+                "job_start_time": "2026-05-01T12:00:00+00:00",
+            },
+            "metadata": {"cluster": "", "agent": "test", "tenant": "", "ruleset": ""},
+        }
+    )
+    before = sum(
+        point.value
+        for point in points(reader, "attribution_service", "response.size")
+        if point.attributes["operation"] == "create_attributor"
+    )
+    with pytest.raises(ApiException) as raised:
+        AttributionConnector("http://h").create_attributor(info)
+    assert raised.value.status == status
+    (failure,) = [
+        point
+        for point in points(reader, "attribution_service", "errors")
+        if point.attributes["operation"] == "create_attributor" and point.attributes["error.type"] == str(status)
+    ]
+    assert failure.value == 1
+    after = sum(
+        point.value
+        for point in points(reader, "attribution_service", "response.size")
+        if point.attributes["operation"] == "create_attributor"
+    )
+    assert after - before == len(body)
+
+
+def test_kubernetes_error_response_size(reader, mocker):
+    """Preserve API errors and count the response bytes they carry.
+
+    Args:
+        reader: Metric reader for this process.
+        mocker: Pytest mock helper.
+    """
+    from kubernetes.client.exceptions import ApiException
+
+    from attribution_blueprint.kubernetes.client import _set_default_request_timeout
+
+    error = ApiException(
+        http_resp=SimpleNamespace(status=403, reason="Forbidden", data=b"denied", getheaders=lambda: {})
+    )
+    client = SimpleNamespace(call_api=mocker.Mock(side_effect=error))
+    _set_default_request_timeout(client, 15)
+    method = "ERROR_RESPONSE"
+    before = sum(
+        point.value
+        for point in points(reader, "kubernetes", "response.size")
+        if point.attributes["operation"] == method
+    )
+    with pytest.raises(ApiException) as raised:
+        client.call_api("/api/v1/pods", method, _preload_content=False)
+    assert raised.value is error
+    (failure,) = [point for point in points(reader, "kubernetes", "errors") if point.attributes["operation"] == method]
+    assert failure.value == 1
+    assert failure.attributes["error.type"] == "403"
+    (size,) = [
+        point for point in points(reader, "kubernetes", "response.size") if point.attributes["operation"] == method
+    ]
+    assert size.value - before == 6
+
+
 def test_kubernetes_response_size(reader, mocker):
     """Measure bytes for a DynamicClient request that does not stream.
 
@@ -466,6 +586,59 @@ def test_kubernetes_response_size(reader, mocker):
     ]
     assert size.value == 4
     assert size.attributes == {"connector": "kubernetes", "operation": "GET"}
+
+
+@pytest.mark.parametrize("keyword", [False, True])
+def test_kubernetes_response_size_without_query_params(reader, mocker, keyword):
+    """Count response bytes when query parameters are None.
+
+    Args:
+        reader: Metric reader for this process.
+        mocker: Pytest mock helper.
+        keyword: Whether to pass query parameters by keyword.
+    """
+    from attribution_blueprint.kubernetes.client import _set_default_request_timeout
+
+    response = SimpleNamespace(data=b"body")
+    client = SimpleNamespace(call_api=mocker.Mock(return_value=response))
+    _set_default_request_timeout(client, 15)
+    method = f"NO_QUERY_PARAMS_{keyword}"
+    if keyword is True:
+        result = client.call_api("/api/v1/pods", method, query_params=None, _preload_content=False)
+    else:
+        result = client.call_api("/api/v1/pods", method, {}, None, {}, _preload_content=False)
+    assert result is response
+    (size,) = [
+        point for point in points(reader, "kubernetes", "response.size") if point.attributes["operation"] == method
+    ]
+    assert size.value == 4
+
+
+@pytest.mark.parametrize("body, expected_size", [(None, None), ("body", None), (b"", 0)])
+def test_kubernetes_response_body_types(reader, mocker, body, expected_size):
+    """Record only byte bodies, including an empty byte body.
+
+    Args:
+        reader: Metric reader for this process.
+        mocker: Pytest mock helper.
+        body: Response data supplied by the client.
+        expected_size: Expected byte count, or None when no size is recorded.
+    """
+    from attribution_blueprint.kubernetes.client import _set_default_request_timeout
+
+    response = SimpleNamespace(data=body)
+    client = SimpleNamespace(call_api=mocker.Mock(return_value=response))
+    _set_default_request_timeout(client, 15)
+    method = f"BODY_TYPE_{type(body).__name__}"
+    assert client.call_api("/api/v1/pods", method, _preload_content=False) is response
+    sizes = [
+        point for point in points(reader, "kubernetes", "response.size") if point.attributes["operation"] == method
+    ]
+    if expected_size is None:
+        assert sizes == []
+    else:
+        (size,) = sizes
+        assert size.value == expected_size
 
 
 @pytest.mark.parametrize("query_params", [[("watch", True)], [("follow", True)]])

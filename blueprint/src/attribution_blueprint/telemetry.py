@@ -126,6 +126,12 @@ def track(connector: str, operation: str) -> Iterator[_Call]:
     except BaseException as error:
         status = getattr(error, "status", None)
         call.error_type = str(status) if isinstance(status, int) and status > 0 else type(error).__name__
+        # Generated API clients raise ApiException with the error body they already read.
+        body = getattr(error, "body", None)
+        if isinstance(body, str):
+            body = body.encode("utf-8")
+        if isinstance(body, bytes) and call.response_bytes is None:
+            call.response_bytes = len(body)
         raise
     finally:
         elapsed = time.perf_counter() - start

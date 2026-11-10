@@ -1201,6 +1201,7 @@ counts as an error. HTTP retries count once per client call.
 HTTP connectors use only the listed URL path suffixes. Other paths use the
 uppercase HTTP method, so resource IDs do not become labels.
 Response size measures the decoded body, not compressed bytes on the wire.
+It includes the body of an error response.
 Command calls measure encoded stdout. Streamed HTTP responses omit size.
 Kafka output records no response size.
 Kubernetes watch and log-follow calls record no response size, because their bodies are streams that the metrics must not read.
@@ -1226,6 +1227,8 @@ while that run is active.
 
 The scraper sees these names. Labels are `connector`, `operation`, and
 `error_type` for failures. Histogram buckets also have the `le` label.
+The Prometheus exporter also adds `otel_scope_name`, `otel_scope_version`, and
+`otel_scope_schema_url` labels to every series.
 
 | OpenTelemetry metric | Prometheus name |
 | --- | --- |
