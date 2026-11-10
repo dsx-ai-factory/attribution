@@ -401,12 +401,48 @@ def test_timeout_of_one_requeue_attempt_does_not_leak_to_another(mocker):
     assert steps == {"sluid-cby-7007a": "root", "sluid-cby-7007b": "Timeout"}
 
 
-def test_uid0_step_without_retained_head_drops_canceller(mocker):
+def test_uid0_step_cancelled_before_the_limit_of_a_timed_out_attempt_resolves_to_root(mocker):
+    """An operator cancels one step, and the job runs on until it hits its time limit.
+
+    The head ends TIMEOUT, but the step ended 50 minutes before the 60-minute limit,
+    so slurmctld did not end it: the cancel was root's, not the limit's.
+    """
+    rows = (
+        "7009|7009|sluid-cby-7009|TIMEOUT|2026-05-01T12:00:00|2026-05-01T13:00:00|"
+        "node300||60|cpu=8|/o|/e|carol|short\n"
+        "7009.0|7009.0|sluid-cby-7009|CANCELLED by 0|2026-05-01T12:00:05|2026-05-01T12:10:00|"
+        "node300||60|cpu=8|||carol|step0\n"
+        "7009.1|7009.1|sluid-cby-7009|CANCELLED by 0|2026-05-01T12:10:05|2026-05-01T13:00:00|"
+        "node300||60|cpu=8|||carol|step1\n"
+    )
+    _mock_sacct(mocker, rows)
+    contexts = SlurmExecutionContextAdapter().discover_by_ids(["7009"])
+    by_id = {c["job_id"]: c for c in contexts}
+    assert by_id["7009.0"]["cancelled_by"] == "root"
+    assert by_id["7009.1"]["cancelled_by"] == "Timeout"
+
+
+def test_uid0_step_of_timed_out_attempt_without_a_limit_keeps_uid0(mocker):
+    """Without the head's time limit there is no way to tell when the limit hit, so the raw UID 0 stays."""
+    rows = (
+        "7010|7010|sluid-cby-7010|TIMEOUT|2026-05-01T12:00:00|2026-05-01T13:00:00|"
+        "node300|||cpu=8|/o|/e|carol|short\n"
+        "7010.0|7010.0|sluid-cby-7010|CANCELLED by 0|2026-05-01T12:00:05|2026-05-01T13:00:00|"
+        "node300|||cpu=8|||carol|step0\n"
+    )
+    _mock_sacct(mocker, rows)
+    contexts = SlurmExecutionContextAdapter().discover_by_ids(["7010"])
+    by_id = {c["job_id"]: c for c in contexts}
+    assert "time_limit" not in by_id["7010"]
+    assert by_id["7010.0"]["cancelled_by"] == "0"
+
+
+def test_uid0_step_without_retained_head_keeps_uid0(mocker):
     """A head row with an unparseable Start/End is skipped, leaving its UID 0 step orphaned.
 
-    Without the head there is no way to tell a time-limit kill from a scancel, so the
-    canceller is removed: a retained `0` or a guessed `root` would each turn into a
-    definite cancellation verdict downstream.
+    Without the head there is no way to tell a time-limit kill from a scancel. The
+    step keeps the raw UID 0 the connector sent before resolution existed, rather
+    than a guessed `root` or `Timeout`, and the scheduler's value is not lost.
     """
     rows = (
         "7008|7008|sluid-cby-7008|TIMEOUT|Unknown|Unknown|"
@@ -418,7 +454,7 @@ def test_uid0_step_without_retained_head_drops_canceller(mocker):
     contexts = SlurmExecutionContextAdapter().discover_by_ids(["7008"])
     assert [c["job_id"] for c in contexts] == ["7008.0"]
     assert contexts[0]["state"] == "CANCELLED"
-    assert "cancelled_by" not in contexts[0]
+    assert contexts[0]["cancelled_by"] == "0"
 
 
 def test_cancelled_by_nonzero_uid_stays_numeric(mocker):
