@@ -8,7 +8,6 @@ import re
 from datetime import UTC, datetime, timedelta
 from typing import Mapping
 
-import requests
 from loguru import logger
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
@@ -18,6 +17,7 @@ from attribution_blueprint.connectors.cluster import query_cluster
 from attribution_blueprint.connectors.logs import log_observation
 from attribution_blueprint.connectors.logs.envelope import extract_body_and_node
 from attribution_blueprint.connectors.logs.victorialogs.templates import TEMPLATES
+from attribution_blueprint.telemetry import MeteredSession
 from attribution_blueprint.types import (
     ExecutionContext,
     NodeResource,
@@ -89,7 +89,7 @@ class VictoriaLogsConnector:
         self._cluster_from_context = cluster_from_context
         self._auth = auth
 
-        self._session = requests.Session()
+        self._session = MeteredSession("victorialogs", (QUERY_PATH,))
         retry = Retry(
             total=5,
             connect=5,
