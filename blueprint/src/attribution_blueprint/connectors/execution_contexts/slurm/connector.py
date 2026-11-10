@@ -3,7 +3,7 @@
 
 import re
 import subprocess
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import NotRequired, TypedDict
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
@@ -147,31 +147,40 @@ def _resolve_cancellers(contexts: list[SlurmExecutionContext]) -> list[SlurmExec
     rules key on names: ``root`` for an operator scancel and ``Timeout`` for
     Slurm enforcing the time limit. UID 0 is ambiguous. slurmctld also cancels
     every step of a job that hits its time limit as UID 0, so a step whose
-    attempt ended ``TIMEOUT`` was cancelled by the limit, not by root. The
-    attempt's head row carries that state, so this runs over the whole sacct
-    result rather than one row at a time. Other UIDs stay numeric: the
-    Blueprint host is not guaranteed to share the cluster's account database,
-    and a wrong name is worse than a number no rule matches.
+    attempt ended ``TIMEOUT`` and that was still running at the limit was
+    cancelled by the limit, not by root. The attempt's head row carries that
+    state, start, and limit, so this runs over the whole sacct result rather
+    than one row at a time. Other UIDs stay numeric: the Blueprint host is not
+    guaranteed to share the cluster's account database, and a wrong name is
+    worse than a number no rule matches.
 
-    A step whose head row was dropped by ``_parse_row`` cannot be resolved:
-    without the head there is no way to tell a time-limit kill from a scancel.
-    Its canceller is removed rather than guessed, since a retained ``"0"`` or a
-    guessed ``root`` would each produce a definite cancellation verdict.
+    A UID 0 cancel this cannot establish keeps the raw ``"0"``, which is what
+    the connector sent before resolution existed. That covers a step whose head
+    row was dropped by ``_parse_row``, and a step of a ``TIMEOUT`` attempt whose
+    head carries no time limit.
     """
-    heads = {ctx["sluid"]: ctx["state"] for ctx in contexts if "step_id" not in ctx}
+    heads = {ctx["sluid"]: ctx for ctx in contexts if "step_id" not in ctx}
     for ctx in contexts:
         if ctx.get("cancelled_by") != "0":
             continue
-        head_state = heads.get(ctx["sluid"])
-        if head_state is None:
+        head = heads.get(ctx["sluid"])
+        if head is None:
             logger.warning(
                 f"sacct step {ctx['job_id']} is CANCELLED by UID 0 but its head row was not retained; "
-                "dropping cancelled_by rather than guessing root or Timeout"
+                "keeping UID 0 rather than guessing root or Timeout"
             )
-            del ctx["cancelled_by"]
-        elif head_state == "TIMEOUT":
+        elif head["state"] != "TIMEOUT":
+            ctx["cancelled_by"] = "root"
+        elif "time_limit" not in head:
+            logger.warning(
+                f"sacct step {ctx['job_id']} is CANCELLED by UID 0 in a TIMEOUT attempt with no time limit; "
+                "keeping UID 0 rather than guessing root or Timeout"
+            )
+        elif ctx["end_time"] >= head["start_time"] + timedelta(minutes=head["time_limit"]):
+            # Still running when the limit was reached, so slurmctld ended it.
             ctx["cancelled_by"] = "Timeout"
         else:
+            # Ended before the limit: an operator cancelled the step, and the job ran on until it timed out.
             ctx["cancelled_by"] = "root"
     return contexts
 

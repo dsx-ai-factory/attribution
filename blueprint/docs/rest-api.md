@@ -75,12 +75,14 @@ states produce the failed fallback symptom.
 
 `cancelled_by` is a resolved identity, not a raw scheduler field. The bundled
 rules match `root` for an operator cancellation and `Timeout` for the scheduler
-enforcing the time limit; an identity they do not recognize is treated as the
-user who cancelled. Slurm's `sacct` reports `CANCELLED by <uid>`, and the
-Blueprint's Slurm connector resolves UID 0 before it sends the workload (see
+enforcing the time limit. Any other identity gives a `CANCELLED` workload the
+`Cancelled by user` symptom, and a `Fail User` outcome is reclassified as
+`Cancelled by User`; stronger infrastructure evidence still takes precedence.
+Slurm's `sacct` reports `CANCELLED by <uid>`, and the Blueprint's Slurm
+connector resolves UID 0 before it sends the workload (refer to
 [SLURM Cancellations](SCHEDULER_REQUIREMENTS.md#slurm-cancellations)). A
 client that builds workloads from `sacct` itself must apply the same
-resolution, or a root `scancel` arrives as `cancelled_by: "0"` and is
+resolution, or a root `scancel` arrives as `cancelled_by: "0"` and may be
 attributed to the user.
 
 Creating an identical attributor while the first one still exists returns

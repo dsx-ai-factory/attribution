@@ -95,18 +95,21 @@ The adapter filters `.batch` and `.extern` rows and keeps numeric step rows such
 into state `CANCELLED` and `cancelled_by`, then resolves UID 0 per attempt,
 because the attribution rules key on names rather than UIDs:
 
-- A UID 0 step whose attempt (same `SLUID`) has a head row in state `TIMEOUT`
-  was cancelled by `slurmctld` enforcing the time limit and is sent as
+- A UID 0 step whose attempt (same `SLUID`) has a head row in state `TIMEOUT`,
+  and that was still running when the head's time limit was reached, was
+  cancelled by `slurmctld` enforcing the limit and is sent as
   `cancelled_by: "Timeout"`.
-- Any other UID 0 cancellation is an operator `scancel` and is sent as
-  `cancelled_by: "root"`.
-- A UID 0 step whose head row was not retained cannot be told apart from
-  either case. Its `cancelled_by` is dropped and a warning names the step.
+- A UID 0 step that ended before that limit was cancelled by an operator while
+  the job ran on, and is sent as `cancelled_by: "root"`. So is any UID 0
+  cancellation in an attempt that did not time out.
+- When the head row was not retained, or a `TIMEOUT` head has no time limit,
+  the cause cannot be established. The step keeps `cancelled_by: "0"`, and a
+  warning names it.
 - Other UIDs are forwarded as digits. The Blueprint host need not share the
   cluster's account database, so no name lookup is attempted.
 
 A client that calls the Attribution Service directly with `sacct` data must
-apply the same resolution. See the
+apply the same resolution. Refer to the
 [REST API guide](rest-api.md#1-create-an-attributor).
 
 ### Timezone Requirement
