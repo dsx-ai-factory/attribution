@@ -180,12 +180,26 @@ def test_deep_link_returns_spa_shell(populated_db):
 
 
 @pytest.mark.parametrize("private_guidance", [False, True])
-def test_tenant_guidance_survives_catalog_to_http_payload(tmp_path, monkeypatch, private_guidance):
+@pytest.mark.parametrize(
+    "catalog_id",
+    [
+        "xid-79",
+        "cancelled-due-to-task-failure",
+        "ib-device-settings-mismatch",
+        "kernel-oops",
+        "nvrx-ft-launcher-exit-0",
+        "oom-kill-of-user-task",
+        "xid-69",
+        "nv-err-invalid-object",
+        "nv-err-no-memory",
+    ],
+)
+def test_tenant_guidance_survives_catalog_to_http_payload(tmp_path, monkeypatch, private_guidance, catalog_id):
     """Expose tenant actions and handoff evidence, never private catalog fields."""
     from attribution_blueprint.webui import diagnose
 
     catalog = deepcopy(diagnose._load_catalog())
-    entry = catalog["xid-79"]
+    entry = catalog[catalog_id]
     tenant = entry["personas"]["tenant_sre"]
     assert tenant["action"] != ""
     assert tenant["support_details"] != ""
@@ -199,7 +213,7 @@ def test_tenant_guidance_survives_catalog_to_http_payload(tmp_path, monkeypatch,
     path = tmp_path / "tenant.db"
     out = SQLiteOutput(str(path))
     result = _attr("Fail InfraHW")
-    result["verdict"]["root_symptom"]["catalog_id"] = "xid-79"
+    result["verdict"]["root_symptom"]["catalog_id"] = catalog_id
     out.write(_ctx("tenant-job", "tenant-attempt"), result)
     out.close()
     with TestClient(create_app(str(path))) as client:
@@ -213,6 +227,8 @@ def test_tenant_guidance_survives_catalog_to_http_payload(tmp_path, monkeypatch,
     for payload in (summary, detail):
         card = payload["diagnose"]
         assert card["hasPersona"] is True
+        assert card["catalogId"] == catalog_id
+        assert card["severity"] == entry["severity"]
         assert card["action"] == tenant["action"]
         assert card["supportDetails"] == [tenant["support_details"]]
         assert "operatorDiagnose" not in payload
