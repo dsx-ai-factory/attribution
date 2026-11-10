@@ -18,6 +18,7 @@ from attribution_blueprint.types import Source
 
 
 def _build(spec: dict, ctx: dict) -> VictoriaLogsConnector:
+    """Validate a VictoriaLogs configuration and build the requested log collector."""
     from attribution_blueprint.mca import _coerce_bool, _coerce_float, _coerce_int
 
     source: Source = ctx["source"]

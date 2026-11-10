@@ -986,10 +986,10 @@ Fields:
 The bundled templates target `service_name`, `app`, `slurm_job_id`, and `host_name`.
 Templates may use `{job_id}` (the execution context ID) and any `{key}` supplied
 in `query_kwargs`. LogsQL queries are paginated backward in time when a response
-reaches `limit`; rows at a page boundary are deduplicated. If more than `limit`
-records share one timestamp, or the page budget prevents completing the window,
-available entries are retained and the collector report is `partial` with a reason.
-A saturated response at the window start is also reported as potentially incomplete.
+reaches `limit`; rows at a page boundary are deduplicated. The collector report is
+`partial` with a reason when a template argument is missing, the page budget is
+exhausted, or a saturated response cannot advance past one timestamp, has no
+parseable `_time`, or reaches the window start. Available entries are retained.
 
 The bundled templates do not use `{cluster}`. A custom template can scope its
 query to a cluster with `{cluster}` and a `cluster` entry in `query_kwargs`.

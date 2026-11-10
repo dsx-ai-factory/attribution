@@ -169,6 +169,7 @@ class AttributionOrchestrator:
         return results
 
     def _process_one(self, ctx: dict, collectors: list) -> tuple[dict, bool] | None:
+        """Collect available evidence, report coverage, attribute it and deliver the result to outputs."""
         # Collect before opening a session so collection/dump failures cannot
         # strand a newly created handle. A duplicate may still do this work.
         connector_reports: list[ConnectorReport] = []

@@ -134,7 +134,7 @@ class VictoriaLogsConnector:
             Timestamp-ordered observations without provider-specific context fields.
 
         Raises:
-            PartialCollectionError: Paging was incomplete; the exception retains available observations.
+            PartialCollectionError: Paging or a configured query was incomplete; retains available observations.
         """
         start = assert_aware(context["start_time"], "start_time")
         end = assert_aware(context["end_time"], "end_time")
@@ -153,6 +153,7 @@ class VictoriaLogsConnector:
                     **query_kwargs,
                 )
             except KeyError as error:
+                issues.append(f"query {index}: template missing kwarg {error}; skipped")
                 logger.warning(f"victorialogs template missing kwarg {error}; skipping query")
                 continue
             query = self._inject_node_filter(query, nodes)

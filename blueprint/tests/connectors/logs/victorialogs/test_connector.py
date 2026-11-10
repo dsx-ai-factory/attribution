@@ -85,6 +85,7 @@ def test_renders_templates_and_sends_inclusive_window_as_exclusive_end(mocker):
 
 
 def test_missing_template_kwarg_warns_and_skips(mocker):
+    """A skipped query records incomplete coverage even when it provides no observations."""
     post = mocker.patch("requests.Session.post")
     warning = mocker.patch.object(victorialogs.logger, "warning")
     conn = VictoriaLogsConnector(
@@ -94,10 +95,43 @@ def test_missing_template_kwarg_warns_and_skips(mocker):
         templates={Source.SYSLOG: ['service_name:="{missing}"']},
     )
 
-    assert conn.collect(_context()) == []
+    with pytest.raises(PartialCollectionError, match="query 1: template missing kwarg 'missing'") as raised:
+        conn.collect(_context())
+    assert raised.value.observations == []
     post.assert_not_called()
     warning.assert_called_once()
     assert "missing" in warning.call_args.args[0]
+
+
+@pytest.mark.parametrize("missing_first", [True, False])
+def test_skipped_template_preserves_other_query_and_cannot_report_complete(missing_first, mocker):
+    """A skipped query marks coverage partial regardless of its order among successful queries."""
+    templates = ['field:="{missing}"', "*"] if missing_first is True else ["*", 'field:="{missing}"']
+    connector = VictoriaLogsConnector(
+        endpoint="http://logs.example", source=Source.SYSLOG, templates={Source.SYSLOG: templates}
+    )
+    post = mocker.patch(
+        "requests.Session.post", return_value=_response(_ndjson([_row("2026-01-15T05:00:00Z", "kept")]), mocker)
+    )
+    service = mocker.Mock()
+    service.get_attribution.return_value = {"verdict": {"attribution_outcome": "Fail User"}}
+    service.ingest_observation.return_value.ingest.accepted = 1
+    service.ingest_observation.return_value.ingest.dropped = {}
+    output = mocker.Mock()
+    pipeline = AttributionOrchestrator([], [], [], service, [output])
+
+    result, succeeded = pipeline._process_one(_context(), [connector])
+
+    assert succeeded is True
+    post.assert_called_once()
+    [report] = result["connector_reports"]
+    assert report["status"] == "partial"
+    assert f"query {1 if missing_first is True else 2}: template missing kwarg 'missing'" in report["reason"]
+    assert report["observation_count"] == 1
+    assert result["evidence_status"] == "partial"
+    wire = service.ingest_observation.call_args.args[1].to_dict()
+    assert [entry["body"] for entry in json.loads(wire["body"])] == ["kept"]
+    assert output.write.call_args.args[1]["connector_reports"] == [report]
 
 
 @pytest.mark.parametrize(
@@ -295,6 +329,7 @@ def test_pagination_reincludes_boundary_and_deduplicates_rows(mocker):
 
 
 def test_same_timestamp_overflow_warns_and_skips_boundary(mocker):
+    """A saturated timestamp retains visible rows and reports potentially missing boundary records."""
     same_time = _ndjson(
         [
             _row("2026-01-15T05:00:20Z", "one"),
@@ -322,6 +357,7 @@ def test_same_timestamp_overflow_warns_and_skips_boundary(mocker):
 
 
 def test_pagination_stops_when_oldest_is_at_window_start(mocker):
+    """A saturated start boundary stops paging and reports its coverage as incomplete."""
     start_time = _context()["start_time"]
     rows = _ndjson(
         [
@@ -337,6 +373,7 @@ def test_pagination_stops_when_oldest_is_at_window_start(mocker):
 
 
 def test_saturated_page_without_parseable_timestamps_warns_and_stops(mocker):
+    """Unusable timestamps stop saturated pagination with an explicit partial reason."""
     rows = _ndjson([{"_msg": "one"}, {"_msg": "two"}])
     post = mocker.patch("requests.Session.post", return_value=_response(rows, mocker))
     warning = mocker.patch.object(victorialogs.logger, "warning")
@@ -569,6 +606,7 @@ def test_cluster_from_context_falls_back_without_context_cluster(context_cluster
 
 
 def test_cluster_from_context_supplies_cluster_missing_from_query_kwargs(mocker):
+    """A context cluster completes the query; omitting it later reports a skipped query."""
     post = mocker.patch("requests.Session.post", return_value=_response("", mocker))
     warning = mocker.patch.object(victorialogs.logger, "warning")
     conn = _cluster_connector(query_kwargs={"service_name": "example-service"}, cluster_from_context=True)
@@ -576,7 +614,9 @@ def test_cluster_from_context_supplies_cluster_missing_from_query_kwargs(mocker)
     conn.collect({**_context(), "cluster": "cluster-b"})
     assert _queried(post) == ['cluster:="cluster-b" service_name:="example-service"']
 
-    assert conn.collect(_context()) == []
+    with pytest.raises(PartialCollectionError, match="template missing kwarg 'cluster'") as raised:
+        conn.collect(_context())
+    assert raised.value.observations == []
     assert post.call_count == 1
     assert "cluster" in warning.call_args.args[0]
 
