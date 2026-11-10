@@ -211,7 +211,7 @@ def _owner_resource(owner: dict) -> str | None:
     group = _owner_group(owner)
     if owner["kind"] == "Job" and group in (None, "batch"):
         return _JOB_RESOURCE
-    if owner["kind"] == "JobSet" and group == "jobset.x-k8s.io":
+    if owner["kind"] == "JobSet" and group in (None, "jobset.x-k8s.io"):
         return _JOBSET_RESOURCE
     return None
 
