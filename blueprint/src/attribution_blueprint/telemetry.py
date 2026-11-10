@@ -3,6 +3,7 @@
 
 """Measure connector requests through the optional OpenTelemetry provider."""
 
+import inspect
 import time
 from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
@@ -12,6 +13,8 @@ from urllib.parse import urlsplit
 import requests
 from loguru import logger
 from opentelemetry import metrics
+
+_request_signature = inspect.signature(requests.Session.request)
 
 _meter = metrics.get_meter("attribution_blueprint")
 _requests = _meter.create_counter(
@@ -178,6 +181,9 @@ class MeteredSession(requests.Session):
             response = super().request(method, url, *args, **kwargs)
             if response.status_code >= 400:
                 call.error_type = str(response.status_code)
-            if kwargs.get("stream") is not True:
+            stream = _request_signature.bind(self, method, url, *args, **kwargs).arguments.get("stream")
+            if stream is None:
+                stream = self.stream
+            if not stream:
                 call.response_bytes = len(response.content)
             return response

@@ -261,19 +261,41 @@ def test_session_path_guard(reader, method, path, operation):
     assert points(reader, connector, "requests")[0].attributes["operation"] == operation
 
 
-def test_session_stream_does_not_read_body(reader):
-    """Leave streamed bodies unread and omit their size.
+@pytest.mark.parametrize(
+    "case, session_stream, args, kwargs, expected_stream",
+    [
+        ("keyword", False, (), {"stream": True}, True),
+        ("session", True, (), {}, True),
+        ("positional", False, (None, None, None, None, None, None, None, True, None, None, True), {}, True),
+        ("override", True, (), {"stream": False}, False),
+    ],
+)
+def test_session_stream_does_not_read_body(reader, case, session_stream, args, kwargs, expected_stream):
+    """Read bodies and record their size only when streaming is disabled.
 
     Args:
         reader: Metric reader for this process.
+        case: Unique name for this test case.
+        session_stream: Session default for streaming.
+        args: Positional request arguments after the URL.
+        kwargs: Keyword request arguments.
+        expected_stream: Whether the response body must remain unread.
     """
+    connector = f"stream_{case}"
     adapter = FakeAdapter()
-    with telemetry.MeteredSession("stream") as session:
+    with telemetry.MeteredSession(connector) as session:
+        session.stream = session_stream
         session.mount("http://", adapter)
-        response = session.get("http://h/", stream=True)
-        assert response.raw.tell() == 0
-        assert points(reader, "stream", "response.size") == []
-        assert points(reader, "stream", "successes")[0].value == 1
+        response = session.request("GET", "http://h/", *args, **kwargs)
+        if expected_stream is True:
+            assert response.raw.tell() == 0
+            assert points(reader, connector, "response.size") == []
+        else:
+            assert response.raw.tell() == 5
+            assert response.content == b"hello"
+            (size,) = points(reader, connector, "response.size")
+            assert size.value == 5
+        assert points(reader, connector, "successes")[0].value == 1
 
 
 def test_prometheus_endpoint():
