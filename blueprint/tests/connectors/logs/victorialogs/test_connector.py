@@ -2,17 +2,19 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import json
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
 import requests
-
 from attribution_blueprint.connectors.auth import MTLSAuth, TokenAuth
 from attribution_blueprint.connectors.logs.victorialogs import (
     VictoriaLogsConnector,
+    _build,
     connector as victorialogs,
 )
+from attribution_blueprint.exceptions import PartialCollectionError
+from attribution_blueprint.orchestrator import AttributionOrchestrator
 from attribution_blueprint.types import Source
 
 FIXTURES = Path(__file__).parent / "fixtures"
@@ -308,7 +310,8 @@ def test_same_timestamp_overflow_warns_and_skips_boundary(mocker):
         ],
     )
     warning = mocker.patch.object(victorialogs.logger, "warning")
-    _connector(limit=2).collect(_context())
+    with pytest.raises(PartialCollectionError, match="possible truncation"):
+        _connector(limit=2).collect(_context())
 
     assert [call.kwargs["data"]["end"] for call in post.call_args_list] == [
         1768471200000000001,
@@ -328,7 +331,8 @@ def test_pagination_stops_when_oldest_is_at_window_start(mocker):
     )
     post = mocker.patch("requests.Session.post", return_value=_response(rows, mocker))
 
-    _connector(limit=2).collect(_context())
+    with pytest.raises(PartialCollectionError, match="window start"):
+        _connector(limit=2).collect(_context())
     post.assert_called_once()
 
 
@@ -337,14 +341,16 @@ def test_saturated_page_without_parseable_timestamps_warns_and_stops(mocker):
     post = mocker.patch("requests.Session.post", return_value=_response(rows, mocker))
     warning = mocker.patch.object(victorialogs.logger, "warning")
 
-    observations = _connector(limit=2).collect(_context())
+    with pytest.raises(PartialCollectionError, match="no parseable _time") as raised:
+        _connector(limit=2).collect(_context())
+    observations = raised.value.observations
     assert json.loads(observations[0]["body"]) == []
     post.assert_called_once()
     warning.assert_called_once_with("victorialogs: saturated page has no parseable _time; stopping pagination")
 
 
-def test_max_pages_cap_warns(mocker, monkeypatch):
-    monkeypatch.setattr(victorialogs, "MAX_PAGES", 2)
+def test_max_pages_cap_preserves_rows_and_reports_incomplete(mocker):
+    """Reaching the page budget carries the fetched rows with an explicit partial result."""
     first_page = _ndjson(
         [
             _row("2026-01-15T05:00:20Z", "one"),
@@ -366,9 +372,98 @@ def test_max_pages_cap_warns(mocker, monkeypatch):
     )
     warning = mocker.patch.object(victorialogs.logger, "warning")
 
-    _connector(limit=2).collect(_context())
+    with pytest.raises(PartialCollectionError, match="page limit of 2") as raised:
+        _connector(limit=2, max_pages=2).collect(_context())
+    assert len(json.loads(raised.value.observations[0]["body"])) == 3
     assert post.call_count == 2
-    assert any("MAX_PAGES=2" in call.args[0] for call in warning.call_args_list)
+    assert any("page limit of 2" in call.args[0] for call in warning.call_args_list)
+
+
+def test_page_budget_preserves_evidence_but_does_not_report_complete(mocker):
+    """A truncated query must retain its entries and make incomplete collection visible."""
+    pages = [
+        _ndjson([_row(f"2026-01-15T05:00:{second:02d}Z", str(second)) for second in seconds])
+        for seconds in ((20, 10), (10, 9))
+    ]
+    mocker.patch("requests.Session.post", side_effect=[_response(page, mocker) for page in pages])
+    service = mocker.Mock()
+    service.get_attribution.return_value = {"verdict": {"attribution_outcome": "Fail User"}}
+    service.ingest_observation.return_value.ingest.accepted = 3
+    service.ingest_observation.return_value.ingest.dropped = {}
+    output = mocker.Mock()
+    pipeline = AttributionOrchestrator([], [], [], service, [output])
+
+    result, succeeded = pipeline._process_one(_context(), [_connector(limit=2, max_pages=2)])
+
+    assert succeeded is True
+    [report] = result["connector_reports"]
+    assert report["status"] == "partial"
+    assert "page" in report["reason"]
+    assert report["observation_count"] == 1
+    assert result["evidence_status"] == "partial"
+    wire = service.ingest_observation.call_args.args[1].to_dict()
+    assert [entry["body"] for entry in json.loads(wire["body"])] == ["9", "10", "20"]
+    assert output.write.call_args.args[1]["connector_reports"] == [report]
+
+
+def test_configured_budget_can_read_beyond_twenty_pages(mocker):
+    """A larger finite budget retrieves older entries without changing boundary deduplication."""
+    start = _context()["start_time"] + timedelta(hours=1)
+    rows = [_row((start + timedelta(seconds=index)).isoformat(), str(index)) for index in range(22)]
+    pages = [_ndjson([rows[index], rows[index - 1]]) for index in range(21, 0, -1)] + [""]
+    post = mocker.patch("requests.Session.post", side_effect=[_response(page, mocker) for page in pages])
+
+    [observation] = _connector(limit=2, max_pages=22).collect(_context())
+
+    assert post.call_count == 22
+    assert [entry["body"] for entry in json.loads(observation["body"])] == [str(index) for index in range(22)]
+
+
+def test_partial_query_retains_other_queries_and_does_not_leak_status_to_next_collection(mocker):
+    """Each collection owns its partial status and preserves rows from all configured queries."""
+    pages = [
+        _ndjson([_row("2026-01-15T05:00:20Z", "one"), _row("2026-01-15T05:00:10Z", "two")]),
+        _ndjson([_row("2026-01-15T05:00:09Z", "three")]),
+        "",
+        "",
+    ]
+    mocker.patch("requests.Session.post", side_effect=[_response(page, mocker) for page in pages])
+    connector = VictoriaLogsConnector(
+        endpoint="http://logs.example",
+        source=Source.SYSLOG,
+        templates={Source.SYSLOG: ["first", "second"]},
+        limit=2,
+        max_pages=1,
+    )
+    with pytest.raises(PartialCollectionError, match="query 1: page limit of 1") as raised:
+        connector.collect(_context())
+
+    assert len(json.loads(raised.value.observations[0]["body"])) == 3
+    assert "query 2" not in str(raised.value)
+    assert connector.collect(_context()) == []
+
+
+@pytest.mark.parametrize("max_pages", [0, -1, True, False, 1.5, "2", None])
+def test_page_budget_requires_a_positive_integer(max_pages):
+    """Reject invalid budgets before sending any query."""
+    with pytest.raises(ValueError, match="max_pages must be a positive integer"):
+        _connector(max_pages=max_pages)
+
+
+def test_configured_page_budget_reaches_the_connector(mocker):
+    """The MCA factory forwards the configured budget to actual pagination."""
+    post = mocker.patch(
+        "requests.Session.post",
+        return_value=_response(_ndjson([_row("2026-01-15T05:00:20Z", "one")]), mocker),
+    )
+    connector = _build(
+        {"endpoint": "http://logs.example", "query": "*", "limit": 1, "max_pages": 1},
+        {"source": Source.SYSLOG},
+    )
+
+    with pytest.raises(PartialCollectionError, match="page limit of 1"):
+        connector.collect(_context())
+    post.assert_called_once()
 
 
 @pytest.mark.parametrize("status", [400, 500])

@@ -95,6 +95,12 @@ the new connector.
 
 ### Building The Observation
 
+When collection is incomplete but usable evidence is available, raise
+`PartialCollectionError(reason, observations)` from `attribution_blueprint.exceptions`.
+The Blueprint ingests those observations and records `status: "partial"` and the
+reason in `connector_reports`. Other callers must handle this exception to retain
+the partial evidence. Complete collections still return an observation list.
+
 `collect` must emit a list of observations. The `log_observation` helper emits an entry timeseries: one entry per log line. Pass
 `entries=` built by `entries_from_text`, or by hand when the backend already gives
 structured entries with their own `ts` and `resources`. Whether an entry may omit

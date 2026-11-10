@@ -18,6 +18,7 @@ from attribution_blueprint.connectors.execution_contexts import ExecutionContext
 from attribution_blueprint.connectors.logs import LogConnector
 from attribution_blueprint.connectors.metrics import MetricsConnector
 from attribution_blueprint.connectors.outputs import OutputConnector
+from attribution_blueprint.exceptions import PartialCollectionError
 from attribution_blueprint.result import ConnectorReport, IngestionReport, enrich_attribution_result, service_outcome
 from attribution_blueprint.taxonomy import taxonomy_for_service_value
 
@@ -173,14 +174,19 @@ class AttributionOrchestrator:
         connector_reports: list[ConnectorReport] = []
         batches: list[tuple[ConnectorReport, list[dict]]] = []
         for collector in collectors:
+            status, reason = "ok", ""
             try:
                 collected = collector.collect(ctx)
+            except PartialCollectionError as error:
+                collected = error.observations
+                status, reason = "partial", str(error)
+                logger.warning(f"collector {getattr(collector, 'source', '?')} incomplete for ctx {ctx['id']}: {error}")
             except Exception as e:
                 logger.warning(f"collector {getattr(collector, 'source', '?')} failed for ctx {ctx['id']}: {e}")
                 connector_reports.append(_connector_report(collector, "error", str(e), 0))
                 batches.append((connector_reports[-1], []))
                 continue
-            connector_reports.append(_connector_report(collector, "ok", "", len(collected)))
+            connector_reports.append(_connector_report(collector, status, reason, len(collected)))
             batches.append((connector_reports[-1], collected))
         observations = [obs for _, collected in batches for obs in collected]
 

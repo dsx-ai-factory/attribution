@@ -17,6 +17,7 @@ from attribution_blueprint.connectors.cluster import query_cluster
 from attribution_blueprint.connectors.logs import log_observation
 from attribution_blueprint.connectors.logs.envelope import extract_body_and_node
 from attribution_blueprint.connectors.logs.victorialogs.templates import TEMPLATES
+from attribution_blueprint.exceptions import PartialCollectionError
 from attribution_blueprint.telemetry import MeteredSession
 from attribution_blueprint.types import (
     ExecutionContext,
@@ -62,6 +63,8 @@ def _datetime_ns(value: datetime) -> int:
 
 
 class VictoriaLogsConnector:
+    """Collect timestamped LogsQL rows under a finite per-query page budget."""
+
     def __init__(
         self,
         *,
@@ -72,13 +75,18 @@ class VictoriaLogsConnector:
         templates: Mapping[str, list[str]] = TEMPLATES,
         timeout_seconds: float = 60.0,
         limit: int = DEFAULT_LIMIT,
+        max_pages: int = MAX_PAGES,
         node_field: str | None = DEFAULT_NODE_FIELD,
         cluster_from_context: bool = False,
     ):
+        """Configure queries, connection security, row limits and the maximum pages per query."""
         if source not in templates:
             raise ValueError(f"no templates registered for source {source}")
         if limit <= 0:
             raise ValueError("limit must be greater than 0")
+        if type(max_pages) is not int or max_pages <= 0:
+            raise ValueError("max_pages must be a positive integer")
+        self._max_pages = max_pages
         self._source = source
         self._templates = list(templates[source])
         self._query_kwargs = dict(query_kwargs or {})
@@ -113,9 +121,21 @@ class VictoriaLogsConnector:
 
     @property
     def source(self) -> Source:
+        """Return the configured evidence source."""
         return self._source
 
     def collect(self, context: ExecutionContext) -> list[Observation]:
+        """Collect deduplicated entries within the workload window.
+
+        Args:
+            context: Workload identity, nodes, cluster and collection interval.
+
+        Returns:
+            Timestamp-ordered observations without provider-specific context fields.
+
+        Raises:
+            PartialCollectionError: Paging was incomplete; the exception retains available observations.
+        """
         start = assert_aware(context["start_time"], "start_time")
         end = assert_aware(context["end_time"], "end_time")
         start_ns = _datetime_ns(start)
@@ -125,7 +145,8 @@ class VictoriaLogsConnector:
 
         rows: list[dict] = []
         seen: set[str] = set()
-        for template in self._templates:
+        issues: list[str] = []
+        for index, template in enumerate(self._templates, start=1):
             try:
                 query = template.format(
                     job_id=context.get("id", ""),
@@ -135,39 +156,22 @@ class VictoriaLogsConnector:
                 logger.warning(f"victorialogs template missing kwarg {error}; skipping query")
                 continue
             query = self._inject_node_filter(query, nodes)
-            for row in self._query_window(query, start_ns, end_ns):
+            query_rows, query_issues = self._query_window(query, start_ns, end_ns)
+            issues.extend(f"query {index}: {issue}" for issue in query_issues)
+            for row in query_rows:
                 key = json.dumps(row, sort_keys=True)
                 if key not in seen:
                     seen.add(key)
                     rows.append(row)
 
-        if not rows:
-            return []
-        entries_with_timestamps = []
-        for row in rows:
-            timestamp = _timestamp_ns(row.get("_time"))
-            message = row.get("_msg")
-            if timestamp is None or not isinstance(message, str):
-                logger.debug("victorialogs: skipping row with invalid _time or non-string _msg")
-                continue
-            row_node = row.get(self._node_field) if self._node_field else None
-            if not isinstance(row_node, str) or not row_node:
-                row_node = None
-            body, node = extract_body_and_node(message, row_node)
-            entry: TimeseriesEntry = {"body": body, "ts": timestamp}
-            resources: list[NodeResource | ReplicaResource] = []
-            if node is not None:
-                resources.append({"kind": "node", "hostname": node})
-            replica = row.get("pod")
-            if isinstance(replica, str) and replica:
-                resources.append({"kind": "replica", "name": replica})
-            if resources:
-                entry["resources"] = resources
-            entries_with_timestamps.append((timestamp, entry))
-
-        entries_with_timestamps.sort(key=lambda item: item[0])
-        entries = [entry for _, entry in entries_with_timestamps]
-        return [log_observation(source=self._source, entries=entries, context=context)]
+        observations = (
+            [log_observation(source=self._source, entries=_rows_to_entries(rows, self._node_field), context=context)]
+            if rows != []
+            else []
+        )
+        if issues != []:
+            raise PartialCollectionError("; ".join(dict.fromkeys(issues)), observations)
+        return observations
 
     def _context_query_kwargs(self, context: ExecutionContext) -> dict[str, str]:
         """Return query_kwargs with `cluster` taken from the context when enabled and present."""
@@ -176,59 +180,85 @@ class VictoriaLogsConnector:
             return self._query_kwargs
         return {**self._query_kwargs, "cluster": cluster}
 
-    def _query_window(self, query: str, start_ns: int, end_ns_excl: int) -> list[dict]:
+    def _read_page(self, query: str, start_ns: int, end_ns_excl: int) -> list[dict]:
+        """Fetch and decode one bounded LogsQL response.
+
+        Args:
+            query: Rendered LogsQL query.
+            start_ns: Inclusive window start in nanoseconds.
+            end_ns_excl: Exclusive window end in nanoseconds.
+
+        Returns:
+            Decoded JSON object rows. Transport errors propagate.
+        """
+        response = self._session.post(
+            f"{self._endpoint}{QUERY_PATH}",
+            data={
+                "query": query,
+                "start": start_ns,
+                "end": end_ns_excl,
+                "limit": self._limit,
+            },
+            timeout=self._timeout,
+        )
+        response.raise_for_status()
+        page: list[dict] = []
+        malformed = 0
+        for line in response.text.splitlines():
+            if not line.strip():
+                continue
+            try:
+                row = json.loads(line)
+            except json.JSONDecodeError:
+                malformed += 1
+                continue
+            if not isinstance(row, dict):
+                malformed += 1
+                continue
+            page.append(row)
+        if malformed:
+            logger.warning(f"victorialogs: skipped {malformed} invalid NDJSON line(s)")
+        return page
+
+    def _query_window(self, query: str, start_ns: int, end_ns_excl: int) -> tuple[list[dict], list[str]]:
+        """Page backward within the budget, preserving reasons for incomplete coverage.
+
+        Args:
+            query: Rendered LogsQL query.
+            start_ns: Inclusive window start in nanoseconds.
+            end_ns_excl: Exclusive window end in nanoseconds.
+
+        Returns:
+            Available rows and any reasons paging could not prove complete coverage.
+        """
         rows: list[dict] = []
+        issues: list[str] = []
         cur_end = end_ns_excl
-        for _ in range(MAX_PAGES):
-            response = self._session.post(
-                f"{self._endpoint}{QUERY_PATH}",
-                data={
-                    "query": query,
-                    "start": start_ns,
-                    "end": cur_end,
-                    "limit": self._limit,
-                },
-                timeout=self._timeout,
-            )
-            response.raise_for_status()
-            page: list[dict] = []
-            malformed = 0
-            for line in response.text.splitlines():
-                if not line.strip():
-                    continue
-                try:
-                    row = json.loads(line)
-                except json.JSONDecodeError:
-                    malformed += 1
-                    continue
-                if not isinstance(row, dict):
-                    malformed += 1
-                    continue
-                page.append(row)
-            if malformed:
-                logger.warning(f"victorialogs: skipped {malformed} invalid NDJSON line(s)")
+        for _ in range(self._max_pages):
+            page = self._read_page(query, start_ns, cur_end)
             if not page:
-                return rows
+                return rows, issues
             rows.extend(page)
             if len(page) < self._limit:
-                return rows
+                return rows, issues
             timestamps = [timestamp for row in page if (timestamp := _timestamp_ns(row.get("_time"))) is not None]
             if not timestamps:
-                logger.warning("victorialogs: saturated page has no parseable _time; stopping pagination")
-                return rows
+                issues.append("saturated page has no parseable _time; stopping pagination")
+                logger.warning(f"victorialogs: {issues[-1]}")
+                return rows, issues
             oldest = min(timestamps)
             if oldest <= start_ns:
-                return rows
+                issues.append("saturated page reaches window start; boundary records may be truncated")
+                return rows, issues
             next_end = oldest + 1
             if next_end >= cur_end:
-                logger.warning(f"victorialogs: possible truncation at {_format_timestamp_ns(oldest)}")
+                issues.append(f"possible truncation at {_format_timestamp_ns(oldest)}")
+                logger.warning(f"victorialogs: {issues[-1]}")
                 next_end = oldest
             cur_end = next_end
-        logger.warning(
-            f"victorialogs: hit MAX_PAGES={MAX_PAGES} for query={query[:80]!r}; "
-            f"older entries before ts={cur_end} may be truncated"
-        )
-        return rows
+        issues.append(f"page limit of {self._max_pages} reached; older entries before ts={cur_end} may be truncated")
+        logger.warning(f"victorialogs: {issues[-1]}")
+        return rows, issues
 
     def _inject_node_filter(self, query: str, nodes: list[str]) -> str:
         if self._node_field is None or not nodes:
@@ -274,3 +304,40 @@ def _format_timestamp_ns(timestamp_ns: int) -> str:
     seconds, nanoseconds = divmod(timestamp_ns, 1_000_000_000)
     timestamp = datetime.fromtimestamp(seconds, tz=UTC).strftime("%Y-%m-%dT%H:%M:%S")
     return f"{timestamp}.{nanoseconds:09d}Z"
+
+
+def _rows_to_entries(rows: list[dict], node_field: str | None) -> list[TimeseriesEntry]:
+    """Normalize valid rows and order entries by timestamp.
+
+    Args:
+        rows: Rows already deduplicated across queries and page boundaries.
+        node_field: Row field containing the node hostname, or None.
+
+    Returns:
+        Timestamp-ordered entries accepted by the observation schema.
+    """
+    entries_with_timestamps = []
+    for row in rows:
+        timestamp = _timestamp_ns(row.get("_time"))
+        message = row.get("_msg")
+        if timestamp is None or not isinstance(message, str):
+            logger.debug("victorialogs: skipping row with invalid _time or non-string _msg")
+            continue
+        row_node = row.get(node_field) if node_field else None
+        if not isinstance(row_node, str) or not row_node:
+            row_node = None
+        body, node = extract_body_and_node(message, row_node)
+        entry: TimeseriesEntry = {"body": body, "ts": timestamp}
+        resources: list[NodeResource | ReplicaResource] = []
+        if node is not None:
+            resources.append({"kind": "node", "hostname": node})
+        replica = row.get("pod")
+        if isinstance(replica, str) and replica:
+            resources.append({"kind": "replica", "name": replica})
+        if resources:
+            entry["resources"] = resources
+        entries_with_timestamps.append((timestamp, entry))
+
+    entries_with_timestamps.sort(key=lambda item: item[0])
+    entries = [entry for _, entry in entries_with_timestamps]
+    return entries

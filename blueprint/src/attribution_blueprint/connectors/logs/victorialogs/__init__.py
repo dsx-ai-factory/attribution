@@ -8,6 +8,7 @@ from attribution_blueprint.connectors.auth import Auth, build_auth
 from attribution_blueprint.connectors.logs.victorialogs.connector import (
     DEFAULT_LIMIT,
     DEFAULT_NODE_FIELD,
+    MAX_PAGES,
     VictoriaLogsConnector,
 )
 from attribution_blueprint.connectors.logs.victorialogs.templates import BARE_TEMPLATES, TEMPLATES
@@ -27,8 +28,11 @@ def _build(spec: dict, ctx: dict) -> VictoriaLogsConnector:
     auth: Auth | None = build_auth(auth_spec, "victorialogs") if auth_spec is not None else None
     timeout = _coerce_float(spec.get("timeout_seconds", 60.0), "timeout_seconds")
     limit = _coerce_int(spec.get("limit", DEFAULT_LIMIT), "limit")
+    max_pages = _coerce_int(spec.get("max_pages", MAX_PAGES), "max_pages")
     if limit <= 0:
         raise MCAError("limit must be greater than 0")
+    if max_pages <= 0:
+        raise MCAError("max_pages must be greater than 0")
     queries = spec.get("queries")
     if queries is None and "query" in spec:
         queries = [spec["query"]]
@@ -48,6 +52,7 @@ def _build(spec: dict, ctx: dict) -> VictoriaLogsConnector:
         query_kwargs=dict(spec.get("query_kwargs", {})),
         timeout_seconds=timeout,
         limit=limit,
+        max_pages=max_pages,
         node_field=node_field,
         cluster_from_context=cluster_from_context,
     )
@@ -63,6 +68,7 @@ _registry.register_component(
         "endpoint": _PARAM,
         "timeout_seconds": _PARAM,
         "limit": _PARAM,
+        "max_pages": _PARAM,
         "query": _PARAM,
         "queries": _PARAM,
         "node_field": _PARAM,

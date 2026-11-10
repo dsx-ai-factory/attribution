@@ -4,7 +4,6 @@
 import sys
 
 import pytest
-
 from attribution_blueprint import mca_registry as reg
 from attribution_blueprint.exceptions import RegistryError
 
@@ -229,6 +228,7 @@ def test_built_schema_has_expected_shape():
             "endpoint",
             "timeout_seconds",
             "limit",
+            "max_pages",
             "query",
             "queries",
             "node_field",
