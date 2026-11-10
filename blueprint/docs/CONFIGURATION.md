@@ -659,8 +659,11 @@ input) takes precedence for both the service rank mapping and output metadata.
 
 For `scheduler = "runapi"`, a positive integer `gpu_count` that divides evenly by
 the non-empty node list determines that job's GPUs per node when no explicit
-context value is supplied and `history_complete` is not explicitly false.
-This assumes RunAPI jobs supply a complete node list and use a uniform allocation.
+context value is supplied. Every listed `pod_names` entry must have a `pod_nodes`
+placement, and the current placement nodes must match the unique `nodes` list.
+Missing placements or historical-only nodes use the configured fallback.
+This still assumes RunAPI jobs use a uniform allocation; `history_complete`
+describes scheduler-history coverage and does not control this calculation.
 For example, 8 GPUs across 2 nodes gives 4 ranks per node, while 16 GPUs across
 2 nodes gives 8. Mixed jobs can therefore use different mappings in one run.
 

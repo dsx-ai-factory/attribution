@@ -500,7 +500,7 @@ def _gpus_per_node_for_context(ctx: dict, fallback: int | None) -> int | None:
 
     Args:
         ctx: Execution context with optional per-node topology or a RunAPI GPU total.
-        fallback: Configured ranks per node when the allocation is unavailable or uneven.
+        fallback: Configured ranks per node when allocation or placement is ambiguous.
 
     Returns:
         The job's ranks per node, or the unchanged fallback.
@@ -510,7 +510,7 @@ def _gpus_per_node_for_context(ctx: dict, fallback: int | None) -> int | None:
         if not isinstance(explicit, int) or isinstance(explicit, bool) or explicit <= 0:
             raise ValueError("ctx['gpus_per_node'] must be a positive integer")
         return explicit
-    if ctx.get("scheduler") != "runapi" or ctx.get("history_complete") is False:
+    if ctx.get("scheduler") != "runapi" or not _has_current_node_coverage(ctx):
         return fallback
     total = ctx.get("gpu_count")
     nodes = ctx.get("nodes")
@@ -525,6 +525,27 @@ def _gpus_per_node_for_context(ctx: dict, fallback: int | None) -> int | None:
         if remainder == 0:
             return per_node
     return fallback
+
+
+def _has_current_node_coverage(ctx: dict) -> bool:
+    """Check that complete current pod placements cover exactly the reported nodes.
+
+    Args:
+        ctx: RunAPI context whose node list can include historical placements.
+
+    Returns:
+        Whether all listed pods have placements and no historical-only nodes remain.
+    """
+    nodes = ctx.get("nodes")
+    pods = ctx.get("pod_names")
+    placements = ctx.get("pod_nodes")
+    if not isinstance(nodes, list) or not isinstance(pods, list) or not isinstance(placements, dict):
+        return False
+    if not nodes or not pods or not all(isinstance(value, str) and value for value in nodes + pods):
+        return False
+    if not all(isinstance(value, str) and value for value in placements.values()):
+        return False
+    return len(set(nodes)) == len(nodes) and set(pods) == set(placements) and set(nodes) == set(placements.values())
 
 
 def _context_with_workload_gpu_defaults(ctx: dict, gpus_per_node: int | None) -> dict:

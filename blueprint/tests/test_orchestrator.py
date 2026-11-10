@@ -581,6 +581,9 @@ def test_build_attributor_info_rejects_non_positive_gpus_per_node():
 def test_mixed_gpu_jobs_use_per_context_topology(fallback):
     """A mixed batch must use each job's allocation for both ranks and output metadata."""
     contexts = [{**_make_ctx(str(gpus)), "scheduler": "runapi", "gpu_count": gpus} for gpus in (8, 16)]
+    for ctx in contexts:
+        ctx["pod_names"] = ["worker-0", "worker-1"]
+        ctx["pod_nodes"] = dict(zip(ctx["pod_names"], ctx["nodes"]))
     eca = MagicMock()
     eca.discover.return_value = contexts
     attribution = _make_attribution_mock()
@@ -607,6 +610,8 @@ def test_mixed_gpu_jobs_use_per_context_topology(fallback):
 def test_unusable_gpu_total_keeps_configured_rank_topology(gpu_count):
     """Missing, invalid, zero, and uneven totals retain the configured rank map."""
     ctx = {**_make_ctx("fallback"), "scheduler": "runapi", "gpu_count": gpu_count}
+    ctx["pod_names"] = ["worker-0", "worker-1"]
+    ctx["pod_nodes"] = dict(zip(ctx["pod_names"], ctx["nodes"]))
     pipeline = _make_pipeline(MagicMock(), [])
     pipeline.gpus_per_node = 8
 
@@ -666,10 +671,26 @@ def test_invalid_explicit_gpu_topology_is_rejected(per_node):
         pipeline._build_attributor_info({**_make_ctx("invalid"), "gpus_per_node": per_node})
 
 
-@pytest.mark.parametrize("scheduler", ["kueue", "runapi"])
-def test_incomplete_node_evidence_keeps_fallback_and_coverage_flag(scheduler):
-    """Partial node evidence must not inflate ranks or become complete in output metadata."""
-    ctx = {**_make_ctx("partial"), "scheduler": scheduler, "gpu_count": 16, "history_complete": False}
+@pytest.mark.parametrize(
+    ("placements", "expected"),
+    [
+        (None, 4),
+        ({}, 4),
+        ({"worker-0": "node-partial-1"}, 4),
+        ({"worker-0": "node-partial-2", "worker-1": "node-partial-2"}, 4),
+        ({"worker-0": "node-partial-1", "worker-1": "node-partial-2"}, 8),
+    ],
+)
+def test_runapi_placement_coverage_controls_inference(placements, expected):
+    """Missing or moved pods use fallback; history coverage does not determine topology."""
+    ctx = {
+        **_make_ctx("partial"),
+        "scheduler": "runapi",
+        "gpu_count": 16,
+        "history_complete": False,
+        "pod_names": ["worker-0", "worker-1"],
+        "pod_nodes": placements,
+    }
     eca = MagicMock()
     eca.discover.return_value = [ctx]
     attribution = _make_attribution_mock()
@@ -680,7 +701,8 @@ def test_incomplete_node_evidence_keeps_fallback_and_coverage_flag(scheduler):
     pipeline.analyze()
 
     info = _wire(attribution.create_attributor.call_args.args[0])
-    assert list(info["workload"]["nodes"].values()) == [list(range(4)), list(range(4, 8))]
+    assert list(info["workload"]["nodes"].values()) == [list(range(expected)), list(range(expected, 2 * expected))]
+    assert output.entries[0][0]["gpus_per_node"] == expected
     assert output.entries[0][0]["history_complete"] is False
     assert ctx["history_complete"] is False
 

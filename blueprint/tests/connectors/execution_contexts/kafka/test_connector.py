@@ -229,10 +229,13 @@ def test_discover_maps_structured_event_to_context():
 
 @pytest.mark.parametrize("binary", [False, True])
 @pytest.mark.parametrize("per_node", [None, 4])
-def test_kafka_topology_reaches_service_and_output(mocker, binary, per_node):
+@pytest.mark.parametrize("moved", [False, True])
+def test_kafka_topology_reaches_service_and_output(mocker, binary, per_node, moved):
     """Preserve explicit Kafka topology through discovery, service projection, and output."""
     event = _events()[0]
     event["data"].update(scheduler="runapi", gpus_per_node=per_node)
+    if moved:
+        event["data"]["pod_nodes"] = dict.fromkeys(event["data"]["pod_names"], event["data"]["nodes"][1])
     messages = [_binary(event)] if binary else _structured([event])
     eca, _ = _make_eca(messages)
     attribution = mocker.Mock()
@@ -243,7 +246,7 @@ def test_kafka_topology_reaches_service_and_output(mocker, binary, per_node):
 
     pipeline.analyze()
 
-    expected = 8 if per_node is None else per_node
+    expected = (7 if moved else 8) if per_node is None else per_node
     info = attribution.create_attributor.call_args.args[0]
     assert list(info.workload.nodes.values()) == [list(range(expected)), list(range(expected, expected * 2))]
     context = output.write.call_args.args[0]
