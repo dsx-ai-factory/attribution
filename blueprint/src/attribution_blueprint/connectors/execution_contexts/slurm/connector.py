@@ -12,6 +12,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from loguru import logger
 
 from attribution_blueprint.connectors.execution_contexts.slurm import filename_patterns
+from attribution_blueprint.telemetry import track
 
 
 class SlurmExecutionContext(TypedDict):
@@ -431,7 +432,9 @@ class SlurmExecutionContextAdapter:
         # jobid, or a time range with no activity). Treat that as empty rather
         # than letting CalledProcessError abort the per-context loop upstream.
         try:
-            result = subprocess.run(cmd, check=True, text=True, timeout=60, capture_output=True)
+            with track("slurm", "sacct") as call:
+                result = subprocess.run(cmd, check=True, text=True, timeout=60, capture_output=True)
+                call.response_bytes = len(result.stdout.encode())
         except subprocess.CalledProcessError as e:
             logger.warning(f"sacct exited {e.returncode}: {(e.stderr or '').strip() or '<no stderr>'}")
             return []

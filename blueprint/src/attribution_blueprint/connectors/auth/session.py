@@ -31,7 +31,9 @@ def apply_auth(session: requests.Session, auth: Auth | None) -> None:
         session.verify = kwargs["verify"]
 
 
-def build_session(auth: Auth | None, *, retries: int = DEFAULT_RETRIES) -> requests.Session:
+def build_session(
+    auth: Auth | None, *, retries: int = DEFAULT_RETRIES, session: requests.Session | None = None
+) -> requests.Session:
     """Return a session carrying `auth` that retries transient POST failures.
 
     Connection failures, read-phase failures (including a peer connection reset
@@ -42,10 +44,19 @@ def build_session(auth: Auth | None, *, retries: int = DEFAULT_RETRIES) -> reque
     PromQL). The jitter decorrelates retries so a correlated reset burst from a
     rate-limiting or connection-limiting gateway does not resynchronize and fail
     again in lockstep.
+
+    Args:
+        auth: Credentials to apply, or None for no authentication.
+        retries: Maximum retries for each query.
+        session: Session to configure, or None to create a plain session.
+
+    Returns:
+        The session with authentication and retry adapters configured.
     """
     if retries < 0:
         raise ValueError(f"retries must not be negative, got {retries}")
-    session = requests.Session()
+    if session is None:
+        session = requests.Session()
     retry = Retry(
         total=retries,
         connect=retries,

@@ -1212,6 +1212,91 @@ their contexts always use the configured value. A context `cluster` that
 contains a quote, backslash, or control character is rejected: the connector
 reports an error for that context instead of querying another cluster.
 
+## Connector Metrics
+
+Connector metrics use the OpenTelemetry metrics API. They are off by default.
+The API does nothing unless you configure an OpenTelemetry SDK.
+
+| Metric | Unit | Meaning |
+| --- | --- | --- |
+| `attribution.connector.requests` | `{request}` | Requests started |
+| `attribution.connector.successes` | `{request}` | Requests that succeeded |
+| `attribution.connector.errors` | `{request}` | Requests that failed |
+| `attribution.connector.response.size` | `By` | Decoded response bytes received |
+| `attribution.connector.request.duration` | `s` | Time spent on each request |
+
+Every metric has `connector` and `operation` labels. Errors and failed request
+durations also have an `error.type` label. Its value is the HTTP status code
+or the exception class name. An exception or an HTTP status of 400 or higher
+counts as an error. HTTP retries count once per client call.
+
+| Connector | Operation |
+| --- | --- |
+| `loki` | `/loki/api/v1/query_range` |
+| `victorialogs` | `/select/logsql/query` |
+| `promql` | `/api/v1/query` or `/api/v1/query_range` |
+| `kubernetes_daemon` | `/v1/placements` or `/v1/history` |
+| `kubernetes` | HTTP method, such as `GET` |
+| `slurm` | Command name `sacct` |
+| `kubectl_logs` | Command name `logs` |
+| `attribution_service` | Client method: `create_attributor`, `ingest_observation`, `get_attribution`, or `delete_attributor` |
+| `kafka` | `produce` |
+
+HTTP connectors use only the listed URL path suffixes. Other paths use the
+uppercase HTTP method, so resource IDs do not become labels.
+Response size measures the decoded body, not compressed bytes on the wire.
+It includes the body of an error response.
+Command calls measure encoded stdout. Streamed HTTP responses omit size.
+Kafka output records no response size.
+Kubernetes watch and log-follow calls record no response size, because their bodies are streams that the metrics must not read.
+The Kafka input consumer is not measured.
+The `kubernetes-daemon` watch process is not measured because its watch streams are long-lived.
+
+### Built-in Scrape Endpoint
+
+Install the `metrics` extra. The container image already includes it.
+Set `ATTRIBUTION_METRICS_ADDR` to enable the endpoint in the Blueprint CLI:
+
+```bash
+uv pip install "nvidia-attribution-blueprint[metrics]"
+ATTRIBUTION_METRICS_ADDR=0.0.0.0:9464 \
+  nvidia-attribution-blueprint --config ./attribution-blueprint.toml
+```
+
+A Prometheus-compatible scraper can read `/metrics` at that address.
+The address uses `host:port` form, or `[::1]:9464` for IPv6.
+The endpoint is off when the variable is unset or empty.
+A short-lived run exits after its last job. A scraper sees its metrics only
+while that run is active.
+
+The scraper sees these names. Labels are `connector`, `operation`, and
+`error_type` for failures. Histogram buckets also have the `le` label.
+The Prometheus exporter also adds `otel_scope_name`, `otel_scope_version`, and
+`otel_scope_schema_url` labels to every series.
+
+| OpenTelemetry metric | Prometheus name |
+| --- | --- |
+| `attribution.connector.requests` | `attribution_connector_requests_total` |
+| `attribution.connector.successes` | `attribution_connector_successes_total` |
+| `attribution.connector.errors` | `attribution_connector_errors_total` |
+| `attribution.connector.response.size` | `attribution_connector_response_size_bytes_total` |
+| `attribution.connector.request.duration` | `attribution_connector_request_duration_seconds_bucket`, `attribution_connector_request_duration_seconds_sum`, `attribution_connector_request_duration_seconds_count` |
+
+### Other OpenTelemetry Exporters
+
+Install `opentelemetry-distro` and an exporter, such as
+`opentelemetry-exporter-otlp`. Run the Blueprint command with
+`opentelemetry-instrument`. Do not combine this setup with the built-in scrape
+endpoint. Leave `ATTRIBUTION_METRICS_ADDR` unset.
+
+```bash
+uv pip install opentelemetry-distro opentelemetry-exporter-otlp
+OTEL_SERVICE_NAME=attribution-blueprint \
+OTEL_METRICS_EXPORTER=otlp \
+OTEL_EXPORTER_OTLP_ENDPOINT=http://127.0.0.1:4317 \
+  opentelemetry-instrument nvidia-attribution-blueprint --config ./attribution-blueprint.toml
+```
+
 ## Environment Variables
 
 Every TOML value can be set with an `NVAB_` environment variable. Examples:
@@ -1232,6 +1317,8 @@ CLI values still win over environment variables.
 Unknown `NVAB_`-prefixed variables are logged as warnings and ignored, so unrelated `NVAB_` variables from other tooling do not abort a run.
 
 The stderr log level is controlled by the `ATTRIBUTION_LOG_LEVEL` environment variable (default `INFO`). This is a plain environment variable, not an `NVAB_` config key.
+
+`ATTRIBUTION_METRICS_ADDR` enables the Blueprint CLI scrape endpoint at `host:port`; unset or empty keeps it off.
 
 ## Config Checks
 

@@ -9,7 +9,7 @@ from pathlib import Path
 
 from loguru import logger
 
-from attribution_blueprint import mca_registry
+from attribution_blueprint import mca_registry, telemetry
 from attribution_blueprint.exceptions import MCAError
 from attribution_blueprint.mca import (
     ENV_PREFIX,
@@ -380,6 +380,10 @@ def main(argv: list[str] | None = None) -> int:
     _configure_logging()
     parser = _build_parser()
     args = parser.parse_args(argv)
+    try:
+        telemetry.enable_prometheus_endpoint_from_env(os.environ)
+    except (ValueError, RuntimeError) as e:
+        parser.error(str(e))
 
     for tokens in args.connector or []:
         if is_help_request(tokens):

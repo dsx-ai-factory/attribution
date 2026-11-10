@@ -25,6 +25,7 @@ from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
 from attribution_blueprint.connectors.auth import Auth, build_session
+from attribution_blueprint.telemetry import MeteredSession
 from attribution_blueprint.types import assert_aware
 
 DEFAULT_STEP_SECONDS = 60
@@ -83,7 +84,7 @@ class PromQLQueryClient:
         `require_node=True` drops series without the node label, which the
         service needs on every PROMETHEUS_METRICS entry. Set it to False for
         callers that consume series without node identity themselves.
-        `session` is used as-is; otherwise `build_session(auth)` supplies one.
+        `session` is used as-is; otherwise `build_session` configures a metered session.
         """
         if not endpoint:
             raise ValueError("endpoint must be a nonempty PromQL base URL")
@@ -95,7 +96,11 @@ class PromQLQueryClient:
         self._cluster_label = cluster_label
         self._component_label = component_label
         self._require_node = require_node
-        self._session = build_session(auth) if session is None else session
+        self._session = (
+            build_session(auth, session=MeteredSession("promql", ("/api/v1/query", "/api/v1/query_range")))
+            if session is None
+            else session
+        )
 
     def query_range(
         self,
@@ -209,7 +214,7 @@ class PrometheusClient:
     ):
         self.endpoint = endpoint.rstrip("/")
         self.timeout_seconds = timeout_seconds
-        self.session = requests.Session()
+        self.session = MeteredSession("promql", ("/api/v1/query", "/api/v1/query_range"))
         retry = Retry(
             total=5,
             connect=5,

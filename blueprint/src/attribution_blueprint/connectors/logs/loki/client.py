@@ -26,6 +26,7 @@ from typing import NotRequired, TypedDict
 import requests
 
 from attribution_blueprint.connectors.auth import Auth, build_session
+from attribution_blueprint.telemetry import MeteredSession
 from attribution_blueprint.types import assert_aware
 
 DEFAULT_LIMIT = 5000
@@ -101,7 +102,7 @@ class LokiQueryClient:
         `query_window=None` reads each requested range in one request (plus
         bisection). `node_label_fallbacks` are further stream labels tried when
         `node_label` is absent; the Blueprint assumes none. `session` is used
-        as-is; otherwise `build_session(auth)` supplies one.
+        as-is; otherwise `build_session` configures a metered session.
         """
         if not endpoint:
             raise ValueError("endpoint must be a nonempty Loki base URL")
@@ -118,7 +119,11 @@ class LokiQueryClient:
         self._query_window_ns = None if query_window is None else int(query_window.total_seconds() * 1_000_000_000)
         self._node_label = node_label
         self._node_label_fallbacks = tuple(node_label_fallbacks)
-        self._session = build_session(auth) if session is None else session
+        self._session = (
+            build_session(auth, session=MeteredSession("loki", ("/loki/api/v1/query_range",)))
+            if session is None
+            else session
+        )
 
     def query_range(self, query: str, start: datetime, end: datetime, *, newest_first: bool = False) -> list[LokiEntry]:
         """Return every entry for `query` between `start` and `end`, both inclusive.
