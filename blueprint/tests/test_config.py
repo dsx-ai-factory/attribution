@@ -247,6 +247,44 @@ def test_loki_log_connector_built_per_source(monkeypatch, tmp_path):
     assert sources == ["applog", "syslog"]
 
 
+def test_loki_health_check_connector_uses_configured_queries(monkeypatch, tmp_path):
+    """Node health-check logs (e.g. a HealthCheckProgram's syslog tag) feed the
+    service's HEALTH_CHECK source; there are no bundled templates, so the
+    site supplies the selector."""
+    monkeypatch.setenv("ATTRIBUTION_TEST_TOKEN", "x")
+    p = tmp_path / "c.toml"
+    p.write_text(
+        '[attribution]\nservice_url = "http://x"\n'
+        '[eca]\ncomponent = "slurm"\n'
+        '[output.console]\ncomponent = "stdout"\n'
+        '[log.health_check]\ncomponent = "loki"\n'
+        '[log.health_check.loki]\nendpoint = "https://loki.example"\n'
+        'query = \'{{service_name="c", syslog_identifier="site-health-check"}}\'\n'
+        '[log.health_check.loki.auth]\ntype = "token"\ntoken_env = "ATTRIBUTION_TEST_TOKEN"\n'
+    )
+    cfg = load_config(p)
+    assert [c.source.value for c in cfg.log_connectors] == ["health_check"]
+    assert cfg.log_connectors[0]._templates == ['{{service_name="c", syslog_identifier="site-health-check"}}']
+
+
+def test_loki_health_check_without_queries_is_a_config_error(monkeypatch, tmp_path):
+    """No bundled templates exist for HEALTH_CHECK, so omitting `query`/`queries`
+    must surface as MCAError (clean usage message), not the connector's ValueError."""
+    monkeypatch.setenv("ATTRIBUTION_TEST_TOKEN", "x")
+    p = tmp_path / "c.toml"
+    p.write_text(
+        '[attribution]\nservice_url = "http://x"\n'
+        '[eca]\ncomponent = "slurm"\n'
+        '[output.console]\ncomponent = "stdout"\n'
+        '[log.health_check]\ncomponent = "loki"\n'
+        '[log.health_check.loki]\nendpoint = "https://loki.example"\n'
+        'query_kwargs = { service_name = "c" }\n'
+        '[log.health_check.loki.auth]\ntype = "token"\ntoken_env = "ATTRIBUTION_TEST_TOKEN"\n'
+    )
+    with pytest.raises(MCAError, match="log.health_check.loki requires query or queries"):
+        load_config(p)
+
+
 def test_loki_unset_token_env_raises_mca_error(monkeypatch, tmp_path):
     """Unset token_env surfaces as MCAError so the CLI's parser.error path
     produces a clean usage message and exit code 2, rather than a Python

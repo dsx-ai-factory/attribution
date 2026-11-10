@@ -10,7 +10,7 @@ from typing import Optional
 
 from loguru import logger
 
-from attribution_blueprint.connectors.logs import entries_from_text, log_observation
+from attribution_blueprint.connectors.logs import DEFAULT_TIME_INTERVAL, entries_from_text, log_observation
 from attribution_blueprint.connectors.logs.syslog import syslog_entries_from_text
 from attribution_blueprint.exceptions import MCAError
 from attribution_blueprint.types import (
@@ -148,6 +148,12 @@ class LocalFileLogConnector:
             entries = _jsonl_entries(path, body, context)
             if not entries:
                 return None
+        elif self._source == Source.HEALTH_CHECK:
+            # The service drops an untimed HEALTH_CHECK line, and health-check
+            # output is syslog-formatted, so read each line's time as syslog does.
+            # Date it against the health-check window, which ends after the job.
+            window_end = DEFAULT_TIME_INTERVAL[Source.HEALTH_CHECK](context)["end"]
+            entries = syslog_entries_from_text(body, context, window_end=window_end)
         else:
             entries = entries_from_text(body)
 

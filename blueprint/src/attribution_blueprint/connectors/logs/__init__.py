@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import json
+from datetime import timedelta
 from typing import Callable, Optional, Protocol
 
 from attribution_blueprint import mca_registry as _registry
@@ -42,10 +43,21 @@ def _context_window(context: ExecutionContext) -> TimeInterval:
     return TimeInterval(start=context["start_time"], end=context["end_time"])
 
 
+# A health check reports on the node after the workload on it ends, so its
+# window reaches past the end of the job. The service's own HEALTH_CHECK window
+# for legacy formats is the same ten minutes.
+HEALTH_CHECK_GRACE = timedelta(minutes=10)
+
+
+def _health_check_window(context: ExecutionContext) -> TimeInterval:
+    return TimeInterval(start=context["start_time"], end=context["end_time"] + HEALTH_CHECK_GRACE)
+
+
 # Per-source default for the observation context's time_interval.
 DEFAULT_TIME_INTERVAL: dict[Source, Callable[[ExecutionContext], TimeInterval]] = {
     Source.APPLOG: _unbounded,
     Source.SYSLOG: _context_window,
+    Source.HEALTH_CHECK: _health_check_window,
 }
 
 
@@ -75,7 +87,7 @@ def log_observation(
 
 
 if "log" not in _registry._FRAMEWORKS:
-    _registry.register_framework(name="log", aliases=("logs",), sources=("applog", "syslog"))
+    _registry.register_framework(name="log", aliases=("logs",), sources=("applog", "syslog", "health_check"))
 
 
-__all__ = ["DEFAULT_TIME_INTERVAL", "LogConnector", "entries_from_text", "log_observation"]
+__all__ = ["DEFAULT_TIME_INTERVAL", "HEALTH_CHECK_GRACE", "LogConnector", "entries_from_text", "log_observation"]

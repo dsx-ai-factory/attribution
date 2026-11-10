@@ -4,7 +4,7 @@
 from loguru import logger
 
 from attribution_blueprint.connectors.auth import Auth
-from attribution_blueprint.connectors.logs import log_observation
+from attribution_blueprint.connectors.logs import DEFAULT_TIME_INTERVAL, log_observation
 from attribution_blueprint.connectors.logs.envelope import extract_body_and_node as _extract_body_and_node
 from attribution_blueprint.connectors.logs.loki.templates import TEMPLATES
 from attribution_blueprint.telemetry import MeteredSession
@@ -97,6 +97,9 @@ class LokiConnector:
         # rather than propagating them into the wire and triggering a 500.
         start = assert_aware(context["start_time"], "start_time")
         end = assert_aware(context["end_time"], "end_time")
+        if self._source == Source.HEALTH_CHECK:
+            # A health check reports after the job ends; query its whole window.
+            end = DEFAULT_TIME_INTERVAL[Source.HEALTH_CHECK](context)["end"]
         start_ns = int(start.timestamp() * 1e9)
         end_ns = int(end.timestamp() * 1e9)
         nodes = context.get("nodes") or []

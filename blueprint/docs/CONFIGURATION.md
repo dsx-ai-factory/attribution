@@ -1008,6 +1008,31 @@ A context without a `cluster`, or with an empty one, uses `query_kwargs.cluster`
 Enable the setting only when the context's `cluster` values match the values in
 your log fields; see [Cluster From The Execution Context](#cluster-from-the-execution-context).
 
+### HEALTH_CHECK
+
+Use `[log.health_check]` for output from a node health check, such as a Slurm `HealthCheckProgram` or an epilog hook, that reports a node fault after the workload on it has ended. The service's `HEALTH_CHECK` source accepts these lines. The bundled rule set currently has no `HEALTH_CHECK` extractors, so the source only changes a verdict once rules exist for the messages your health check emits.
+
+The source accepts the same `local_file` and `loki` components as `syslog`, with two differences:
+
+- The default collection window is the execution context's interval plus ten minutes, matching the service's own `HEALTH_CHECK` window. A health check that logs a drain a few minutes after the job ends is still collected, and a yearless `Mon DD HH:MM:SS` timestamp on such a line is dated against that extended window rather than the job end.
+- There are no bundled LogQL templates for this source. With `loki`, set `query` or `queries` to the selector your health check logs under; omitting both is a configuration error.
+
+```toml
+[log.health_check]
+component = "loki"
+
+[log.health_check.loki]
+endpoint = "https://loki.example"
+query = '{{service_name="slurm-cluster", syslog_identifier="node-health-check"}}'
+node_label = "host_name"
+
+[log.health_check.loki.auth]
+type = "token"
+token_env = "LOKI_TOKEN"
+```
+
+With `local_file`, each line must carry its own syslog timestamp; the service drops an undated `HEALTH_CHECK` entry.
+
 ### Kubectl Pod Logs
 
 Use `kubectl_logs` to collect pod stdout as APPLOG or SYSLOG observations. It

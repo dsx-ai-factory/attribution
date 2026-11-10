@@ -501,3 +501,39 @@ def test_name_and_user_name_placeholders_substitute(tmp_path):
     obs = conn.collect(ctx)
     assert len(obs) == 1
     assert _text(obs[0]) == "from alice\n"
+
+
+def test_health_check_lines_carry_their_syslog_timestamp(tmp_path):
+    """The service drops untimed HEALTH_CHECK lines, so each keeps the time its syslog prefix names."""
+    log = tmp_path / "12345.hc"
+    log.write_text("May  1 00:00:04 node-a health-check[42]: drained\nundated line\n")
+    conn = LocalFileLogConnector(log_path_templates=[str(tmp_path / "{job_id}.hc")], source=Source.HEALTH_CHECK)
+
+    obs = conn.collect(_ctx(tmp_path, std_out_template=""))
+
+    assert len(obs) == 1
+    assert obs[0]["context"]["source"] == Source.HEALTH_CHECK
+    assert json.loads(obs[0]["body"]) == [
+        {
+            "body": "May  1 00:00:04 node-a health-check[42]: drained",
+            "ts": int(datetime(2026, 5, 1, 0, 0, 4, tzinfo=timezone.utc).timestamp()) * 10**9,
+        }
+    ]
+
+
+def test_health_check_line_after_the_job_ends_keeps_its_year_and_window(tmp_path):
+    """A drain logged after the job ends is the case HEALTH_CHECK collection exists for.
+
+    It must be dated in the job's year and fall inside the observation window, or the
+    service drops it and the drain never reaches the verdict.
+    """
+    log = tmp_path / "12345.hc"
+    log.write_text("May  1 01:04:00 node-a health-check[42]: drained\n")
+    conn = LocalFileLogConnector(log_path_templates=[str(tmp_path / "{job_id}.hc")], source=Source.HEALTH_CHECK)
+
+    obs = conn.collect(_ctx(tmp_path, std_out_template=""))
+
+    dated = datetime.fromtimestamp(json.loads(obs[0]["body"])[0]["ts"] / 1e9, tz=timezone.utc)
+    window = obs[0]["context"]["time_interval"]
+    assert dated == datetime(2026, 5, 1, 1, 4, 0, tzinfo=timezone.utc)
+    assert window["start"] <= dated <= window["end"]

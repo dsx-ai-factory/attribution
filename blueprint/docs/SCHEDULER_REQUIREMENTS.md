@@ -151,13 +151,16 @@ For PromQL, confirm that host labels can match the SLURM node names. The bundled
 
 ### SLURM Epilog Hooks
 
-Some clusters run SLURM epilog hooks that emit additional failure signals after
-a job completes. The blueprint's SLURM ECA does not currently collect epilog
-output directly.
+Some clusters run SLURM epilog hooks or a `HealthCheckProgram` that emit
+additional failure signals after a job completes. The blueprint's SLURM ECA
+does not collect epilog output directly. If those signals are written to
+syslog or a file, collect them with a `[log.health_check]` source (see
+[Configuration](CONFIGURATION.md#health_check)); its window extends ten
+minutes past the job end so post-job lines are kept.
 
-As a result, attribution produced by the blueprint uses the signals it does
-collect, including `sacct` metadata, local APPLOG, Loki, and PromQL. It may not
-include signals that only appear in epilog output.
+Without that source, attribution produced by the blueprint uses the signals it
+does collect, including `sacct` metadata, local APPLOG, Loki, and PromQL. It
+may not include signals that only appear in epilog or health-check output.
 
 ### Validation Checklist
 
