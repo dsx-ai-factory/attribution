@@ -442,9 +442,11 @@ def _loki_resources(node: Optional[str], replica: Optional[str] = None) -> Optio
 
 def _raw_log_entries(lines: list[str], job_info: JobInfo, declared_end: Optional[datetime]) -> list[dict[str, Any]]:
     entries = []
+    # Year-less timestamps take the year that puts them between the job start and the declared interval end.
+    end = declared_end if declared_end is not None else job_info.interest_end_time
+    job_span = (job_info.job_start_time, end)
     for line in lines:
-        # Year-less timestamps take their year from the declared interval end, as the library's `raw_log` path did.
-        moment = _extract_timestamp_from_log_line(line, timezone=job_info.timezone, job_end_time=declared_end)
+        moment = _extract_timestamp_from_log_line(line, timezone=job_info.timezone, job_span=job_span)
         entries.append(_entry(line, _datetime_ns(moment) if moment is not None else None))
     return entries
 

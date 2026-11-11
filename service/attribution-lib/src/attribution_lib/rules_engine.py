@@ -439,7 +439,7 @@ class SourceProcessingConfig:
     """Per-source-type configuration for process_observation_source."""
 
     body_fallbacks: BodyFallbacks = BodyFallbacks()
-    """Per line: what an `entry_timeseries` entry may parse out of its body; `year_fallback` is filled per job."""
+    """Per line: what an `entry_timeseries` entry may parse out of its body; `job_span` is filled per job."""
     fallback_unknown_nodes: bool = False
     """Per line: a node that fails to resolve against the job keeps the line as resource ANY instead of dropping it."""
     requires_job_nodes: bool = False
@@ -465,8 +465,10 @@ def body_fallbacks_for(source: ObservationSource, job_info: JobInfo) -> BodyFall
     fallbacks = config.body_fallbacks if config is not None else BodyFallbacks()
     if not fallbacks.parse_timestamp:
         return fallbacks
-    # job_info.job_end_time, not the interval end: entry_timeseries intervals may be unbounded.
-    return replace(fallbacks, year_fallback=job_info.job_end_time)
+    # The job's own times, not the observation interval: entry_timeseries intervals may be unbounded.
+    # The builder always sets interest_end_time, so a job that has not ended still has a span.
+    end = job_info.job_end_time if job_info.job_end_time is not None else job_info.interest_end_time
+    return replace(fallbacks, job_span=(job_info.job_start_time, end))
 
 
 def _apply_pre_filter(

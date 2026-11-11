@@ -4815,51 +4815,101 @@ class TestFilterFatalXidNoise:
 
 
 class TestOutcomeReclassification:
-    @pytest.mark.parametrize("scheduler", [Scheduler.KUEUE, Scheduler.KAI])
-    def test_preempted_reclassified_to_pass(self, stream, obs_ctx, scheduler):
+    @pytest.mark.parametrize(
+        ("symptom", "outcome"),
+        [
+            # The fallback for a job with no evidence.
+            ("job failed", "Fail User"),
+            # Evidence that gives no failure verdict.
+            ("log unrecognized", "Incomplete Info"),
+        ],
+    )
+    @pytest.mark.parametrize("scheduler", [Scheduler.SLURM, Scheduler.KUEUE, Scheduler.KAI])
+    def test_preempted_reclassified_to_pass(self, stream, obs_ctx, scheduler, symptom, outcome):
         ji = _job_info_with(state="PREEMPTED", scheduler=scheduler)
         bad_nodes_result = CalcBadNodesAttributionResult()
         result = AttributionResult(event_stream=stream, bad_nodes_attr=bad_nodes_result)
-        result.outcome_attr = _make_outcome("Fail User")
+        result.outcome_attr = _make_outcome(outcome, root_cause=symptom)
 
-        # Non-empty and all "job failed": exercises the actual all(symptom ==
-        # "job failed" ...) check. An empty symptom set would make this test
-        # pass vacuously regardless of whether that check is implemented
-        # correctly.
-        symptoms = _make_symptoms(obs_ctx, "job failed")
+        symptoms = _make_symptoms(obs_ctx, symptom)
         result.symptoms.update(symptoms)
         _run_post_outcome(stream, ji, symptoms, outcome=result.outcome_attr, attribution_result=result)
         assert result.outcome_attr.value().outcome == "Pass"
         assert result.outcome_attr.value().root_cause_symptom == "SLURM preempted"
+        assert "Job preempted" in result.symptoms
+        if symptom == "job failed":
+            assert "job failed" not in result.symptoms
+        else:
+            assert symptom in result.symptoms
 
-    @pytest.mark.parametrize("scheduler", [Scheduler.KUEUE, Scheduler.KAI])
+    def test_preempted_with_demoted_failure_evidence_reclassified_to_pass(self, stream, obs_ctx):
+        # PostProcessSymptoms demotes a generic Python exception next to the cancel
+        # line after the outcome was set, so that verdict has no evidence left.
+        ji = _job_info_with(state="PREEMPTED")
+        result = AttributionResult(event_stream=stream, bad_nodes_attr=CalcBadNodesAttributionResult())
+        symptoms = _make_symptoms(obs_ctx, "Python Exception", "Cancelled by user")
+        result.symptoms.update(symptoms)
+        result.symptoms.discard("Python Exception")
+        result.outcome_attr = _make_outcome("Fail User", root_cause="Python Exception")
+
+        _run_post_outcome(stream, ji, symptoms, outcome=result.outcome_attr, attribution_result=result)
+
+        assert result.outcome_attr.value().root_cause_symptom == "SLURM preempted"
+        assert set(result.symptoms.symptoms()) == {"Job preempted"}
+
+    def test_preempted_with_only_ignored_metric_left_reclassified_to_pass(self, stream, obs_ctx):
+        # A metric that never selects an outcome does not support the stale verdict.
+        ji = _job_info_with(state="PREEMPTED")
+        result = AttributionResult(event_stream=stream, bad_nodes_attr=CalcBadNodesAttributionResult())
+        symptoms = _make_symptoms(obs_ctx, "Python Exception", "plr_tx_bw_loss_high_5m_1pct")
+        result.symptoms.update(symptoms)
+        result.symptoms.discard("Python Exception")
+        result.outcome_attr = _make_outcome("Fail User", root_cause="Python Exception")
+
+        _run_post_outcome(stream, ji, symptoms, outcome=result.outcome_attr, attribution_result=result)
+
+        assert result.outcome_attr.value().root_cause_symptom == "SLURM preempted"
+
+    def test_preempted_failure_restored_after_cancel_symptom_removed(self, stream, obs_ctx):
+        # "Cancelled by user" and the sigkill_handler failure share a tier, so the
+        # cancel line selects the outcome. Whether or not PostProcessSymptoms then
+        # removes it, the cancel symptom is not failure evidence and the failure stays.
+        ji = _job_info_with(state="PREEMPTED")
+        result = AttributionResult(event_stream=stream, bad_nodes_attr=CalcBadNodesAttributionResult())
+        symptoms = _make_symptoms(obs_ctx, "sigkill_handler] Killing subprocess", "Cancelled by user")
+        result.symptoms.update(symptoms)
+        result.outcome_attr = _make_outcome("Cancelled by User", root_cause="Cancelled by user")
+
+        _run_post_outcome(stream, ji, symptoms, outcome=result.outcome_attr, attribution_result=result)
+
+        assert result.outcome_attr.value().outcome == "Fail User"
+        assert result.outcome_attr.value().root_cause_symptom == "sigkill_handler] Killing subprocess"
+        assert "Job preempted" not in result.symptoms
+
+    def test_preempted_task_failure_keeps_failure(self, stream, obs_ctx):
+        # PostProcessSymptoms writes "job failed" for a task-failure cancellation.
+        # Unlike the status fallback, that is failure evidence.
+        ji = _job_info_with(state="PREEMPTED")
+        result = AttributionResult(event_stream=stream, bad_nodes_attr=CalcBadNodesAttributionResult())
+        result.symptoms.add(ji.source_value("job failed", "task failure", "task failure cancellation"))
+        result.outcome_attr = _make_outcome("Fail User", root_cause="Cancelled due to task failure")
+
+        _run_post_outcome(stream, ji, _make_symptoms(obs_ctx), outcome=result.outcome_attr, attribution_result=result)
+
+        assert result.outcome_attr.value().outcome == "Fail User"
+        assert "Job preempted" not in result.symptoms
+
+    @pytest.mark.parametrize("scheduler", [Scheduler.SLURM, Scheduler.KUEUE, Scheduler.KAI])
     def test_preempted_does_not_override_failure_evidence(self, stream, obs_ctx, scheduler):
         ji = _job_info_with(state="PREEMPTED", scheduler=scheduler)
         result = AttributionResult(event_stream=stream, bad_nodes_attr=CalcBadNodesAttributionResult())
         symptoms = _make_symptoms(obs_ctx, "XID-94-CONTAINED_ERROR")
         result.symptoms.update(symptoms)
-        result.outcome_attr = _make_outcome("Fail InfraHW")
+        result.outcome_attr = _make_outcome("Fail InfraHW", root_cause="XID-94-CONTAINED_ERROR")
 
         _run_post_outcome(stream, ji, symptoms, outcome=result.outcome_attr, attribution_result=result)
 
         assert result.outcome_attr.value().outcome == "Fail InfraHW"
-
-    def test_non_kueue_preempted_retains_existing_reclassification(self, stream, obs_ctx):
-        ji = _job_info_with(state="PREEMPTED")._replace(type="runai")
-        result = AttributionResult(event_stream=stream, bad_nodes_attr=CalcBadNodesAttributionResult())
-        symptoms = _make_symptoms(obs_ctx, "XID-94-CONTAINED_ERROR")
-        result.symptoms.update(symptoms)
-        result.outcome_attr = _make_outcome("Fail InfraHW")
-
-        _run_post_outcome(
-            stream,
-            ji,
-            symptoms,
-            outcome=result.outcome_attr,
-            attribution_result=result,
-        )
-
-        assert result.outcome_attr.value().outcome == "Pass"
 
     @pytest.mark.parametrize("scheduler", [Scheduler.KUEUE, Scheduler.KAI])
     def test_timeout_only_reclassified_to_pass(self, stream, obs_ctx, scheduler):
@@ -4901,9 +4951,25 @@ class TestOutcomeReclassification:
     def test_nvrx_success_with_preemption_becomes_pass(self, stream, obs_ctx):
         # PREEMPTED + NVRx 0:0 -> Pass (existing PREEMPTED branch, not blocked).
         ji = _job_info_with(state="PREEMPTED", tags=frozenset({"nvrx"}), exit_code=0, exit_code_signal=0)
-        result = self._nvrx_result(stream, "Fail User")
-        _run_post_outcome(stream, ji, _make_symptoms(obs_ctx), outcome=result.outcome_attr, attribution_result=result)
+        symptoms = _make_symptoms(obs_ctx, "job failed")
+        result = self._nvrx_result(stream, "Fail User", symptoms)
+        result.outcome_attr = _make_outcome("Fail User", root_cause="job failed")
+        _run_post_outcome(stream, ji, symptoms, outcome=result.outcome_attr, attribution_result=result)
         assert result.outcome_attr.value().outcome == "Pass"
+
+    @pytest.mark.parametrize("exit_fields", [(0, 0), (None, None)])
+    def test_nvrx_detected_failure_with_preemption_not_pass(self, stream, obs_ctx, exit_fields):
+        # PREEMPTED must not hide explicit NVRx failure evidence. (None, None) is how
+        # the caller passes a cycle whose parent exited 0:0.
+        exit_code, exit_code_signal = exit_fields
+        ji = _job_info_with(
+            state="PREEMPTED", tags=frozenset({"nvrx"}), exit_code=exit_code, exit_code_signal=exit_code_signal
+        )
+        symptoms = _make_symptoms(obs_ctx, "NVRx detected failure")
+        result = self._nvrx_result(stream, calculate_outcome(symptoms).value().outcome, symptoms)
+        _run_post_outcome(stream, ji, symptoms, outcome=result.outcome_attr, attribution_result=result)
+        assert result.outcome_attr.value().outcome == "Fail MultiCategory"
+        assert result.outcome_attr.value().root_cause_symptom != "SLURM preempted"
 
     def test_nvrx_success_does_not_override_clear_infra_hw(self, stream, obs_ctx):
         # A clean 0:0 must NOT override a clear hardware failure.
