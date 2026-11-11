@@ -17,6 +17,9 @@ For documentation and catalog prose, follow
 [Documentation review in CONTRIBUTING.md](CONTRIBUTING.md#documentation-review).
 Apply it to authored text, references, signals, examples, and rendered output.
 
+Follow `docs/style-guide.md` when you write Python and
+`docs/repo-conventions.md` for where code goes and how the repository works.
+
 ## Permitted operations
 
 - Read and search repository files and local Git history.
