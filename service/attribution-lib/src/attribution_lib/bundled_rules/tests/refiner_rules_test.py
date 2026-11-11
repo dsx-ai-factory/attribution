@@ -797,6 +797,53 @@ class TestIBSymptomCleanup:
         assert "Python Exception" in symptoms
         assert "IB Error-5 (IBV_WC_WR_FLUSH_ERR)" not in symptoms
 
+    @pytest.mark.parametrize("oom", ["cudaError out of memory", "System-out of memory"])
+    def test_applog_oom_keeps_ib_error_12(self, stream, obs_ctx, job_info, oom):
+        """An OOM seen only in the application log does not explain IB Error-12.
+
+        Args:
+            stream: Event stream fixture used by the refiner.
+            obs_ctx: Application log observation context fixture.
+            job_info: Job information fixture.
+            oom: OOM symptom reported by the application log.
+        """
+        ib12 = "IB Error-12 (IBV_WC_RETRY_EXC_ERR)"
+        symptoms = _make_symptoms(obs_ctx, oom, ib12)
+        bad_nodes = _make_bad_nodes(obs_ctx, {"node01": [oom, ib12]})
+
+        _run_ib_cleanup(stream, job_info, symptoms, bad_nodes)
+
+        assert oom in symptoms
+        assert ib12 in symptoms
+        assert ib12 in bad_nodes["node01"].attributions
+
+    @pytest.mark.parametrize(
+        "oom",
+        ["System-out of memory", "OOM kill of user task", "OOM kill of system service", "OOM kill of a system pod"],
+    )
+    def test_syslog_oom_discards_ib_error_12(self, stream, obs_ctx, job_info, oom):
+        """A kernel OOM in syslog explains IB Error-12, even next to an application log OOM.
+
+        Args:
+            stream: Event stream fixture used by the refiner.
+            obs_ctx: Application log observation context fixture.
+            job_info: Job information fixture.
+            oom: OOM symptom reported by syslog.
+        """
+        syslog_ctx = replace(obs_ctx, source=ObsSource.SYSLOG, id=Id(997))
+        stream.register_observation_context(syslog_ctx)
+        ib12 = "IB Error-12 (IBV_WC_RETRY_EXC_ERR)"
+        symptoms = _make_symptoms(obs_ctx, "cudaError out of memory", ib12)
+        symptoms.add(SourceSet(oom).add(_make_source(syslog_ctx)))
+        bad_nodes = _make_bad_nodes(obs_ctx, {"node01": ["cudaError out of memory", ib12]})
+        bad_nodes.add(["node01"], SourceSet(oom).add(_make_source(syslog_ctx)))
+
+        _run_ib_cleanup(stream, job_info, symptoms, bad_nodes)
+
+        assert oom in symptoms
+        assert ib12 not in symptoms
+        assert ib12 not in bad_nodes["node01"].attributions
+
     @pytest.mark.parametrize("lifecycle", ["Node reboot initiated", "System is powering down"])
     def test_orderly_lifecycle_discards_cross_node_ib_aftermath(self, stream, obs_ctx, job_info, lifecycle):
         """Treat orderly lifecycle evidence as the root cause of IB aftermath.
