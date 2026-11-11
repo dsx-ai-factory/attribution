@@ -54,6 +54,16 @@ def _connector(source=Source.SYSLOG, **kwargs):
     )
 
 
+def _reporting_pipeline(mocker):
+    """Build an orchestrator with observable Service ingestion and result delivery."""
+    service = mocker.Mock()
+    service.get_attribution.return_value = {"verdict": {"attribution_outcome": "Fail User"}}
+    service.ingest_observation.return_value.ingest.accepted = 1
+    service.ingest_observation.return_value.ingest.dropped = {}
+    output = mocker.Mock()
+    return AttributionOrchestrator([], [], [], service, [output]), service, output
+
+
 def test_renders_templates_and_sends_inclusive_window_as_exclusive_end(mocker):
     post = mocker.patch(
         "requests.Session.post",
@@ -113,12 +123,7 @@ def test_skipped_template_preserves_other_query_and_cannot_report_complete(missi
     post = mocker.patch(
         "requests.Session.post", return_value=_response(_ndjson([_row("2026-01-15T05:00:00Z", "kept")]), mocker)
     )
-    service = mocker.Mock()
-    service.get_attribution.return_value = {"verdict": {"attribution_outcome": "Fail User"}}
-    service.ingest_observation.return_value.ingest.accepted = 1
-    service.ingest_observation.return_value.ingest.dropped = {}
-    output = mocker.Mock()
-    pipeline = AttributionOrchestrator([], [], [], service, [output])
+    pipeline, service, output = _reporting_pipeline(mocker)
 
     result, succeeded = pipeline._process_one(_context(), [connector])
 
@@ -423,12 +428,8 @@ def test_page_budget_preserves_evidence_but_does_not_report_complete(mocker):
         for seconds in ((20, 10), (10, 9))
     ]
     mocker.patch("requests.Session.post", side_effect=[_response(page, mocker) for page in pages])
-    service = mocker.Mock()
-    service.get_attribution.return_value = {"verdict": {"attribution_outcome": "Fail User"}}
+    pipeline, service, output = _reporting_pipeline(mocker)
     service.ingest_observation.return_value.ingest.accepted = 3
-    service.ingest_observation.return_value.ingest.dropped = {}
-    output = mocker.Mock()
-    pipeline = AttributionOrchestrator([], [], [], service, [output])
 
     result, succeeded = pipeline._process_one(_context(), [_connector(limit=2, max_pages=2)])
 
@@ -511,6 +512,54 @@ def test_http_errors_propagate(status, mocker):
 
     with pytest.raises(requests.HTTPError, match=f"HTTP {status}"):
         _connector().collect(_context())
+
+
+@pytest.mark.parametrize("later_query", [False, True])
+@pytest.mark.parametrize("error_type", [requests.HTTPError, requests.Timeout])
+def test_request_failure_retains_pages_and_other_queries(later_query, error_type, mocker):
+    """A later page or query failure preserves evidence and permits subsequent queries."""
+    first = [_row("2026-01-15T05:00:20Z", "one")]
+    if later_query is False:
+        first.append(_row("2026-01-15T05:00:10Z", "two"))
+    response = requests.Response()
+    response.status_code = 503
+    error = error_type("diagnostic containing an endpoint must not be copied", response=response)
+    post = mocker.patch(
+        "requests.Session.post",
+        side_effect=[
+            _response(_ndjson(first), mocker),
+            error,
+            _response(_ndjson([_row("2026-01-15T05:00:30Z", "three")]), mocker),
+        ],
+    )
+    queries = ["first", "failed", "last"] if later_query is True else ["first", "last"]
+    connector = VictoriaLogsConnector(
+        endpoint="http://logs.example", source=Source.SYSLOG, templates={Source.SYSLOG: queries}, limit=2
+    )
+    pipeline, service, output = _reporting_pipeline(mocker)
+
+    result, succeeded = pipeline._process_one(_context(), [connector])
+
+    assert succeeded is True
+    assert post.call_count == 3
+    [report] = result["connector_reports"]
+    assert report["status"] == "partial"
+    assert f"request failed: {error_type.__name__} (HTTP 503)" in report["reason"]
+    assert "diagnostic containing" not in report["reason"]
+    assert result["evidence_status"] == "partial"
+    wire = service.ingest_observation.call_args.args[1].to_dict()
+    expected = ["one", "three"] if later_query is True else ["two", "one", "three"]
+    assert [entry["body"] for entry in json.loads(wire["body"])] == expected
+    assert output.write.call_args.args[1]["connector_reports"] == [report]
+
+
+def test_first_page_timeout_propagates_without_replacing_the_error(mocker):
+    """With no fetched evidence, a request failure remains the original collection error."""
+    error = requests.Timeout("timed out")
+    mocker.patch("requests.Session.post", side_effect=error)
+    with pytest.raises(requests.Timeout) as raised:
+        _connector().collect(_context())
+    assert raised.value is error
 
 
 def test_auth_none_and_token_header(mocker):

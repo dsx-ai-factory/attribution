@@ -988,8 +988,10 @@ Templates may use `{job_id}` (the execution context ID) and any `{key}` supplied
 in `query_kwargs`. LogsQL queries are paginated backward in time when a response
 reaches `limit`; rows at a page boundary are deduplicated. The collector report is
 `partial` with a reason when a template argument is missing, the page budget is
-exhausted, or a saturated response cannot advance past one timestamp, has no
-parseable `_time`, or reaches the window start. Available entries are retained.
+exhausted, a later request fails after rows have been fetched, or a saturated
+response cannot advance past one timestamp, has no parseable `_time`, or reaches
+the window start. Available entries are retained. A request failure before any
+rows are fetched remains a collection error.
 
 The bundled templates do not use `{cluster}`. A custom template can scope its
 query to a cluster with `{cluster}` and a `cluster` entry in `query_kwargs`.

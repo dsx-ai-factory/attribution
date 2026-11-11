@@ -10,6 +10,7 @@ from typing import Mapping
 
 from loguru import logger
 from requests.adapters import HTTPAdapter
+from requests.exceptions import RequestException
 from urllib3.util.retry import Retry
 
 from attribution_blueprint.connectors.auth import Auth
@@ -135,6 +136,7 @@ class VictoriaLogsConnector:
 
         Raises:
             PartialCollectionError: Paging or a configured query was incomplete; retains available observations.
+            RequestException: A request failed before any evidence was fetched.
         """
         start = assert_aware(context["start_time"], "start_time")
         end = assert_aware(context["end_time"], "end_time")
@@ -157,7 +159,12 @@ class VictoriaLogsConnector:
                 logger.warning(f"victorialogs template missing kwarg {error}; skipping query")
                 continue
             query = self._inject_node_filter(query, nodes)
-            query_rows, query_issues = self._query_window(query, start_ns, end_ns)
+            try:
+                query_rows, query_issues = self._query_window(query, start_ns, end_ns)
+            except RequestException as error:
+                if rows == []:
+                    raise
+                query_rows, query_issues = [], [_request_failure_reason(error)]
             issues.extend(f"query {index}: {issue}" for issue in query_issues)
             for row in query_rows:
                 key = json.dumps(row, sort_keys=True)
@@ -231,12 +238,21 @@ class VictoriaLogsConnector:
 
         Returns:
             Available rows and any reasons paging could not prove complete coverage.
+
+        Raises:
+            RequestException: The first request failed, leaving no rows from this query.
         """
         rows: list[dict] = []
         issues: list[str] = []
         cur_end = end_ns_excl
         for _ in range(self._max_pages):
-            page = self._read_page(query, start_ns, cur_end)
+            try:
+                page = self._read_page(query, start_ns, cur_end)
+            except RequestException as error:
+                if rows == []:
+                    raise
+                issues.append(_request_failure_reason(error))
+                return rows, issues
             if not page:
                 return rows, issues
             rows.extend(page)
@@ -305,6 +321,20 @@ def _format_timestamp_ns(timestamp_ns: int) -> str:
     seconds, nanoseconds = divmod(timestamp_ns, 1_000_000_000)
     timestamp = datetime.fromtimestamp(seconds, tz=UTC).strftime("%Y-%m-%dT%H:%M:%S")
     return f"{timestamp}.{nanoseconds:09d}Z"
+
+
+def _request_failure_reason(error: RequestException) -> str:
+    """Describe a request failure without copying URLs, headers or response bodies.
+
+    Args:
+        error: The failed transport operation.
+
+    Returns:
+        Exception type and HTTP status when the server supplied a response.
+    """
+    status = error.response.status_code if error.response is not None else None
+    detail = f" (HTTP {status})" if status is not None else ""
+    return f"request failed: {type(error).__name__}{detail}"
 
 
 def _rows_to_entries(rows: list[dict], node_field: str | None) -> list[TimeseriesEntry]:
