@@ -1,6 +1,5 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
-import atexit
 import contextlib
 import json
 import os
@@ -11,6 +10,7 @@ import weakref
 import zlib
 from collections.abc import Callable
 from enum import Enum, auto
+from multiprocessing.util import Finalize
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Optional, TypeAlias
 
@@ -308,7 +308,7 @@ _shared_lookup_cache: "weakref.WeakKeyDictionary[RuleEngine, tuple[Path, _Lookup
 _shared_lookup_tmpdir: Optional[str] = None
 # PID of the process that created `_shared_lookup_tmpdir`. A `os.fork()`'d
 # child (e.g. a pre-fork server's worker process) inherits both this global
-# and the `atexit` registration below, but must not delete the directory on
+# and the `Finalize` registration below, but must not delete the directory on
 # its own exit: it didn't create it, and the parent or sibling workers may
 # still have EventManagers ATTACHed to files inside it. Only the owning PID
 # performs cleanup; a forked child's exit is a no-op here.
@@ -320,6 +320,7 @@ _shared_lookup_counter = 0
 
 
 def _cleanup_shared_lookup_tmpdir() -> None:
+    """Remove the shared lookup directory only in the process that created it."""
     if _shared_lookup_tmpdir is not None and os.getpid() == _shared_lookup_tmpdir_owner_pid:
         shutil.rmtree(_shared_lookup_tmpdir, ignore_errors=True)
 
@@ -329,7 +330,9 @@ def _get_shared_lookup_tmpdir() -> str:
     if _shared_lookup_tmpdir is None:
         _shared_lookup_tmpdir = tempfile.mkdtemp(prefix="attribution_lib_shared_lookup_")
         _shared_lookup_tmpdir_owner_pid = os.getpid()
-        atexit.register(_cleanup_shared_lookup_tmpdir)
+        # Pool workers run these finalizers before os._exit(), which skips atexit.
+        # A negative priority defers cleanup until multiprocessing children exit.
+        Finalize(None, _cleanup_shared_lookup_tmpdir, exitpriority=-100)
     return _shared_lookup_tmpdir
 
 
@@ -411,7 +414,7 @@ def _build_shared_lookup_db(rules_engine: "RuleEngine") -> tuple[Path, _LookupPy
                 path.unlink(missing_ok=True)
                 Path(f"{path}.wal").unlink(missing_ok=True)
             except Exception:
-                # The process-owned temp directory remains covered by atexit.
+                # The process-owned temp directory remains covered by Finalize.
                 logger.exception("Failed to remove incomplete lookup database {}", path)
             raise
 
