@@ -2032,6 +2032,37 @@ outcome_symptom(
     hw_cause="Bad input tokens causing numerical instability",
 )
 
+# MegatronRerunVerdict refiner discards "Bad Token" on a node with a verdict.
+# Verdicts that say the result was not reproducible are informational only.
+known_symptom("Unexpected value not reproduced on same GPU")
+
+known_symptom("Transient error reported by Megatron")
+
+known_symptom("Unexpected value not reproduced on other GPU")
+
+known_symptom("Persistent error reported by Megatron")
+
+outcome_symptom(
+    "Unexpected value reproduced on same GPU",
+    outcome="Fail Undetermined",
+    priority=OutcomePriority.LOW_USER,
+    doc="unexpected-value-reproduced-on-same-gpu",
+)
+
+outcome_symptom(
+    "Unexpected value reproduced on other GPU",
+    outcome="Fail User",
+    priority=OutcomePriority.LOW_USER,
+    doc="unexpected-value-reproduced-on-other-gpu",
+)
+
+outcome_symptom(
+    "Application error reported by Megatron",
+    outcome="Fail User",
+    priority=OutcomePriority.LOW_USER,
+    doc="application-error-reported-by-megatron",
+)
+
 outcome_symptom(
     "pyxis: enroot mount failure from user directory",
     outcome="Fail User",

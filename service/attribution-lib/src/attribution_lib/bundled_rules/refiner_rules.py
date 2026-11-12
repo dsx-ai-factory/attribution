@@ -120,6 +120,8 @@ _REFINER_ORDER = [
     "CspEventPrecedenceAndCascades",
     "CancellationResolution",
     "SimpleSymptomCascades",
+    # Before NvrxFailureUserCauseCascade, which reads "Bad Token" and the verdicts.
+    "MegatronRerunVerdict",
     "MulticastNvErrSuppression",
     "WatchdogTerminateResolution",
     "NodeOfflineComposite",
@@ -419,6 +421,33 @@ _NVRX_FAILURE_USER_CAUSES = (
     "Python Exception: RuntimeError: pinned activation buffer budget exceeded",
     "Python Exception: FileNotFoundError: checkpoint iteration not found",
     "Bad Token",
+    "Unexpected value reproduced on other GPU",
+    "Application error reported by Megatron",
+)
+
+# Megatron rerun verdicts
+_MEGATRON_RERUN_OUTCOME_SYMPTOMS = frozenset(
+    {
+        "Unexpected value reproduced on same GPU",
+        "Unexpected value reproduced on other GPU",
+        "Application error reported by Megatron",
+    }
+)
+_MEGATRON_RERUN_SYMPTOMS = _MEGATRON_RERUN_OUTCOME_SYMPTOMS | {
+    "Unexpected value not reproduced on same GPU",
+    "Transient error reported by Megatron",
+    "Unexpected value not reproduced on other GPU",
+    "Persistent error reported by Megatron",
+}
+# The second rerun runs on a different node from the one that logged the
+# unexpected result, so these verdicts discard "Bad Token" on every node.
+_MEGATRON_SECOND_RERUN_SYMPTOMS = frozenset(
+    {
+        "Unexpected value not reproduced on other GPU",
+        "Unexpected value reproduced on other GPU",
+        "Persistent error reported by Megatron",
+        "Application error reported by Megatron",
+    }
 )
 
 _XID145_RXPIPE_SYMPTOM = "XID-145-RLW_RXPIPE-8"
@@ -1806,6 +1835,47 @@ def simple_symptom_cascades(context: RefinerContext):
     # NUMA memory exhaustion supersedes missing CUDA runtime
     if "NUMA node memory exhaustion" in symptoms:
         symptoms.discard("No CUDA runtime is found")
+
+
+@refiner_def(name="MegatronRerunVerdict", author="NVIDIA Attribution team", priority=_priority("MegatronRerunVerdict"))
+def megatron_rerun_verdict(context: RefinerContext):
+    """Replace "Bad Token" with the Megatron rerun verdict on the same node.
+
+    The verdicts are interesting node evidence, so they never blame a node. On
+    each node, or in the job-level group, that has a verdict, "Bad Token" is
+    discarded as it can be a transient issue in the presences of the re-run.
+    It is also discarded from the job-level symptoms when no group
+    still has it.
+
+    Args:
+        context: Refiner context with the job-level symptoms and my_bad_nodes.
+    """
+    symptoms = context.symptoms
+    my_bad_nodes = context.my_bad_nodes
+    if symptoms is None or my_bad_nodes is None:
+        return
+
+    groups = [group for _node, group in my_bad_nodes.symptom_groups()]
+    verdicts_by_group = [
+        [(symptom, sources) for symptom, sources in group.all_items() if symptom in _MEGATRON_RERUN_SYMPTOMS]
+        for group in groups
+    ]
+    job_wide = any(symptom in _MEGATRON_SECOND_RERUN_SYMPTOMS for v in verdicts_by_group for symptom, _ in v)
+    found_verdict = False
+    for group, verdicts in zip(groups, verdicts_by_group):
+        if len(verdicts) == 0 and job_wide is False:
+            continue
+        found_verdict = True
+        group.discard("Bad Token")
+        for symptom, sources in verdicts:
+            source = next(sources.all_sources(), None)
+            if symptom in _MEGATRON_RERUN_OUTCOME_SYMPTOMS and source is not None:
+                symptoms.add(SourceSet.new_one(symptom, source))
+
+    if found_verdict is False:
+        return
+    if not any("Bad Token" in group for _node, group in my_bad_nodes.symptom_groups()):
+        symptoms.discard("Bad Token")
 
 
 @refiner_def(
