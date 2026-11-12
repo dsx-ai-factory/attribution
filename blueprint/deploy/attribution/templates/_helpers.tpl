@@ -123,8 +123,8 @@ exec:
 {{- if and .Values.config.existing.secret.name (not .Values.config.existing.secret.key) -}}
 {{- fail "config.existing.secret.key is required" -}}
 {{- end -}}
-{{- if and (or .Values.runner.enabled .Values.dashboard.enabled) (not (hasPrefix "/data/" .Values.dashboard.databasePath)) -}}
-{{- fail "dashboard.databasePath must be under /data, the only path the runner and the dashboard share" -}}
+{{- if and (or .Values.runner.enabled .Values.dashboard.enabled) (not (regexMatch "^/data(/[^/]+)+$" .Values.dashboard.databasePath)) -}}
+{{- fail "dashboard.databasePath must be a file path under /data, the only path the runner and the dashboard share" -}}
 {{- end -}}
 {{- if and .Values.service.enabled .Values.dashboard.enabled (eq (int .Values.service.port) (int .Values.dashboard.port)) -}}
 {{- fail "service.port and dashboard.port must differ: both containers share the pod's network namespace" -}}

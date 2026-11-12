@@ -112,7 +112,7 @@ dashboard:
   command: []
   args: []
   port: 8080
-  # The results database that the dashboard reads. It must be under /data, the
+  # The results database that the dashboard reads. It must be a file path under /data, the
   # only path the runner and the dashboard share. The default matches the path
   # the generated Blueprint configuration writes to.
   databasePath: /data/attributions.db
