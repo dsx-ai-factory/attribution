@@ -322,19 +322,31 @@ def test_message_and_cloud_event_envelopes(mocker):
     ]
 
 
-def test_invalid_time_or_message_rows_are_skipped(mocker):
-    text = _ndjson(
-        [
-            _row("invalid", "bad timestamp"),
-            _row("2026-01-15T05:00:00Z", 42),
-        ]
-    )
+@pytest.mark.parametrize(
+    "invalid",
+    [
+        {"_time": "invalid", "_msg": "bad timestamp"},
+        {"_msg": "missing timestamp"},
+        {"_time": "2026-01-15T05:00:00Z", "_msg": 42},
+        {"_time": "2026-01-15T05:00:00Z", "_msg": None},
+        {"_time": "2026-01-15T05:00:00Z"},
+    ],
+)
+@pytest.mark.parametrize("include_valid", [False, True])
+def test_invalid_time_or_message_rows_report_partial_and_retain_valid_entries(invalid, include_valid, mocker):
+    rows = [invalid]
+    expected = []
+    if include_valid:
+        rows.append(_row("2026-01-15T05:00:01Z", "valid"))
+        expected = [{"body": "valid", "ts": 1768453201000000000}]
+    text = _ndjson(rows)
     mocker.patch("requests.Session.post", return_value=_response(text, mocker))
-    debug = mocker.patch.object(victorialogs.logger, "debug")
 
-    observations = _connector().collect(_context())
-    assert json.loads(observations[0]["body"]) == []
-    assert debug.call_count == 2
+    with pytest.raises(PartialCollectionError, match="1 row.*invalid _time or non-string _msg") as raised:
+        _connector().collect(_context())
+    observations = raised.value.observations
+    assert (json.loads(observations[0]["body"]) if observations else []) == expected
+    assert bool(observations) == include_valid
 
 
 @pytest.mark.parametrize("text", ["", " \n\n  "])
@@ -418,7 +430,8 @@ def test_saturated_page_without_parseable_timestamps_warns_and_stops(mocker):
     with pytest.raises(PartialCollectionError, match="no parseable _time") as raised:
         _connector(limit=2).collect(_context())
     observations = raised.value.observations
-    assert json.loads(observations[0]["body"]) == []
+    assert observations == []
+    assert "skipped 2 row(s) with invalid _time or non-string _msg" in str(raised.value)
     post.assert_called_once()
     warning.assert_called_once_with("victorialogs: saturated page has no parseable _time; stopping pagination")
 

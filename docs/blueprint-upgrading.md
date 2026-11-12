@@ -1,7 +1,7 @@
-<!--
+{/*
 SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 SPDX-License-Identifier: Apache-2.0
--->
+*/}
 
 # Blueprint upgrade guide
 
@@ -37,7 +37,7 @@ Complete collection still returns a list, including an empty list when no logs m
 Consumers of `connector_reports` must accept `"partial"` alongside `"ok"` and
 `"error"`. Available evidence does not establish complete coverage. For the
 conditions that produce partial collection, refer to
-[VictoriaLogs configuration](CONFIGURATION.md#victorialogs-syslog-or-applog).
+[VictoriaLogs configuration](https://github.com/dsx-ai-factory/attribution/blob/main/blueprint/docs/CONFIGURATION.md#victorialogs-syslog-or-applog).
 
 ### Multiple queries and request failures
 
@@ -49,5 +49,6 @@ If every attempted query fails without returning a response, the first request
 exception propagates as an error. Reordering queries does not turn retained
 evidence into a complete collection or prevent later queries from running.
 
-Missing template arguments and skipped malformed response records also report
-partial coverage. Blank response lines are ignored.
+Missing template arguments, malformed response records, and rows with invalid
+`_time` or non-string `_msg` also report partial coverage. Blank response lines
+are ignored. When no valid entries remain, partial collection carries no observations.

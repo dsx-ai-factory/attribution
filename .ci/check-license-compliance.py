@@ -242,8 +242,10 @@ def requires_apache_header(relative_path: str) -> bool:
     )
 
 
-def header_style(relative_path: str) -> tuple[str, str | None]:
+def header_style(relative_path: str, lines: list[str] | None = None) -> tuple[str, str | None]:
     suffix = PurePosixPath(relative_path).suffix
+    if suffix == ".md" and lines and lines[0] == "{/*":
+        return "", "*/}"
     if suffix in {".md", ".html", ".svg", ".vue"}:
         return "", "-->"
     if suffix == ".css":
@@ -254,7 +256,7 @@ def header_style(relative_path: str) -> tuple[str, str | None]:
 
 
 def expected_header_start(relative_path: str, lines: list[str]) -> int:
-    _, closing = header_style(relative_path)
+    _, closing = header_style(relative_path, lines)
     if closing is not None:
         index = 0
         if PurePosixPath(relative_path).suffix == ".md" and lines and lines[0] == "---":
@@ -264,7 +266,7 @@ def expected_header_start(relative_path: str, lines: list[str]) -> int:
                 return -1
             while index < len(lines) and not lines[index]:
                 index += 1
-        opening = "/*" if closing == " */" else "<!--"
+        opening = {" */": "/*", "*/}": "{/*"}.get(closing, "<!--")
         return index + 1 if index < len(lines) and lines[index] == opening else -1
     if relative_path == PARTIAL_HEADER:
         return (
@@ -360,7 +362,7 @@ def validate_headers_and_relics(
         lines = text.splitlines()
         identifier_occurrences = text.count(IDENTIFIER_TAG)
         copyright_occurrences = text.count(COPYRIGHT_TAG)
-        comment_prefix, closing = header_style(relative_path)
+        comment_prefix, closing = header_style(relative_path, lines)
         expected_identifier_line = f"{comment_prefix}{APACHE_IDENTIFIER}"
         header_start = expected_header_start(relative_path, lines)
         if (
@@ -404,7 +406,7 @@ def validate_headers_and_relics(
         ):
             violations.append(
                 f"{relative_path}: expected a closed SPDX HTML comment"
-                if closing == "-->"
+                if closing in {"-->", "*/}"}
                 else f"{relative_path}: expected a closed SPDX CSS comment"
             )
 

@@ -143,11 +143,10 @@ class VictoriaLogsConnector:
         start_ns = _datetime_ns(start)
         end_ns = _datetime_ns(end) + 1
         rows, issues = self._collect_queries(context, start_ns, end_ns)
-        observations = (
-            [log_observation(source=self._source, entries=_rows_to_entries(rows, self._node_field), context=context)]
-            if rows
-            else []
-        )
+        entries, skipped = _rows_to_entries(rows, self._node_field)
+        if skipped:
+            issues.append(f"skipped {skipped} row(s) with invalid _time or non-string _msg")
+        observations = [log_observation(source=self._source, entries=entries, context=context)] if entries else []
         if issues:
             raise PartialCollectionError("; ".join(dict.fromkeys(issues)), observations)
         return observations
@@ -364,7 +363,7 @@ def _request_failure_reason(error: RequestException) -> str:
     return f"request failed: {type(error).__name__}{detail}"
 
 
-def _rows_to_entries(rows: list[dict], node_field: str | None) -> list[TimeseriesEntry]:
+def _rows_to_entries(rows: list[dict], node_field: str | None) -> tuple[list[TimeseriesEntry], int]:
     """Normalize valid rows and order entries by timestamp.
 
     Args:
@@ -372,14 +371,16 @@ def _rows_to_entries(rows: list[dict], node_field: str | None) -> list[Timeserie
         node_field: Row field containing the node hostname, or None.
 
     Returns:
-        Timestamp-ordered entries accepted by the observation schema.
+        Timestamp-ordered entries and the count of rows dropped during normalization.
     """
     entries_with_timestamps = []
+    skipped = 0
     for row in rows:
         timestamp = _timestamp_ns(row.get("_time"))
         message = row.get("_msg")
         if timestamp is None or not isinstance(message, str):
             logger.debug("victorialogs: skipping row with invalid _time or non-string _msg")
+            skipped += 1
             continue
         row_node = row.get(node_field) if node_field else None
         if not isinstance(row_node, str) or not row_node:
@@ -398,4 +399,4 @@ def _rows_to_entries(rows: list[dict], node_field: str | None) -> list[Timeserie
 
     entries_with_timestamps.sort(key=lambda item: item[0])
     entries = [entry for _, entry in entries_with_timestamps]
-    return entries
+    return entries, skipped

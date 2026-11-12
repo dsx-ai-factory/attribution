@@ -102,7 +102,7 @@ reason in `connector_reports`. Other callers must handle this exception to retai
 the partial evidence. Complete collections still return an observation list.
 
 For changes required by existing callers, refer to the
-[Blueprint upgrade guide](upgrading.md#victorialogs-partial-collection-reporting).
+[Blueprint upgrade guide](../../docs/blueprint-upgrading.md#victorialogs-partial-collection-reporting).
 
 `collect` must emit a list of observations. The `log_observation` helper emits an entry timeseries: one entry per log line. Pass
 `entries=` built by `entries_from_text`, or by hand when the backend already gives

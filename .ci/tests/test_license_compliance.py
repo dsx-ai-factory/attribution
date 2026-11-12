@@ -417,6 +417,27 @@ class LicenseComplianceTest(unittest.TestCase):
             artifacts = make_artifact_set(root)
             self.assert_compliant(root, artifacts)
 
+    def test_mdx_spdx_headers_require_exact_notices_and_closed_comments(self) -> None:
+        relative_path = "docs/blueprint-upgrading.md"
+        with valid_fixture() as root:
+            (root / "docs").mkdir(exist_ok=True)
+            (root / relative_path).write_text(
+                "{/*\n"
+                f"{COPYRIGHT_TAG} Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.\n"
+                f"{APACHE_IDENTIFIER}\n"
+                "*/}\n\n# Upgrade guide\n",
+                encoding="utf-8",
+            )
+            self.stage(root, relative_path)
+            self.assert_compliant(root)
+            self.replace_and_stage(root, relative_path, "*/}", "*/")
+            self.assert_violation(root, f"{relative_path}: expected a closed SPDX HTML comment")
+            self.replace_and_stage(root, relative_path, "*/", "*/}")
+            self.replace_and_stage(root, relative_path, "Apache-2.0", "MIT")
+            self.assert_violation(
+                root, f"{relative_path}: expected one exact Apache SPDX comment after the permitted preamble"
+            )
+
     def test_rejects_each_mutated_canonical_license(self) -> None:
         for relative_path in CANONICAL_LICENSE_PATHS:
             with self.subTest(relative_path=relative_path), valid_fixture() as root:
