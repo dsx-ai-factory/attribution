@@ -5235,9 +5235,10 @@ class TestCudaOomTeardownCascade:
 
         symptoms = self._attribute(stream, job_info, bad_nodes)
 
-        assert self._XID45 in symptoms
-        for node in ("node02", "node03"):
-            assert self._XID45 in bad_nodes[node]
+        for symptom in self._CASCADE:
+            assert symptom in symptoms
+            for node in ("node02", "node03"):
+                assert symptom in bad_nodes[node]
 
     def test_an_untimed_oom_discards_nothing(self, stream, obs_ctx, job_info):
         bad_nodes = self._bad_nodes(obs_ctx, [self._OOM_TIME + timedelta(seconds=38)], oom_times=(None,))
