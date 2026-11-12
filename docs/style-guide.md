@@ -7,7 +7,7 @@ Rules come in two groups.
 1. **Standard rules** are backed by a PEP, the Python typing docs, an established style guide, or a linter rule. Each one links its source.
 2. **Team conventions** are choices we made where no external standard decides. Each one gives its reasoning and an example.
 
-Rules apply to test code too, unless a rule says tests are exempt.
+These rules are encouraged in tests but not enforced there, unless a rule says otherwise. [S13](#s13-test-every-behavior-change), [S14](#s14-name-tests-for-the-behavior-they-check) and [S15](#s15-keep-complex-logic-out-of-tests) are about tests and always apply.
 
 ## Standard rules
 
@@ -36,7 +36,7 @@ Source: [PEP 8](https://peps.python.org/pep-0008/#programming-recommendations)
 
 ### S2. Annotate types with modern syntax
 
-- Annotate every public function and method. Tests, fixtures and test helpers are exempt
+- Annotate every public function and method
 - Use built-in generics (`list`, `dict`), over `typing.List`
 - Write optional types as `X | None`, not `Optional[X]`
 - Avoid `Any`; if a parameter really accepts anything, use `object`
@@ -73,7 +73,7 @@ Source: [PEP 8](https://peps.python.org/pep-0008/#programming-recommendations)
 
 ### S4. Write docstrings, and comments that explain why
 
-Every public module, class, function and method has a docstring, except in tests, where the test name states the behavior ([S14](#s14-name-tests-for-the-behavior-they-check)). Write docstring summaries either imperatively ("Return the ...") or descriptively ("Returns the ..."), and keep one style within a module. Comments explain why the code does something, not what it does. If a comment needs a paragraph to explain what a block does, extract the block into a well-named function instead. Update comments when the code changes.
+Every public module, class, function and method has a docstring. Write docstring summaries either imperatively ("Return the ...") or descriptively ("Returns the ..."), and keep one style within a module. Comments explain why the code does something, not what it does. If a comment needs a paragraph to explain what a block does, extract the block into a well-named function instead. Update comments when the code changes.
 
 ```python
 # Yes
@@ -125,7 +125,7 @@ Source: [The Pragmatic Programmer | Tip 15](https://pragprog.com/tips/)
 
 ### S8. Name magic values
 
-Give magic values a name. This covers numbers and also strings that carry meaning, such as a wildcard or sentinel like `"*"`. The name says what the value means and keeps every use in sync. Tests may use literal values, because expected outputs are written as literals ([S15](#s15-keep-complex-logic-out-of-tests)).
+Give magic values a name. This covers numbers and also strings that carry meaning, such as a wildcard or sentinel like `"*"`. The name says what the value means and keeps every use in sync.
 
 ```python
 # Yes
@@ -165,7 +165,7 @@ Source: [PEP 544](https://peps.python.org/pep-0544/)
 
 ### S11. Use typed structures, not primitives
 
-When data has structure, give it a type: a `NamedTuple`, `dataclass`, enum or `TypedDict`. Avoid long tuples, deeply nested dicts, and plain strings that stand for a fixed set of values. For an enum whose values are strings, use `StrEnum`, not `Enum` or `(str, Enum)`, so members behave as their string value everywhere, including comparisons, `str()` and f-strings. With `(str, Enum)`, `str(m)` and `f"{m}"` give `"Cls.MEMBER"`. Test data, such as `pytest.mark.parametrize` cases, may use plain tuples, dicts and strings.
+When data has structure, give it a type: a `NamedTuple`, `dataclass`, enum or `TypedDict`. Avoid long tuples, deeply nested dicts, and plain strings that stand for a fixed set of values. For an enum whose values are strings, use `StrEnum`, not `Enum` or `(str, Enum)`, so members behave as their string value everywhere, including comparisons, `str()` and f-strings. With `(str, Enum)`, `str(m)` and `f"{m}"` give `"Cls.MEMBER"`.
 
 ```python
 # Yes
