@@ -2,7 +2,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { describe, expect, it } from 'vitest'
-import { parseFilter, serializeFilter } from '@/lib/filter-state'
+import { applyFilter, DEFAULT_FILTER, parseFilter, serializeFilter } from '@/lib/filter-state'
+import type { RunSummary } from '@/interfaces/attribution'
 import type { FleetFilter } from '@/interfaces/filter'
 
 describe('filter date window mode', () => {
@@ -76,5 +77,38 @@ describe('date range validation', () => {
 
     expect(filter.from).toBeUndefined()
     expect(filter.to).toBeUndefined()
+  })
+})
+
+describe('free-text search', () => {
+  const run = (id: string, nodeIds: string[], attemptUid: string): RunSummary => ({
+    id,
+    jobId: id,
+    workload: '—',
+    attempt: 1,
+    attemptUid,
+    user: 'alice',
+    status: 'FAILED',
+    nodes: nodeIds.length,
+    nodeIds,
+    elapsedH: 1,
+    gpusPerNode: 8,
+    gpuCount: 8,
+    endTime: '2026-05-01T01:00:00Z',
+    startTime: '2026-05-01T00:00:00Z',
+    outcome: 'hardware',
+    verdictLabel: 'Hardware',
+    detail: '',
+    decisionGraphState: 'absent',
+    rootSymptom: { symptom: 'Xid79', rule: 'xid', time: '', line: '' },
+    symptoms: [],
+    responsibleNodes: ['node-a'],
+    pipeline: '1',
+    service: '2',
+  })
+  const runs = [run('100', ['alloc-node-7', 'node-a'], 'attempt-uid-7'), run('101', ['node-a'], 'sluid-b')]
+
+  it.each(['ALLOC-NODE-7', 'attempt-uid-7'])('matches %s against allocated nodes and attempt UID', (q) => {
+    expect(applyFilter(runs, { ...DEFAULT_FILTER, q }).map((r) => r.id)).toEqual(['100'])
   })
 })
