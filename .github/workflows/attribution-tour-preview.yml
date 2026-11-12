@@ -140,3 +140,20 @@ jobs:
           pages-base-url: ${{ steps.pages_base.outputs.value }}
           wait-for-pages-deployment: ${{ steps.pages.outcome == 'success' }}
           qr-code: false
+
+      # A wrong build base still deploys, but the page renders blank because
+      # its scripts and stylesheets 404. Load the live preview to catch that.
+      # The checker comes from the trusted base revision, so skip it until it
+      # exists there.
+      - name: Check published preview loads its assets
+        if: >-
+          github.event.action != 'closed' &&
+          steps.pages.outcome == 'success' &&
+          hashFiles('.github/scripts/check_pages_deploy.py') != ''
+        env:
+          PAGES_BASE_URL: ${{ steps.pages.outputs.base_url }}
+          PR_NUMBER: ${{ github.event.number }}
+        run: >-
+          python3 .github/scripts/check_pages_deploy.py
+          "${PAGES_BASE_URL%/}/pr-preview/pr-${PR_NUMBER}/"
+          .preview-artifact/docs/attribution-tour/dist/index.html
