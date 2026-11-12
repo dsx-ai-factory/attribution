@@ -151,3 +151,33 @@ def test_date_window_normalizes_end_time_offsets_to_utc(tmp_path):
     data = dbmod.dashboard_data(str(p), since="2026-08-08", until="2026-08-08")
     assert data["metrics"]["windowedRuns"] == 2
     assert [(d["date"], d["hw"]) for d in data["daily"]] == [("2026-08-08", 2)]
+
+
+def test_unfiltered_dashboard_spine_uses_utc_days(tmp_path):
+    """Without a window, chart days and date bounds follow the UTC bucket of offset runs."""
+    p = tmp_path / "offset-only.db"
+    pacific = timezone(timedelta(hours=-7))
+    out = SQLiteOutput(str(p))
+    out.write(_ctx("offset-job", "s1", datetime(2026, 8, 7, 23, 30, tzinfo=pacific)), _attr("Fail InfraHW"))
+    out.close()
+
+    data = dbmod.dashboard_data(str(p))
+    assert data["metrics"]["windowedRuns"] == 1
+    assert [(d["date"], d["hw"]) for d in data["daily"]] == [("2026-08-08", 1)]
+    assert data["meta"]["dateBounds"]["max"] == "2026-08-08"
+
+
+def test_date_window_seeks_end_time_index(tmp_path):
+    """The UTC window keeps an indexed end_time range so narrow windows do not scan every run."""
+    p = tmp_path / "plan.db"
+    out = SQLiteOutput(str(p))
+    out.write(_ctx("J1", "s1", datetime(2026, 8, 8, 1, tzinfo=timezone.utc)), _attr("Fail InfraHW"))
+    out.close()
+    clauses, params = dbmod._filtered_clauses(since="2026-08-08", until="2026-08-08")
+    sql = (
+        "EXPLAIN QUERY PLAN SELECT COUNT(*) FROM attribution_run r "
+        "JOIN execution_context c ON c.id = r.execution_context_id WHERE " + " AND ".join(clauses)
+    )
+    with sqlite3.connect(p) as conn:
+        plan = " ".join(row[-1] for row in conn.execute(sql, params).fetchall())
+    assert "idx_execution_context_end_time" in plan

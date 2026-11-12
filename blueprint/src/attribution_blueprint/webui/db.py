@@ -316,13 +316,16 @@ def _filtered_clauses(
         clauses.append("r.outcome = ?")
         params.append(raw_outcome)
     # Compare instants, not stored text: end_time keeps its source offset, and
-    # the UI date window is a UTC day.
+    # the UI date window is a UTC day. The stored-text range widened by one day
+    # covers every UTC offset (at most 14 hours) and lets SQLite seek the
+    # end_time index before the exact julianday() check.
     if since is not None:
-        clauses.append("julianday(c.end_time) >= julianday(?)")
-        params.append(since)
+        clauses.append("c.end_time >= ? AND julianday(c.end_time) >= julianday(?)")
+        params.extend([_iso_prev_day(since), since])
     if until is not None:
-        clauses.append("julianday(c.end_time) < julianday(?)")
-        params.append(_iso_next_day(until))
+        upper = _iso_next_day(until)
+        clauses.append("c.end_time < ? AND julianday(c.end_time) < julianday(?)")
+        params.extend([_iso_next_day(upper), upper])
     if status == "failed":
         clauses.append("r.outcome != ?")
         params.append("Pass")
@@ -579,6 +582,19 @@ def _iso_next_day(iso_date: str) -> str:
 
     d = date.fromisoformat(iso_date)
     return (d + timedelta(days=1)).isoformat()
+
+
+def _iso_prev_day(iso_date: str) -> str:
+    """Subtract one day from an ISO date string for widened lower bounds.
+
+    Args:
+        iso_date: ISO calendar date.
+
+    Returns:
+        The previous ISO calendar date.
+    """
+
+    return (date.fromisoformat(iso_date[:10]) - timedelta(days=1)).isoformat()
 
 
 def date_range_bounds(path: str) -> tuple[str | None, str | None]:
@@ -1327,7 +1343,9 @@ def _db_total_runs_conn(conn: sqlite3.Connection) -> int:
 
 
 def _db_date_bounds_conn(conn: sqlite3.Connection) -> tuple[str | None, str | None]:
-    """Return the first and last run end days held by the whole database.
+    """Return the first and last UTC run end days held by the whole database.
+
+    Days come from ``date(end_time)`` so they match the UTC daily buckets.
 
     Args:
         conn: SQLite connection.
@@ -1337,14 +1355,12 @@ def _db_date_bounds_conn(conn: sqlite3.Connection) -> tuple[str | None, str | No
     """
 
     row = conn.execute(
-        "SELECT MIN(c.end_time) AS lo, MAX(c.end_time) AS hi "
+        "SELECT MIN(date(c.end_time)) AS lo, MAX(date(c.end_time)) AS hi "
         "FROM attribution_run r JOIN execution_context c ON c.id = r.execution_context_id"
     ).fetchone()
     if row is None:
         return None, None
-    lo = row["lo"][:10] if row["lo"] is not None else None
-    hi = row["hi"][:10] if row["hi"] is not None else None
-    return lo, hi
+    return row["lo"], row["hi"]
 
 
 def _pareto_ledger(entries: list[dict[str, Any]], name: str) -> list[dict[str, Any]]:
@@ -1888,7 +1904,10 @@ def dashboard_data(
     with _connect(path) as conn:
         metric_row = conn.execute(metric_sql, tuple(params)).fetchone()
         window_gpu_count = _window_gpu_count_conn(conn, clauses, params)
-        lo_hi = conn.execute("SELECT MIN(end_time) AS lo, MAX(end_time) AS hi FROM execution_context").fetchone()
+        # UTC days, matching the date(c.end_time) daily buckets.
+        lo_hi = conn.execute(
+            "SELECT MIN(date(end_time)) AS lo, MAX(date(end_time)) AS hi FROM execution_context"
+        ).fetchone()
         db_total_runs = _db_total_runs_conn(conn)
         db_min, db_max = _db_date_bounds_conn(conn)
         summary = db_summary(path)
