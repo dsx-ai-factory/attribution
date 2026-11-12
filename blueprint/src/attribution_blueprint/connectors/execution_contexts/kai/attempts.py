@@ -22,6 +22,7 @@ from attribution_blueprint.kubernetes.attempts import (
     parse_time,
     restart_attempt,
     restart_starts,
+    retained_history_covers_window,
     within,
 )
 
@@ -238,6 +239,15 @@ def attempts_from_podgroup_history(
                 allow_before_start=not recreated,
             ),
         )
+        if owner["kind"] == "JobSet":
+            starts = _coalesce_initial_allocation(
+                starts,
+                observations,
+                terminals,
+                pod_group_name,
+                [history.get("coverage") or {}, *(history.get("coverages") or [])],
+                lifetime_start,
+            )
         for index, start in enumerate(starts):
             first_attempt_for_restart = not any(
                 previous["restart_attempt"] == start["restart_attempt"]
@@ -600,6 +610,81 @@ def _attempt_starts(
                 }
             )
     return starts
+
+
+def _coalesce_initial_allocation(
+    starts: list[dict],
+    observations: list[dict],
+    terminal_events: list[dict],
+    pod_group_name: str,
+    coverages: list[dict],
+    lifetime_start: str,
+) -> list[dict]:
+    """Join a retry's first allocation only when continuous history proves it."""
+    result = []
+    for start in starts:
+        previous = result[-1] if result else None
+        result.append(start)
+        if (
+            previous is None
+            or previous["restart_attempt"] != start["restart_attempt"]
+            or previous["time"] == previous["start_key"]
+        ):
+            continue
+        begin, end = parse_time(previous["time"]), parse_time(start["time"])
+        if not any(
+            retained_history_covers_window(
+                c,
+                {"pods", "jobs", "jobsets", "kai-podgroups"},
+                parse_time(lifetime_start),
+                end,
+            )
+            for c in coverages
+        ):
+            continue
+        pending, allocated, earlier = False, False, False
+        for observation in observations:
+            if (
+                observation.get("kind") != "Pod"
+                or restart_attempt(observation) != start["restart_attempt"]
+                or not _pod_matches_attempt(
+                    observation,
+                    pod_group_name,
+                    start["restart_attempt"],
+                    allow_unannotated=False,
+                )
+            ):
+                continue
+            status = observation.get("status") or {}
+            execution_start = status.get("startTime")
+            earlier |= bool(execution_start and parse_time(execution_start) < end)
+            pending |= (
+                status.get("phase") == "Pending"
+                and not execution_start
+                and begin <= parse_time(observation["observedAt"]) < end
+            )
+            for condition in status.get("conditions") or []:
+                if (
+                    condition.get("type") == "PodScheduled"
+                    and condition.get("status") == "True"
+                    and condition.get("lastTransitionTime")
+                ):
+                    scheduled = parse_time(condition["lastTransitionTime"])
+                    earlier |= scheduled < end
+                    allocated |= scheduled == end
+        if (
+            pending
+            and allocated
+            and not earlier
+            and not any(
+                begin <= parse_time(event["time"]) < end
+                and event["type"] in {"Failed", "Complete", "Completed"}
+                and event.get("restart_attempt") in {None, start["restart_attempt"]}
+                for event in terminal_events
+            )
+        ):
+            result.pop()
+    return result
 
 
 def _terminal_events(observations: list[dict]) -> list[dict]:
