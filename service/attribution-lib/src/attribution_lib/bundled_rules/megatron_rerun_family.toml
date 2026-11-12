@@ -8,10 +8,11 @@
 # front of some messages and "!" after them, and it logs at ERROR or WARNING. The
 # keys match the message text only.
 #
-# Every verdict is interesting node evidence and never blames a node: the second
-# rerun runs on a healthy node. The MegatronRerunVerdict refiner discards
-# "Bad Token" on a node that logged a verdict, and adds the verdicts that have an
-# outcome to the job-level symptoms.
+# Each verdict stays on the node that logged it as supporting evidence. It does
+# not make that node a bad node, because the second rerun runs on a different
+# GPU. The MegatronRerunVerdict refiner discards each "Bad Token" with the same
+# iteration number as a verdict, and adds the verdicts that have an outcome to
+# the job-level symptoms.
 
 author  = "NVIDIA Attribution team"
 sources = ["APPLOG"]

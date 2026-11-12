@@ -439,16 +439,9 @@ _MEGATRON_RERUN_SYMPTOMS = _MEGATRON_RERUN_OUTCOME_SYMPTOMS | {
     "Unexpected value not reproduced on other GPU",
     "Persistent error reported by Megatron",
 }
-# The second rerun runs on a different node from the one that logged the
-# unexpected result, so these verdicts discard "Bad Token" on every node.
-_MEGATRON_SECOND_RERUN_SYMPTOMS = frozenset(
-    {
-        "Unexpected value not reproduced on other GPU",
-        "Unexpected value reproduced on other GPU",
-        "Persistent error reported by Megatron",
-        "Application error reported by Megatron",
-    }
-)
+# Megatron writes "iteration #N" in the unexpected-result line and in each
+# verdict line that has the rank prefix.
+_MEGATRON_ITERATION = re.compile(r"iteration #(\d+)")
 
 _XID145_RXPIPE_SYMPTOM = "XID-145-RLW_RXPIPE-8"
 # Slurm sends SIGKILL KillWait after SIGTERM, and KillWait was 120 s on every
@@ -1839,13 +1832,17 @@ def simple_symptom_cascades(context: RefinerContext):
 
 @refiner_def(name="MegatronRerunVerdict", author="NVIDIA Attribution team", priority=_priority("MegatronRerunVerdict"))
 def megatron_rerun_verdict(context: RefinerContext):
-    """Replace "Bad Token" with the Megatron rerun verdict on the same node.
+    """Replace "Bad Token" with the Megatron rerun verdict for the same iteration.
 
-    The verdicts are interesting node evidence, so they never blame a node. On
-    each node, or in the job-level group, that has a verdict, "Bad Token" is
-    discarded as it can be a transient issue in the presences of the re-run.
-    It is also discarded from the job-level symptoms when no group
-    still has it.
+    A verdict stays on the node that logged it as supporting evidence. It does
+    not make that node a bad node, because the second rerun runs on a different
+    GPU from the one that produced the unexpected value.
+
+    A verdict discards each "Bad Token" line that has the same iteration
+    number, on every node and in the job-level symptoms. A "Bad Token" from
+    another iteration, or with no iteration number, stays. The verdicts that
+    set an outcome are added to the job-level symptoms with all of their
+    source lines.
 
     Args:
         context: Refiner context with the job-level symptoms and my_bad_nodes.
@@ -1856,26 +1853,38 @@ def megatron_rerun_verdict(context: RefinerContext):
         return
 
     groups = [group for _node, group in my_bad_nodes.symptom_groups()]
-    verdicts_by_group = [
-        [(symptom, sources) for symptom, sources in group.all_items() if symptom in _MEGATRON_RERUN_SYMPTOMS]
+    verdicts = [
+        (symptom, sources)
         for group in groups
+        for symptom, sources in group.all_items()
+        if symptom in _MEGATRON_RERUN_SYMPTOMS
     ]
-    job_wide = any(symptom in _MEGATRON_SECOND_RERUN_SYMPTOMS for v in verdicts_by_group for symptom, _ in v)
-    found_verdict = False
-    for group, verdicts in zip(groups, verdicts_by_group):
-        if len(verdicts) == 0 and job_wide is False:
-            continue
-        found_verdict = True
-        group.discard("Bad Token")
-        for symptom, sources in verdicts:
-            source = next(sources.all_sources(), None)
-            if symptom in _MEGATRON_RERUN_OUTCOME_SYMPTOMS and source is not None:
-                symptoms.add(SourceSet.new_one(symptom, source))
-
-    if found_verdict is False:
+    if len(verdicts) == 0:
         return
-    if not any("Bad Token" in group for _node, group in my_bad_nodes.symptom_groups()):
-        symptoms.discard("Bad Token")
+
+    for symptom, sources in verdicts:
+        if symptom in _MEGATRON_RERUN_OUTCOME_SYMPTOMS:
+            job_sources = SourceSet(symptom)
+            for source in sources.all_sources():
+                job_sources.add(source)
+            symptoms.add(job_sources)
+
+    iterations = {
+        match.group(1)
+        for _symptom, sources in verdicts
+        for source in sources.all_sources()
+        if (match := _MEGATRON_ITERATION.search(source.datum)) is not None
+    }
+    for symptom_set in [symptoms, *groups]:
+        if "Bad Token" not in symptom_set:
+            continue
+        symptom_set["Bad Token"].discard_selected(
+            [
+                source
+                for source in symptom_set["Bad Token"]
+                if (match := _MEGATRON_ITERATION.search(source.datum)) is not None and match.group(1) in iterations
+            ]
+        )
 
 
 @refiner_def(
@@ -2402,8 +2411,7 @@ def last_resort_symptoms(context: RefinerContext):
         elif job_info.state == "REQUEUED":
             symptoms.add(job_info.source_value("Job requeued", job_info.state, "last resort; slurm status"))
         elif job_info.state == "EVICTED" or (
-            job_info.state == "UNKNOWN"
-            and job_info.scheduler in KUBERNETES_SCHEDULER_TYPES
+            job_info.state == "UNKNOWN" and job_info.scheduler in KUBERNETES_SCHEDULER_TYPES
         ):
             pass
         elif job_info.state != "RUNNING":
@@ -2550,7 +2558,7 @@ def xid149_and_nvlink_filtering(context: RefinerContext):
     """XID-149 priority filtering and nvlink symptom cleanup.
 
     Overall Priority: XID-149.4 > XID-149.10 > other XID-149.x > XID-149.0
-    
+
     Exceptions:
     - XID-149.21 survives XID-149.4
     """
