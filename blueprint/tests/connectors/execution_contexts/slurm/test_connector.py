@@ -5,6 +5,8 @@ import subprocess
 from datetime import datetime
 from pathlib import Path
 
+import pytest
+
 from attribution_blueprint.connectors.execution_contexts.slurm import (
     SlurmExecutionContextAdapter,
 )
@@ -405,3 +407,38 @@ def test_std_out_with_array_tokens_resolves_at_ctx_boundary(mocker):
     assert ctx["attempt_index"] == 3
     assert ctx["std_out"] == "/path/to/logs/8200_3.out"
     assert ctx["std_err"] == "/path/to/logs/8200_3.err"
+
+
+def _alloc_tres_row(alloc_tres: str) -> str:
+    """Build a 14-field sacct row on two nodes with the given AllocTRES."""
+    return (
+        "9300|9300|sluid-9300|FAILED|2026-05-01T12:00:00|2026-05-01T12:30:00"
+        f"|node[001-002]||60|{alloc_tres}|||alice|train"
+    )
+
+
+@pytest.mark.parametrize(
+    ("alloc_tres", "expected"),
+    [
+        # Partial allocation: 1 GPU on an 8-GPU node.
+        ("cpu=8,mem=32G,gres/gpu=1", 1),
+        # Generic and typed counts describe the same GPUs; do not sum them.
+        ("cpu=16,gres/gpu=4,gres/gpu:h200=4,node=2", 4),
+        # Typed-only MIG slices (mixed 1g/2g profiles) are summed.
+        ("cpu=4,gres/gpu:1g.24gb=2,gres/gpu:2g.48gb=1", 3),
+        # gres/gpumem is not a GPU count.
+        ("cpu=4,gres/gpu=2,gres/gpumem=48G", 2),
+        # CPU-only allocation.
+        ("cpu=8,mem=32G", 0),
+    ],
+)
+def test_gpu_count_is_parsed_from_alloc_tres(mocker, alloc_tres, expected):
+    _mock_sacct(mocker, _alloc_tres_row(alloc_tres))
+    [ctx] = SlurmExecutionContextAdapter().discover_by_ids(["9300"])
+    assert ctx["gpu_count"] == expected
+
+
+def test_gpu_count_absent_without_alloc_tres(mocker):
+    _mock_sacct(mocker, _alloc_tres_row(""))
+    [ctx] = SlurmExecutionContextAdapter().discover_by_ids(["9300"])
+    assert "gpu_count" not in ctx

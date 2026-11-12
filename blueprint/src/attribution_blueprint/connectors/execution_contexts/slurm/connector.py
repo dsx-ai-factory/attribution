@@ -51,6 +51,7 @@ class SlurmExecutionContext(TypedDict):
     cancelled_by: NotRequired[str]
     time_limit: NotRequired[int]
     alloc_tres: NotRequired[str]
+    gpu_count: NotRequired[int]
     std_out: NotRequired[str]
     std_err: NotRequired[str]
 
@@ -138,6 +139,38 @@ def _parse_state(state: str) -> tuple[str, str | None]:
     if state.startswith("CANCELLED by "):
         return "CANCELLED", state.removeprefix("CANCELLED by ").strip()
     return state, None
+
+
+def _gpu_count_from_alloc_tres(alloc_tres: str) -> int:
+    """Return the number of GPUs in a Slurm AllocTRES string.
+
+    Args:
+        alloc_tres: Raw AllocTRES value, such as
+            ``cpu=16,gres/gpu=4,gres/gpu:h200=4``.
+
+    Returns:
+        The generic ``gres/gpu`` count when present. Typed entries such as
+        ``gres/gpu:h200`` repeat that count, so they are summed only when the
+        generic entry is absent. Returns 0 when no GPU entry is present.
+    """
+    generic: int | None = None
+    typed = 0
+    for part in alloc_tres.split(","):
+        key, _, raw_value = part.partition("=")
+        key = key.strip()
+        if key != "gres/gpu" and not key.startswith("gres/gpu:"):
+            continue
+        try:
+            value = int(raw_value)
+        except ValueError:
+            continue
+        if key == "gres/gpu":
+            generic = value
+        else:
+            typed += value
+    if generic is not None:
+        return generic
+    return typed
 
 
 def _parse_row(row: str, cluster_tz: ZoneInfo | None = None) -> SlurmExecutionContext | None:
@@ -274,6 +307,7 @@ def _parse_row(row: str, cluster_tz: ZoneInfo | None = None) -> SlurmExecutionCo
             pass
     if alloc_tres:
         ctx["alloc_tres"] = alloc_tres
+        ctx["gpu_count"] = _gpu_count_from_alloc_tres(alloc_tres)
     if user_name:
         ctx["user_name"] = user_name
     # std_out/std_err may still carry Slurm filename patterns (`%j`, `%x`,
