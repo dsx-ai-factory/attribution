@@ -78,6 +78,10 @@ shared image. Called as (list $ "service"), (list $ "runner") or (list $ "dashbo
 httpGet:
   path: /v2/healthz
   port: api
+{{- else if $root.Values.service.probes.command }}
+exec:
+  command:
+{{ toYaml $root.Values.service.probes.command | indent 4 }}
 {{- else }}
 exec:
   command:
@@ -95,15 +99,6 @@ exec:
 {{- if .Values.runner.enabled -}}
 {{- if not .Values.namespaces -}}
 {{- fail "namespaces is required when the runner is enabled: list the namespaces whose workloads are attributed" -}}
-{{- end -}}
-{{- if not (has .Values.eca.component (list "kai" "kueue")) -}}
-{{- fail (printf "eca.component must be kai or kueue, got %q (static and slurm do not apply inside a cluster)" .Values.eca.component) -}}
-{{- end -}}
-{{- if not .Values.logs.connector -}}
-{{- fail "logs.connector is required: the name of the pod-log component, for example kubectl_logs" -}}
-{{- end -}}
-{{- if not (has .Values.rbac.scope (list "namespaced" "cluster")) -}}
-{{- fail (printf "rbac.scope must be namespaced or cluster, got %q" .Values.rbac.scope) -}}
 {{- end -}}
 {{- if le (int .Values.runner.initialLookbackSeconds) (int .Values.runner.settleSeconds) -}}
 {{- fail "runner.initialLookbackSeconds must be larger than runner.settleSeconds, or a pass window is empty" -}}
@@ -127,6 +122,12 @@ exec:
 {{- end -}}
 {{- if and .Values.config.existing.secret.name (not .Values.config.existing.secret.key) -}}
 {{- fail "config.existing.secret.key is required" -}}
+{{- end -}}
+{{- if and .Values.service.enabled .Values.dashboard.enabled (eq (int .Values.service.port) (int .Values.dashboard.port)) -}}
+{{- fail "service.port and dashboard.port must differ: both containers share the pod's network namespace" -}}
+{{- end -}}
+{{- if and .Values.persistence.existingClaim (eq (include "attribution.persistence" .) "false") -}}
+{{- fail "persistence.existingClaim has no effect when the volume is off: remove it, or leave persistence.enabled unset" -}}
 {{- end -}}
 {{- if and .Values.service.api.enabled (not .Values.service.enabled) -}}
 {{- fail "service.api.enabled needs service.enabled" -}}

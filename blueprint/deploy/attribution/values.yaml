@@ -59,8 +59,11 @@ service:
   extraVolumeMounts: []
   # The Service probes use /v2/healthz. When the Service listens only on
   # localhost, the probes run inside the container, because the kubelet
-  # connects to the pod address.
+  # connects to the pod address. That command runs the bundle image's Python;
+  # set probes.command to a command that exists in your image if you override
+  # service.image or service.command.
   probes:
+    command: []
     readiness: {initialDelaySeconds: 15, periodSeconds: 15, timeoutSeconds: 5}
     liveness: {initialDelaySeconds: 60, periodSeconds: 30, timeoutSeconds: 5, failureThreshold: 6}
   resources:
@@ -109,8 +112,9 @@ dashboard:
   command: []
   args: []
   port: 8080
-  # The results database that the dashboard reads. The default matches the
-  # path the generated Blueprint configuration writes to.
+  # The results database that the dashboard reads. It must be under /data, the
+  # only path the runner and the dashboard share. The default matches the path
+  # the generated Blueprint configuration writes to.
   databasePath: /data/attributions.db
   probes:
     path: /
@@ -179,7 +183,8 @@ persistence:
   # runner keeps its per-namespace marks there and writes the results database
   # there, and the dashboard reads it. A Service-only release has no volume.
   # Set false to use an emptyDir instead, which loses the marks and the results
-  # database when the pod restarts. Set true to force the volume.
+  # database when the pod restarts. Set true to always use the volume. Either
+  # way a Service-only release mounts no volume, because the Service writes none.
   enabled: null
   # Use an existing claim instead of creating one, for example to start a
   # dashboard on a database that another installation writes.

@@ -224,8 +224,6 @@ def test_ingress_renders_with_its_controller_allowed_through_the_policy():
     assert _kind(docs, "NetworkPolicy")[0]["spec"]["ingress"][0]["ports"] == [{"port": 8080, "protocol": "TCP"}]
 
 
-
-
 # --- a Service-only release -------------------------------------------------
 
 
@@ -384,11 +382,17 @@ def test_without_a_volume_the_runner_and_dashboard_use_an_empty_dir():
     assert {"name": "data", "emptyDir": {}} in _pod(docs)["volumes"]
 
 
-def test_a_volume_can_be_forced_on_for_a_service_only_release():
+def test_a_service_only_release_mounts_no_volume_even_when_persistence_is_on():
     docs = _render(
         "--set", "runner.enabled=false", "--set", "dashboard.enabled=false", "--set", "persistence.enabled=true"
     )
     assert "volumeClaimTemplates" not in _kind(docs, "StatefulSet")[0]["spec"]
+    assert not _pod(docs).get("volumes")
+
+
+def test_the_service_probe_command_can_be_replaced():
+    docs = _render(*NS, "--set", "service.probes.command={python3,-c,pass}")
+    assert _containers(docs)["service"]["readinessProbe"]["exec"]["command"] == ["python3", "-c", "pass"]
 
 
 # --- the example values files -----------------------------------------------
@@ -440,6 +444,10 @@ def test_every_example_renders(example, containers):
         ([*NS, "--set", "config.existing.configMap.name=a", "--set", "extraConfig=[x]"], True, "extraConfig is not used"),
         (["--set", "runner.enabled=false", "--set", "config.existing.configMap.name=a"], True, "no effect when the runner is disabled"),
         ([*NS, "--set", "service.port=70000"], True, "port"),
+        ([*NS, "--set", "dashboard.port=8000"], True, "must differ"),
+        ([*NS, "--set", "dashboard.databasePath=/tmp/a.db"], True, "databasePath"),
+        ([*NS, "--set", "persistence.enabled=false", "--set", "persistence.existingClaim=c"], True, "existingClaim has no effect"),
+        ([*NS, "--set", "service.probes.readiness.httpGet.path=/x"], True, "httpGet"),
     ],
 )  # fmt: skip
 def test_invalid_values_are_rejected_with_a_message(args, image, message):

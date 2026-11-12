@@ -82,6 +82,9 @@ chart then requires `networkPolicy.service.from` to say who may call it.
 The Service is probed at `/v2/healthz`: over HTTP when its API is exposed, and by
 a command inside the container when it listens on localhost, because the kubelet
 connects to the pod address.
+That command runs the bundle image's Python. If you override `service.image` or
+`service.command`, set `service.probes.command` to a command that exists in your
+image.
 
 ### The runner
 
@@ -97,7 +100,8 @@ runner:
 ### The dashboard
 
 The dashboard has its own probes, `dashboard.probes`, and reads
-`dashboard.databasePath`. A dashboard-only release reads a database through
+`dashboard.databasePath`, which must be under `/data`, the only path the runner
+and the dashboard share. `service.port` and `dashboard.port` must differ. A dashboard-only release reads a database through
 `persistence.existingClaim`.
 
 ## Use your own Blueprint configuration
