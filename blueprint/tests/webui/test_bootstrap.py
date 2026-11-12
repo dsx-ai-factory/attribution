@@ -365,6 +365,12 @@ def test_run_to_react_sums_typed_slurm_alloc_tres_gpu_counts(tmp_path):
     assert r["gpuCount"] == 6
 
 
+def test_run_to_react_does_not_double_count_generic_and_typed_alloc_tres(tmp_path):
+    run = _seed_one(tmp_path, gpus_per_node=8, alloc_tres="cpu=16,gres/gpu=4,gres/gpu:h200=4")
+    r = bootstrap.run_to_react(run)
+    assert r["gpuCount"] == 4
+
+
 def test_run_to_react_treats_cpu_only_slurm_alloc_tres_as_zero_gpus(tmp_path):
     run = _seed_one(tmp_path, gpus_per_node=8, alloc_tres="cpu=24,mem=96G")
     r = bootstrap.run_to_react(run)

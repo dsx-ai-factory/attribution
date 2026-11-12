@@ -438,7 +438,19 @@ def test_gpu_count_is_parsed_from_alloc_tres(mocker, alloc_tres, expected):
     assert ctx["gpu_count"] == expected
 
 
-def test_gpu_count_absent_without_alloc_tres(mocker):
-    _mock_sacct(mocker, _alloc_tres_row(""))
+@pytest.mark.parametrize(
+    "alloc_tres",
+    [
+        "",
+        # Unavailable allocation marker.
+        "(null)",
+        # Wholly malformed GPU entry.
+        "cpu=8,gres/gpu=unknown",
+        # Partially malformed typed GPU entries.
+        "cpu=8,gres/gpu:h200=2,gres/gpu:a100=invalid",
+    ],
+)
+def test_gpu_count_absent_without_valid_alloc_tres(mocker, alloc_tres):
+    _mock_sacct(mocker, _alloc_tres_row(alloc_tres))
     [ctx] = SlurmExecutionContextAdapter().discover_by_ids(["9300"])
     assert "gpu_count" not in ctx
