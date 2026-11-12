@@ -390,6 +390,11 @@ def test_a_service_only_release_mounts_no_volume_even_when_persistence_is_on():
     assert not _pod(docs).get("volumes")
 
 
+def test_a_database_file_name_with_dots_is_accepted():
+    docs = _render(*NS, "--set", "dashboard.databasePath=/data/results/attributions.v2.db")
+    assert _env(_containers(docs)["dashboard"])["ATTRIBUTION_DB"] == "/data/results/attributions.v2.db"
+
+
 def test_a_service_only_release_ignores_the_database_path():
     docs = _render(
         "--set", "runner.enabled=false", "--set", "dashboard.enabled=false", "--set", "dashboard.databasePath=/tmp/a.db"
@@ -455,6 +460,9 @@ def test_every_example_renders(example, containers):
         ([*NS, "--set", "dashboard.databasePath=/tmp/a.db"], True, "databasePath"),
         ([*NS, "--set", "dashboard.databasePath=/data/"], True, "file path under /data"),
         ([*NS, "--set", "dashboard.databasePath=/data/results/"], True, "file path under /data"),
+        ([*NS, "--set", "dashboard.databasePath=/data/."], True, "file path under /data"),
+        ([*NS, "--set", "dashboard.databasePath=/data/../etc/a.db"], True, "file path under /data"),
+        ([*NS, "--set", "dashboard.databasePath=/data//a.db"], True, "file path under /data"),
         ([*NS, "--set", "persistence.enabled=false", "--set", "persistence.existingClaim=c"], True, "existingClaim has no effect"),
         ([*NS, "--set", "service.probes.readiness.httpGet.path=/x"], True, "httpGet"),
     ],
