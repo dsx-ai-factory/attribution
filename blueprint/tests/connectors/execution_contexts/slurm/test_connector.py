@@ -5,6 +5,8 @@ import subprocess
 from datetime import datetime
 from pathlib import Path
 
+import pytest
+
 from attribution_blueprint.connectors.execution_contexts.slurm import (
     SlurmExecutionContextAdapter,
 )
@@ -420,6 +422,63 @@ def test_uid0_step_cancelled_before_the_limit_of_a_timed_out_attempt_resolves_to
     by_id = {c["job_id"]: c for c in contexts}
     assert by_id["7009.0"]["cancelled_by"] == "root"
     assert by_id["7009.1"]["cancelled_by"] == "Timeout"
+
+
+@pytest.mark.parametrize(
+    ("step_end", "expected"),
+    [
+        ("2026-03-08T03:00:00", "root"),
+        ("2026-03-08T03:30:00", "Timeout"),
+    ],
+    ids=["ended-before-elapsed-limit", "ran-to-elapsed-limit"],
+)
+def test_uid0_step_of_timed_out_attempt_across_a_dst_change_compares_elapsed_time(mocker, step_end, expected):
+    """The limit is elapsed time, so a spring-forward change moves its local deadline an hour later.
+
+    In New York the clock skips 02:00 to 03:00 on 2026-03-08. A job that starts at
+    01:30 EST with a 60-minute limit times out at 03:30 EDT. A step that ended at
+    03:00 EDT had run 30 minutes, so an operator cancelled it. Adding the limit to
+    the local start time gives 02:30, which would wrongly make that step `Timeout`.
+    """
+    rows = (
+        "7011|7011|sluid-cby-7011|TIMEOUT|2026-03-08T01:30:00|2026-03-08T03:30:00|"
+        "node300||60|cpu=8|/o|/e|carol|short\n"
+        f"7011.0|7011.0|sluid-cby-7011|CANCELLED by 0|2026-03-08T01:30:05|{step_end}|"
+        "node300||60|cpu=8|||carol|step0\n"
+    )
+    _mock_sacct(mocker, rows)
+    contexts = SlurmExecutionContextAdapter(cluster_tz="America/New_York").discover_by_ids(["7011"])
+    by_id = {c["job_id"]: c for c in contexts}
+    assert by_id["7011.0"]["cancelled_by"] == expected
+
+
+@pytest.mark.parametrize(
+    ("head_state", "head_cancelled_by"),
+    [
+        ("PREEMPTED", None),
+        ("NODE_FAIL", None),
+        ("CANCELLED by 4243", "4243"),
+    ],
+    ids=["preempted", "node-fail", "cancelled-by-user"],
+)
+def test_uid0_step_whose_head_was_not_cancelled_by_uid0_keeps_uid0(mocker, head_state, head_cancelled_by):
+    """slurmctld also ends steps as UID 0 when it preempts a job or loses a node.
+
+    Only a head that was itself cancelled by UID 0 shows that an operator ran
+    `scancel`. Under any other non-TIMEOUT head the step keeps the raw UID 0, so
+    a preemption, a node failure or a user's cancel is not reported as root.
+    """
+    rows = (
+        f"7012|7012|sluid-cby-7012|{head_state}|2026-05-01T12:00:00|2026-05-01T12:10:00|"
+        "node300||60|cpu=8|/o|/e|carol|short\n"
+        "7012.0|7012.0|sluid-cby-7012|CANCELLED by 0|2026-05-01T12:00:05|2026-05-01T12:10:00|"
+        "node300||60|cpu=8|||carol|step0\n"
+    )
+    _mock_sacct(mocker, rows)
+    contexts = SlurmExecutionContextAdapter().discover_by_ids(["7012"])
+    by_id = {c["job_id"]: c for c in contexts}
+    assert by_id["7012"].get("cancelled_by") == head_cancelled_by
+    assert by_id["7012.0"]["cancelled_by"] == "0"
 
 
 def test_uid0_step_of_timed_out_attempt_without_a_limit_keeps_uid0(mocker):

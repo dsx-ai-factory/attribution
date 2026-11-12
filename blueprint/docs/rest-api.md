@@ -73,11 +73,14 @@ to the rules engine as a string. When no stronger evidence exists,
 `COMPLETED` produces the successful fallback symptom. Other unrecognized
 states produce the failed fallback symptom.
 
-`cancelled_by` is a resolved identity, not a raw scheduler field. The bundled
-rules match `root` for an operator cancellation and `Timeout` for the scheduler
-enforcing the time limit. Any other identity gives a `CANCELLED` workload the
-`Cancelled by user` symptom, and a `Fail User` outcome is reclassified as
-`Cancelled by User`; stronger infrastructure evidence still takes precedence.
+`cancelled_by` is a resolved identity, not a raw scheduler field. For a
+`CANCELLED` workload, the bundled rules map it to a symptom: `root` to
+`Cancelled by root`, `Timeout` to `Cancelled by Timeout`,
+`site-automation-account` to `Cancelled by cluster operators`, and any other
+identity to `Cancelled by user`. Separately, a `Fail User` outcome is
+reclassified as `Cancelled by User` unless the identity is `root`, `Timeout`,
+or `PyTorch NCCL watchdog`, or starts with `svc-`. Stronger infrastructure
+evidence still takes precedence over both.
 Slurm's `sacct` reports `CANCELLED by <uid>`, and the Blueprint's Slurm
 connector resolves UID 0 before it sends the workload (refer to
 [SLURM Cancellations](SCHEDULER_REQUIREMENTS.md#slurm-cancellations)). A

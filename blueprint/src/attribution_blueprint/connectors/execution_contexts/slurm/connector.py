@@ -3,7 +3,7 @@
 
 import re
 import subprocess
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import NotRequired, TypedDict
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
@@ -140,6 +140,18 @@ def _parse_state(state: str) -> tuple[str, str | None]:
     return state, None
 
 
+def _time_limit_deadline(start: datetime, time_limit_minutes: int) -> datetime:
+    """The instant a job that started at `start` reaches its time limit.
+
+    Slurm's limit is elapsed time. Adding a timedelta to an aware datetime moves
+    its wall clock and keeps the zone, so across a daylight-saving change the
+    local result is an hour off. Add in UTC to count elapsed minutes. An aware
+    UTC result also compares by instant with the step's end time, which Python
+    would compare by wall clock if both shared the cluster zone.
+    """
+    return start.astimezone(timezone.utc) + timedelta(minutes=time_limit_minutes)
+
+
 def _resolve_cancellers(contexts: list[SlurmExecutionContext]) -> list[SlurmExecutionContext]:
     """Replace a UID 0 sacct canceller with the identity the refiner rules match.
 
@@ -154,12 +166,19 @@ def _resolve_cancellers(contexts: list[SlurmExecutionContext]) -> list[SlurmExec
     guaranteed to share the cluster's account database, and a wrong name is
     worse than a number no rule matches.
 
+    Outside a ``TIMEOUT`` attempt, only a head that was itself cancelled by
+    UID 0 shows an operator scancel. slurmctld ends steps as UID 0 for other
+    reasons too, such as preemption or a lost node.
+
     A UID 0 cancel this cannot establish keeps the raw ``"0"``, which is what
     the connector sent before resolution existed. That covers a step whose head
-    row was dropped by ``_parse_row``, and a step of a ``TIMEOUT`` attempt whose
-    head carries no time limit.
+    row was dropped by ``_parse_row``, a step whose head ended in any state but
+    ``TIMEOUT`` or ``CANCELLED`` by UID 0, and a step of a ``TIMEOUT`` attempt
+    whose head carries no time limit.
     """
     heads = {ctx["sluid"]: ctx for ctx in contexts if "step_id" not in ctx}
+    # Read before the loop below rewrites a head's own "0" to "root".
+    operator_cancelled = {sluid for sluid, head in heads.items() if head.get("cancelled_by") == "0"}
     for ctx in contexts:
         if ctx.get("cancelled_by") != "0":
             continue
@@ -169,14 +188,17 @@ def _resolve_cancellers(contexts: list[SlurmExecutionContext]) -> list[SlurmExec
                 f"sacct step {ctx['job_id']} is CANCELLED by UID 0 but its head row was not retained; "
                 "keeping UID 0 rather than guessing root or Timeout"
             )
-        elif head["state"] != "TIMEOUT":
+        elif ctx["sluid"] in operator_cancelled:
             ctx["cancelled_by"] = "root"
+        elif head["state"] != "TIMEOUT":
+            # Preempted, node failure, or cancelled by another user: the UID 0 step alone does not show an operator.
+            continue
         elif "time_limit" not in head:
             logger.warning(
                 f"sacct step {ctx['job_id']} is CANCELLED by UID 0 in a TIMEOUT attempt with no time limit; "
                 "keeping UID 0 rather than guessing root or Timeout"
             )
-        elif ctx["end_time"] >= head["start_time"] + timedelta(minutes=head["time_limit"]):
+        elif ctx["end_time"] >= _time_limit_deadline(head["start_time"], head["time_limit"]):
             # Still running when the limit was reached, so slurmctld ended it.
             ctx["cancelled_by"] = "Timeout"
         else:
