@@ -328,7 +328,7 @@ def test_mca_build_accepts_a_positive_size(value):
     assert isinstance(spec.build({"max_bytes_per_pod": value}, {"source": Source.APPLOG}), KubernetesLogsConnector)
 
 
-@pytest.mark.parametrize("value", ["abc", "12 parsecs", "", 3.5, 0, "0", "0KB", -1, "-5", [1], {"a": 1}])
+@pytest.mark.parametrize("value", ["abc", "12 parsecs", "", 3.5, 0, "0", "0KB", -1, "-5", [1], {"a": 1}, True, False])
 def test_mca_build_rejects_an_invalid_size_naming_the_field(value):
     """A bad cap is a configuration error that names its field, not a raw exception."""
     from attribution_blueprint import mca_registry

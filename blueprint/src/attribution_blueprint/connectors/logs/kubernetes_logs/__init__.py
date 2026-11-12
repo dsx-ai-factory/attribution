@@ -65,6 +65,8 @@ def _positive_size(value: int | str | None) -> int | None:
     """
     if value is None:
         return None
+    if isinstance(value, bool):
+        raise ValueError(f"size must be an integer or a size string, got {value!r}")
     try:
         size = _parse_size(value)
     except TypeError as error:
