@@ -1205,7 +1205,8 @@ It includes the body of an error response.
 Command calls measure encoded stdout. Streamed HTTP responses omit size.
 Kafka output records no response size.
 Kubernetes watch and log-follow calls record no response size, because their bodies are streams that the metrics must not read.
-The Kafka input consumer is not measured.
+The Kafka input consumer has its own metrics, described in
+[Kafka Input Consumer Metrics](#kafka-input-consumer-metrics).
 The `kubernetes-daemon` watch process is not measured because its watch streams are long-lived.
 
 ### Built-in Scrape Endpoint
@@ -1251,6 +1252,73 @@ OTEL_SERVICE_NAME=attribution-blueprint \
 OTEL_METRICS_EXPORTER=otlp \
 OTEL_EXPORTER_OTLP_ENDPOINT=http://127.0.0.1:4317 \
   opentelemetry-instrument nvidia-attribution-blueprint --config ./attribution-blueprint.toml
+```
+
+### Kafka Input Consumer Metrics
+
+The `eca.kafka` consumer records these metrics for both `discover()` and the
+long-lived `open_consumer()` lifecycle described in
+[Kafka consumption and acknowledgements](kafka_lifecycle.md).
+
+| Metric | Type | Unit | Labels | Meaning |
+| --- | --- | --- | --- | --- |
+| `attribution.kafka.consumer.consumed` | Counter | `{record}` | `topic`, `partition`, `consumer_group` | Records read from the broker |
+| `attribution.kafka.consumer.accepted` | Counter | `{record}` | `topic`, `partition`, `consumer_group` | Valid records returned by `poll()` or added to a `discover()` batch |
+| `attribution.kafka.consumer.skipped` | Counter | `{record}` | `topic`, `partition`, `consumer_group`, `reason` | Records skipped as `filtered` or `malformed` |
+| `attribution.kafka.consumer.acknowledged` | Counter | `{record}` | `topic`, `partition`, `consumer_group` | Receipts acknowledged for the first time |
+| `attribution.kafka.consumer.commits` | Counter | `{commit}` | `topic`, `partition`, `consumer_group` | Offset commits that the broker confirmed |
+| `attribution.kafka.consumer.commit.errors` | Counter | `{commit}` | `topic`, `partition`, `consumer_group`, `error.type` | Offset commits that failed or have an uncertain outcome |
+| `attribution.kafka.consumer.errors` | Counter | `{error}` | `topic`, `consumer_group`, `error.type` | Errors returned by a poll, other than end of partition |
+| `attribution.kafka.consumer.rebalances` | Counter | `{partition}` | `topic`, `partition`, `consumer_group`, `change` | Partitions `assigned`, `revoked`, or `lost` in rebalance callbacks |
+| `attribution.kafka.consumer.lag` | Gauge | `{record}` | `topic`, `partition`, `consumer_group` | High watermark minus the committed offset |
+| `attribution.kafka.consumer.position.lag` | Gauge | `{record}` | `topic`, `partition`, `consumer_group` | High watermark minus the consumer's fetch position |
+| `attribution.kafka.consumer.unacknowledged` | Gauge | `{record}` | `topic`, `partition`, `consumer_group` | Records returned by `poll()` that the caller has not acknowledged |
+| `attribution.kafka.consumer.oldest_unacknowledged.age` | Gauge | `s` | `topic`, `partition`, `consumer_group` | Time since the earliest unacknowledged record was returned by `poll()`, or 0 |
+
+`consumer_group` is the configured `group_id`. For a commit error, `error.type`
+is the exception class name. For a poll error, it is the Kafka error name, such
+as `_TRANSPORT`.
+
+Gauges report only the partitions that the consumer currently owns, and stop
+when the consumer closes. The connector computes them from client-side state
+and never contacts the broker when the metrics are read:
+
+- The high watermark is the client's cached value from its latest fetch. The
+  fetch position is the client's local position. The connector refreshes both
+  while the owner thread polls, at most once every 5 seconds.
+- The committed offset is the offset of the first record that the consumer read
+  after it received the partition, which is where the group's committed offset
+  resumed. After the consumer commits, it is the committed offset.
+
+The connector commits only the acknowledged prefix of each partition, so one
+slow record holds back every later commit in its partition. When
+`oldest_unacknowledged.age` keeps growing while `lag` grows and `position.lag`
+stays low, the consumer is reading records but a delivered record is still
+waiting for its acknowledgement. If the consumer restarts, Kafka replays every
+record after the committed offset.
+
+The built-in scrape endpoint renders these names:
+
+| OpenTelemetry metric | Prometheus name |
+| --- | --- |
+| `attribution.kafka.consumer.consumed` | `attribution_kafka_consumer_consumed_total` |
+| `attribution.kafka.consumer.accepted` | `attribution_kafka_consumer_accepted_total` |
+| `attribution.kafka.consumer.skipped` | `attribution_kafka_consumer_skipped_total` |
+| `attribution.kafka.consumer.acknowledged` | `attribution_kafka_consumer_acknowledged_total` |
+| `attribution.kafka.consumer.commits` | `attribution_kafka_consumer_commits_total` |
+| `attribution.kafka.consumer.commit.errors` | `attribution_kafka_consumer_commit_errors_total` |
+| `attribution.kafka.consumer.errors` | `attribution_kafka_consumer_errors_total` |
+| `attribution.kafka.consumer.rebalances` | `attribution_kafka_consumer_rebalances_total` |
+| `attribution.kafka.consumer.lag` | `attribution_kafka_consumer_lag` |
+| `attribution.kafka.consumer.position.lag` | `attribution_kafka_consumer_position_lag` |
+| `attribution.kafka.consumer.unacknowledged` | `attribution_kafka_consumer_unacknowledged` |
+| `attribution.kafka.consumer.oldest_unacknowledged.age` | `attribution_kafka_consumer_oldest_unacknowledged_age_seconds` |
+
+For example, this PromQL expression finds partitions in which a delivered
+record has waited for its acknowledgement for more than one hour:
+
+```promql
+max by (topic, partition, consumer_group) (attribution_kafka_consumer_oldest_unacknowledged_age_seconds) > 3600
 ```
 
 ## Environment Variables
