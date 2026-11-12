@@ -158,3 +158,22 @@ def test_second_rerun_verdict_discards_bad_token_on_every_node(attribute_lines):
         "Persistent error reported by Megatron",
     } <= _interesting_symptoms(result, "node01")
     assert result.outcome_attr.value().root_cause_symptom == "job failed"
+
+
+def test_verdict_keeps_bad_token_from_other_iteration(attribute_lines):
+    """The verdict is for iteration 56427, so the iteration-60000 "Bad Token" on node01 stays."""
+    other_iteration = (
+        "0: ERROR:megatron.core.rerun_state_machine:Unexpected result inf on rank 0 at iteration #60000 "
+        "invocation #1 (message='found Inf in local grad norm')"
+    )
+    result = attribute_lines([_UNEXPECTED, _SECOND_NOT_REPRODUCIBLE, _PERSISTENT, other_iteration])
+
+    assert [source.datum for source in result.symptoms["Bad Token"]] == [other_iteration]
+    assert result.outcome_attr.value().root_cause_symptom == "Bad Token"
+
+
+def test_outcome_verdict_keeps_every_source_line(attribute_lines):
+    second_rank = _CORRECT_RESULT.replace("0: ERROR", "1: ERROR").replace("Rank 0", "Rank 1")
+    result = attribute_lines([_CORRECT_RESULT, second_rank])
+
+    assert len(result.symptoms["Application error reported by Megatron"]) == 2
