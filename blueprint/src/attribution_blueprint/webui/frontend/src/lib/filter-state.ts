@@ -96,7 +96,8 @@ function matchesSearch(r: RunSummary, q: string): boolean {
     r.outcome.toLowerCase().includes(needle) ||
     r.attemptUid.toLowerCase().includes(needle) ||
     r.detail.toLowerCase().includes(needle) ||
-    r.responsibleNodes.some((n) => n.toLowerCase().includes(needle))
+    r.responsibleNodes.some((n) => n.toLowerCase().includes(needle)) ||
+    r.nodeIds.some((n) => n.toLowerCase().includes(needle))
   )
 }
 
