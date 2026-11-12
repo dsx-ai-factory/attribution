@@ -8,15 +8,20 @@
 
 import re
 from bisect import bisect_left
+from collections import defaultdict
+from dataclasses import dataclass, replace
 from datetime import datetime, timedelta
 from typing import Optional
 
+from common.hca import command_devices, command_symptom
 from common.refiner_helpers import (
     _add_symptom_from_source,
     _get_earliest_watchdog_source,
 )
 from loguru import logger
 
+from attribution_lib.attr_types import JobNodeAttributions
+from attribution_lib.event_helpers import query_events_with_source
 from attribution_lib.events import BAD_PAIR_EVENT_TYPES, EventStream, sql_placeholders
 from attribution_lib.failed_node_provenance import FailedNodeResolution
 from common.megatron import get_pytorch_timeout_minutes
@@ -27,6 +32,7 @@ from attribution_lib.observation import Context as ObservationContext
 from attribution_lib.observation.inbound import Source as ObsSource
 from attribution_lib.bundled_rules.common.outcome_helpers import (
     KUBERNETES_SCHEDULER_TYPES,
+    apply_preemption_pass,
     apply_user_cancellation_reclassification,
 )
 from attribution_lib.outcome import OutcomeAttribution
@@ -57,6 +63,8 @@ from attribution_lib.utils import normalize_pci_id
 declare_event_types(
     *BAD_PAIR_EVENT_TYPES,
     "Application.megatron-lm.runtime_args",
+    "Application.hca.command_failure",
+    "Application.mfu",
     "Node failure reported by slurm",
 )
 
@@ -85,6 +93,7 @@ _SCRUB_ORDER = [
     "Xid140Cascade",
     "PoisonedGspComposite",
     "DetectBadNicState",
+    "LocalHcaCommandFailures",
     # Combine only the scheduler failure and surviving independent epilog
     # non-response evidence after more specific per-node causes are scrubbed.
     "CorroboratedNodeFailure",
@@ -457,6 +466,14 @@ _XID145_RXPIPE_COMPANION_WINDOW = timedelta(seconds=1)
 _XID_PCI_ID_RE = re.compile(r"NVRM:\s+Xid \(PCI:(?P<pci_id>[0-9a-fA-F.:]+)\):")
 _BAD_NIC_COMPONENTS = ("mlx5 firmware in initialization state", "mlx5 device initialization failed")
 _BAD_NIC_WINDOW = timedelta(minutes=2)
+
+_HCA_WINDOW = timedelta(minutes=5)
+_HCA_NIC_SYSLOG = {"irisc not responding", "detected bad NIC state"}
+# Provider connectors own instance identity, lifecycle checks and event mapping.
+# An instance-status check alone does not establish a hardware fault.
+_HCA_PROVIDER_FAULTS = {"CSP Event NIC Fault"}
+_HCA_COMPOUND = "Corroborated local HCA command failure"
+
 _MLX5_PCI_RE = re.compile(r"\bmlx5_core\s+([0-9a-fA-F]{4}:[0-9a-fA-F]{2}:[0-9a-fA-F]{2}\.[0-7]):")
 _IB_CLEANUP_SKIP_SYMPTOMS = frozenset({_XID145_RXPIPE_SYMPTOM, "XID-137-NVLINK_PRIV_ERR"})
 _KERNEL_CRASH_SYMPTOMS = frozenset(
@@ -891,6 +908,182 @@ def detect_bad_nic_state(context: RefinerContext):
         node_group.add(combined)
         for component in _BAD_NIC_COMPONENTS:
             symptoms[component].discard_selected(combined)
+
+
+def _hca_resource_limited(command: "_HcaCommand") -> bool:
+    return command.errno == 11 and command.verb in {"ibv_reg_mr", "ibv_create_cq"}
+
+
+@dataclass(frozen=True)
+class _HcaCommand:
+    node: str | None
+    verb: str
+    errno: int
+    device: str | None
+    process: str | None
+    source: Source
+    device_source: Source | None = None
+
+
+def _hca_near(first: datetime | None, second: datetime | None) -> bool:
+    return first is not None and second is not None and abs(first - second) <= _HCA_WINDOW
+
+
+def _hca_source_near(sources: list[Source], time: datetime | None) -> Source | None:
+    """Find one proof in a sorted index, avoiding quadratic evidence expansion."""
+    if time is None:
+        return None
+    index = bisect_left(sources, time - _HCA_WINDOW, key=lambda source: source.time)
+    return sources[index] if index < len(sources) and _hca_near(sources[index].time, time) else None
+
+
+def _active_hca_commands(stream: EventStream, nodes: JobNodeAttributions) -> list[_HcaCommand]:
+    """Select sources that survived attribution filters; never revive demoted evidence."""
+    active = []
+    for _, _, payload, source in query_events_with_source(
+        stream, stream.mgr.types.get_id("Application.hca.command_failure")
+    ):
+        command = _HcaCommand(**payload, source=source)
+        if command.node is None or command.node not in nodes:
+            continue
+        group = nodes[command.node].attributions
+        symptom = command_symptom(command.verb, command.errno)
+        if symptom in group and command.source in group[symptom]:
+            active.append(command)
+    return active
+
+
+def _resolve_hca_devices(commands: list[_HcaCommand]) -> list[_HcaCommand]:
+    """Fill missing devices from same-node, same-PID/thread anchors within five minutes.
+
+    All nearby anchors must agree on one device; retain its source as evidence.
+    """
+    anchors = defaultdict(lambda: defaultdict(list))
+    for command in commands:
+        if command.device and command.node and command.process and command.source.time is not None:
+            anchors[command.node, command.process][command.device].append(command.source)
+    for devices in anchors.values():
+        for sources in devices.values():
+            sources.sort(key=lambda source: source.time)
+    resolved = []
+    for command in commands:
+        if command.device is None and command.process:
+            nearby = [
+                (device, source)
+                for device, sources in anchors[command.node, command.process].items()
+                if (source := _hca_source_near(sources, command.source.time)) is not None
+            ]
+            if len(nearby) == 1:
+                command = replace(command, device=nearby[0][0], device_source=nearby[0][1])
+        resolved.append(command)
+    return resolved
+
+
+def _hca_corroboration(command: _HcaCommand, group) -> list[tuple[str, Source]]:
+    """Use materialized NIC diagnoses; never repeat their correlation logic."""
+    matches = []
+    for symptom in _HCA_NIC_SYSLOG | _HCA_PROVIDER_FAULTS:
+        if symptom not in group:
+            continue
+        for source in group[symptom]:
+            if not _hca_near(source.time, command.source.time):
+                continue
+            if symptom in _HCA_NIC_SYSLOG:
+                if source.source_context.source != ObsSource.SYSLOG:
+                    continue
+                if command.device is None or command.device not in command_devices(source.datum):
+                    continue
+            elif source.source_context.source != ObsSource.CSP_EVENT:
+                continue
+            matches.append((symptom, source))
+    return matches
+
+
+def _index_hca_guard_sources(commands: list[_HcaCommand]) -> dict[tuple[str, str], dict[str, list[Source]]]:
+    """Index timed failures by node, device and verb for five-minute proof lookups.
+
+    Resource-limited EAGAIN failures cannot prove another such failure is hardware.
+    """
+    by_device = defaultdict(lambda: defaultdict(list))
+    for command in commands:
+        if command.node and command.device and command.source.time is not None and not _hca_resource_limited(command):
+            by_device[command.node, command.device][command.verb].append(command.source)
+    for verbs in by_device.values():
+        for sources in verbs.values():
+            sources.sort(key=lambda source: source.time)
+    return by_device
+
+
+def _hca_guard_proof(command: _HcaCommand, by_device, corroboration) -> list[Source]:
+    """Require a different verb on the same device or matching NIC syslog.
+
+    Provider evidence can corroborate a diagnosis but cannot bypass this guard.
+    """
+    proof = []
+    if command.device:
+        proof = [
+            source
+            for verb, sources in by_device[command.node, command.device].items()
+            if verb != command.verb and (source := _hca_source_near(sources, command.source.time)) is not None
+        ]
+    return proof or [source for _, source in corroboration if source.source_context.source == ObsSource.SYSLOG]
+
+
+def _refine_hca_command(command: _HcaCommand, nodes: JobNodeAttributions, by_device) -> list[tuple[str, str, Source]]:
+    """Apply one command's resource guard and build its corroborated diagnosis.
+
+    Return the exact sources replaced by the compound for deferred demotion.
+    """
+    symptom = command_symptom(command.verb, command.errno)
+    group = nodes[command.node].attributions
+    corroboration = _hca_corroboration(command, group)
+    guard_proof = _hca_guard_proof(command, by_device, corroboration)
+    guarded = _hca_resource_limited(command)
+    qualifies = not guarded or bool(guard_proof)
+    sources = group[symptom]
+    if not qualifies:
+        sources.discard_selected([command.source])
+    elif guarded:
+        for proof_source in guard_proof:
+            sources.add_interesting(proof_source)
+    if command.device_source is not None:
+        sources.add_interesting(command.device_source)
+    if not qualifies or not corroboration:
+        return []
+
+    combined = SourceSet(_HCA_COMPOUND).add(command.source)
+    if command.device_source is not None:
+        combined.add(command.device_source)
+    consumed_sources = []
+    for matched_symptom, source in corroboration:
+        combined.add(source)
+        if matched_symptom in _HCA_NIC_SYSLOG:
+            consumed_sources.append((command.node, matched_symptom, source))
+    # Keep authoritative provider evidence selected so its priority and cascades apply.
+    nodes.add([command.node], combined)
+    consumed_sources.append((command.node, symptom, command.source))
+    return consumed_sources
+
+
+@refiner_def(
+    name="LocalHcaCommandFailures",
+    author="NVIDIA Attribution team",
+    priority=_priority("LocalHcaCommandFailures"),
+)
+def local_hca_command_failures(context: RefinerContext) -> None:
+    """Select active commands, evaluate their guards and correlate per-node NIC evidence."""
+    stream, nodes = context.event_stream, context.my_bad_nodes
+    if stream is None or nodes is None:
+        return
+    commands = _resolve_hca_devices(_active_hca_commands(stream, nodes))
+    by_device = _index_hca_guard_sources(commands)
+    consumed_sources = []
+    for command in commands:
+        consumed_sources.extend(_refine_hca_command(command, nodes, by_device))
+    # Demote only command and syslog sources used by the compound, after all
+    # commands have been examined. Other nodes, devices and episodes stay selected.
+    for node, symptom, source in consumed_sources:
+        nodes[node].attributions[symptom].discard_selected(SourceSet(symptom).add(source))
 
 
 # Raw-keyword promotion rules
@@ -2637,35 +2830,7 @@ def outcome_reclassification_refiner(context: RefinerContext):
     nvrx_exit_fields = (job_info.exit_code, job_info.exit_code_signal)
     is_nvrx = NVRX_TAG in job_info.tags
     nvrx_failed = is_nvrx and any(v is not None and v != 0 for v in nvrx_exit_fields)
-    has_only_preemption_fallback = all(
-        symptom == "job failed" for symptom in attribution_result.symptoms.symptoms()
-    )
-
-    # Kubernetes scheduler preemption must not mask evidence-backed
-    # failures. Other scheduler types retain their original behavior.
-    if (
-        job_info.attributed_cancellation is None
-        and not nvrx_failed
-        and (job_info.scheduler not in KUBERNETES_SCHEDULER_TYPES or has_only_preemption_fallback)
-        and job_info.state is not None
-        and job_info.state.upper() == "PREEMPTED"
-    ):
-        previous_source = None
-        if attribution_result.outcome_attr is not None:
-            previous_source = attribution_result.outcome_attr.one_source()
-
-        if previous_source is None:
-            previous_source = job_info.source(job_info.state, "slurm state")
-
-        new_outcome = OutcomeAttribution(
-            outcome="Pass",
-            hw_cause="Not Applicable",
-            root_cause_symptom="SLURM preempted",
-        )
-
-        attribution_result.outcome_attr = SourceSet(new_outcome).add(
-            previous_source.derived(rule="reclassified: slurm preempted")
-        )
+    if not nvrx_failed and apply_preemption_pass(attribution_result, job_info):
         return
 
     # Reclassify TIMEOUT to Pass when it's the only symptom (unless NVRx reports a failure)

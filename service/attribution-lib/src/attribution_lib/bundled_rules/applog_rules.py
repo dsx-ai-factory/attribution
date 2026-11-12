@@ -14,9 +14,11 @@ eliminating the need for applog_to_symptom.py and the dynamic dictionary buildin
 import json
 import re
 from datetime import datetime
+from ipaddress import ip_address
 from pathlib import Path
 from typing import Dict, List, Literal, Optional
 
+from common.hca import command_failure_events, command_source_node, parse_command_errno
 from common.nccl_helpers import get_status_name
 from common.nccl_watchdog import NcclWatchdogData, NcclWatchdogParseState
 from common.rankpulse import RankpulseParseState
@@ -29,7 +31,7 @@ from attribution_lib.event_helpers import query_events_with_source
 from attribution_lib.events import BAD_PAIR_EVENT_TYPES, DemotionTypes, sql_placeholders
 from attribution_lib.network_identity import NetworkSourceIdentity, network_source_identity, normalize_network_hostname
 from attribution_lib.observation.inbound import Source as ObsSource
-from attribution_lib.rule_helpers import _bad
+from attribution_lib.rule_helpers import _bad, _interesting
 from attribution_lib.rules import (
     EventTriple,
     ExtractorAccumulator,
@@ -147,6 +149,9 @@ declare_rule_names(
 declare_event_types(
     "Attribution.node.bad",
     "Attribution.node.bad_peers",
+    "Attribution.node.interesting_peers",
+    "Attribution.node.interesting",
+    "Application.hca.command_failure",
     "Application.bad_pair.complete",
     "Application.bad_pair.partial",
     "Application.pytorch.nccl_watchdog",
@@ -478,63 +483,127 @@ def irrecoverable_net_ib_communicator_error_event(
     return events
 
 
-@rule_processor("applog:Call to ibv_modify_qp failed")
-def ibv_modify_qp_failed_event(
-    groups: Dict[str, str], node: str, source: Source, ctx: RuleContext
-) -> List[EventTriple]:
-    error_code = int(groups["error_code"])
-    local_gid, remote_gid = groups["local_gid"], groups["remote_gid"]
-    remote_ip = remote_gid[7:] if remote_gid.startswith("::ffff:") else remote_gid
+def _qp_gid_addresses(local_gid: str, remote_gid: str) -> tuple[dict[str, str], bool]:
+    """Canonicalize available addresses and identify two IPv4-mapped GIDs."""
+    addresses = {}
+    for endpoint, gid in (("local", local_gid), ("remote", remote_gid)):
+        try:
+            addresses[endpoint] = ip_address(gid)
+        except ValueError:
+            continue
+    mapped_gids = len(addresses) == 2 and all(
+        getattr(address, "ipv4_mapped", None) is not None for address in addresses.values()
+    )
+    pair_ips = {
+        f"{endpoint}_dev_ip": str(getattr(address, "ipv4_mapped", None) or address)
+        for endpoint, address in addresses.items()
+    }
+    return pair_ips, mapped_gids
 
-    peer_node = get_hostname(remote_ip)
 
+def _qp_failure_symptom(error_code: int, mapped_gids: bool, job_script: str | None) -> str:
+    """Preserve the existing errno, GID mismatch and user-configuration symptoms."""
     msg = f"Call to ibv_modify_qp failed: eno {error_code}"
     if error_code == 11:
         msg += " resource unavailable"
     elif error_code == 22:
         msg += " invalid argument"
-        if not all("::ffff:" in gid for gid in [local_gid, remote_gid]):
+        if not mapped_gids:
             msg += "(Mismatched GID)"
     elif error_code == 110:
         msg += " timeout"
         # Check if job script contains forbidden NCCL parameters
-        if ctx.job_script_content and any(param in ctx.job_script_content for param in NCCL_PARAMS_OVERWRITE_FORBIDDEN):
+        if job_script and any(param in job_script for param in NCCL_PARAMS_OVERWRITE_FORBIDDEN):
             msg += "(Overwrite NCCL parameters)"
 
-    events = [_bad_peers(node, peer_node, msg, source, demotion="Call to ibv_modify_qp failed")]
+    return msg
 
-    # Try to create complete bad_pair event with all fields
-    local_dev_ip = local_gid[7:] if local_gid.startswith("::ffff:") else None
-    remote_dev_ip = remote_gid[7:] if remote_gid.startswith("::ffff:") else None
 
-    if local_dev_ip and remote_dev_ip:
-        bad_pair_payload = {
-            "local_node": node,
-            "remote_node": peer_node,
-            "local_dev_ip": local_dev_ip,
-            "local_device": groups.get("local_hca"),
-            "remote_dev_ip": remote_dev_ip,
-        }
-        events.append(
-            EventTriple(
-                type="Application.bad_pair.complete",
-                payload=bad_pair_payload,
-                source=source.derived(rule="Call to ibv_modify_qp failed"),
-            )
-        )
+def _qp_failure_attributions(
+    error_code: int,
+    mapped_gids: bool,
+    node: str | None,
+    peer_node: str | None,
+    local_hca: str,
+    msg: str,
+    source: Source,
+) -> list[EventTriple]:
+    """Choose local or pair evidence without blaming an unidentified emitter's peer."""
+    # Only the errno-22 variant with two IPv4-mapped GIDs establishes a
+    # local-side fault. Keep mismatched-GID and resolved timeout behavior.
+    local_argument_error = error_code == 22 and mapped_gids
+    unresolved_peer = peer_node is None
+    local_command_error = error_code in {11, 110, 125} and unresolved_peer
+    configuration_error = "(Overwrite NCCL parameters)" in msg
+    if configuration_error:
+        events = [
+            _bad_peers(node, peer_node, msg, source, demotion="Call to ibv_modify_qp failed")
+            if node is not None and peer_node is not None
+            else _bad(node, msg, source, demotion="Call to ibv_modify_qp failed")
+        ]
+    elif local_command_error:
+        events = command_failure_events("ibv_modify_qp", error_code, node, source, local_hca)
+    elif node is None:
+        events = [_interesting(None, msg, source)]
+    elif local_argument_error:
+        events = [_bad(node, msg, source, demotion="Call to ibv_modify_qp failed")]
     else:
-        bad_pair_payload = {
-            "local_node": node,
-            "remote_node": peer_node,
-        }
+        events = [_bad_peers(node, peer_node, msg, source, demotion="Call to ibv_modify_qp failed")]
+    if local_argument_error or local_command_error or node is None:
         events.append(
             EventTriple(
-                type="Application.bad_pair.partial",
-                payload=bad_pair_payload,
-                source=source.derived(rule="Call to ibv_modify_qp failed"),
+                type="Attribution.node.interesting_peers",
+                payload={"node": node, "peer": peer_node, "symptom": msg},
+                source=source,
             )
         )
+
     return events
+
+
+@rule_processor("applog:Call to ibv_modify_qp failed")
+def ibv_modify_qp_failed_event(
+    groups: Dict[str, str], node: str, source: Source, ctx: RuleContext
+) -> List[EventTriple]:
+    """Attribute the failure and retain endpoint details independently of node blame."""
+    node = command_source_node(node, source, ctx)
+    error_code = int(groups["error_code"])
+    remote_gid = groups["remote_gid"]
+    pair_ips, mapped_gids = _qp_gid_addresses(groups["local_gid"], remote_gid)
+    remote_ip = pair_ips.get("remote_dev_ip", remote_gid)
+    pair_peer = get_hostname(remote_ip) if remote_gid != "N/A" else None
+    peer_node = normalize_network_hostname(pair_peer) if pair_peer is not None else None
+    # Pair reports retain unmapped addresses; fault attribution requires a name.
+    pair_peer = peer_node or pair_peer
+    msg = _qp_failure_symptom(error_code, mapped_gids, ctx.job_script_content)
+    events = _qp_failure_attributions(error_code, mapped_gids, node, peer_node, groups["local_hca"], msg, source)
+
+    # Keep complete-pair semantics for two mapped GIDs, retaining any available
+    # canonical addresses in partial reports as well.
+    events.append(
+        EventTriple(
+            type="Application.bad_pair.complete" if mapped_gids else "Application.bad_pair.partial",
+            payload={
+                "local_node": node,
+                "remote_node": pair_peer,
+                "local_device": groups.get("local_hca"),
+                **pair_ips,
+            },
+            source=source.derived(rule="Call to ibv_modify_qp failed"),
+        )
+    )
+    return events
+
+
+@rule_processor("applog:LocalHcaCommandFailure")
+def local_hca_command_failure_event(
+    groups: Dict[str, str], node: str | None, source: Source, ctx: RuleContext
+) -> List[EventTriple]:
+    """Preserve supported local verbs failures for device-scoped refinement."""
+    error_code = parse_command_errno(groups["error"])
+    if error_code not in {11, 110, 125}:
+        return []
+    return command_failure_events(groups["verb"], error_code, command_source_node(node, source, ctx), source)
 
 
 @rule_processor("applog:Connection closed by remote peer")

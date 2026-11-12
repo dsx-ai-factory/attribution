@@ -17429,6 +17429,39 @@ failures:
   severity: high
   verification: verified
   last_reviewed: 2026-10-20
+- id: local-hca-command-failure
+  title: Local HCA command failure
+  aliases:
+  - Corroborated local HCA command failure
+  category: distributed_comm
+  likely_owner: infrastructure
+  personas:
+    tenant_sre:
+      title: A local RDMA adapter operation failed
+      summary: A verbs control operation failed on the reporting node. A remote peer is not blamed solely because it appears in the connection details.
+      impact: Workload communication may fail. A local command failure alone does not establish physical adapter damage.
+      action: Share the diagnosis and source evidence with the infrastructure owner to inspect the affected adapter and its resource limits.
+      support_details: Include node, device identity, operation, errno, timestamps, and corroborating syslog or provider evidence when available.
+  summary: Local RDMA control-call failures with device-scoped guards and optional independent corroboration.
+  technical_details: >-
+    Supported local errno values are 11, 110 and 125. Memory-registration and completion-queue EAGAIN remain interesting unless
+    a different, non-resource-limited verb fails on the same node and device within five minutes, or a matching NIC syslog diagnosis corroborates it.
+    Repeated instances of one verb, ambiguous devices, and missing timestamps do not satisfy that guard.
+    New qualifying local failures map to Fail InfraHW with Unknown HW Cause. Independent NIC syslog with an exact device match or existing
+    CSP Event NIC Fault evidence on the same node within five minutes establishes the corroborated
+    diagnosis with Known HW Cause - Node (NIC). CSP evidence retains its existing priority and cascades.
+    PCI-to-mlx5 mapping and EC2 system-check collection are not implemented here.
+    Existing standalone NIC syslog outcome mappings and resolved-peer QP timeout handling remain unchanged.
+    IPv4-mapped errno-22 QP errors retain their existing outcome while attributing the local node and preserving peer context.
+  signals:
+  - kind: log
+    pattern: 'Call to ibv_(modify_qp|query_qp|create_cq|reg_mr|dereg_mr) failed'
+    note: Interpret the operation, errno, source node and device together; a log match alone does not establish hardware damage.
+  related:
+  - detected-bad-nic-state
+  - irisc-not-responding
+  severity: high
+  last_reviewed: 2026-10-29
 - id: jit-c-compilation-failure
   title: Triton/Inductor JIT C-compilation failure
   aliases:
@@ -17481,3 +17514,292 @@ failures:
     url: https://docs.pytorch.org/docs/stable/user_guide/torch_compiler/torch.compiler_troubleshooting.html
   verification: draft
   last_reviewed: 2026-10-21
+- id: cancelled-due-to-task-failure
+  title: Cancelled due to task failure
+  aliases:
+  - DUE TO TASK FAILURE
+  category: scheduler
+  likely_owner: ambiguous
+  summary: A task failure led to cancellation; inspect the earliest task error before choosing a correction or requesting
+    help.
+  personas:
+    tenant_sre:
+      title: A task failure led to cancellation
+      summary: A task failed and other tasks were stopped; the cancellation message does not identify the original cause.
+      impact: Peer tasks may report termination or communication errors after the first task fails.
+      action: |
+        1. Inspect the application logs you can access across tasks or ranks. Find the first error before cancellation and record the failing operation, exit status, and any traceback.
+        2. Correct a confirmed application, input, or job-configuration problem only if you control it. If the change requires code or permissions you do not have, contact the person or team responsible for your application.
+        3. After a confirmed correction, retry once if restarting is safe and permitted. Confirm that the failed operation and required tasks complete and produce the expected outputs. Stop repeated retries if the error returns.
+        4. If the cause remains unclear or requires scheduler or host evidence, contact your cluster administrator or cloud provider. You can ask for help with incomplete evidence; identify the records you cannot access.
+      support_details: Provide the NVIDIA Attribution diagnosis (verdict, symptom chain, and source logs) if available,
+        job and step identifiers, failure time, accessible node or rank identifiers, the first task error, task exit
+        statuses, relevant application logs, and any correction and retry result. For a Python exception, include its
+        traceback. Remove credentials and sensitive arguments before sharing. Ask your cluster administrator or cloud
+        provider to collect scheduler termination records you cannot access. Do not delay asking for help because a diagnosis
+        or log is unavailable.
+  technical_details: Cancellation after a task failure describes the termination sequence, not the underlying cause.
+    Slurm can terminate peer tasks after a nonzero task exit according to the effective launch options and cluster configuration.
+    The cancellation message does not establish that a particular option was enabled, identify the failing component,
+    or indicate manual cancellation by a named person.
+  signals:
+  - kind: log
+    pattern: DUE TO TASK FAILURE
+    note: Task-failure cancellation message; inspect preceding application errors.
+  references:
+  - title: Slurm task-exit and cancellation behavior
+    url: https://slurm.schedmd.com/srun.html
+  - title: Slurm job and step exit codes
+    url: https://slurm.schedmd.com/job_exit_code.html
+  severity: medium
+- id: ib-device-settings-mismatch
+  title: IB device settings mismatch
+  aliases: []
+  category: distributed_comm
+  likely_owner: ambiguous
+  summary: An InfiniBand device-settings mismatch was reported; identify the compared settings before changing configuration.
+  personas:
+    tenant_sre:
+      title: A network-device configuration mismatch was reported
+      summary: The label alone does not identify the adapter, differing setting, or source of the comparison.
+      impact: A relevant configuration mismatch can affect distributed communication, but the label alone does not establish
+        the cause of a failed or slow job.
+      action: |
+        1. Save the exact mismatch message and your job's launch configuration. Look for the named device, compared setting, actual value, and expected value in records available to you.
+        2. If you use NVIDIA Collective Communications Library (NCCL) and have set job-level interface-selection overrides, compare them with your provider's documented configuration for your installed NCCL version. This check applies only to NCCL workloads; it does not establish that NCCL produced the mismatch. For another communication library, use its supported guidance.
+        3. Change only a confirmed mismatch in job settings you control. Retry once when safe and permitted. Confirm that the reported mismatch is resolved and the previously failing communication completes. Stop retries if the mismatch or communication failure returns.
+        4. Contact the person or team responsible for your application if you cannot change the relevant application configuration. If the compared values are unavailable, the setting requires host access, or the mismatch persists, contact your cluster administrator or cloud provider. Do not change adapter firmware or shared network settings. Ask for help with the evidence you have.
+      support_details: Provide the NVIDIA Attribution diagnosis (verdict, symptom chain, and source logs) if available,
+        job identifier, timestamps, accessible node and adapter or port identifiers, exact mismatch message, compared
+        values if shown, communication-library version, relevant job-level overrides, and any change and retry result.
+        Remove credentials and sensitive configuration before sharing. Identify unavailable values; ask your cluster
+        administrator or cloud provider to collect restricted device configuration and confirm the supported settings.
+        Missing records must not delay your request for help.
+  technical_details: A generic mismatch label is insufficient to prescribe a device setting, expected value, or firmware
+    change. For NCCL workloads, NCCL_IB_HCA selects communication interfaces; it is one job-level input to compare with
+    the supported configuration, not evidence that this variable caused the observation. Do not treat a generic configuration
+    mismatch as a specific adapter diagnosis or an InfiniBand work-completion error.
+  references:
+  - title: NCCL interface-selection configuration
+    url: https://docs.nvidia.com/deeplearning/nccl/user-guide/docs/env.html
+  severity: medium
+- id: kernel-oops
+  title: Kernel oops
+  aliases:
+  - 'Internal error: Oops'
+  - kernel oops
+  category: linux_kernel
+  likely_owner: infrastructure
+  summary: The Linux kernel reported an exception; preserve available evidence and ask your cluster administrator or
+    cloud provider to assess the node.
+  personas:
+    tenant_sre:
+      title: The node reported a kernel exception
+      summary: A Linux kernel oops was reported; the short message does not identify the responsible subsystem or cause.
+      impact: Tasks may fail or stall, and a node that continues running may still require assessment.
+      action: |
+        1. Save your application logs, failure time, and affected allocation identifiers. Contact your cluster administrator or cloud provider to assess the node. This symptom does not provide a tenant-level kernel repair.
+        2. If your provider permits it and restarting the application is safe, request a fresh allocation and retry once. Do not reboot the host, reload drivers, or change kernel settings yourself.
+        3. Confirm that the application passes the previous failure point and produces its expected outputs. Report the retry result to your provider. Stop retries if the failure returns; a successful retry does not establish that the original node is healthy.
+        4. Ask for help even if the kernel trace or NVIDIA Attribution diagnosis is unavailable. Identify the evidence you cannot access rather than delaying the request.
+      support_details: Provide the NVIDIA Attribution diagnosis (verdict, symptom chain, and source logs) if available,
+        job and step identifiers, accessible node or rank identifiers, timestamps, application errors, the oops message
+        if accessible, and any retry result. Remove credentials before sharing logs. Ask your cluster administrator or
+        cloud provider to collect the complete kernel exception trace and host diagnostics for the failure window. Privileged
+        log access is not a prerequisite for asking for help.
+  technical_details: An oops reports a kernel exception. The full exception and call trace help identify the failing
+    code path. A generic oops does not identify a particular memory fault, prove a hardware cause, or establish that
+    another application error caused the exception.
+  signals:
+  - kind: log
+    pattern: 'Internal error: Oops(?: - [^:]+)?:'
+    note: Linux kernel exception banner; the full trace is needed for investigation.
+  references:
+  - title: Linux kernel bug hunting and exception traces
+    url: https://www.kernel.org/doc/html/latest/admin-guide/bug-hunting.html
+  severity: high
+- id: nvrx-ft-launcher-exit-0
+  title: NVRx ft_launcher exit 0
+  aliases:
+  - NVRx launcher successful exit
+  category: unknown
+  likely_owner: ambiguous
+  summary: The NVIDIA Resiliency Extension launcher recorded a successful exit; check expected results before treating
+    the workload as complete.
+  personas:
+    tenant_sre:
+      title: The launcher recorded a successful exit
+      summary: NVIDIA Resiliency Extension (NVRx) ft_launcher recorded a zero exit status.
+      impact: This is informational, not a failure diagnosis. A launcher exit status alone does not verify application
+        outputs or recover missing logs.
+      action: |
+        1. Compare your expected outputs and checkpoints with the results available to you. Check task or step exit statuses when your deployment exposes them; a successful launcher exit alone is not enough to validate application results.
+        2. If the expected work completed, treat this label as informational. No corrective action is required for this symptom. Do not rerun completed work solely because this label appears.
+        3. If outputs are missing or incorrect, contact the person or team responsible for your application. If status records or collected logs are missing or inconsistent, contact your cluster administrator or cloud provider. State what you expected, what you observed, and which records you cannot access. Incomplete evidence must not delay asking for help.
+      support_details: If help is needed, provide the NVIDIA Attribution diagnosis (verdict, symptom chain, and source
+        logs) if available, job identifier, timestamps, launcher version, recorded exit status and signal, accessible
+        task or step results, and expected versus observed outputs. Identify missing logs and remove credentials or sensitive
+        launch arguments before sharing. Ask your cluster administrator or cloud provider to investigate collection or
+        scheduler records you cannot access; an unavailable diagnosis is not a reason to delay the request.
+  technical_details: NVIDIA Resiliency Extension provides fault-tolerance components, including a workload launcher.
+    Exit status zero is a successful process exit, not an independent validation of expected workload results. In Slurm,
+    a batch script can return zero even when a task failed; compare step results and application outputs when determining
+    whether work completed. This label is not synonymous with a missing-log observation and does not invalidate separately
+    reported failures.
+  references:
+  - title: NVIDIA Resiliency Extension
+    url: https://github.com/NVIDIA/nvidia-resiliency-ext
+  - title: Slurm job and step exit codes
+    url: https://slurm.schedmd.com/job_exit_code.html
+  severity: low
+- id: oom-kill-of-user-task
+  title: OOM kill of user task
+  aliases:
+  - User task killed by the OOM killer
+  category: application
+  likely_owner: ambiguous
+  summary: An out-of-memory event killed a workload task; check its memory use and allocation limits before changing
+    resources or requesting help.
+  personas:
+    tenant_sre:
+      title: A workload task was killed during memory pressure
+      summary: An out-of-memory (OOM) kill was recorded for a workload task or container.
+      impact: A worker can stop before producing expected results even when a wrapper or overall job reports successful
+        completion.
+      action: |
+        1. Match the kill time and affected task or container to your workload using logs and status records you can access. Compare the memory requested, effective workload limit if visible, and recorded usage. A workload memory limit can be reached without exhausting the node's physical memory.
+        2. If the record belongs to your task, reduce host-memory demand using supported application settings you control, or request more workload memory within your permitted quota when the evidence supports it. Do not change host or shared control-group settings. This guidance concerns host or container memory, not a CUDA device-memory allocation error.
+        3. After a justified change, retry once if restarting is safe. Confirm that the failed task completes without another OOM kill and produces its expected outputs. Stop retries if the failure returns.
+        4. Contact the person or team responsible for your application if code or configuration changes are outside your control. Contact your cluster administrator or cloud provider if the victim does not match your task, effective limits are unclear, or the failure persists. You can ask for help with incomplete evidence.
+      support_details: Provide the NVIDIA Attribution diagnosis (verdict, symptom chain, and source logs) if available,
+        job and step or pod identifiers, timestamps, accessible node identifier, killed process or container, requested
+        memory, visible limits and recorded peak usage, task exit statuses, incomplete outputs, and any change and retry
+        result. Remove credentials from logs. Identify unavailable records and ask your cluster administrator or cloud
+        provider to collect restricted OOM records and effective resource limits. Do not delay a request because the
+        diagnosis or memory measurements are unavailable.
+  technical_details: A Linux control-group memory limit can trigger an OOM kill within the workload without exhausting
+    all host memory. Correlate the victim with the job before assigning a cause. An OOM kill is distinct from a CUDA
+    device-memory allocation error. A wrapper's successful exit does not establish that every task completed or produced
+    valid output.
+  signals:
+  - kind: log
+    pattern: 'Memory cgroup [Oo]ut of memory: Killed process'
+    note: Linux control-group OOM message; correlate the killed process with the workload.
+  - kind: log
+    pattern: 'kubepods[\w\-]*-pod[0-9a-f_]+\.slice: A process of this unit has been killed by the OOM killer'
+    note: Kubernetes pod-slice OOM message; correlate the affected pod with the workload.
+  references:
+  - title: Linux control-group memory controls and events
+    url: https://www.kernel.org/doc/html/latest/admin-guide/cgroup-v2.html
+  - title: Slurm job and step exit codes
+    url: https://slurm.schedmd.com/job_exit_code.html
+  severity: medium
+- id: xid-69
+  title: XID 69
+  aliases:
+  - XID-69-GR_CLASS_ERROR
+  - GR_CLASS_ERROR
+  - ROBUST_CHANNEL_GR_CLASS_ERROR
+  category: gpu
+  likely_owner: ambiguous
+  summary: The GPU reported a graphics-engine class error; follow the applicable XID guidance and investigate the application
+    and CUDA evidence.
+  personas:
+    tenant_sre:
+      title: The GPU reported XID 69
+      summary: The NVIDIA driver reported a graphics-engine class error; the error number alone does not identify its
+        cause.
+      impact: GPU work may stop or fail, leaving application results incomplete.
+      action: |
+        1. Save the error message and application logs available to you. Refer to NVIDIA's XID guidance for your GPU generation; the cited catalog applies to Ampere and newer GPUs and links to guidance for older GPUs.
+        2. For a GPU covered by the cited restart-application guidance, restart your application once if your checkpoint policy and provider permit it. Confirm that the previously failing operation completes, expected outputs are produced, and XID 69 does not recur. Do not reset the GPU, reboot the host, or change shared drivers yourself.
+        3. If the error returns, stop repeated restarts and inspect accessible application and CUDA errors. Contact the person or team responsible for your application if code or configuration changes are needed beyond your control. If the cause remains unclear or investigation requires host or driver access, contact your cluster administrator or cloud provider.
+        4. Ask for help with the evidence you have. Identify unavailable driver logs or diagnostics; they are not a prerequisite for a support request.
+      support_details: Provide the NVIDIA Attribution diagnosis (verdict, symptom chain, and source logs) if available,
+        job identifier, timestamps, accessible node and GPU identifiers, complete XID message if accessible, nearby application
+        or CUDA errors, GPU model, application and CUDA versions, and restart result. Include a small non-sensitive reproducer
+        if available. Ask your cluster administrator or cloud provider to collect restricted kernel and driver diagnostics.
+        Remove credentials before sharing; do not delay asking for help because any evidence is missing.
+  technical_details: NVIDIA's XID catalog names XID 69 ROBUST_CHANNEL_GR_CLASS_ERROR, a graphics-engine class error.
+    For Ampere and newer GPUs, it lists RESTART_APP as the immediate action and CHECK_APP/CUDA as the investigation direction.
+    The code alone does not determine a hardware cause or authorize host-level recovery. Use the applicable GPU-generation
+    guidance and surrounding evidence before selecting a further action.
+  signals:
+  - kind: xid
+    pattern: 'Xid \(PCI:[^)]+\): 69,'
+    note: NVIDIA driver XID 69 record.
+  references:
+  - title: NVIDIA XID error catalog and recovery actions
+    url: https://docs.nvidia.com/deploy/xid-errors/analyzing-xid-catalog.html
+  severity: medium
+- id: nv-err-invalid-object
+  title: NV_ERR_INVALID_OBJECT
+  aliases:
+  - NV_ERR_INVALID_OBJECT
+  category: gpu
+  likely_owner: infrastructure
+  summary: NVIDIA Resource Manager rejected an invalid object; preserve the driver error and ask your cluster administrator
+    or cloud provider to investigate.
+  personas:
+    tenant_sre:
+      title: A driver operation encountered an invalid object
+      summary: NVIDIA Resource Manager returned NV_ERR_INVALID_OBJECT during a GPU operation.
+      impact: The requested driver operation may fail and prevent the application from starting or continuing.
+      action: |
+        1. Save the complete driver error, failure time, and application logs you can access. Contact your cluster administrator or cloud provider; this status alone does not identify a tenant configuration change that repairs the object.
+        2. If your provider permits a retry and restarting the application is safe, request a fresh allocation and retry once. Do not reset GPUs, restart shared services, or change host drivers yourself.
+        3. Confirm that the failed operation completes and the application produces its expected outputs. Report the result to your provider. Stop retries if the status returns or no safe retry is available.
+        4. Ask for help even if driver diagnostics or the NVIDIA Attribution diagnosis are unavailable. Identify the missing evidence rather than delaying your request.
+      support_details: Provide the NVIDIA Attribution diagnosis (verdict, symptom chain, and source logs) if available,
+        job identifier, accessible node or GPU identifiers, timestamps, complete driver message and source tag if present,
+        application errors, visible driver and application versions, and any retry result. Remove credentials before
+        sharing. Ask your cluster administrator or cloud provider to collect restricted driver diagnostics and relevant
+        host logs. Do not delay requesting help because privileged access or a diagnosis is unavailable.
+  technical_details: NVIDIA's public driver status definitions describe NV_ERR_INVALID_OBJECT as an invalid object. The
+    status identifies an object-validation problem but does not explain why the object became invalid. The error alone
+    does not select a service restart, GPU reset, or other host-level recovery.
+  signals:
+  - kind: log
+    pattern: \bNV_ERR_INVALID_OBJECT\b
+    note: NVIDIA driver Resource Manager status.
+  references:
+  - title: NVIDIA driver status-code definitions
+    url: https://github.com/NVIDIA/open-gpu-kernel-modules/blob/main/src/common/sdk/nvidia/inc/nvstatuscodes.h
+  severity: medium
+- id: nv-err-no-memory
+  title: NV_ERR_NO_MEMORY
+  aliases:
+  - NV_ERR_NO_MEMORY
+  - NV_ERR_NO_MEMORY mem_multicast_fabric.c
+  category: gpu
+  likely_owner: infrastructure
+  summary: NVIDIA Resource Manager reported a memory-allocation failure; preserve the driver context before choosing
+    recovery or changing application memory use.
+  personas:
+    tenant_sre:
+      title: A driver operation could not obtain memory
+      summary: NVIDIA Resource Manager returned NV_ERR_NO_MEMORY during a driver operation.
+      impact: The allocation failure can interrupt GPU work; the status alone does not identify the exhausted memory
+        resource.
+      action: |
+        1. Save the complete driver error and application logs available to you. Do not assume that this is a CUDA device-memory allocation error or that reducing application GPU-memory use will resolve it.
+        2. Contact your cluster administrator or cloud provider to investigate the driver context. If restarting the application is safe and your provider permits it, request a fresh allocation and retry once. Do not reset GPUs, stop other workloads, or change host settings yourself.
+        3. Confirm that the failed operation completes and expected application outputs are produced. Report the retry result. Stop retries if the error returns or a safe restart is unavailable.
+        4. Ask for help with the evidence you have. State which memory measurements or driver records you cannot access; missing evidence must not delay the request.
+      support_details: Provide the NVIDIA Attribution diagnosis (verdict, symptom chain, and source logs) if available,
+        job identifier, accessible node or GPU identifiers, timestamps, complete driver message and source tag if present,
+        application logs, visible driver version, and any retry result. Remove credentials before sharing. Ask your cluster
+        administrator or cloud provider to collect restricted driver diagnostics and host or GPU memory records. Having
+        a diagnosis or memory measurement is not a prerequisite for requesting help.
+  technical_details: NVIDIA's public driver status definitions describe NV_ERR_NO_MEMORY as an out-of-memory status.
+    The status alone does not identify the exhausted memory pool. Do not treat a Resource Manager status as synonymous
+    with a CUDA allocation error or a host OOM kill; use the surrounding driver and application evidence to determine
+    the next investigation step.
+  signals:
+  - kind: log
+    pattern: \bNV_ERR_NO_MEMORY\b
+    note: NVIDIA driver Resource Manager memory-allocation status.
+  references:
+  - title: NVIDIA driver status-code definitions
+    url: https://github.com/NVIDIA/open-gpu-kernel-modules/blob/main/src/common/sdk/nvidia/inc/nvstatuscodes.h
+  severity: medium

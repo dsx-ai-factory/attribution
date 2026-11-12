@@ -8,15 +8,16 @@ import re
 from datetime import UTC, datetime, timedelta
 from typing import Mapping
 
-import requests
 from loguru import logger
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
 from attribution_blueprint.connectors.auth import Auth
+from attribution_blueprint.connectors.cluster import query_cluster
 from attribution_blueprint.connectors.logs import log_observation
 from attribution_blueprint.connectors.logs.envelope import extract_body_and_node
 from attribution_blueprint.connectors.logs.victorialogs.templates import TEMPLATES
+from attribution_blueprint.telemetry import MeteredSession
 from attribution_blueprint.types import (
     ExecutionContext,
     NodeResource,
@@ -72,6 +73,7 @@ class VictoriaLogsConnector:
         timeout_seconds: float = 60.0,
         limit: int = DEFAULT_LIMIT,
         node_field: str | None = DEFAULT_NODE_FIELD,
+        cluster_from_context: bool = False,
     ):
         if source not in templates:
             raise ValueError(f"no templates registered for source {source}")
@@ -84,9 +86,10 @@ class VictoriaLogsConnector:
         self._timeout = timeout_seconds
         self._limit = limit
         self._node_field = node_field or None
+        self._cluster_from_context = cluster_from_context
         self._auth = auth
 
-        self._session = requests.Session()
+        self._session = MeteredSession("victorialogs", (QUERY_PATH,))
         retry = Retry(
             total=5,
             connect=5,
@@ -118,6 +121,7 @@ class VictoriaLogsConnector:
         start_ns = _datetime_ns(start)
         end_ns = _datetime_ns(end) + 1
         nodes = context.get("nodes") or []
+        query_kwargs = self._context_query_kwargs(context)
 
         rows: list[dict] = []
         seen: set[str] = set()
@@ -125,7 +129,7 @@ class VictoriaLogsConnector:
             try:
                 query = template.format(
                     job_id=context.get("id", ""),
-                    **self._query_kwargs,
+                    **query_kwargs,
                 )
             except KeyError as error:
                 logger.warning(f"victorialogs template missing kwarg {error}; skipping query")
@@ -164,6 +168,13 @@ class VictoriaLogsConnector:
         entries_with_timestamps.sort(key=lambda item: item[0])
         entries = [entry for _, entry in entries_with_timestamps]
         return [log_observation(source=self._source, entries=entries, context=context)]
+
+    def _context_query_kwargs(self, context: ExecutionContext) -> dict[str, str]:
+        """Return query_kwargs with `cluster` taken from the context when enabled and present."""
+        cluster = query_cluster(context, self._query_kwargs.get("cluster"), from_context=self._cluster_from_context)
+        if cluster is None or cluster == self._query_kwargs.get("cluster"):
+            return self._query_kwargs
+        return {**self._query_kwargs, "cluster": cluster}
 
     def _query_window(self, query: str, start_ns: int, end_ns_excl: int) -> list[dict]:
         rows: list[dict] = []

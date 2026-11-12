@@ -54,7 +54,7 @@ specifications.
 
 ## Usage
 
-Build and publish the image:
+From the repository root, build and publish the image:
 
 ```bash
 docker build \
@@ -70,20 +70,23 @@ build does not create a consolidated notice bundle.
 ### Enabling scheduler integrations
 
 By default the daemon records scheduler-neutral Pod and owner evidence only.
-Enable one or both scheduler-specific resource resolvers per installation:
+Install it before submitting workloads, one installation per existing workload
+namespace. This example enables KAI:
 
 ```bash
 helm upgrade --install attribution blueprint/deploy/kubernetes-daemon \
   --namespace team-a \
   --set image.repository=registry.example/kubernetes-daemon \
   --set image.tag=VERSION \
-  --set integrations.kueue.enabled=true \
-  --set integrations.kai.enabled=true
+  --set integrations.kai.enabled=true \
+  --set integrations.kai.podGroupVersion=v2alpha2
 ```
 
 Enabling an integration also watches the matching resource and adds its RBAC
 rule (`kueue.x-k8s.io` Workloads or `scheduling.run.ai` PodGroups) to the
-generated Role. Enable only schedulers whose CRDs are installed.
+generated Role. Enable only schedulers whose CRDs are installed, and set the
+integration API version to one served by that CRD. Add
+`--set integrations.kueue.enabled=true` when Kueue is also installed.
 
 | Value                                  | Default   | Meaning                                                     |
 | --------------------------------------- | --------- | ------------------------------------------------------------ |
@@ -102,6 +105,10 @@ Other useful chart settings are:
 - `nodeSelector` and `tolerations`
 - `queueSize`, `workers`, and `watchTimeoutSeconds`
 - `jobsetVersion`
+
+The PVC uses the cluster's default StorageClass unless
+`storage.sqlite.storageClassName` is set. Without either, the StatefulSet
+remains pending.
 
 Run the daemon on a system node outside the workload failure domain. JobSet
 watching is enabled by default. If the JobSet API is not installed, the daemon
