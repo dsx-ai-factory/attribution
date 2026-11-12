@@ -98,13 +98,18 @@ because the attribution rules key on names rather than UIDs:
 - A UID 0 step whose attempt (same `SLUID`) has a head row in state `TIMEOUT`,
   and that was still running when the head's time limit was reached, was
   cancelled by `slurmctld` enforcing the limit and is sent as
-  `cancelled_by: "Timeout"`.
-- A UID 0 step that ended before that limit was cancelled by an operator while
-  the job ran on, and is sent as `cancelled_by: "root"`. So is any UID 0
-  cancellation in an attempt that did not time out.
-- When the head row was not retained, or a `TIMEOUT` head has no time limit,
-  the cause cannot be established. The step keeps `cancelled_by: "0"`, and a
-  warning names it.
+  `cancelled_by: "Timeout"`. The limit is elapsed time from the head's start,
+  so a daylight-saving change in `cluster_tz` does not move it.
+- A UID 0 step of a `TIMEOUT` attempt that ended before that limit was
+  cancelled by an operator while the job ran on, and is sent as
+  `cancelled_by: "root"`. So is every row of an attempt whose head was itself
+  `CANCELLED by 0`.
+- In any other case the cause cannot be established, and the step keeps
+  `cancelled_by: "0"`. `slurmctld` also ends steps as UID 0 when it preempts a
+  job or loses a node, so a UID 0 step under a head in another state, such as
+  `PREEMPTED`, `NODE_FAIL`, or cancelled by another UID, does not show an
+  operator. A warning names the step when its head row was not retained or a
+  `TIMEOUT` head has no time limit.
 - Other UIDs are forwarded as digits. The Blueprint host need not share the
   cluster's account database, so no name lookup is attempted.
 
