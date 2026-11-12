@@ -66,7 +66,7 @@ sub_domain:           system_software
 
 ## At NVIDIA scale
 
-Two cases the rules engine handles in production:
+Three cases the rules engine handles in production:
 
 * **Fabric reliability hardened from concentrated symptom analysis.** A large RDMA-backed GPU cluster was producing a noisy mix of RDMA port errors, connection resets, and scheduler "Not Responding" events. Across several days of failed workloads, NVIDIA Attribution concentrated those symptoms around a small set of fabric patterns and a specific set of host-port and switch-port pairs, producing node-pair-level evidence the operator could act on. On that evidence, the operator ran two sets of mitigations: infrastructure-side fabric repair (downed links, switch failures) and host-side congestion tuning (PFC on host-facing ports, CNP). Those operator actions improved mean time between workload interruptions by roughly 3x on that cluster. Attribution's contribution was the evidence that scoped the work.
 * **Host-level events surfaced through workload impact.** A multi-rank GB200 training fleet was hitting scattered job failures that looked, to each workload, like an isolated termination. NVIDIA Attribution clustered the events by node, time, and workload, surfacing a cohort of failures concentrated on a subset of hosts silently entering scheduler "Not Responding" state. The pattern made the failure mode visible by cluster, node, and workload, turning a backlog of individually-triaged job tickets into a single tracked infrastructure failure with an owner on the cloud-host side. The cloud provider used that evidence to scope and ship a firmware fix and to track recurrence as a named failure mode rather than as noise.
@@ -81,7 +81,7 @@ Two cases the rules engine handles in production:
 
 * **Python.** `>=3.14.6,<3.15` on the host running the Attribution Service. 3.11+ on the host running the Blueprint orchestrator. The two can run on the same host or different hosts.
 * **uv package manager.** Install with `curl -LsSf https://astral.sh/uv/install.sh | sh`. Every `uv run` command resolves and installs dependencies on first invocation, no separate install step.
-* **Scheduler.** Slurm 25.11+ (SLUID required), or Kueue v0.6+ with JobSet v0.5+ for JobSet-shaped distributed training, or NVIDIA KAI Scheduler for PodGroups owned by a Kubernetes Job or JobSet.
+* **Scheduler.** Slurm 25.11+ (SLUID required), Kueue v0.6+ with JobSet v0.5+, or NVIDIA KAI Scheduler for supported Job- and JobSet-owned PodGroups. See the [KAI scope](blueprint/docs/use-cases/kai.md).
 * **Telemetry backends (any subset of):** Loki or VictoriaLogs for application or system logs, a PromQL-compatible Prometheus or Mimir instance for node metrics, `kubectl` access for Kueue pod log collection, or local files for sacct-resolved StdOut/StdErr paths.
 * **Network reach.** The Blueprint must reach the Attribution Service over HTTP. The Service does not need outbound network access.
 * **Supported GPU architectures.** A100, H100, L40S, B200, GB200, GB300. GB200 and GB300 rule coverage continues to mature as coverage expands.

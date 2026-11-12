@@ -15,6 +15,15 @@ Closes #
 
 List the commands you ran and their results.
 
+## Documentation review
+
+For documentation changes, use the [documentation review standards](https://github.com/dsx-ai-factory/attribution/blob/main/CONTRIBUTING.md#documentation-review).
+Otherwise, write "Not applicable" in this section.
+
+- [ ] Scope, technical accuracy, wording, and applicable version assumptions have been checked.
+- [ ] Actions state required access, recovery checks, stopping conditions, and an evidence-aware handoff where applicable.
+- [ ] References and examples are public-safe, related links resolve, and affected rendered guidance or exports have been checked.
+
 ## Contributor checks
 
 - [ ] This pull request links the issue that describes the work.

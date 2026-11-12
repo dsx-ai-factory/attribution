@@ -50,7 +50,7 @@ The Service does not query schedulers, read logs, or scrape metrics. The Bluepri
 
 ## What you need
 
-- **Scheduler.** Slurm 25.11 or later, because `SLUID` is required. Kueue v0.6 or later with JobSet v0.5 or later, for JobSet-shaped distributed training. NVIDIA KAI Scheduler, for PodGroups owned by a Kubernetes Job or JobSet.
+- **Scheduler.** Slurm 25.11 or later (`SLUID` required), Kueue v0.6 or later with JobSet v0.5 or later, or NVIDIA KAI Scheduler for supported Job- and JobSet-owned PodGroups. See the [KAI scope](https://github.com/dsx-ai-factory/attribution/blob/main/blueprint/docs/use-cases/kai.md).
 - **Telemetry.** Any subset of Loki or VictoriaLogs for application or system logs, a PromQL-compatible Prometheus or Mimir for node metrics, `kubectl` access for Kueue pod logs, or local log files.
 - **Network.** The Blueprint must reach the Service over HTTP. The Service needs no outbound access.
 - **Hardware coverage.** A100, H100, L40S, B200, GB200, and GB300. GB200 and GB300 rule coverage is still maturing.

@@ -53,7 +53,7 @@ class Scheduler(StrEnum):
     UNKNOWN = ""
     SLURM = "slurm"
     KUEUE = "kueue"
-    # Identity only; attribution raises NotImplementedError until KAI rules land.
+    # Uses the shared Kubernetes scheduler rules.
     KAI = "kai"
     RUNAPI = "runapi"
 

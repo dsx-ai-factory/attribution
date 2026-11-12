@@ -391,7 +391,9 @@ class TestTimeseriesEntry:
     def test_body_fallbacks_decide_what_is_parsed_out_of_the_body(
         self, timeseries_context, syslog_job_info, timezone, fallbacks, wire, expected_resources, expected_time
     ):
-        body_fallbacks = BodyFallbacks(**fallbacks, year_fallback=datetime(2024, 1, 6, tzinfo=timezone))
+        body_fallbacks = BodyFallbacks(
+            **fallbacks, job_span=(datetime(2024, 1, 5, tzinfo=timezone), datetime(2024, 1, 6, tzinfo=timezone))
+        )
 
         (made,) = TimeseriesEntrySource(Observation(timeseries_context, [wire]), body_fallbacks)
 
@@ -722,32 +724,112 @@ class TestTimestampExtraction:
             assert result is None, f"Should not match: {line}"
 
     @pytest.mark.parametrize(
-        ("line", "job_end", "expected_year"),
+        ("line", "job_start", "job_end", "expected_year"),
         [
             pytest.param(
-                "[E1025 13:56:48.346 ProcessGroupNCCL.cpp:2174] msg", (2026, 10, 25, 13, 54, 49), 2026, id="after_end"
+                "[E1025 13:56:48.346 ProcessGroupNCCL.cpp:2174] msg",
+                (2026, 10, 25, 12, 0, 0),
+                (2026, 10, 25, 13, 54, 49),
+                2026,
+                id="after_end",
             ),
             pytest.param(
-                "[E1025 13:50:00.000 ProcessGroupNCCL.cpp:2174] msg", (2026, 10, 25, 13, 54, 49), 2026, id="before_end"
+                "[E1025 13:50:00.000 ProcessGroupNCCL.cpp:2174] msg",
+                (2026, 10, 25, 12, 0, 0),
+                (2026, 10, 25, 13, 54, 49),
+                2026,
+                id="before_end",
             ),
             pytest.param(
-                "[E1231 23:59:00.000 ProcessGroupNCCL.cpp:2174] msg", (2027, 1, 1, 0, 5, 0), 2026, id="prior_year"
+                "[E1231 23:59:00.000 ProcessGroupNCCL.cpp:2174] msg",
+                (2026, 12, 31, 23, 0, 0),
+                (2027, 1, 1, 0, 5, 0),
+                2026,
+                id="before_new_year",
             ),
             pytest.param(
-                "[E702 00:00:00.000 ProcessGroupNCCL.cpp:2174] msg", (2026, 1, 1, 0, 0, 0), 2026, id="at_threshold"
+                "[E101 00:01:00.000 ProcessGroupNCCL.cpp:2174] msg",
+                (2026, 12, 31, 23, 0, 0),
+                (2027, 1, 1, 0, 5, 0),
+                2027,
+                id="after_new_year",
             ),
             pytest.param(
-                "[E702 00:00:01.000 ProcessGroupNCCL.cpp:2174] msg", (2026, 1, 1, 0, 0, 0), 2025, id="past_threshold"
+                "[E301 00:00:00.000 ProcessGroupNCCL.cpp:2174] msg",
+                (2026, 2, 1, 0, 0, 0),
+                (2026, 11, 30, 0, 0, 0),
+                2026,
+                id="early_line_of_long_job",
             ),
         ],
     )
-    def test_pytorch_format_year_from_job_end(self, timezone, line, job_end, expected_year):
-        """A line logged shortly after the job end keeps the year of the job end."""
+    def test_pytorch_format_year_from_job_span(self, timezone, line, job_start, job_end, expected_year):
+        """A line gets the year that puts it inside the job, or closest to it."""
 
-        result = _extract_timestamp_from_pytorch_format(line, timezone, datetime(*job_end, tzinfo=timezone))
+        job_span = (datetime(*job_start, tzinfo=timezone), datetime(*job_end, tzinfo=timezone))
+        result = _extract_timestamp_from_pytorch_format(line, timezone, job_span)
 
         assert result is not None
         assert result.year == expected_year
+
+    @pytest.mark.parametrize(
+        ("line", "expected"),
+        [
+            pytest.param(
+                "0: [Jan 15 10:20:30.123456 4321 slurmstepd   0x1234] error: *** STEP 7.0 ON node01 "
+                "CANCELLED AT 2026-01-15T10:20:30 DUE to SIGNAL Terminated ***",
+                (2026, 1, 15, 10, 20, 30, 123456),
+                id="cancel_line",
+            ),
+            pytest.param(
+                "16: [Jan 5 10:20:40 5678 slurmstepd   0x5678] error: pyxis: child 1 terminated",
+                (2026, 1, 5, 10, 20, 40),
+                id="no_fraction",
+            ),
+            pytest.param(
+                "0: [Jan 15 10:20:30.123456789 4321 slurmstepd   0x1234] error: *** STEP 7.0 CANCELLED ***",
+                (2026, 1, 15, 10, 20, 30, 123456),
+                id="nanoseconds",
+            ),
+            pytest.param(
+                "0: [Jan 15 10:20:30.11173  478453 slurmstepd   0x1234] error: *** STEP 7.0 CANCELLED ***",
+                (2026, 1, 15, 10, 20, 30, 11173),
+                id="slurm_padded_microseconds",
+            ),
+            pytest.param(
+                "0: [Jan 15 10:20:30.600    299314 slurmstepd   0x1234] error: *** STEP 7.0 CANCELLED ***",
+                (2026, 1, 15, 10, 20, 30, 600),
+                id="slurm_three_digit_microseconds",
+            ),
+            pytest.param(
+                "0: Jan 15 10:20:30.123456 4321 slurmstepd: error: *** STEP 7.0 CANCELLED ***",
+                (2026, 1, 15, 10, 20, 30, 123456),
+                id="no_brackets",
+            ),
+            pytest.param("43: [Jan 15 10:20:40] no slurmstepd marker", None, id="other_tool"),
+            pytest.param("43: [Foo 04 03:23:43.1 1 slurmstepd] bad month", None, id="bad_month"),
+        ],
+    )
+    def test_slurmstepd_format(self, timezone, line, expected):
+        """slurmstepd lines in the step log carry their own timestamp."""
+
+        job_span = (datetime(2026, 1, 5, tzinfo=timezone), datetime(2026, 1, 15, 10, 20, 50, tzinfo=timezone))
+        result = _extract_timestamp_from_log_line(line, timezone, job_span)
+
+        if expected is None:
+            assert result is None
+        else:
+            assert result == datetime(*expected, tzinfo=timezone)
+
+    def test_slurmstepd_line_after_new_year(self, timezone):
+        """A teardown line logged on January 1 after a December 31 job end gets the next year."""
+
+        line = "0: [Jan 01 00:00:01.500000 4321 slurmstepd   0x1234] error: *** STEP 7.0 CANCELLED ***"
+
+        job_span = (datetime(2026, 12, 31, 20, tzinfo=timezone), datetime(2026, 12, 31, 23, 59, 59, tzinfo=timezone))
+        result = _extract_timestamp_from_log_line(line, timezone, job_span)
+
+        assert result == datetime(2027, 1, 1, 0, 0, 1, 500000, tzinfo=timezone)
 
     def test_extract_timestamp_from_log_line_pytorch_single_digit_month(self, timezone):
         """Test the main extraction function with PyTorch single-digit month format."""
