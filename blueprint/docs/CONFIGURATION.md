@@ -1015,7 +1015,8 @@ Use `[log.health_check]` for output from a node health check, such as a Slurm `H
 The source accepts the same `local_file` and `loki` components as `syslog`, with two differences:
 
 - The default collection window is the execution context's interval plus ten minutes, matching the service's own `HEALTH_CHECK` window. A health check that logs a drain a few minutes after the job ends is still collected, and a yearless `Mon DD HH:MM:SS` timestamp on such a line is dated against that extended window rather than the job end.
-- There are no bundled LogQL templates for this source. With `loki`, set `query` or `queries` to the selector your health check logs under; omitting both, or setting an empty `queries` list, is a configuration error.
+- Collection runs once, when the context is attributed, and does not wait for the window to close. A line is collected only if it exists by then, so with [`[eca.kafka]`](#ecakafka), where a job-completion event can be attributed seconds after the job ends, run discovery late enough after job end for the health check to have logged. The Blueprint does not reprocess a context later.
+- There are no bundled LogQL templates for this source. With `loki`, set `query` or `queries` to the selector your health check logs under; omitting both, setting an empty `queries` list, or giving a blank query is a configuration error.
 
 ```toml
 [log.health_check]

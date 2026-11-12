@@ -267,12 +267,16 @@ def test_loki_health_check_connector_uses_configured_queries(monkeypatch, tmp_pa
     assert cfg.log_connectors[0]._templates == ['{{service_name="c", syslog_identifier="site-health-check"}}']
 
 
-@pytest.mark.parametrize("queries_line", ["", "queries = []\n"], ids=["omitted", "empty-list"])
+@pytest.mark.parametrize(
+    "queries_line",
+    ["", "queries = []\n", 'query = ""\n', 'queries = [""]\n', 'queries = ["  ", ""]\n'],
+    ids=["omitted", "empty-list", "blank-query", "blank-in-list", "only-blanks-in-list"],
+)
 def test_loki_health_check_without_queries_is_a_config_error(monkeypatch, tmp_path, queries_line):
     """No bundled templates exist for HEALTH_CHECK, so omitting `query`/`queries`,
-    or setting an empty list, must surface as MCAError (clean usage message)
-    rather than the connector's ValueError or a connector that silently runs
-    no query."""
+    or giving only an empty list or blank strings, must surface as MCAError
+    (clean usage message) rather than the connector's ValueError or a connector
+    that sends an empty LogQL query."""
     monkeypatch.setenv("ATTRIBUTION_TEST_TOKEN", "x")
     p = tmp_path / "c.toml"
     p.write_text(
