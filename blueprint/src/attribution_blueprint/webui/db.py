@@ -319,13 +319,23 @@ def _filtered_clauses(
     # the UI date window is a UTC day. The stored-text range widened by one day
     # covers every UTC offset (at most 14 hours) and lets SQLite seek the
     # end_time index before the exact julianday() check.
+    # A widened day past year 1 or 9999 cannot be represented; that text bound
+    # then excludes nothing, so it is dropped and only the exact check remains.
     if since is not None:
-        clauses.append("c.end_time >= ? AND julianday(c.end_time) >= julianday(?)")
-        params.extend([_iso_prev_day(since), since])
+        clauses.append("julianday(c.end_time) >= julianday(?)")
+        params.append(since)
+        lower_text = _widened_iso_day(since, -1)
+        if lower_text is not None:
+            clauses.append("c.end_time >= ?")
+            params.append(lower_text)
     if until is not None:
         upper = _iso_next_day(until)
-        clauses.append("c.end_time < ? AND julianday(c.end_time) < julianday(?)")
-        params.extend([_iso_next_day(upper), upper])
+        clauses.append("julianday(c.end_time) < julianday(?)")
+        params.append(upper)
+        upper_text = _widened_iso_day(upper, 1)
+        if upper_text is not None:
+            clauses.append("c.end_time < ?")
+            params.append(upper_text)
     if status == "failed":
         clauses.append("r.outcome != ?")
         params.append("Pass")
@@ -584,26 +594,38 @@ def _iso_next_day(iso_date: str) -> str:
     return (d + timedelta(days=1)).isoformat()
 
 
-def _iso_prev_day(iso_date: str) -> str:
-    """Subtract one day from an ISO date string for widened lower bounds.
+def _widened_iso_day(iso_date: str, days: int) -> str | None:
+    """Shift an ISO date by whole days for the indexed text prefilter.
 
     Args:
         iso_date: ISO calendar date.
+        days: Signed number of days to shift.
 
     Returns:
-        The previous ISO calendar date.
+        The shifted ISO calendar date, or None when it falls outside the
+        representable calendar (before year 1 or after year 9999).
     """
 
-    return (date.fromisoformat(iso_date[:10]) - timedelta(days=1)).isoformat()
+    try:
+        return (date.fromisoformat(iso_date[:10]) + timedelta(days=days)).isoformat()
+    except OverflowError:
+        return None
 
 
 def date_range_bounds(path: str) -> tuple[str | None, str | None]:
-    """Return (min, max) of c.end_time in the DB as ISO strings, or (None, None)
-    when empty. Used by the webui to populate the date picker without pulling
-    the entire row set."""
+    """Return the first and last UTC run end days for the date picker.
+
+    Uses the same attributed-run, UTC-day calculation as the dashboard bounds,
+    so the metadata endpoint and the dashboard advertise the same window.
+
+    Args:
+        path: SQLite database path.
+
+    Returns:
+        Inclusive ``(min, max)`` ISO day pair; both None when the database holds no runs.
+    """
     with _connect(path) as conn:
-        row = conn.execute("SELECT MIN(end_time) AS lo, MAX(end_time) AS hi FROM execution_context").fetchone()
-    return (row["lo"], row["hi"]) if row else (None, None)
+        return _db_date_bounds_conn(conn)
 
 
 def get_run(path: str, run_id: str) -> RunRow | None:
