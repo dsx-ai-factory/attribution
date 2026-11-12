@@ -47,7 +47,7 @@ jobs:
 
       - name: Build relocatable walkthrough
         working-directory: docs/attribution-tour
-        run: pnpm build --base /walkthroughs/attribution-process/ --out dist
+        run: pnpm build --base /${{ github.event.repository.name }}/walkthroughs/attribution-process/ --out dist
 
       - name: Stage Pages landing page
         run: |

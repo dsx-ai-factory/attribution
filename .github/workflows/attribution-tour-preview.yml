@@ -58,7 +58,7 @@ jobs:
 
       - name: Build relocatable preview
         working-directory: docs/attribution-tour
-        run: pnpm build --base /pr-preview/pr-${{ github.event.number }}/ --out dist
+        run: pnpm build --base /${{ github.event.repository.name }}/pr-preview/pr-${{ github.event.number }}/ --out dist
 
       # Pages requires an entry file at the publishing root. The production
       # workflow normally creates it after merge, so bootstrap it for the first
