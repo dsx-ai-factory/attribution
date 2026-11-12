@@ -148,6 +148,8 @@ _REFINER_ORDER = [
     "Xid149AndNvlinkFiltering",
     "Gb200PriorityRootCause",
     "_reserved_final_2",
+    # After every pre-outcome cleanup, so it sees each cascade symptom's final sources.
+    "CudaOomTeardownCascade",
     # DAG cascade pruning operates on the refined set, not the original
     "DagCascadePruning",
     # Job-lifecycle fallbacks run dead last: for a job with no nodes or a RUNNING job
@@ -2163,6 +2165,67 @@ def nvrx_failure_user_cause_cascade(context: RefinerContext):
         return
     for _node, errors in my_bad_nodes.symptom_groups():
         errors.discard("NVRx detected failure")
+
+
+_CUDA_OOM_SYMPTOM = "cudaError out of memory"
+_CUDA_OOM_CASCADE_PREFIXES = ("XID-45-", "cudaErrorLaunchFailure", "NV_ERR_INVALID_STATE")
+# Peers tear down seconds to a minute after the OOM (38 s on the job that motivated
+# this rule). Ten minutes covers a slow launcher teardown without linking a later,
+# unrelated failure to the OOM.
+_CUDA_OOM_CASCADE_WINDOW = timedelta(minutes=10)
+
+
+def _earliest_time(sources: SourceSet[str]) -> Optional[datetime]:
+    """Return the earliest timestamp among a symptom's sources, or None when none is timed."""
+    times = [source.time for source in sources if source.time is not None]
+    return min(times) if times != [] else None
+
+
+def _follows_oom(sources: SourceSet[str], oom_time: datetime) -> bool:
+    """Return whether every timed source falls within the OOM teardown window.
+
+    At least one source must be timed, and every timed source must be at or after
+    the OOM and within ``_CUDA_OOM_CASCADE_WINDOW`` of it.
+    """
+    times = [source.time for source in sources if source.time is not None]
+    if times == []:
+        return False
+    return all(oom_time <= time <= oom_time + _CUDA_OOM_CASCADE_WINDOW for time in times)
+
+
+@refiner_def(
+    name="CudaOomTeardownCascade",
+    author="NVIDIA Attribution team",
+    priority=_priority("CudaOomTeardownCascade"),
+)
+def cuda_oom_teardown_cascade(context: RefinerContext):
+    """Discard XID 45, launch failure and NV_ERR_INVALID_STATE that follow a CUDA OOM.
+
+    When one rank runs out of GPU memory, its peers are torn down and log XID 45,
+    cudaErrorLaunchFailure and NV_ERR_INVALID_STATE on other nodes, which turned a
+    user OOM into Fail MultiCategory. A symptom is discarded, from the job and from
+    every node, only when all of its timed sources come after the earliest OOM and
+    within the teardown window, so an XID 45 that came first, or one with no
+    timestamp, is kept.
+    """
+    symptoms = context.symptoms
+    if symptoms is None or _CUDA_OOM_SYMPTOM not in symptoms:
+        return
+    oom_time = _earliest_time(symptoms[_CUDA_OOM_SYMPTOM])
+    if oom_time is None:
+        return
+    cascade = [
+        symptom
+        for symptom in list(symptoms.symptoms())
+        if symptom.startswith(_CUDA_OOM_CASCADE_PREFIXES) and _follows_oom(symptoms[symptom], oom_time)
+    ]
+    for symptom in cascade:
+        symptoms.discard(symptom)
+    if cascade == [] or context.my_bad_nodes is None:
+        return
+    for _node, errors in context.my_bad_nodes.symptom_groups():
+        for symptom in cascade:
+            errors.discard(symptom)
 
 
 @refiner_def(name="XidGenericCleanup", author="NVIDIA Attribution team", priority=_priority("XidGenericCleanup"))
