@@ -67,7 +67,9 @@ class LocalFileLogConnector:
     regular file directly inside the directory is read (non-recursive); if it
     resolves to a file, that file is read. For SYSLOG, each path is a base
     directory containing one child directory per context node. Missing APPLOG
-    paths are skipped silently, while missing SYSLOG node directories warn.
+    paths warn, and when no configured APPLOG path exists ``collect`` raises
+    :class:`MCAError` naming them so the run reports the evidence gap. Missing
+    SYSLOG node directories warn.
     A file whose name ends in ``.jsonl`` is read as one JSON entry per line
     and sent unchanged; for SYSLOG such a path names the file directly
     instead of a base directory.
@@ -99,6 +101,19 @@ class LocalFileLogConnector:
         return self._source
 
     def collect(self, context: ExecutionContext) -> list[Observation]:
+        """Read the configured log paths for one execution context.
+
+        Args:
+            context: Execution context that supplies path placeholders and,
+                for SYSLOG, the node directories to read.
+
+        Returns:
+            One observation per readable, non-empty file.
+
+        Raises:
+            MCAError: For APPLOG, when at least one path was configured and
+                none of the rendered paths exists.
+        """
         # Reject naive datetimes at the boundary; the service rejects them and
         # attribution_lib has paths that crash on them.
         assert_aware(context["start_time"], "start_time")
@@ -107,15 +122,25 @@ class LocalFileLogConnector:
             return self._collect_syslog(context)
         observations: list[Observation] = []
         seen: set[Path] = set()
+        missing: list[Path] = []
+        found_input = False
         for template in self._templates:
             for path in self._resolve_paths(template, context):
                 resolved = path.resolve()
                 if resolved in seen:
                     continue
                 seen.add(resolved)
+                if _is_missing(path):
+                    logger.warning(f"local_file {self._source.name}: no file at {path} for ctx {context.get('id')}")
+                    missing.append(path)
+                    continue
+                found_input = True
                 observation = self._file_observation(path, context)
                 if observation is not None:
                     observations.append(observation)
+        if missing and found_input is False:
+            paths = ", ".join(str(path) for path in missing)
+            raise MCAError(f"local_file {self._source.name}: configured input not found: {paths}")
         return observations
 
     def _file_observation(self, path: Path, context: ExecutionContext) -> Optional[Observation]:
@@ -387,6 +412,21 @@ _registry.register_component(
     schema={"paths": _PARAM, "max_bytes": _PARAM},
     build=_build,
 )
+
+
+def _is_missing(path: Path) -> bool:
+    """Return whether ``path`` does not exist.
+
+    Only a missing path counts. Other stat errors, such as permission denied,
+    return ``False`` so the reader reports them with their own warning.
+    """
+    try:
+        path.stat()
+    except (FileNotFoundError, NotADirectoryError):
+        return True
+    except OSError:
+        return False
+    return False
 
 
 def _jsonl_entries(path: Path, body: str, context: ExecutionContext) -> Optional[list[TimeseriesEntry]]:

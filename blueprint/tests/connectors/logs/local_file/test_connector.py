@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 import pytest
 
 from attribution_blueprint.connectors.logs.local_file import LocalFileLogConnector, parse_size
+from attribution_blueprint.exceptions import MCAError
 from attribution_blueprint.types import Source
 
 
@@ -27,10 +28,65 @@ def _ctx(tmp_path, std_out_template: str, **extra) -> dict:
     }
 
 
-def test_returns_empty_when_file_missing(tmp_path):
+def _collect_with_warnings(conn: LocalFileLogConnector, ctx: dict) -> tuple[list, list[str]]:
+    """Collect while capturing WARNING log lines."""
+    from loguru import logger
+
+    warnings: list[str] = []
+    sink_id = logger.add(lambda msg: warnings.append(str(msg)), level="WARNING")
+    try:
+        obs = conn.collect(ctx)
+    finally:
+        logger.remove(sink_id)
+    return obs, warnings
+
+
+def test_raises_and_warns_when_every_configured_path_is_missing(tmp_path):
+    """A configured APPLOG input that does not exist is an evidence gap, not a successful empty read."""
+    from loguru import logger
+
+    missing = tmp_path / "absent.log"
     conn = LocalFileLogConnector(log_path_templates=["{std_out}"])
-    obs = conn.collect(_ctx(tmp_path, str(tmp_path / "absent.log")))
+
+    warnings: list[str] = []
+    sink_id = logger.add(lambda msg: warnings.append(str(msg)), level="WARNING")
+    try:
+        with pytest.raises(MCAError, match="absent.log"):
+            conn.collect(_ctx(tmp_path, str(missing)))
+    finally:
+        logger.remove(sink_id)
+
+    assert any(str(missing) in warning for warning in warnings)
+
+
+def test_missing_path_next_to_present_path_keeps_evidence_and_warns(tmp_path):
+    present = tmp_path / "present.log"
+    present.write_text("line\n")
+    missing = tmp_path / "absent.log"
+    conn = LocalFileLogConnector(log_path_templates=[str(present), str(missing)])
+
+    obs, warnings = _collect_with_warnings(conn, _ctx(tmp_path, ""))
+
+    assert len(obs) == 1
+    assert any(str(missing) in warning for warning in warnings)
+
+
+def test_empty_rendered_template_is_not_reported_missing(tmp_path):
+    conn = LocalFileLogConnector(log_path_templates=["{std_out}"])
+
+    obs, warnings = _collect_with_warnings(conn, _ctx(tmp_path, ""))
+
     assert obs == []
+    assert warnings == []
+
+
+def test_existing_empty_directory_is_not_reported_missing(tmp_path):
+    conn = LocalFileLogConnector(log_path_templates=[str(tmp_path)])
+
+    obs, warnings = _collect_with_warnings(conn, _ctx(tmp_path, ""))
+
+    assert obs == []
+    assert warnings == []
 
 
 def test_reads_existing_file_and_emits_one_observation(tmp_path):
