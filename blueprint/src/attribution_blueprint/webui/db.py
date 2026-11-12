@@ -315,11 +315,13 @@ def _filtered_clauses(
     if raw_outcome is not None:
         clauses.append("r.outcome = ?")
         params.append(raw_outcome)
+    # Compare instants, not stored text: end_time keeps its source offset, and
+    # the UI date window is a UTC day.
     if since is not None:
-        clauses.append("c.end_time >= ?")
+        clauses.append("julianday(c.end_time) >= julianday(?)")
         params.append(since)
     if until is not None:
-        clauses.append("c.end_time < ?")
+        clauses.append("julianday(c.end_time) < julianday(?)")
         params.append(_iso_next_day(until))
     if status == "failed":
         clauses.append("r.outcome != ?")
@@ -715,7 +717,7 @@ def _daily_breakdown_conn(
 
     clauses, params = _filtered_clauses(outcome=outcome, since=since, until=until)
     sql = _append_where(
-        "SELECT substr(c.end_time, 1, 10) AS day, r.raw_result_json "
+        "SELECT date(c.end_time) AS day, r.raw_result_json "
         "FROM attribution_run r JOIN execution_context c ON c.id = r.execution_context_id",
         clauses,
     )
@@ -1872,7 +1874,7 @@ def dashboard_data(
     )
     # Same intentional omission of 'Fail Undetermined' as the rollup daily_sql above.
     daily_sql = (
-        "SELECT substr(c.end_time, 1, 10) AS day, "
+        "SELECT date(c.end_time) AS day, "
         f"SUM({gpu_expr}) AS gpu_hours, "
         "SUM(CASE WHEN r.outcome = 'Fail InfraHW' THEN 1 ELSE 0 END) AS hw, "
         "SUM(CASE WHEN r.outcome = 'Fail InfraSW' THEN 1 ELSE 0 END) AS sw, "
