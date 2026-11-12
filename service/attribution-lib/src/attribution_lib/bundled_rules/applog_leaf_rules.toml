@@ -668,11 +668,15 @@ rule        = "cudaErrorSystemDriverMismatch"
 [[extractor]]
 name     = "SingleControllerRunComplete"
 match_re = '''SC run complete: \{'''
-emit     = { type = "bad_node", symptom = "the process completes", demotion = "the process completes" }
+# Credit "the process completes" like the other completion markers: bad-node
+# scrubbing drops findings credited to that rule, so a finished run does not
+# leave its controller node marked bad.
+emit     = { type = "bad_node", symptom = "the process completes", demotion = "the process completes", derived_rule = "the process completes" }
 [[extractor.cases]]
 expect  = "bad"
 line    = "SC run complete: {'train_steps': 70, 'trainer_version': 70}"
 symptom = "the process completes"
+rule    = "the process completes"
 [[extractor.cases]]
 expect = "none"
 line   = "SC run started: {'train_steps': 0}"
