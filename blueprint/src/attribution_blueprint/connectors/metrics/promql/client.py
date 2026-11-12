@@ -10,7 +10,7 @@ from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
 from attribution_blueprint.connectors.auth import Auth
-from attribution_blueprint.telemetry import MeteredSession
+from attribution_blueprint.telemetry import MeteredSession, record_series
 
 # Prometheus and Mimir use RE2 for label-match regexes. Python's re.escape()
 # also escapes hyphens (`\-`), which RE2 rejects.
@@ -97,8 +97,11 @@ class PrometheusClient:
                 f"{payload.get('error') or payload.get('errorType') or '<no detail>'}"
             )
             return []
-        result = payload.get("data", {}).get("result", []) or []
+        result = (payload.get("data") or {}).get("result")
+        if result is None:
+            return []
         if not isinstance(result, list):
             logger.warning(f"promql query {name!r} returned a non-list result")
             return []
+        record_series("promql", path, len(result))
         return result
