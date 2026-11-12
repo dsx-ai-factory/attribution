@@ -661,3 +661,18 @@ expect      = "bad"
 line        = "CUDA error 803"
 symptom     = "cudaErrorSystemDriverMismatch"
 rule        = "cudaErrorSystemDriverMismatch"
+
+# Single-controller RL training drivers print this once the run has finished
+# all of its steps. Without it, a finished run whose pods are deleted right
+# after it exits is attributed from the scheduler's CANCELLED state alone.
+[[extractor]]
+name     = "SingleControllerRunComplete"
+match_re = '''SC run complete: \{'''
+emit     = { type = "bad_node", symptom = "the process completes", demotion = "the process completes" }
+[[extractor.cases]]
+expect  = "bad"
+line    = "SC run complete: {'train_steps': 70, 'trainer_version': 70}"
+symptom = "the process completes"
+[[extractor.cases]]
+expect = "none"
+line   = "SC run started: {'train_steps': 0}"
