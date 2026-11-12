@@ -170,7 +170,13 @@ def test_joins_against_rules_view_see_both_tiers():
 
 
 class TestSharedLookupTmpdirForkSafety:
-    """A forked child must preserve the directory shared with its parent."""
+    """`_get_shared_lookup_tmpdir()`'s `Finalize` cleanup is registered once per
+    process and, along with the module globals it reads, inherited by any
+    `os.fork()`'d child (e.g. a pre-fork server's worker process). A child
+    must not delete the directory on its own exit: it didn't create it, and
+    the parent or sibling workers may still have `EventManager`s ATTACHed to
+    files inside it.
+    """
 
     def test_forked_child_does_not_delete_shared_tmpdir(self, monkeypatch, tmp_path):
         import os
@@ -184,7 +190,7 @@ class TestSharedLookupTmpdirForkSafety:
 
         pid = os.fork()
         if pid == 0:
-            # Exercise the creator check in the child.
+            # Child: simulate its inherited cleanup handler firing on its own exit.
             try:
                 events_module._cleanup_shared_lookup_tmpdir()
             finally:

@@ -306,7 +306,12 @@ _shared_lookup_cache: "weakref.WeakKeyDictionary[RuleEngine, tuple[Path, _Lookup
     weakref.WeakKeyDictionary()
 )
 _shared_lookup_tmpdir: Optional[str] = None
-# Only the creator runs exit cleanup; forked children share the directory.
+# PID of the process that created `_shared_lookup_tmpdir`. A `os.fork()`'d
+# child (e.g. a pre-fork server's worker process) inherits both this global
+# and the `Finalize` registration below, but must not delete the directory on
+# its own exit: it didn't create it, and the parent or sibling workers may
+# still have EventManagers ATTACHed to files inside it. Only the owning PID
+# performs cleanup; a forked child's exit is a no-op here.
 _shared_lookup_tmpdir_owner_pid: Optional[int] = None
 # Monotonically increasing; NOT len(_shared_lookup_cache), which can shrink
 # as entries are garbage-collected and would then produce a reused filename
@@ -409,7 +414,7 @@ def _build_shared_lookup_db(rules_engine: "RuleEngine") -> tuple[Path, _LookupPy
                 path.unlink(missing_ok=True)
                 Path(f"{path}.wal").unlink(missing_ok=True)
             except Exception:
-                # The process finalizer removes the containing directory.
+                # The process-owned temp directory remains covered by Finalize.
                 logger.exception("Failed to remove incomplete lookup database {}", path)
             raise
 
