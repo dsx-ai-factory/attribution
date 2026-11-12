@@ -5226,8 +5226,9 @@ class TestCudaOomTeardownCascade:
             [_OOM_TIME + timedelta(minutes=10, seconds=1)],
             [None],
             [_OOM_TIME + timedelta(seconds=38), None],
+            [_OOM_TIME + timedelta(seconds=38), _OOM_TIME + timedelta(minutes=11)],
         ],
-        ids=["before-oom", "after-window", "untimed", "timed-and-untimed"],
+        ids=["before-oom", "after-window", "untimed", "timed-and-untimed", "inside-and-outside"],
     )
     def test_xid_45_the_oom_cannot_explain_is_kept(self, stream, obs_ctx, job_info, cascade_times):
         bad_nodes = self._bad_nodes(obs_ctx, cascade_times)
@@ -5235,6 +5236,8 @@ class TestCudaOomTeardownCascade:
         symptoms = self._attribute(stream, job_info, bad_nodes)
 
         assert self._XID45 in symptoms
+        for node in ("node02", "node03"):
+            assert self._XID45 in bad_nodes[node]
 
     def test_an_untimed_oom_discards_nothing(self, stream, obs_ctx, job_info):
         bad_nodes = self._bad_nodes(obs_ctx, [self._OOM_TIME + timedelta(seconds=38)], oom_times=(None,))
