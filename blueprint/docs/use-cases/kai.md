@@ -1,14 +1,17 @@
 # Attribute KAI PodGroups
 
 The KAI execution-context adapter discovers PodGroups owned by Kubernetes
-`Job` or `JobSet` resources. It validates owner UIDs, joins member Pods, and
-uses the owner lifecycle to report completion, failure, timeout, and end time.
+`Job`, `JobSet`, `LeaderWorkerSet`, `PyTorchJob`, `RayJob`, `Deployment`, or
+`DynamoGraphDeployment` resources. It validates owner UIDs, joins member Pods,
+and uses the owner lifecycle to report completion, failure, timeout,
+cancellation, and end time.
 
 ## Prerequisites
 
 The Kubernetes identity used by the Blueprint needs `get` and `list` access to
-KAI PodGroups and Pods, `get` access to Jobs, and, for JobSets, `get` access to
-JobSets plus `list` access to their Jobs. Confirm the PodGroup CRD and access:
+KAI PodGroups and Pods, `get` access to each workload owner kind present in the
+namespace, and, for JobSets, `list` access to `batch/v1` Jobs. Confirm the
+PodGroup CRD and access:
 
 ```bash
 kubectl get crd podgroups.scheduling.run.ai \
@@ -17,9 +20,14 @@ kubectl auth can-i get podgroups.scheduling.run.ai -n team-a
 kubectl auth can-i list podgroups.scheduling.run.ai -n team-a
 kubectl auth can-i list pods -n team-a
 kubectl auth can-i get jobs.batch -n team-a
-# JobSet-owned PodGroups only:
+# Additional owner kinds when present in the namespace:
 kubectl auth can-i get jobsets.jobset.x-k8s.io -n team-a
 kubectl auth can-i list jobs.batch -n team-a
+kubectl auth can-i get leaderworkersets.leaderworkerset.x-k8s.io -n team-a
+kubectl auth can-i get pytorchjobs.kubeflow.org -n team-a
+kubectl auth can-i get rayjobs.ray.io -n team-a
+kubectl auth can-i get deployments.apps -n team-a
+kubectl auth can-i get dynamographdeployments.nvidia.com -n team-a
 ```
 
 Use the served PodGroup version for
@@ -89,9 +97,12 @@ defines retention and recovery limits.
 
 ## Current Scope
 
-- Supported owners: Kubernetes Jobs and JobSets.
+- Supported owners: Kubernetes `batch/v1` Jobs, `jobset.x-k8s.io` JobSets,
+  `leaderworkerset.x-k8s.io` LeaderWorkerSets, `kubeflow.org` PyTorchJobs,
+  `ray.io` RayJobs, `apps/v1` Deployments, and `nvidia.com`
+  DynamoGraphDeployments.
 - Supported normalized states: `RUNNING`, `COMPLETED`, `FAILED`, `TIMEOUT`,
-  and `NODE_FAIL`.
+  `CANCELLED`, and `NODE_FAIL`.
 - Job deadlines are forwarded from `activeDeadlineSeconds`; for JobSets, the
   shortest verified child deadline and earliest child failure reason are used.
 - `PREEMPTED`, `EVICTED`, and `REQUEUED` are not detected yet.
@@ -100,7 +111,7 @@ defines retention and recovery limits.
 - Hierarchical PodGroups are emitted with `podgroup_shape = "hierarchical"`;
   subgroup-specific attempt semantics are not inferred.
 
-The PodGroup and its owning Job or JobSet must still exist when discovery
+The PodGroup and its owning workload resource must still exist when discovery
 runs. The KAI adapter uses daemon evidence for placement recovery, not
 discovery of deleted PodGroups. Run attribution within both resources'
 retention windows.
