@@ -172,14 +172,45 @@ def test_node_filter_can_be_disabled(node_field, mocker):
     assert post.call_args.kwargs["data"]["query"] == 'service_name:="example-cluster"'
 
 
-def test_ndjson_skips_blank_invalid_and_non_object_lines(mocker):
+def test_ndjson_retains_valid_rows_and_reports_skipped_records_as_partial(mocker):
+    """Blank lines are harmless; malformed or non-object records make coverage incomplete."""
     warning = mocker.patch.object(victorialogs.logger, "warning")
     text = '\n{"_time":"2026-01-15T00:00:01Z","_msg":"kept"}\nnot-json\n[]\n  \n'
     mocker.patch("requests.Session.post", return_value=_response(text, mocker))
-    observations = _connector(node_field=None).collect(_context())
+    with pytest.raises(PartialCollectionError, match="2 invalid NDJSON") as raised:
+        _connector(node_field=None).collect(_context())
 
-    assert json.loads(observations[0]["body"]) == [{"body": "kept", "ts": 1768435201000000000}]
+    assert json.loads(raised.value.observations[0]["body"]) == [{"body": "kept", "ts": 1768435201000000000}]
     warning.assert_called_once_with("victorialogs: skipped 2 invalid NDJSON line(s)")
+
+
+@pytest.mark.parametrize(
+    "invalid",
+    ["not-json", "[]", "1" * 5000, "[" * 1100],
+    ids=["malformed", "non-object", "oversized-integer", "deep-nesting"],
+)
+def test_invalid_record_keeps_a_full_response_saturated_and_retains_later_page(invalid, mocker):
+    """Skipped records still count toward a response limit, so older evidence is fetched."""
+    recent = _ndjson([_row("2026-01-15T05:00:00Z", "recent")])
+    older = _ndjson([_row("2026-01-15T04:00:00Z", "older")])
+    post = mocker.patch(
+        "requests.Session.post", side_effect=[_response(recent + "\n" + invalid, mocker), _response(older, mocker)]
+    )
+
+    with pytest.raises(PartialCollectionError, match="1 invalid NDJSON") as raised:
+        _connector(limit=2).collect(_context())
+
+    assert post.call_count == 2
+    assert [entry["body"] for entry in json.loads(raised.value.observations[0]["body"])] == ["older", "recent"]
+
+
+def test_all_invalid_records_report_partial_without_trying_to_advance_time(mocker):
+    """An undecodable page has no cursor, but must not report complete empty coverage."""
+    post = mocker.patch("requests.Session.post", return_value=_response("not-json\n[]", mocker))
+    with pytest.raises(PartialCollectionError, match="2 invalid NDJSON") as raised:
+        _connector(limit=2).collect(_context())
+    assert raised.value.observations == []
+    post.assert_called_once()
 
 
 @pytest.mark.parametrize(
@@ -306,8 +337,9 @@ def test_invalid_time_or_message_rows_are_skipped(mocker):
     assert debug.call_count == 2
 
 
-def test_empty_response_returns_no_observation(mocker):
-    mocker.patch("requests.Session.post", return_value=_response("", mocker))
+@pytest.mark.parametrize("text", ["", " \n\n  "])
+def test_empty_response_returns_no_observation(text, mocker):
+    mocker.patch("requests.Session.post", return_value=_response(text, mocker))
     assert _connector().collect(_context()) == []
 
 
@@ -551,6 +583,42 @@ def test_request_failure_retains_pages_and_other_queries(later_query, error_type
     expected = ["one", "three"] if later_query is True else ["two", "one", "three"]
     assert [entry["body"] for entry in json.loads(wire["body"])] == expected
     assert output.write.call_args.args[1]["connector_reports"] == [report]
+
+
+@pytest.mark.parametrize("failed_first", [True, False], ids=["failure-first", "failure-last"])
+@pytest.mark.parametrize("entries", [[], [{"body": "kept", "ts": 1768435201000000000}]], ids=["empty", "rows"])
+@pytest.mark.parametrize("error_type", [requests.HTTPError, requests.Timeout])
+def test_query_failures_attempt_other_queries_and_report_partial(failed_first, entries, error_type, mocker):
+    """A successful query, including an empty one, prevents query order from hiding coverage."""
+    text = _ndjson([_row("2026-01-15T00:00:01Z", "kept")]) if entries else ""
+    error = error_type("must not expose this diagnostic")
+    response = _response(text, mocker)
+    post = mocker.patch("requests.Session.post", side_effect=[error, response] if failed_first else [response, error])
+    connector = VictoriaLogsConnector(
+        endpoint="http://logs.example", source=Source.SYSLOG, templates={Source.SYSLOG: ["first", "last"]}
+    )
+
+    with pytest.raises(PartialCollectionError, match=error_type.__name__) as raised:
+        connector.collect(_context())
+
+    assert post.call_count == 2
+    assert "must not expose" not in str(raised.value)
+    assert [entry for obs in raised.value.observations for entry in json.loads(obs["body"])] == entries
+
+
+def test_all_query_requests_fail_after_attempting_every_query_and_preserve_first_error(mocker):
+    """All-query failure remains an error, rather than a partial success or early abort."""
+    first = requests.Timeout("first failure")
+    post = mocker.patch("requests.Session.post", side_effect=[first, requests.HTTPError("second failure")])
+    connector = VictoriaLogsConnector(
+        endpoint="http://logs.example", source=Source.SYSLOG, templates={Source.SYSLOG: ["first", "last"]}
+    )
+
+    with pytest.raises(requests.Timeout) as raised:
+        connector.collect(_context())
+
+    assert raised.value is first
+    assert post.call_count == 2
 
 
 def test_first_page_timeout_propagates_without_replacing_the_error(mocker):

@@ -136,18 +136,45 @@ class VictoriaLogsConnector:
 
         Raises:
             PartialCollectionError: Paging or a configured query was incomplete; retains available observations.
-            RequestException: A request failed before any evidence was fetched.
+            RequestException: Every attempted query failed without returning a response.
         """
         start = assert_aware(context["start_time"], "start_time")
         end = assert_aware(context["end_time"], "end_time")
         start_ns = _datetime_ns(start)
         end_ns = _datetime_ns(end) + 1
+        rows, issues = self._collect_queries(context, start_ns, end_ns)
+        observations = (
+            [log_observation(source=self._source, entries=_rows_to_entries(rows, self._node_field), context=context)]
+            if rows
+            else []
+        )
+        if issues:
+            raise PartialCollectionError("; ".join(dict.fromkeys(issues)), observations)
+        return observations
+
+    def _collect_queries(
+        self, context: ExecutionContext, start_ns: int, end_ns_excl: int
+    ) -> tuple[list[dict], list[str]]:
+        """Try every configured query and retain evidence independently of query order.
+
+        Args:
+            context: Provider identity, nodes and query arguments.
+            start_ns: Inclusive collection start.
+            end_ns_excl: Exclusive collection end.
+
+        Returns:
+            Deduplicated rows and incomplete-coverage reasons.
+
+        Raises:
+            RequestException: All requests failed; preserves the first failure.
+        """
         nodes = context.get("nodes") or []
         query_kwargs = self._context_query_kwargs(context)
-
         rows: list[dict] = []
         seen: set[str] = set()
         issues: list[str] = []
+        request_error: RequestException | None = None
+        received_response = False
         for index, template in enumerate(self._templates, start=1):
             try:
                 query = template.format(
@@ -160,11 +187,13 @@ class VictoriaLogsConnector:
                 continue
             query = self._inject_node_filter(query, nodes)
             try:
-                query_rows, query_issues = self._query_window(query, start_ns, end_ns)
+                query_rows, query_issues = self._query_window(query, start_ns, end_ns_excl)
             except RequestException as error:
-                if rows == []:
-                    raise
-                query_rows, query_issues = [], [_request_failure_reason(error)]
+                if request_error is None:
+                    request_error = error
+                issues.append(f"query {index}: {_request_failure_reason(error)}")
+                continue
+            received_response = True
             issues.extend(f"query {index}: {issue}" for issue in query_issues)
             for row in query_rows:
                 key = json.dumps(row, sort_keys=True)
@@ -172,14 +201,9 @@ class VictoriaLogsConnector:
                     seen.add(key)
                     rows.append(row)
 
-        observations = (
-            [log_observation(source=self._source, entries=_rows_to_entries(rows, self._node_field), context=context)]
-            if rows != []
-            else []
-        )
-        if issues != []:
-            raise PartialCollectionError("; ".join(dict.fromkeys(issues)), observations)
-        return observations
+        if request_error is not None and not received_response:
+            raise request_error
+        return rows, issues
 
     def _context_query_kwargs(self, context: ExecutionContext) -> dict[str, str]:
         """Return query_kwargs with `cluster` taken from the context when enabled and present."""
@@ -188,7 +212,7 @@ class VictoriaLogsConnector:
             return self._query_kwargs
         return {**self._query_kwargs, "cluster": cluster}
 
-    def _read_page(self, query: str, start_ns: int, end_ns_excl: int) -> list[dict]:
+    def _read_page(self, query: str, start_ns: int, end_ns_excl: int) -> tuple[list[dict], int]:
         """Fetch and decode one bounded LogsQL response.
 
         Args:
@@ -197,7 +221,8 @@ class VictoriaLogsConnector:
             end_ns_excl: Exclusive window end in nanoseconds.
 
         Returns:
-            Decoded JSON object rows. Transport errors propagate.
+            Decoded object rows and the count of invalid non-empty records.
+            Transport errors propagate.
         """
         response = self._session.post(
             f"{self._endpoint}{QUERY_PATH}",
@@ -217,7 +242,7 @@ class VictoriaLogsConnector:
                 continue
             try:
                 row = json.loads(line)
-            except json.JSONDecodeError:
+            except (ValueError, RecursionError):
                 malformed += 1
                 continue
             if not isinstance(row, dict):
@@ -226,7 +251,7 @@ class VictoriaLogsConnector:
             page.append(row)
         if malformed:
             logger.warning(f"victorialogs: skipped {malformed} invalid NDJSON line(s)")
-        return page
+        return page, malformed
 
     def _query_window(self, query: str, start_ns: int, end_ns_excl: int) -> tuple[list[dict], list[str]]:
         """Page backward within the budget, preserving reasons for incomplete coverage.
@@ -247,16 +272,18 @@ class VictoriaLogsConnector:
         cur_end = end_ns_excl
         for _ in range(self._max_pages):
             try:
-                page = self._read_page(query, start_ns, cur_end)
+                page, skipped = self._read_page(query, start_ns, cur_end)
             except RequestException as error:
                 if rows == []:
                     raise
                 issues.append(_request_failure_reason(error))
                 return rows, issues
+            if skipped:
+                issues.append(f"skipped {skipped} invalid NDJSON record(s)")
             if not page:
                 return rows, issues
             rows.extend(page)
-            if len(page) < self._limit:
+            if len(page) + skipped < self._limit:
                 return rows, issues
             timestamps = [timestamp for row in page if (timestamp := _timestamp_ns(row.get("_time"))) is not None]
             if not timestamps:

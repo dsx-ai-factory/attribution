@@ -101,10 +101,8 @@ The Blueprint ingests those observations and records `status: "partial"` and the
 reason in `connector_reports`. Other callers must handle this exception to retain
 the partial evidence. Complete collections still return an observation list.
 
-Direct VictoriaLogs callers upgrading from a version that returned truncated
-results as a list must catch `PartialCollectionError`, use its `observations`,
-and retain the exception reason as incomplete coverage. Consumers of
-`connector_reports` must accept `"partial"` alongside `"ok"` and `"error"`.
+For changes required by existing callers, refer to the
+[Blueprint upgrade guide](upgrading.md#victorialogs-partial-collection-reporting).
 
 `collect` must emit a list of observations. The `log_observation` helper emits an entry timeseries: one entry per log line. Pass
 `entries=` built by `entries_from_text`, or by hand when the backend already gives
