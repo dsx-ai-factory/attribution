@@ -5181,24 +5181,36 @@ class TestCudaOomTeardownCascade:
     _XID45 = "XID-45-PREEMPTIVE_REMOVAL"
     _CASCADE = (_XID45, "cudaErrorLaunchFailure", "NV_ERR_INVALID_STATE nv_gpu_ops.c")
     _OOM_TIME = datetime(2024, 1, 1, 10, 30, 0, tzinfo=ZoneInfo("UTC"))
+    _NODES = ["node01", "node02", "node03"]
 
-    def _bad_nodes(self, obs_ctx, cascade_offset):
-        """One rank OOMs on node01; its peers on node02 and node03 log the teardown."""
+    def _bad_nodes(self, obs_ctx, cascade_times, oom_times=(_OOM_TIME,)):
+        """Ranks OOM on node01; peers on node02 and node03 log teardown at each of ``cascade_times``."""
         bad_nodes = JobNodeAttributions()
-        bad_nodes.add(["node01"], SourceSet(self._OOM).add(_make_source(obs_ctx, self._OOM_TIME)))
-        cascade_source = _make_source(obs_ctx)._replace(
-            time=None if cascade_offset is None else self._OOM_TIME + cascade_offset
-        )
+        oom = SourceSet(self._OOM)
+        for line_num, oom_time in enumerate(oom_times, start=1):
+            oom.add(_make_source(obs_ctx, line_num=line_num)._replace(time=oom_time))
+        bad_nodes.add(["node01"], oom)
         for node in ("node02", "node03"):
             for symptom in self._CASCADE:
-                bad_nodes.add([node], SourceSet(symptom).add(cascade_source))
+                cascade = SourceSet(symptom)
+                for line_num, cascade_time in enumerate(cascade_times, start=1):
+                    cascade.add(_make_source(obs_ctx, line_num=line_num)._replace(time=cascade_time))
+                bad_nodes.add([node], cascade)
         return bad_nodes
 
-    def test_teardown_after_the_oom_is_discarded(self, stream, obs_ctx, job_info):
-        job_info = job_info._replace(nodes=["node01", "node02", "node03"])
-        bad_nodes = self._bad_nodes(obs_ctx, timedelta(seconds=38))
+    def _attribute(self, stream, job_info, bad_nodes):
+        job_info = job_info._replace(nodes=self._NODES)
+        return calculate_symptoms(event_stream=stream, job_info=job_info, my_bad_nodes=bad_nodes)
 
-        symptoms = calculate_symptoms(event_stream=stream, job_info=job_info, my_bad_nodes=bad_nodes)
+    @pytest.mark.parametrize(
+        "cascade_offset",
+        [timedelta(0), timedelta(seconds=38), timedelta(minutes=10)],
+        ids=["at-oom", "38s-after", "window-end"],
+    )
+    def test_teardown_after_the_oom_is_discarded(self, stream, obs_ctx, job_info, cascade_offset):
+        bad_nodes = self._bad_nodes(obs_ctx, [self._OOM_TIME + cascade_offset])
+
+        symptoms = self._attribute(stream, job_info, bad_nodes)
 
         assert self._OOM in symptoms
         for symptom in self._CASCADE:
@@ -5208,15 +5220,46 @@ class TestCudaOomTeardownCascade:
                 assert bad_nodes[node].attributions[symptom].has_interesting()
 
     @pytest.mark.parametrize(
-        "cascade_offset",
-        [timedelta(seconds=-5), timedelta(minutes=11), None],
-        ids=["before-oom", "after-window", "untimed"],
+        "cascade_times",
+        [
+            [_OOM_TIME - timedelta(seconds=5)],
+            [_OOM_TIME + timedelta(minutes=10, seconds=1)],
+            [None],
+            [_OOM_TIME + timedelta(seconds=38), None],
+        ],
+        ids=["before-oom", "after-window", "untimed", "timed-and-untimed"],
     )
-    def test_xid_45_the_oom_cannot_explain_is_kept(self, stream, obs_ctx, job_info, cascade_offset):
-        job_info = job_info._replace(nodes=["node01", "node02", "node03"])
-        bad_nodes = self._bad_nodes(obs_ctx, cascade_offset)
+    def test_xid_45_the_oom_cannot_explain_is_kept(self, stream, obs_ctx, job_info, cascade_times):
+        bad_nodes = self._bad_nodes(obs_ctx, cascade_times)
 
-        symptoms = calculate_symptoms(event_stream=stream, job_info=job_info, my_bad_nodes=bad_nodes)
+        symptoms = self._attribute(stream, job_info, bad_nodes)
+
+        assert self._XID45 in symptoms
+
+    def test_an_untimed_oom_discards_nothing(self, stream, obs_ctx, job_info):
+        bad_nodes = self._bad_nodes(obs_ctx, [self._OOM_TIME + timedelta(seconds=38)], oom_times=(None,))
+
+        symptoms = self._attribute(stream, job_info, bad_nodes)
+
+        assert self._XID45 in symptoms
+
+    def test_teardown_after_a_later_oom_is_discarded(self, stream, obs_ctx, job_info):
+        second_oom = self._OOM_TIME + timedelta(minutes=30)
+        bad_nodes = self._bad_nodes(
+            obs_ctx, [second_oom + timedelta(seconds=38)], oom_times=(self._OOM_TIME, second_oom)
+        )
+
+        symptoms = self._attribute(stream, job_info, bad_nodes)
+
+        assert self._XID45 not in symptoms
+
+    def test_teardown_between_two_ooms_but_outside_both_windows_is_kept(self, stream, obs_ctx, job_info):
+        second_oom = self._OOM_TIME + timedelta(minutes=30)
+        bad_nodes = self._bad_nodes(
+            obs_ctx, [self._OOM_TIME + timedelta(minutes=15)], oom_times=(self._OOM_TIME, second_oom)
+        )
+
+        symptoms = self._attribute(stream, job_info, bad_nodes)
 
         assert self._XID45 in symptoms
 

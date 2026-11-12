@@ -2175,22 +2175,30 @@ _CUDA_OOM_CASCADE_PREFIXES = ("XID-45-", "cudaErrorLaunchFailure", "NV_ERR_INVAL
 _CUDA_OOM_CASCADE_WINDOW = timedelta(minutes=10)
 
 
-def _earliest_time(sources: SourceSet[str]) -> Optional[datetime]:
-    """Return the earliest timestamp among a symptom's sources, or None when none is timed."""
-    times = [source.time for source in sources if source.time is not None]
-    return min(times) if times != [] else None
+def _oom_times(sources: SourceSet[str]) -> list[datetime]:
+    """Return the sorted timestamps of a CUDA OOM's timed sources."""
+    return sorted(source.time for source in sources if source.time is not None)
 
 
-def _follows_oom(sources: SourceSet[str], oom_time: datetime) -> bool:
-    """Return whether every timed source falls within the OOM teardown window.
+def _follows_oom(sources: SourceSet[str], oom_times: list[datetime]) -> bool:
+    """Return whether every source falls within the teardown window of some CUDA OOM.
 
-    At least one source must be timed, and every timed source must be at or after
-    the OOM and within ``_CUDA_OOM_CASCADE_WINDOW`` of it.
+    Every source must be timed and at or after an OOM, within
+    ``_CUDA_OOM_CASCADE_WINDOW`` of it. A symptom with any untimed source is kept,
+    because the OOM cannot be shown to explain that source.
     """
-    times = [source.time for source in sources if source.time is not None]
-    if times == []:
+    if len(sources) == 0:
         return False
-    return all(oom_time <= time <= oom_time + _CUDA_OOM_CASCADE_WINDOW for time in times)
+    for source in sources:
+        if source.time is None:
+            return False
+        # The latest OOM at or before this source is the only one that can explain it.
+        index = bisect_left(oom_times, source.time)
+        if index < len(oom_times) and oom_times[index] == source.time:
+            continue
+        if index == 0 or source.time - oom_times[index - 1] > _CUDA_OOM_CASCADE_WINDOW:
+            return False
+    return True
 
 
 @refiner_def(
@@ -2204,20 +2212,20 @@ def cuda_oom_teardown_cascade(context: RefinerContext):
     When one rank runs out of GPU memory, its peers are torn down and log XID 45,
     cudaErrorLaunchFailure and NV_ERR_INVALID_STATE on other nodes, which turned a
     user OOM into Fail MultiCategory. A symptom is discarded, from the job and from
-    every node, only when all of its timed sources come after the earliest OOM and
-    within the teardown window, so an XID 45 that came first, or one with no
-    timestamp, is kept.
+    every node, only when every one of its sources is timed and falls within the
+    teardown window after some CUDA OOM. An XID 45 that came before any OOM, long
+    after every OOM, or without a timestamp is kept.
     """
     symptoms = context.symptoms
     if symptoms is None or _CUDA_OOM_SYMPTOM not in symptoms:
         return
-    oom_time = _earliest_time(symptoms[_CUDA_OOM_SYMPTOM])
-    if oom_time is None:
+    oom_times = _oom_times(symptoms[_CUDA_OOM_SYMPTOM])
+    if oom_times == []:
         return
     cascade = [
         symptom
         for symptom in list(symptoms.symptoms())
-        if symptom.startswith(_CUDA_OOM_CASCADE_PREFIXES) and _follows_oom(symptoms[symptom], oom_time)
+        if symptom.startswith(_CUDA_OOM_CASCADE_PREFIXES) and _follows_oom(symptoms[symptom], oom_times)
     ]
     for symptom in cascade:
         symptoms.discard(symptom)
