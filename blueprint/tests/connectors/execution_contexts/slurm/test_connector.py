@@ -448,6 +448,9 @@ def test_gpu_count_is_parsed_from_alloc_tres(mocker, alloc_tres, expected):
         "cpu=8,gres/gpu=unknown",
         # Partially malformed typed GPU entries.
         "cpu=8,gres/gpu:h200=2,gres/gpu:a100=invalid",
+        # Unicode digits that str.isdigit() accepts but int() rejects.
+        "cpu=8,gres/gpu=\u00b2",
+        "cpu=8,gres/gpu:h200=\u00b2",
     ],
 )
 def test_gpu_count_absent_without_valid_alloc_tres(mocker, alloc_tres):

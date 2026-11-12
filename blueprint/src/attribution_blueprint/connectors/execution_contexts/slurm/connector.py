@@ -174,7 +174,7 @@ def gpu_count_from_alloc_tres(alloc_tres: object) -> int | None:
         if key != "gres/gpu" and not key.startswith("gres/gpu:"):
             continue
         raw_value = raw_value.strip()
-        if not raw_value.isdigit():
+        if not raw_value.isdecimal():
             return None
         value = int(raw_value)
         if key == "gres/gpu":
