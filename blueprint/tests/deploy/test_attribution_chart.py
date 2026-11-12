@@ -390,6 +390,13 @@ def test_a_service_only_release_mounts_no_volume_even_when_persistence_is_on():
     assert not _pod(docs).get("volumes")
 
 
+def test_a_service_only_release_ignores_the_database_path():
+    docs = _render(
+        "--set", "runner.enabled=false", "--set", "dashboard.enabled=false", "--set", "dashboard.databasePath=/tmp/a.db"
+    )
+    assert list(_containers(docs)) == ["service"]
+
+
 def test_the_service_probe_command_can_be_replaced():
     docs = _render(*NS, "--set", "service.probes.command={python3,-c,pass}")
     assert _containers(docs)["service"]["readinessProbe"]["exec"]["command"] == ["python3", "-c", "pass"]

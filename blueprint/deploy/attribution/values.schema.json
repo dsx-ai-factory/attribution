@@ -109,7 +109,7 @@
         "command": {"$ref": "#/definitions/stringList"},
         "args": {"$ref": "#/definitions/stringList"},
         "port": {"$ref": "#/definitions/port"},
-        "databasePath": {"type": "string", "pattern": "^/data/.+"},
+        "databasePath": {"type": "string", "pattern": "^/.+"},
         "probes": {
           "type": "object",
           "additionalProperties": false,
