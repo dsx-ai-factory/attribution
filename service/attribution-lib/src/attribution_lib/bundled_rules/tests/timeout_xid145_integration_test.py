@@ -4,6 +4,7 @@
 """End-to-end coverage for teardown evidence after an external job termination."""
 
 from datetime import UTC, datetime, timedelta
+from zoneinfo import ZoneInfo
 
 from attribution_lib.attributor import Attributor
 from attribution_lib.job_info import Scheduler
@@ -159,7 +160,8 @@ def test_timeout_cascades_and_unused_xid_leave_only_timeout_failure(
             time_interval=interval,
             source=ObservationSource.APPLOG,
             format=ObservationFormat.ENTRY_TIMESERIES,
-            timezone=timezone,
+            # The slurmstepd timestamp below is on the same UTC clock as the job.
+            timezone=ZoneInfo("UTC"),
         ),
         lines=line_entries(
             [

@@ -34,6 +34,12 @@ _CATALOG_RESOURCE = _pkg_files("attribution_blueprint") / "data" / "failures.yml
 _ROOT_RULE_CATALOG_FALLBACKS = {
     "UnsquashfsWriteFailed": "pyxis-couldnt-start-container",
 }
+# These emitted verdict names currently arrive without a catalog ID. Match
+# exact names only, leaving explicit IDs and unrelated symptoms unchanged.
+_ROOT_SYMPTOM_CATALOG_FALLBACKS = {
+    "XID-69-GR_CLASS_ERROR": "xid-69",
+    "NVRx ft_launcher exit 0": "nvrx-ft-launcher-exit-0",
+}
 
 
 @functools.lru_cache(maxsize=1)
@@ -67,13 +73,16 @@ def _catalog_id_for_run(run: RunRow) -> str | None:
         run: Read-only web UI database row.
 
     Returns:
-        The explicit catalog ID, a known historical rule fallback, or None.
+        The explicit catalog ID, an exact symptom or rule fallback, or None.
     """
     verdict = (run.raw_result or {}).get("verdict") or {}
     root = verdict.get("root_symptom") or {}
     explicit = root.get("catalog_id")
     if isinstance(explicit, str) and explicit != "":
         return explicit
+    symptom = root.get("symptom")
+    if isinstance(symptom, str) and symptom in _ROOT_SYMPTOM_CATALOG_FALLBACKS:
+        return _ROOT_SYMPTOM_CATALOG_FALLBACKS[symptom]
     source = root.get("source") or {}
     rule = source.get("rule")
     if isinstance(rule, str) and rule != "":
