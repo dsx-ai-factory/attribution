@@ -3,7 +3,7 @@
 
 import json
 import sqlite3
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
@@ -135,3 +135,19 @@ def test_root_filters_ignore_invalid_json_and_non_string_fields(tmp_path, field)
     runs, total = dbmod.list_runs_page(str(p), **{field: "{}"})
     assert total == 1
     assert [run.job_id for run in runs] == ["J0"]
+
+
+def test_date_window_normalizes_end_time_offsets_to_utc(tmp_path):
+    """Runs ending at the same UTC instant land in the same UTC day window (#210)."""
+    p = tmp_path / "offsets.db"
+    pacific = timezone(timedelta(hours=-7))
+    out = SQLiteOutput(str(p))
+    out.write(_ctx("utc-job", "s1", datetime(2026, 8, 8, 0, 30, tzinfo=timezone.utc)), _attr("Fail InfraHW"))
+    out.write(_ctx("offset-job", "s2", datetime(2026, 8, 7, 17, 30, tzinfo=pacific)), _attr("Fail InfraHW"))
+    out.close()
+
+    assert dbmod.count_runs(str(p), since="2026-08-08", until="2026-08-08") == 2
+    assert dbmod.count_runs(str(p), since="2026-08-07", until="2026-08-07") == 0
+    data = dbmod.dashboard_data(str(p), since="2026-08-08", until="2026-08-08")
+    assert data["metrics"]["windowedRuns"] == 2
+    assert [(d["date"], d["hw"]) for d in data["daily"]] == [("2026-08-08", 2)]
