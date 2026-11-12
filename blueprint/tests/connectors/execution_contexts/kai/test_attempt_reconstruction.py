@@ -1168,3 +1168,91 @@ def test_reconstructed_attempt_rejects_time_only_placement_membership():
     assert context["state"] == "RUNNING"
     assert context["nodes"] == ["node-current"]
     assert "failed_node" not in context
+
+
+@pytest.mark.parametrize("delay", [1, 5, 60, 3600])
+@pytest.mark.parametrize("evidence", ["complete", "gap", "late-watch", "missing-coverage", "earlier-allocation", "missing-scheduled", "earlier-terminal"])
+@pytest.mark.parametrize("owner_kind", ["JobSet", "Job"])
+def test_initial_retry_allocation_requires_continuous_evidence(delay, evidence, owner_kind):
+    import copy
+    import random
+    from datetime import timedelta
+
+    origin = datetime(2026, 10, 14, 10, tzinfo=timezone.utc)
+    def ts(seconds):
+        return (origin + timedelta(seconds=seconds)).isoformat()
+    owner = _owner(owner_kind, "training", "owner-uid")
+    boundary = 100 + delay
+    coverage = {"sources": [{"sourceName": source,
+        "coverageStartedAt": ts(-1), "checkpointedAt": ts(boundary + 100)}
+        for source in ["pods", "jobs", "jobsets", "kai-podgroups"]], "gaps": []}
+    if evidence == "gap":
+        coverage["gaps"] = [{"sourceName": "pods", "startedAt": ts(99), "recoveredAt": ts(boundary)}]
+    elif evidence == "late-watch":
+        coverage["sources"][0]["coverageStartedAt"] = ts(101)
+    elif evidence == "missing-coverage":
+        coverage = {}
+    pending = _pod_observation("new", "new", ts(100), start_time=ts(100), restart="1")
+    pending["status"] = {"phase": "Pending"}
+    running = copy.deepcopy(pending)
+    running["observedAt"] = ts(boundary + 1)
+    running["status"] = {"phase": "Running", "startTime": ts(boundary),
+        "conditions": [{"type": "PodScheduled", "status": "True", "lastTransitionTime": ts(boundary)}]}
+    if evidence == "missing-scheduled":
+        running["status"]["conditions"] = []
+    observations = [
+        _podgroup_observation(owner, ts(0), status={"lastStartTimestamp": ts(0)}),
+        _pod_observation("old", "old", ts(1), start_time=ts(1), restart="0"),
+        {"kind": "Job", "metadata": {"uid": "new-job", "name": "new-job"},
+         "selectedMetadata": {"labels": {_RESTART_LABEL: "1"}},
+         "observedAt": ts(100), "status": {"startTime": ts(100)}},
+        pending,
+    ]
+    def reconstruct(items):
+        return attempts_from_podgroup_history({"observations": items, "coverage": coverage},
+            pod_group_name="pg-training", now=origin + timedelta(seconds=boundary+100))
+    # The previous generation can fail at exactly the replacement start time.
+    observations.append({
+        "kind": "Job", "metadata": {"uid": "old-job", "name": "old-job"},
+        "observedAt": ts(100),
+        "selectedMetadata": {"labels": {_RESTART_LABEL: "0"}},
+        "status": {"conditions": [{"type": "Failed", "status": "True", "lastTransitionTime": ts(100)}]},
+    })
+    before = reconstruct(observations)
+    if evidence == "earlier-allocation":
+        earlier = copy.deepcopy(running)
+        earlier["metadata"]["uid"] = "earlier"
+        earlier["observedAt"] = ts(100)
+        earlier["status"]["startTime"] = ts(100)
+        earlier["status"]["conditions"][0]["lastTransitionTime"] = ts(100)
+        observations.append(earlier)
+    if evidence == "earlier-terminal":
+        observations.append({
+            "kind": "Job", "metadata": {"uid": "failed-job", "name": "failed"},
+            "observedAt": ts(100),
+            "selectedMetadata": {"labels": {_RESTART_LABEL: "1"}},
+            "status": {"conditions": [{"type": "Failed", "status": "True", "lastTransitionTime": ts(100)}]},
+        })
+    observations.extend([running, _podgroup_observation(owner, ts(boundary), status={"lastStartTimestamp": ts(boundary)})])
+    after = reconstruct(observations)
+    combined = KaiExecutionContextAdapter._combine_attempt_evidence([
+        _WorkloadEvidence(namespace="default", pod_group_name="pg-training",
+            observed_until=origin + timedelta(seconds=boundary+100),
+            observations=observations, retained_coverage=[coverage])
+    ])
+    assert [item.attempt for item in combined] == after
+    merge = evidence == "complete" and owner_kind == "JobSet"
+    assert len(after) == (2 if merge else 3)
+    if merge:
+        assert [a.attempt_id for a in before] == [a.attempt_id for a in after]
+        assert after[-1].job_uids == frozenset({"new-job"})
+        assert after[-1].pod_uids == frozenset({"new"})
+    # Reallocation following an actual allocation must remain separate.
+    observations.append(_podgroup_observation(owner, ts(boundary+50), status={"lastStartTimestamp": ts(boundary+50)}))
+    reallocated = reconstruct(observations)
+    assert len(reallocated) == len(after) + 1
+    assert reallocated[-1].attempt_id != after[-1].attempt_id
+    for seed in range(10):
+        replay = copy.deepcopy(observations + observations[:2])
+        random.Random(seed).shuffle(replay)
+        assert reconstruct(replay) == reallocated

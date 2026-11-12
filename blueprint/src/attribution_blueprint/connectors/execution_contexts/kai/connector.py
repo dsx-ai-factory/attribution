@@ -826,7 +826,10 @@ class KaiExecutionContextAdapter:
                         observations.append(observation)
 
             attempts = attempts_from_podgroup_history(
-                {"observations": observations},
+                {
+                    "observations": observations,
+                    "coverages": [coverage for item in items for coverage in item.retained_coverage],
+                },
                 pod_group_name=pod_group_name,
                 now=max(item.observed_until for item in items),
             )
