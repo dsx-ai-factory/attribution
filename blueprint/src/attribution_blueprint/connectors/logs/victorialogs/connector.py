@@ -17,7 +17,7 @@ from attribution_blueprint.connectors.cluster import query_cluster
 from attribution_blueprint.connectors.logs import log_observation
 from attribution_blueprint.connectors.logs.envelope import extract_body_and_node
 from attribution_blueprint.connectors.logs.victorialogs.templates import TEMPLATES
-from attribution_blueprint.telemetry import MeteredSession
+from attribution_blueprint.telemetry import MeteredSession, QueryTruncation, record_paginated_query
 from attribution_blueprint.types import (
     ExecutionContext,
     NodeResource,
@@ -179,7 +179,8 @@ class VictoriaLogsConnector:
     def _query_window(self, query: str, start_ns: int, end_ns_excl: int) -> list[dict]:
         rows: list[dict] = []
         cur_end = end_ns_excl
-        for _ in range(MAX_PAGES):
+        truncation = None
+        for pages in range(1, MAX_PAGES + 1):
             response = self._session.post(
                 f"{self._endpoint}{QUERY_PATH}",
                 data={
@@ -208,26 +209,30 @@ class VictoriaLogsConnector:
             if malformed:
                 logger.warning(f"victorialogs: skipped {malformed} invalid NDJSON line(s)")
             if not page:
-                return rows
+                break
             rows.extend(page)
             if len(page) < self._limit:
-                return rows
+                break
             timestamps = [timestamp for row in page if (timestamp := _timestamp_ns(row.get("_time"))) is not None]
             if not timestamps:
                 logger.warning("victorialogs: saturated page has no parseable _time; stopping pagination")
-                return rows
+                truncation = QueryTruncation.MISSING_TIMESTAMP
+                break
             oldest = min(timestamps)
             if oldest <= start_ns:
-                return rows
+                break
             next_end = oldest + 1
             if next_end >= cur_end:
                 logger.warning(f"victorialogs: possible truncation at {_format_timestamp_ns(oldest)}")
                 next_end = oldest
             cur_end = next_end
-        logger.warning(
-            f"victorialogs: hit MAX_PAGES={MAX_PAGES} for query={query[:80]!r}; "
-            f"older entries before ts={cur_end} may be truncated"
-        )
+        else:
+            logger.warning(
+                f"victorialogs: hit MAX_PAGES={MAX_PAGES} for query={query[:80]!r}; "
+                f"older entries before ts={cur_end} may be truncated"
+            )
+            truncation = QueryTruncation.PAGE_LIMIT
+        record_paginated_query("victorialogs", QUERY_PATH, entries=len(rows), pages=pages, truncation=truncation)
         return rows
 
     def _inject_node_filter(self, query: str, nodes: list[str]) -> str:
