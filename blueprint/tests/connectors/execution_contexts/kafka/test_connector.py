@@ -17,6 +17,7 @@ from attribution_blueprint.connectors.execution_contexts.kafka import (
 )
 from attribution_blueprint.connectors.execution_contexts.kafka.connector import KafkaConsumerError
 from attribution_blueprint.exceptions import MCAError
+from attribution_blueprint.orchestrator import AttributionOrchestrator
 
 FIXTURE = Path(__file__).parents[3] / "fixtures" / "kafka_completion_events.json"
 EVENT_TYPE = "com.example.job.completed.v1"
@@ -226,6 +227,33 @@ def test_discover_maps_structured_event_to_context():
     assert consumer.commits == [{0: 2}]
 
 
+@pytest.mark.parametrize("binary", [False, True])
+@pytest.mark.parametrize("per_node", [None, 4])
+@pytest.mark.parametrize("moved", [False, True])
+def test_kafka_topology_reaches_service_and_output(mocker, binary, per_node, moved):
+    """Preserve explicit Kafka topology through discovery, service projection, and output."""
+    event = _events()[0]
+    event["data"].update(scheduler="runapi", gpus_per_node=per_node)
+    if moved:
+        event["data"]["pod_nodes"] = dict.fromkeys(event["data"]["pod_names"], event["data"]["nodes"][1])
+    messages = [_binary(event)] if binary else _structured([event])
+    eca, _ = _make_eca(messages)
+    attribution = mocker.Mock()
+    attribution.create_attributor.return_value = "attributor-1"
+    attribution.get_attribution.return_value = {"verdict": {"attribution_outcome": "Fail User"}}
+    output = mocker.Mock()
+    pipeline = AttributionOrchestrator([eca], [], [], attribution, [output], gpus_per_node=7)
+
+    pipeline.analyze()
+
+    expected = 7 if per_node is None else per_node
+    info = attribution.create_attributor.call_args.args[0]
+    assert list(info.workload.nodes.values()) == [list(range(expected)), list(range(expected, expected * 2))]
+    context = output.write.call_args.args[0]
+    assert context["gpus_per_node"] == expected
+    assert context["gpu_count"] == 16
+
+
 def test_discover_omits_zero_time_limit():
     event = _events()[0]
     event["data"]["time_limit"] = 0
@@ -394,6 +422,11 @@ def test_discover_accepts_every_type_when_unfiltered():
             timezone="", start_time="2026-10-21T14:05:31+05:30", end_time="2026-10-21T17:41:58+05:30"
         ),
         lambda e: e["data"].update(gpu_count=-1),
+        lambda e: e["data"].update(gpus_per_node=0),
+        lambda e: e["data"].update(gpus_per_node=-1),
+        lambda e: e["data"].update(gpus_per_node=True),
+        lambda e: e["data"].update(gpus_per_node=4.0),
+        lambda e: e["data"].update(gpus_per_node="4"),
         lambda e: e["data"].update(pod_nodes=["not", "a", "map"]),
         lambda e: e.update(specversion="0.3"),
         lambda e: e.pop("id"),

@@ -499,7 +499,7 @@ contexts_path = "path/to/static-contexts.json"
 | `workload_type`      | No                           | empty string       | Workload type sent unchanged to service v2. The v2 schema accepts any string. Examples include `slurm`, `runai`, and `kueue`; the empty string means unspecified.                                                                                               |
 | `workload_framework` | No                           | none               | Optional framework label, such as `pytorch`.                                                                                                                                                                                                                    |
 | `attempt_id`         | No                           | `0`                | Attempt key used by outputs.                                                                                                                                                                                                                                    |
-| `gpu_count`          | No                           | none               | Optional allocated GPU count used by outputs and the web UI.                                                                                                                                                                                                    |
+| `gpu_count`          | No                           | none               | Optional total allocated GPUs across all `nodes`, used by outputs and the web UI. A total alone does not establish per-node placement. |
 
 
 `state` is an open scheduler string, not a closed enum. Its value can affect
@@ -560,12 +560,14 @@ Unexpected exceptions propagate; they are not classified as invalid events.
 The event `data` object uses ExecutionContext field names: `id`, `start_time`,
 `end_time` (with UTC offset) and a non-empty `nodes` list are required;
 `job_id`, `attempt_id`, `scheduler`, `state`, `name`, `user_name`,
-`workload_framework`, `timezone`, `time_limit`, `gpu_count`, `cancelled_by`,
+`workload_framework`, `timezone`, `time_limit`, `gpu_count`, `gpus_per_node`, `cancelled_by`,
 `failed_nodes`, `failed_node`, `std_out`, `std_err`, `namespace`, `pod_names`,
 `pod_nodes`, and `cluster` are optional. `failed_node` is used when `failed_nodes`
 is absent or empty; otherwise, the lexicographically first entry in
 `failed_nodes` supplies `failed_node`. A `time_limit` of 0 means no limit, and
-the context omits it.
+the context omits it. Optional `gpus_per_node` must be a positive integer and
+overrides the configured rank topology; booleans, floats, and strings
+are rejected. `gpu_count` remains the job's total allocated GPU count.
 CloudEvent `subject`, when it is a non-empty string, is retained as
 `event_subject`; any other value is ignored without skipping the event. `cluster`
 is retained unchanged; the VictoriaLogs and PromQL connectors query it when
@@ -652,15 +654,24 @@ aws_region = "us-east-2"
 
 This section controls workload shape sent to the attribution service.
 
-**Important:** `workload.gpus_per_node` defaults to `4`. This is also the
-ranks-per-node value. In the supported training model, one rank runs on one GPU,
-so GPUs per node and ranks per node are the same number. Review this for your
-cluster before deploying; mismatches silently break rank-to-node attribution.
+An explicit positive integer `gpus_per_node` in a context (including static JSON
+input) takes precedence for both the service rank mapping and output metadata.
+
+Without an explicit context value, `workload.gpus_per_node` supplies the
+fallback (default `4`). GPU totals are preserved but are not divided by the
+node count: pod placements can include CPU-only pods or historical nodes.
+Neither placement coverage nor `history_complete` establishes GPU allocation.
+
+This uniform rank model assumes one rank per GPU on every listed node. Review
+both the node list and the per-node value before deploying. Mixed GPU/CPU node
+layouts require allocation-aware topology support; the fallback does not model
+them. Automatic RunAPI topology detection requires additional allocation data.
+
 
 
 | Field           | Required | Default | Meaning                                                                                                                                                                                                                                                                                                                                     |
 | --------------- | -------- | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `gpus_per_node` | No       | `4`     | GPUs per node (ranks per node). The blueprint uses this to build the service v2 node-to-ranks payload. Default: `4`, applied when this key is unset. **You should review and override this for your cluster.** Clusters with a different GPU count per node will produce incorrect rank-to-node attribution if this is left at the default. |
+| `gpus_per_node` | No       | `4`     | Fallback GPUs per node (ranks per node) when no explicit context topology is supplied. |
 
 
 Example:

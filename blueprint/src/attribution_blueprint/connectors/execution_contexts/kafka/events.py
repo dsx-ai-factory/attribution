@@ -160,6 +160,11 @@ def _copy_optional_fields(ctx: KafkaExecutionContext, data: dict, event_id: str)
         value = data.get(key)
         if value is not None:
             ctx[key] = _non_negative_int(value, key, event_id)
+    per_node = data.get("gpus_per_node")
+    if per_node is not None:
+        if isinstance(per_node, bool) or not isinstance(per_node, int) or per_node <= 0:
+            raise EventError(f"CloudEvent {event_id} gpus_per_node must be a positive integer")
+        ctx["gpus_per_node"] = per_node
     # A zero time limit means no limit, as in the Slurm adapter. The service
     # rejects a time limit that is not positive.
     if ctx.get("time_limit") == 0:

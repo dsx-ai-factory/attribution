@@ -577,6 +577,127 @@ def test_build_attributor_info_rejects_non_positive_gpus_per_node():
         pipeline._build_attributor_info(ctx)
 
 
+@pytest.mark.parametrize("fallback", [None, 8])
+def test_mixed_gpu_jobs_use_per_context_topology(fallback):
+    """A mixed batch must use explicit topology for both ranks and output metadata."""
+    contexts = [
+        {**_make_ctx(str(gpus)), "scheduler": "runapi", "gpu_count": gpus, "gpus_per_node": gpus // 2}
+        for gpus in (8, 16)
+    ]
+    eca = MagicMock()
+    eca.discover.return_value = contexts
+    attribution = _make_attribution_mock()
+    output = _ListOutput()
+    pipeline = _make_pipeline(eca, [], attribution=attribution, output=output)
+    pipeline.gpus_per_node = fallback
+
+    pipeline.analyze()
+
+    for index, gpus in enumerate((8, 16)):
+        ranks = gpus // 2
+        info = _wire(attribution.create_attributor.call_args_list[index].args[0])
+        assert info["workload"]["nodes"] == {
+            contexts[index]["nodes"][0]: list(range(ranks)),
+            contexts[index]["nodes"][1]: list(range(ranks, gpus)),
+        }
+        assert output.entries[index][0]["gpus_per_node"] == ranks
+        assert output.entries[index][0]["gpu_count"] == gpus
+        assert contexts[index]["gpus_per_node"] == ranks
+    assert pipeline.gpus_per_node == fallback
+
+
+@pytest.mark.parametrize("gpu_count", [None, 0, -2, True, 8.0, "8", 1, 7, 4, 8, 16])
+def test_gpu_total_does_not_override_configured_rank_topology(gpu_count):
+    """An aggregate total and complete placements do not prove uniform allocation."""
+    ctx = {**_make_ctx("fallback"), "scheduler": "runapi", "gpu_count": gpu_count}
+    ctx["pod_names"] = ["worker-0", "worker-1"]
+    ctx["pod_nodes"] = dict(zip(ctx["pod_names"], ctx["nodes"]))
+    pipeline = _make_pipeline(MagicMock(), [])
+    pipeline.gpus_per_node = 8
+
+    nodes = _wire(pipeline._build_attributor_info(ctx))["workload"]["nodes"]
+
+    assert list(nodes.values()) == [list(range(8)), list(range(8, 16))]
+
+
+@pytest.mark.parametrize("nodes", [None, []])
+def test_gpu_total_without_nodes_keeps_fallback(nodes):
+    """An absent node list cannot establish per-node topology."""
+    ctx = {**_make_ctx("no-nodes"), "scheduler": "runapi", "nodes": nodes, "gpu_count": 8}
+    pipeline = _make_pipeline(MagicMock(), [])
+
+    assert _wire(pipeline._build_attributor_info(ctx))["workload"]["nodes"] == {}
+
+
+@pytest.mark.parametrize("scheduler", ["static", "runapi"])
+@pytest.mark.parametrize(("total", "explicit", "expected"), [(16, 4, 4), (16, None, 8), (6, 8, 8)])
+def test_explicit_context_gpu_topology_is_used_by_service_and_output(scheduler, total, explicit, expected):
+    """An explicit context topology must agree on the wire and in output metadata."""
+    ctx = {**_make_ctx("explicit"), "scheduler": scheduler, "gpu_count": total, "gpus_per_node": explicit}
+    eca = MagicMock()
+    eca.discover.return_value = [ctx]
+    attribution = _make_attribution_mock()
+    output = _ListOutput()
+    pipeline = _make_pipeline(eca, [], attribution=attribution, output=output)
+    pipeline.gpus_per_node = 8
+
+    pipeline.analyze()
+
+    info = _wire(attribution.create_attributor.call_args.args[0])
+    assert list(info["workload"]["nodes"].values()) == [list(range(expected)), list(range(expected, 2 * expected))]
+    assert output.entries[0][0]["gpus_per_node"] == expected
+    assert output.entries[0][0]["gpu_count"] == total
+    assert ctx["gpus_per_node"] == explicit
+
+
+@pytest.mark.parametrize("scheduler", ["kueue", "kai", "slurm", "static", None])
+def test_other_schedulers_do_not_infer_uniformity_from_gpu_total(scheduler):
+    """A divisible aggregate alone must not override another scheduler's configured topology."""
+    ctx = {**_make_ctx("aggregate"), "scheduler": scheduler, "gpu_count": 4}
+    pipeline = _make_pipeline(MagicMock(), [])
+    pipeline.gpus_per_node = 4
+
+    nodes = _wire(pipeline._build_attributor_info(ctx))["workload"]["nodes"]
+
+    assert list(nodes.values()) == [list(range(4)), list(range(4, 8))]
+
+
+@pytest.mark.parametrize("per_node", [0, -1, True, 4.0, "4"])
+def test_invalid_explicit_gpu_topology_is_rejected(per_node):
+    """An explicit topology must be a positive integer rather than a coerced value."""
+    pipeline = _make_pipeline(MagicMock(), [])
+
+    with pytest.raises(ValueError, match="gpus_per_node.*positive integer"):
+        pipeline._build_attributor_info({**_make_ctx("invalid"), "gpus_per_node": per_node})
+
+
+def test_runapi_pod_coverage_does_not_establish_gpu_allocation():
+    """A CPU helper's placement must not trigger averaging or change history metadata."""
+    ctx = {
+        **_make_ctx("mixed"),
+        "scheduler": "runapi",
+        "gpu_count": 4,
+        "history_complete": False,
+        "pod_names": ["gpu-worker", "cpu-helper"],
+        "pod_nodes": {"gpu-worker": "node-mixed-1", "cpu-helper": "node-mixed-2"},
+    }
+    eca = MagicMock()
+    eca.discover.return_value = [ctx]
+    attribution = _make_attribution_mock()
+    output = _ListOutput()
+    pipeline = _make_pipeline(eca, [], attribution=attribution, output=output)
+    pipeline.gpus_per_node = 7
+
+    pipeline.analyze()
+
+    info = _wire(attribution.create_attributor.call_args.args[0])
+    assert list(info["workload"]["nodes"].values()) == [list(range(7)), list(range(7, 14))]
+    assert output.entries[0][0]["gpus_per_node"] == 7
+    assert output.entries[0][0]["gpu_count"] == 4
+    assert output.entries[0][0]["history_complete"] is False
+    assert "gpus_per_node" not in ctx
+
+
 def test_outputs_receive_workload_gpu_defaults():
     contexts = [_make_ctx("ctx-gpu")]
     eca = MagicMock()
@@ -599,8 +720,9 @@ def test_outputs_receive_workload_gpu_defaults():
 
 
 def test_outputs_preserve_scheduler_gpu_count():
+    """Keep an uneven scheduler GPU total while using the configured rank topology."""
     ctx = _make_ctx("ctx-partial")
-    ctx["gpu_count"] = 6
+    ctx["gpu_count"] = 7
     contexts = [ctx]
     eca = MagicMock()
     eca.discover_by_ids.return_value = contexts
@@ -618,7 +740,7 @@ def test_outputs_preserve_scheduler_gpu_count():
 
     output_ctx = output.entries[0][0]
     assert output_ctx["gpus_per_node"] == 8
-    assert output_ctx["gpu_count"] == 6
+    assert output_ctx["gpu_count"] == 7
 
 
 def test_failing_ingest_is_recorded_and_does_not_block_other_observations():

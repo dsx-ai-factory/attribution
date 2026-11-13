@@ -305,6 +305,14 @@ class AttributionOrchestrator:
             path.write_text(json.dumps(payload, indent=2))
 
     def _build_attributor_info(self, ctx: dict) -> AttributorInfoV2:
+        """Build service metadata using the context's effective rank topology.
+
+        Args:
+            ctx: Execution context with workload identity, allocation, and timestamps.
+
+        Returns:
+            Validated service request with explicit node-to-rank assignments.
+        """
         # Service-side AttributorWorkloadInfo.job_start_time is AwareDatetime;
         # a naive datetime here would 422 the request, so fail fast at the BP
         # boundary rather than turning a programming error into an HTTP error.
@@ -323,7 +331,8 @@ class AttributionOrchestrator:
         # model, that is the same as ranks per node because each rank maps to
         # one GPU. Attribution-service v2 transports this as explicit
         # node-to-ranks entries.
-        ranks_per_node = 4 if self.gpus_per_node is None else self.gpus_per_node
+        inferred = _gpus_per_node_for_context(ctx, self.gpus_per_node)
+        ranks_per_node = 4 if inferred is None else inferred
         if ranks_per_node <= 0:
             raise ValueError(f"gpus_per_node must be positive, got {ranks_per_node}")
         node_to_ranks = {
@@ -393,22 +402,41 @@ def _observation_source(obs: dict) -> str:
     return str(source.value if hasattr(source, "value") else source)
 
 
+def _gpus_per_node_for_context(ctx: dict, fallback: int | None) -> int | None:
+    """Use explicit uniform topology, or retain the configured fallback.
+
+    Args:
+        ctx: Execution context with an optional positive per-node rank count.
+        fallback: Configured ranks per node when no explicit value is supplied.
+
+    Returns:
+        The explicit ranks per node, or the unchanged fallback. Aggregate GPU
+        totals and pod placements do not establish per-node GPU allocation.
+    """
+    explicit = ctx.get("gpus_per_node")
+    if explicit is None:
+        return fallback
+    if not isinstance(explicit, int) or isinstance(explicit, bool) or explicit <= 0:
+        raise ValueError("ctx['gpus_per_node'] must be a positive integer")
+    return explicit
+
+
 def _context_with_workload_gpu_defaults(ctx: dict, gpus_per_node: int | None) -> dict:
     """Add workload GPU metadata to the output context when available.
 
     Args:
         ctx: Execution context discovered by a scheduler adapter.
-        gpus_per_node: Effective workload GPUs-per-node value from config.
+        gpus_per_node: Fallback workload GPUs-per-node value from config.
 
     Returns:
-        A shallow context copy for output sinks. Existing scheduler-provided
-        values are preserved.
+        A shallow context copy with the same effective topology as the service.
+        Scheduler-provided GPU totals are preserved.
     """
     output_ctx = dict(ctx)
+    gpus_per_node = _gpus_per_node_for_context(ctx, gpus_per_node)
     if gpus_per_node is None:
         return output_ctx
-    if "gpus_per_node" not in output_ctx:
-        output_ctx["gpus_per_node"] = gpus_per_node
+    output_ctx["gpus_per_node"] = gpus_per_node
     if "gpu_count" not in output_ctx:
         nodes = output_ctx.get("nodes")
         node_count = len(nodes) if isinstance(nodes, list) else 0

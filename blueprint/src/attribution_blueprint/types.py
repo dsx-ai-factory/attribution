@@ -48,6 +48,8 @@ class ExecutionContext(TypedDict):
     cancelled_by: NotRequired[str]
     time_limit: NotRequired[int]
     gpu_count: NotRequired[int]
+    # Explicit uniform ranks per node, taking precedence over inferred or configured topology.
+    gpus_per_node: NotRequired[int]
     # Per-Pod scheduler placement with source provenance. Kueue populates
     # this from live Pods and durable PlacementRecords when available.
     pod_placements: NotRequired[list[dict]]
