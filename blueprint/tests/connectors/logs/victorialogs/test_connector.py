@@ -2,17 +2,19 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import json
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
 import requests
-
 from attribution_blueprint.connectors.auth import MTLSAuth, TokenAuth
 from attribution_blueprint.connectors.logs.victorialogs import (
     VictoriaLogsConnector,
+    _build,
     connector as victorialogs,
 )
+from attribution_blueprint.exceptions import PartialCollectionError
+from attribution_blueprint.orchestrator import AttributionOrchestrator
 from attribution_blueprint.types import Source
 
 FIXTURES = Path(__file__).parent / "fixtures"
@@ -52,6 +54,16 @@ def _connector(source=Source.SYSLOG, **kwargs):
     )
 
 
+def _reporting_pipeline(mocker):
+    """Build an orchestrator with observable Service ingestion and result delivery."""
+    service = mocker.Mock()
+    service.get_attribution.return_value = {"verdict": {"attribution_outcome": "Fail User"}}
+    service.ingest_observation.return_value.ingest.accepted = 1
+    service.ingest_observation.return_value.ingest.dropped = {}
+    output = mocker.Mock()
+    return AttributionOrchestrator([], [], [], service, [output]), service, output
+
+
 def test_renders_templates_and_sends_inclusive_window_as_exclusive_end(mocker):
     post = mocker.patch(
         "requests.Session.post",
@@ -83,6 +95,7 @@ def test_renders_templates_and_sends_inclusive_window_as_exclusive_end(mocker):
 
 
 def test_missing_template_kwarg_warns_and_skips(mocker):
+    """A skipped query records incomplete coverage even when it provides no observations."""
     post = mocker.patch("requests.Session.post")
     warning = mocker.patch.object(victorialogs.logger, "warning")
     conn = VictoriaLogsConnector(
@@ -92,10 +105,38 @@ def test_missing_template_kwarg_warns_and_skips(mocker):
         templates={Source.SYSLOG: ['service_name:="{missing}"']},
     )
 
-    assert conn.collect(_context()) == []
+    with pytest.raises(PartialCollectionError, match="query 1: template missing kwarg 'missing'") as raised:
+        conn.collect(_context())
+    assert raised.value.observations == []
     post.assert_not_called()
     warning.assert_called_once()
     assert "missing" in warning.call_args.args[0]
+
+
+@pytest.mark.parametrize("missing_first", [True, False])
+def test_skipped_template_preserves_other_query_and_cannot_report_complete(missing_first, mocker):
+    """A skipped query marks coverage partial regardless of its order among successful queries."""
+    templates = ['field:="{missing}"', "*"] if missing_first is True else ["*", 'field:="{missing}"']
+    connector = VictoriaLogsConnector(
+        endpoint="http://logs.example", source=Source.SYSLOG, templates={Source.SYSLOG: templates}
+    )
+    post = mocker.patch(
+        "requests.Session.post", return_value=_response(_ndjson([_row("2026-01-15T05:00:00Z", "kept")]), mocker)
+    )
+    pipeline, service, output = _reporting_pipeline(mocker)
+
+    result, succeeded = pipeline._process_one(_context(), [connector])
+
+    assert succeeded is True
+    post.assert_called_once()
+    [report] = result["connector_reports"]
+    assert report["status"] == "partial"
+    assert f"query {1 if missing_first is True else 2}: template missing kwarg 'missing'" in report["reason"]
+    assert report["observation_count"] == 1
+    assert result["evidence_status"] == "partial"
+    wire = service.ingest_observation.call_args.args[1].to_dict()
+    assert [entry["body"] for entry in json.loads(wire["body"])] == ["kept"]
+    assert output.write.call_args.args[1]["connector_reports"] == [report]
 
 
 @pytest.mark.parametrize(
@@ -131,14 +172,45 @@ def test_node_filter_can_be_disabled(node_field, mocker):
     assert post.call_args.kwargs["data"]["query"] == 'service_name:="example-cluster"'
 
 
-def test_ndjson_skips_blank_invalid_and_non_object_lines(mocker):
+def test_ndjson_retains_valid_rows_and_reports_skipped_records_as_partial(mocker):
+    """Blank lines are harmless; malformed or non-object records make coverage incomplete."""
     warning = mocker.patch.object(victorialogs.logger, "warning")
     text = '\n{"_time":"2026-01-15T00:00:01Z","_msg":"kept"}\nnot-json\n[]\n  \n'
     mocker.patch("requests.Session.post", return_value=_response(text, mocker))
-    observations = _connector(node_field=None).collect(_context())
+    with pytest.raises(PartialCollectionError, match="2 invalid NDJSON") as raised:
+        _connector(node_field=None).collect(_context())
 
-    assert json.loads(observations[0]["body"]) == [{"body": "kept", "ts": 1768435201000000000}]
+    assert json.loads(raised.value.observations[0]["body"]) == [{"body": "kept", "ts": 1768435201000000000}]
     warning.assert_called_once_with("victorialogs: skipped 2 invalid NDJSON line(s)")
+
+
+@pytest.mark.parametrize(
+    "invalid",
+    ["not-json", "[]", "1" * 5000, "[" * 1100],
+    ids=["malformed", "non-object", "oversized-integer", "deep-nesting"],
+)
+def test_invalid_record_keeps_a_full_response_saturated_and_retains_later_page(invalid, mocker):
+    """Skipped records still count toward a response limit, so older evidence is fetched."""
+    recent = _ndjson([_row("2026-01-15T05:00:00Z", "recent")])
+    older = _ndjson([_row("2026-01-15T04:00:00Z", "older")])
+    post = mocker.patch(
+        "requests.Session.post", side_effect=[_response(recent + "\n" + invalid, mocker), _response(older, mocker)]
+    )
+
+    with pytest.raises(PartialCollectionError, match="1 invalid NDJSON") as raised:
+        _connector(limit=2).collect(_context())
+
+    assert post.call_count == 2
+    assert [entry["body"] for entry in json.loads(raised.value.observations[0]["body"])] == ["older", "recent"]
+
+
+def test_all_invalid_records_report_partial_without_trying_to_advance_time(mocker):
+    """An undecodable page has no cursor, but must not report complete empty coverage."""
+    post = mocker.patch("requests.Session.post", return_value=_response("not-json\n[]", mocker))
+    with pytest.raises(PartialCollectionError, match="2 invalid NDJSON") as raised:
+        _connector(limit=2).collect(_context())
+    assert raised.value.observations == []
+    post.assert_called_once()
 
 
 @pytest.mark.parametrize(
@@ -250,23 +322,36 @@ def test_message_and_cloud_event_envelopes(mocker):
     ]
 
 
-def test_invalid_time_or_message_rows_are_skipped(mocker):
-    text = _ndjson(
-        [
-            _row("invalid", "bad timestamp"),
-            _row("2026-01-15T05:00:00Z", 42),
-        ]
-    )
+@pytest.mark.parametrize(
+    "invalid",
+    [
+        {"_time": "invalid", "_msg": "bad timestamp"},
+        {"_msg": "missing timestamp"},
+        {"_time": "2026-01-15T05:00:00Z", "_msg": 42},
+        {"_time": "2026-01-15T05:00:00Z", "_msg": None},
+        {"_time": "2026-01-15T05:00:00Z"},
+    ],
+)
+@pytest.mark.parametrize("include_valid", [False, True])
+def test_invalid_time_or_message_rows_report_partial_and_retain_valid_entries(invalid, include_valid, mocker):
+    rows = [invalid]
+    expected = []
+    if include_valid:
+        rows.append(_row("2026-01-15T05:00:01Z", "valid"))
+        expected = [{"body": "valid", "ts": 1768453201000000000}]
+    text = _ndjson(rows)
     mocker.patch("requests.Session.post", return_value=_response(text, mocker))
-    debug = mocker.patch.object(victorialogs.logger, "debug")
 
-    observations = _connector().collect(_context())
-    assert json.loads(observations[0]["body"]) == []
-    assert debug.call_count == 2
+    with pytest.raises(PartialCollectionError, match="1 row.*invalid _time or non-string _msg") as raised:
+        _connector().collect(_context())
+    observations = raised.value.observations
+    assert (json.loads(observations[0]["body"]) if observations else []) == expected
+    assert bool(observations) == include_valid
 
 
-def test_empty_response_returns_no_observation(mocker):
-    mocker.patch("requests.Session.post", return_value=_response("", mocker))
+@pytest.mark.parametrize("text", ["", " \n\n  "])
+def test_empty_response_returns_no_observation(text, mocker):
+    mocker.patch("requests.Session.post", return_value=_response(text, mocker))
     assert _connector().collect(_context()) == []
 
 
@@ -293,6 +378,7 @@ def test_pagination_reincludes_boundary_and_deduplicates_rows(mocker):
 
 
 def test_same_timestamp_overflow_warns_and_skips_boundary(mocker):
+    """A saturated timestamp retains visible rows and reports potentially missing boundary records."""
     same_time = _ndjson(
         [
             _row("2026-01-15T05:00:20Z", "one"),
@@ -308,7 +394,8 @@ def test_same_timestamp_overflow_warns_and_skips_boundary(mocker):
         ],
     )
     warning = mocker.patch.object(victorialogs.logger, "warning")
-    _connector(limit=2).collect(_context())
+    with pytest.raises(PartialCollectionError, match="possible truncation"):
+        _connector(limit=2).collect(_context())
 
     assert [call.kwargs["data"]["end"] for call in post.call_args_list] == [
         1768471200000000001,
@@ -319,6 +406,7 @@ def test_same_timestamp_overflow_warns_and_skips_boundary(mocker):
 
 
 def test_pagination_stops_when_oldest_is_at_window_start(mocker):
+    """A saturated start boundary stops paging and reports its coverage as incomplete."""
     start_time = _context()["start_time"]
     rows = _ndjson(
         [
@@ -328,23 +416,28 @@ def test_pagination_stops_when_oldest_is_at_window_start(mocker):
     )
     post = mocker.patch("requests.Session.post", return_value=_response(rows, mocker))
 
-    _connector(limit=2).collect(_context())
+    with pytest.raises(PartialCollectionError, match="window start"):
+        _connector(limit=2).collect(_context())
     post.assert_called_once()
 
 
 def test_saturated_page_without_parseable_timestamps_warns_and_stops(mocker):
+    """Unusable timestamps stop saturated pagination with an explicit partial reason."""
     rows = _ndjson([{"_msg": "one"}, {"_msg": "two"}])
     post = mocker.patch("requests.Session.post", return_value=_response(rows, mocker))
     warning = mocker.patch.object(victorialogs.logger, "warning")
 
-    observations = _connector(limit=2).collect(_context())
-    assert json.loads(observations[0]["body"]) == []
+    with pytest.raises(PartialCollectionError, match="no parseable _time") as raised:
+        _connector(limit=2).collect(_context())
+    observations = raised.value.observations
+    assert observations == []
+    assert "skipped 2 row(s) with invalid _time or non-string _msg" in str(raised.value)
     post.assert_called_once()
     warning.assert_called_once_with("victorialogs: saturated page has no parseable _time; stopping pagination")
 
 
-def test_max_pages_cap_warns(mocker, monkeypatch):
-    monkeypatch.setattr(victorialogs, "MAX_PAGES", 2)
+def test_max_pages_cap_preserves_rows_and_reports_incomplete(mocker):
+    """Reaching the page budget carries the fetched rows with an explicit partial result."""
     first_page = _ndjson(
         [
             _row("2026-01-15T05:00:20Z", "one"),
@@ -366,9 +459,94 @@ def test_max_pages_cap_warns(mocker, monkeypatch):
     )
     warning = mocker.patch.object(victorialogs.logger, "warning")
 
-    _connector(limit=2).collect(_context())
+    with pytest.raises(PartialCollectionError, match="page limit of 2") as raised:
+        _connector(limit=2, max_pages=2).collect(_context())
+    assert len(json.loads(raised.value.observations[0]["body"])) == 3
     assert post.call_count == 2
-    assert any("MAX_PAGES=2" in call.args[0] for call in warning.call_args_list)
+    assert any("page limit of 2" in call.args[0] for call in warning.call_args_list)
+
+
+def test_page_budget_preserves_evidence_but_does_not_report_complete(mocker):
+    """A truncated query must retain its entries and make incomplete collection visible."""
+    pages = [
+        _ndjson([_row(f"2026-01-15T05:00:{second:02d}Z", str(second)) for second in seconds])
+        for seconds in ((20, 10), (10, 9))
+    ]
+    mocker.patch("requests.Session.post", side_effect=[_response(page, mocker) for page in pages])
+    pipeline, service, output = _reporting_pipeline(mocker)
+    service.ingest_observation.return_value.ingest.accepted = 3
+
+    result, succeeded = pipeline._process_one(_context(), [_connector(limit=2, max_pages=2)])
+
+    assert succeeded is True
+    [report] = result["connector_reports"]
+    assert report["status"] == "partial"
+    assert "page" in report["reason"]
+    assert report["observation_count"] == 1
+    assert result["evidence_status"] == "partial"
+    wire = service.ingest_observation.call_args.args[1].to_dict()
+    assert [entry["body"] for entry in json.loads(wire["body"])] == ["9", "10", "20"]
+    assert output.write.call_args.args[1]["connector_reports"] == [report]
+
+
+def test_configured_budget_can_read_beyond_twenty_pages(mocker):
+    """A larger finite budget retrieves older entries without changing boundary deduplication."""
+    start = _context()["start_time"] + timedelta(hours=1)
+    rows = [_row((start + timedelta(seconds=index)).isoformat(), str(index)) for index in range(22)]
+    pages = [_ndjson([rows[index], rows[index - 1]]) for index in range(21, 0, -1)] + [""]
+    post = mocker.patch("requests.Session.post", side_effect=[_response(page, mocker) for page in pages])
+
+    [observation] = _connector(limit=2, max_pages=22).collect(_context())
+
+    assert post.call_count == 22
+    assert [entry["body"] for entry in json.loads(observation["body"])] == [str(index) for index in range(22)]
+
+
+def test_partial_query_retains_other_queries_and_does_not_leak_status_to_next_collection(mocker):
+    """Each collection owns its partial status and preserves rows from all configured queries."""
+    pages = [
+        _ndjson([_row("2026-01-15T05:00:20Z", "one"), _row("2026-01-15T05:00:10Z", "two")]),
+        _ndjson([_row("2026-01-15T05:00:09Z", "three")]),
+        "",
+        "",
+    ]
+    mocker.patch("requests.Session.post", side_effect=[_response(page, mocker) for page in pages])
+    connector = VictoriaLogsConnector(
+        endpoint="http://logs.example",
+        source=Source.SYSLOG,
+        templates={Source.SYSLOG: ["first", "second"]},
+        limit=2,
+        max_pages=1,
+    )
+    with pytest.raises(PartialCollectionError, match="query 1: page limit of 1") as raised:
+        connector.collect(_context())
+
+    assert len(json.loads(raised.value.observations[0]["body"])) == 3
+    assert "query 2" not in str(raised.value)
+    assert connector.collect(_context()) == []
+
+
+@pytest.mark.parametrize("max_pages", [0, -1, True, False, 1.5, "2", None])
+def test_page_budget_requires_a_positive_integer(max_pages):
+    """Reject invalid budgets before sending any query."""
+    with pytest.raises(ValueError, match="max_pages must be a positive integer"):
+        _connector(max_pages=max_pages)
+
+
+def test_configured_page_budget_reaches_the_connector(mocker):
+    """The MCA factory forwards the configured budget to actual pagination."""
+    post = mocker.patch(
+        "requests.Session.post",
+        return_value=_response(_ndjson([_row("2026-01-15T05:00:20Z", "one")]), mocker),
+    )
+    connector = _build(
+        {"endpoint": "http://logs.example", "query": "*", "limit": 1, "max_pages": 1},
+        {"source": Source.SYSLOG},
+    )
+
+    with pytest.raises(PartialCollectionError, match="page limit of 1"):
+        connector.collect(_context())
+    post.assert_called_once()
 
 
 @pytest.mark.parametrize("status", [400, 500])
@@ -379,6 +557,90 @@ def test_http_errors_propagate(status, mocker):
 
     with pytest.raises(requests.HTTPError, match=f"HTTP {status}"):
         _connector().collect(_context())
+
+
+@pytest.mark.parametrize("later_query", [False, True])
+@pytest.mark.parametrize("error_type", [requests.HTTPError, requests.Timeout])
+def test_request_failure_retains_pages_and_other_queries(later_query, error_type, mocker):
+    """A later page or query failure preserves evidence and permits subsequent queries."""
+    first = [_row("2026-01-15T05:00:20Z", "one")]
+    if later_query is False:
+        first.append(_row("2026-01-15T05:00:10Z", "two"))
+    response = requests.Response()
+    response.status_code = 503
+    error = error_type("diagnostic containing an endpoint must not be copied", response=response)
+    post = mocker.patch(
+        "requests.Session.post",
+        side_effect=[
+            _response(_ndjson(first), mocker),
+            error,
+            _response(_ndjson([_row("2026-01-15T05:00:30Z", "three")]), mocker),
+        ],
+    )
+    queries = ["first", "failed", "last"] if later_query is True else ["first", "last"]
+    connector = VictoriaLogsConnector(
+        endpoint="http://logs.example", source=Source.SYSLOG, templates={Source.SYSLOG: queries}, limit=2
+    )
+    pipeline, service, output = _reporting_pipeline(mocker)
+
+    result, succeeded = pipeline._process_one(_context(), [connector])
+
+    assert succeeded is True
+    assert post.call_count == 3
+    [report] = result["connector_reports"]
+    assert report["status"] == "partial"
+    assert f"request failed: {error_type.__name__} (HTTP 503)" in report["reason"]
+    assert "diagnostic containing" not in report["reason"]
+    assert result["evidence_status"] == "partial"
+    wire = service.ingest_observation.call_args.args[1].to_dict()
+    expected = ["one", "three"] if later_query is True else ["two", "one", "three"]
+    assert [entry["body"] for entry in json.loads(wire["body"])] == expected
+    assert output.write.call_args.args[1]["connector_reports"] == [report]
+
+
+@pytest.mark.parametrize("failed_first", [True, False], ids=["failure-first", "failure-last"])
+@pytest.mark.parametrize("entries", [[], [{"body": "kept", "ts": 1768435201000000000}]], ids=["empty", "rows"])
+@pytest.mark.parametrize("error_type", [requests.HTTPError, requests.Timeout])
+def test_query_failures_attempt_other_queries_and_report_partial(failed_first, entries, error_type, mocker):
+    """A successful query, including an empty one, prevents query order from hiding coverage."""
+    text = _ndjson([_row("2026-01-15T00:00:01Z", "kept")]) if entries else ""
+    error = error_type("must not expose this diagnostic")
+    response = _response(text, mocker)
+    post = mocker.patch("requests.Session.post", side_effect=[error, response] if failed_first else [response, error])
+    connector = VictoriaLogsConnector(
+        endpoint="http://logs.example", source=Source.SYSLOG, templates={Source.SYSLOG: ["first", "last"]}
+    )
+
+    with pytest.raises(PartialCollectionError, match=error_type.__name__) as raised:
+        connector.collect(_context())
+
+    assert post.call_count == 2
+    assert "must not expose" not in str(raised.value)
+    assert [entry for obs in raised.value.observations for entry in json.loads(obs["body"])] == entries
+
+
+def test_all_query_requests_fail_after_attempting_every_query_and_preserve_first_error(mocker):
+    """All-query failure remains an error, rather than a partial success or early abort."""
+    first = requests.Timeout("first failure")
+    post = mocker.patch("requests.Session.post", side_effect=[first, requests.HTTPError("second failure")])
+    connector = VictoriaLogsConnector(
+        endpoint="http://logs.example", source=Source.SYSLOG, templates={Source.SYSLOG: ["first", "last"]}
+    )
+
+    with pytest.raises(requests.Timeout) as raised:
+        connector.collect(_context())
+
+    assert raised.value is first
+    assert post.call_count == 2
+
+
+def test_first_page_timeout_propagates_without_replacing_the_error(mocker):
+    """With no fetched evidence, a request failure remains the original collection error."""
+    error = requests.Timeout("timed out")
+    mocker.patch("requests.Session.post", side_effect=error)
+    with pytest.raises(requests.Timeout) as raised:
+        _connector().collect(_context())
+    assert raised.value is error
 
 
 def test_auth_none_and_token_header(mocker):
@@ -474,6 +736,7 @@ def test_cluster_from_context_falls_back_without_context_cluster(context_cluster
 
 
 def test_cluster_from_context_supplies_cluster_missing_from_query_kwargs(mocker):
+    """A context cluster completes the query; omitting it later reports a skipped query."""
     post = mocker.patch("requests.Session.post", return_value=_response("", mocker))
     warning = mocker.patch.object(victorialogs.logger, "warning")
     conn = _cluster_connector(query_kwargs={"service_name": "example-service"}, cluster_from_context=True)
@@ -481,7 +744,9 @@ def test_cluster_from_context_supplies_cluster_missing_from_query_kwargs(mocker)
     conn.collect({**_context(), "cluster": "cluster-b"})
     assert _queried(post) == ['cluster:="cluster-b" service_name:="example-service"']
 
-    assert conn.collect(_context()) == []
+    with pytest.raises(PartialCollectionError, match="template missing kwarg 'cluster'") as raised:
+        conn.collect(_context())
+    assert raised.value.observations == []
     assert post.call_count == 1
     assert "cluster" in warning.call_args.args[0]
 

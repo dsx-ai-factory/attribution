@@ -60,19 +60,20 @@ class AttributionConnector:
         configuration = Configuration(host=self.service_url, retries=3)
         self._api = DefaultApi(ApiClient(configuration))
 
-    def _call(self, operation, api_method, *args):
+    def _call(self, operation, api_method, *args, **kwargs):
         """Measure a service call and return its decoded data.
 
         Args:
             operation: Fixed client method name for metrics.
             api_method: Generated method that returns HTTP response details.
             *args: Arguments for the generated method.
+            **kwargs: Keyword arguments for the generated method.
 
         Returns:
             The decoded response data.
         """
         with track("attribution_service", operation) as call:
-            response = api_method(*args, _request_timeout=self._request_timeout)
+            response = api_method(*args, _request_timeout=self._request_timeout, **kwargs)
             call.response_bytes = len(response.raw_data or b"")
             return response.data
 
@@ -114,9 +115,12 @@ class AttributionConnector:
         return response
 
     def get_attribution(self, attributor_id: str) -> dict:
-        """GET /v2/attributor/{attributor_id}/attribution. Returns response JSON."""
+        """GET /v2/attributor/{attributor_id}/attribution with the decision graph. Returns response JSON."""
         response = self._call(
-            "get_attribution", self._api.attribute_v2_attributor_att_id_attribution_get_with_http_info, attributor_id
+            "get_attribution",
+            self._api.attribute_v2_attributor_att_id_attribution_get_with_http_info,
+            attributor_id,
+            include_decision_graph=True,
         )
         # to_dict() would leave datetimes, which aren't JSON-serializable.
         return json.loads(response.to_json())
