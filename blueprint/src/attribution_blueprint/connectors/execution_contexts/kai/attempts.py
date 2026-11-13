@@ -677,7 +677,7 @@ def _coalesce_initial_allocation(
             and allocated
             and not earlier
             and not any(
-                begin <= parse_time(event["time"]) < end
+                begin <= parse_time(event["time"]) <= end
                 and event["type"] in {"Failed", "Complete", "Completed"}
                 and event.get("restart_attempt") in {None, start["restart_attempt"]}
                 for event in terminal_events
