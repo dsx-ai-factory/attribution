@@ -101,6 +101,72 @@ def test_result_matches_rfc_and_waits_for_delivery(rfc, context, attribution):
     assert attribution == original
 
 
+@pytest.mark.parametrize(
+    "run_id,expected_key",
+    [
+        pytest.param("provider-run", b"provider-run", id="provider-run"),
+        pytest.param(None, b"processing-1", id="missing"),
+        pytest.param("", b"processing-1", id="empty"),
+        pytest.param(3, b"processing-1", id="integer"),
+        pytest.param(True, b"processing-1", id="boolean"),
+    ],
+)
+def test_processing_id_keeps_original_run_routing(
+    run_id: object, expected_key: bytes, context: dict[str, object], attribution: dict[str, object]
+) -> None:
+    """Use an explicit run identity for routing without changing result correlation."""
+    producer = FakeProducer()
+    ctx = {**context, "id": "processing-1", "run_id": run_id}
+    KafkaOutput(producer=producer, topic="results").write(ctx, attribution)
+
+    record = producer.messages[0][1]
+    event = json.loads(record["value"])
+    assert record["key"] == expected_key
+    assert event["data"]["job_id"] == context["job_id"]
+    assert event["data"]["attempt_id"] == context["attempt_id"]
+    assert event["data"]["trigger_event_id"] == context["event_id"]
+    assert event["subject"] == context["event_subject"]
+
+
+def test_distinct_attempts_share_run_routing_and_keep_trigger_correlation(
+    context: dict[str, object], attribution: dict[str, object]
+) -> None:
+    """Caller-prepared attempts share a provider key while retaining their own correlation."""
+    producer = FakeProducer()
+    output = KafkaOutput(producer=producer, topic="results")
+    for attempt in ("1", "2"):
+        output.write(
+            {
+                **context,
+                "id": f"processing-{attempt}",
+                "run_id": "provider-run",
+                "attempt_id": attempt,
+                "event_id": f"event-{attempt}",
+            },
+            attribution,
+        )
+
+    records = [record for _topic, record in producer.messages]
+    assert [record["key"] for record in records] == [b"provider-run", b"provider-run"]
+    data = [json.loads(record["value"])["data"] for record in records]
+    assert [(item["job_id"], item["attempt_id"], item["trigger_event_id"]) for item in data] == [
+        (context["job_id"], "1", "event-1"),
+        (context["job_id"], "2", "event-2"),
+    ]
+
+
+def test_original_run_supplies_missing_job_identity(attribution: dict[str, object]) -> None:
+    """A processing key does not leak into fallback job identity or subject."""
+    producer = FakeProducer()
+    KafkaOutput(producer=producer, topic="results").write({"id": "processing-1", "run_id": "original-run"}, attribution)
+
+    record = producer.messages[0][1]
+    event = json.loads(record["value"])
+    assert record["key"] == b"original-run"
+    assert event["data"]["job_id"] == "original-run"
+    assert event["subject"] == "jobs/original-run"
+
+
 def test_preserves_service_fields_and_evidence_extensions(context, attribution):
     producer = FakeProducer()
     attribution.update(

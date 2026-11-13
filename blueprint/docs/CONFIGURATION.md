@@ -935,7 +935,7 @@ Fields:
 
 The bundled Loki templates are examples. If your labels are not `service_name`, `app`, or `host_name`, set `query`, `queries`, `query_kwargs`, and `node_label` for your environment.
 
-Custom templates may use `{job_id}` (the execution context ID) and any `{key}` supplied in `query_kwargs`. Literal `{` and `}` in LogQL label selectors must be doubled (`{{`, `}}`).
+Custom templates may use `{job_id}` (the provider `run_id`, falling back to the execution context `id`) and any `{key}` supplied in `query_kwargs`. Literal `{` and `}` in LogQL label selectors must be doubled (`{{`, `}}`).
 
 ### VictoriaLogs SYSLOG Or APPLOG
 
@@ -984,7 +984,7 @@ Fields:
 | `queries` | No | Custom LogsQL template list replacing the bundled templates; takes precedence over `query`. |
 
 The bundled templates target `service_name`, `app`, `slurm_job_id`, and `host_name`.
-Templates may use `{job_id}` (the execution context ID) and any `{key}` supplied
+Templates may use `{job_id}` (the provider `run_id`, falling back to the execution context `id`) and any `{key}` supplied
 in `query_kwargs`. LogsQL queries are paginated backward in time when a response
 reaches `limit`; rows at a page boundary are deduplicated. The collector report is
 `partial` with a reason when a template argument is missing, invalid response
