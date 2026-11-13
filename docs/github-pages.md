@@ -51,6 +51,10 @@ publishes the deck to the `gh-pages` branch at:
 
 <https://dsx-ai-factory.github.io/attribution/walkthroughs/attribution-process/>
 
+After each production or preview deployment, the workflow loads the published
+page and fails if any of its scripts or stylesheets does not load. A failure
+usually means the build's `--base` does not match the path that Pages serves.
+
 Use this stable URL in repository documentation. Production and PR-preview
 deployments share the `gh-pages` branch, and the workflows serialize their
 updates so they preserve one another's files. The Pages root is a small landing

@@ -16,6 +16,7 @@ from datetime import datetime, timezone
 from typing import Any, Callable, Protocol
 from uuid import uuid4
 
+from attribution_blueprint.telemetry import track
 from attribution_blueprint.types import ExecutionContext
 
 EVENT_TYPE = "com.nvidia.attribution.job.attributed.v1"
@@ -113,19 +114,22 @@ class KafkaOutput:
             raise KafkaOutputError(
                 f"output.kafka event is {len(value)} bytes, over max_message_bytes={self._max_bytes}"
             )
-        delivery: list[Any] = []
-        self._producer.produce(
-            self._topic,
-            key=str(context["id"]).encode(),
-            value=value,
-            headers=[("content-type", "application/cloudevents+json")],
-            on_delivery=lambda error, _message: delivery.append(error),
-        )
-        remaining = self._producer.flush(self._timeout)
-        if not delivery:
-            raise KafkaOutputError(f"output.kafka delivery unconfirmed after {self._timeout}s ({remaining} pending)")
-        if delivery[0] is not None:
-            raise KafkaOutputError(f"output.kafka delivery failed: {delivery[0]}")
+        with track("kafka", "produce"):
+            delivery: list[Any] = []
+            self._producer.produce(
+                self._topic,
+                key=str(context["id"]).encode(),
+                value=value,
+                headers=[("content-type", "application/cloudevents+json")],
+                on_delivery=lambda error, _message: delivery.append(error),
+            )
+            remaining = self._producer.flush(self._timeout)
+            if not delivery:
+                raise KafkaOutputError(
+                    f"output.kafka delivery unconfirmed after {self._timeout}s ({remaining} pending)"
+                )
+            if delivery[0] is not None:
+                raise KafkaOutputError(f"output.kafka delivery failed: {delivery[0]}")
 
     def close(self) -> None:
         """Flush pending records once; reject writes even if that final flush fails."""
