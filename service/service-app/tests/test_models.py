@@ -8,6 +8,7 @@ from zoneinfo import ZoneInfo
 
 import pytest
 import yaml
+from attribution_lib.bundled_rules.common.straggler_types import StragglerNodeReport, StragglerRankReport
 from attribution_lib.compound_outcome import (
     CancellationActor,
     FailureDomain,
@@ -384,6 +385,66 @@ class TestV2Models:
         sites = response.symptoms["link_flap"]
         assert [s.node for s in sites] == ["node-a", "node-b"]
         assert all(s.type == "NodeSource" for s in sites)
+
+    def test_collectors_encode_sources_nested_in_a_dataclass_report(self):
+        """A straggler node report keeps its node, ranks and sources when the collectors digest is encoded."""
+        src = _lib_source(
+            rule="Megatron Straggler Bottom Ranks", line_num=7, datum="Bottom 2 Ranks: 213.46/5, 287.92/1"
+        )
+        result = _empty_result()
+        result.collectors = {
+            "megatron_straggler": {
+                "gpu-node-042": StragglerNodeReport(
+                    pattern="Megatron Pattern",
+                    rank_scores=[StragglerRankReport(rank=5, score=213.46)],
+                    sources=[src],
+                )
+            }
+        }
+
+        response = AttributionResponseV2.from_lib_attribution(set(), result)
+
+        assert response.collectors == {
+            "megatron_straggler": {
+                "gpu-node-042": {
+                    "pattern": "Megatron Pattern",
+                    "rank_scores": [{"rank": 5, "score": 213.46}],
+                    "sources": [
+                        {
+                            "observation_id": 1,
+                            "source": "applog",
+                            "pos": 7,
+                            "line": "Bottom 2 Ranks: 213.46/5, 287.92/1",
+                            "rule": "Megatron Straggler Bottom Ranks",
+                            "time": "2026-03-22T14:03:12Z",
+                        }
+                    ],
+                }
+            }
+        }
+
+    def test_collectors_encode_sources_outside_dataclasses(self):
+        """A source that a collector returns in a plain container is encoded in the same API shape."""
+        src = _lib_source(rule="some_collector_rule")
+        result = _empty_result()
+        result.collectors = {"some_digest": {"evidence": [src]}}
+
+        response = AttributionResponseV2.from_lib_attribution(set(), result)
+
+        assert response.collectors == {
+            "some_digest": {
+                "evidence": [
+                    {
+                        "observation_id": 1,
+                        "source": "applog",
+                        "pos": 0,
+                        "line": "raw",
+                        "rule": "some_collector_rule",
+                        "time": "2026-03-22T14:03:12Z",
+                    }
+                ]
+            }
+        }
 
 
 def test_fallback_catalog_ids_resolve_in_packaged_catalog() -> None:
