@@ -17,7 +17,7 @@ from typing import Any, Callable, Protocol
 from uuid import uuid4
 
 from attribution_blueprint.telemetry import track
-from attribution_blueprint.types import ExecutionContext
+from attribution_blueprint.types import ExecutionContext, context_run_id
 
 EVENT_TYPE = "com.nvidia.attribution.job.attributed.v1"
 EVENT_SOURCE = "/attribution/blueprint"
@@ -51,7 +51,7 @@ def _validate_options(topic: str, event_type: str, source: str, max_bytes: int, 
 
 def _event(context: ExecutionContext, attribution: dict, *, event_type: str, source: str, cluster: str | None) -> dict:
     """Map an enriched result to the RFC envelope without changing its evidence."""
-    job_id = str(context.get("job_id") or context["id"])
+    job_id = str(context.get("job_id") or context_run_id(context))
     attempt_id = context.get("attempt_id")
     data = {
         "job_id": job_id,
@@ -80,7 +80,7 @@ def _event(context: ExecutionContext, attribution: dict, *, event_type: str, sou
 
 
 class KafkaOutput:
-    """Write one RFC result event per context, keyed by the input's run ID."""
+    """Write one RFC result event per context, keyed by run_id when supplied, else id."""
 
     def __init__(
         self,
@@ -118,7 +118,7 @@ class KafkaOutput:
             delivery: list[Any] = []
             self._producer.produce(
                 self._topic,
-                key=str(context["id"]).encode(),
+                key=str(context_run_id(context)).encode(),
                 value=value,
                 headers=[("content-type", "application/cloudevents+json")],
                 on_delivery=lambda error, _message: delivery.append(error),

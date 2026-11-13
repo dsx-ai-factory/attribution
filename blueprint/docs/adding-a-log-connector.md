@@ -70,11 +70,16 @@ is a complete working copy in a single file.
 
 | Field | Type | |
 |---|---|---|
-| `id` | `str` | the workload run |
+| `id` | `str` | the workload context or processing item |
 | `nodes` | `list[str]` | node names |
 | `start_time`, `end_time` | `datetime` | must be timezone-aware |
 
 Other optional fields may be included  - see the declared fields in [`types.py`](../src/attribution_blueprint/types.py).
+
+A caller can supply `run_id` to preserve the provider run identity when `id`
+distinguishes processing items. Loki and VictoriaLogs use `context_run_id(context)`
+for the `{job_id}` selector: a non-empty string `run_id`, otherwise `id`. Batch
+results remain keyed by `id`, so attempts retain separate evidence.
 
 ### What `_build` Receives
 

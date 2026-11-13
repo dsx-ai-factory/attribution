@@ -16,6 +16,9 @@ class ExecutionContext(TypedDict):
     """
 
     id: str
+    # Original provider run identity when id is a distinct processing key.
+    # Log selectors and Kafka result keys use this value, falling back to id.
+    run_id: NotRequired[str]
     nodes: list[str]
     start_time: datetime
     end_time: datetime
@@ -113,6 +116,19 @@ class Observation(TypedDict):
     body: str
 
 
+def context_run_id(context: ExecutionContext) -> str:
+    """Return the provider run identity independently of a processing key.
+
+    Args:
+        context: Execution context, optionally carrying its original run ID.
+
+    Returns:
+        A non-empty string run_id, or id when run_id is absent or unusable.
+    """
+    run_id = context.get("run_id")
+    return run_id if isinstance(run_id, str) and run_id != "" else context["id"]
+
+
 def assert_aware(dt: datetime, field: str) -> datetime:
     """Reject naive datetimes at the boundary into the attribution service.
 
@@ -135,4 +151,5 @@ __all__ = [
     "TimeInterval",
     "TimeseriesEntry",
     "assert_aware",
+    "context_run_id",
 ]
