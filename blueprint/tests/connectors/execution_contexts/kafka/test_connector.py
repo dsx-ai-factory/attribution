@@ -145,9 +145,12 @@ class FakeConsumer:
     def position(self, partitions):
         return [TP(tp.topic, tp.partition, self._positions.get(tp.partition, -1001)) for tp in partitions]
 
-    def get_watermark_offsets(self, tp, *, timeout, cached):
+    def get_watermark_offsets(self, tp, *, timeout=None, cached=False):
+        # Discovery asks the broker; lag metrics read only the client's cache.
+        if cached:
+            assert timeout is None
+            return 0, self._highs.get(tp.partition, -1001)
         assert timeout > 0
-        assert cached is False
         return 0, self._highs.get(tp.partition, 0)
 
     def close(self):

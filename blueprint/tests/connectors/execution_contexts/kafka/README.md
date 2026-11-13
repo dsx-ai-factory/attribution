@@ -63,7 +63,10 @@ Optional infrastructure tests:
 
 Run sequentially, without pytest-xdist. The source is split between `events.py`
 (payload decoding/mapping), `connector.py` (discovery and streaming lifecycle),
-`receipts.py` (acknowledged offsets and ownership), and `__init__.py` (MCA settings).
+`receipts.py` (acknowledged offsets and ownership), `telemetry.py` (consumer
+metrics), and `__init__.py` (MCA settings). Consumer metric tests use these fakes
+from `blueprint/tests/test_telemetry_kafka_consumer.py`, which shares the
+process meter provider with `test_telemetry.py`.
 The [acknowledgement API](../../../../docs/kafka_lifecycle.md) is available;
 Runtime durable storage and its integration remain follow-up work. Kafka result publishing is
 implemented by `output.kafka` and covered in the
