@@ -499,6 +499,53 @@ def test_date_bounds_span_runs_the_rollup_table_left_behind(tmp_path):
     assert payload["metrics"]["windowedRuns"] == 1
 
 
+def test_rollup_date_window_normalizes_end_time_offsets_to_utc(populated_db):
+    """The rollup path buckets runs by UTC day like the normalized path, ignoring a source-local end_day (#210)."""
+    # 2026-08-07T17:30-07:00 is 2026-08-08T00:30 UTC; end_day keeps the source-local day on purpose.
+    _seed_rollup(
+        populated_db,
+        [
+            ("rollup-utc", "2026-08-08T00:30:00+00:00", "2026-08-08", "utc", "Fail InfraHW", 10, 8, "XID-79"),
+            ("rollup-offset", "2026-08-07T17:30:00-07:00", "2026-08-07", "offset", "Fail InfraHW", 10, 8, "XID-79"),
+        ],
+    )
+
+    aug8 = db.dashboard_data(populated_db, since="2026-08-08", until="2026-08-08")
+    aug7 = db.dashboard_data(populated_db, since="2026-08-07", until="2026-08-07")
+
+    assert aug8["metrics"]["windowedRuns"] == 2
+    assert [(d["date"], d["hw"]) for d in aug8["daily"]] == [("2026-08-08", 2)]
+    assert aug8["hwBreakdown"]["series"] == [{"symptom": "XID-79", "data": [2], "total": 2}]
+    assert aug8["ledgers"]["symptom"][0]["count"] == 2
+    assert aug7["metrics"]["windowedRuns"] == 0
+    assert aug7["hwBreakdown"]["total"] == 0
+
+
+def test_rollup_unfiltered_spine_uses_utc_days(populated_db):
+    """Without a window, the rollup chart spine starts and ends on the UTC day of offset runs."""
+    _seed_rollup(
+        populated_db,
+        [("rollup-offset", "2026-08-07T23:30:00-07:00", "2026-08-07", "offset", "Fail InfraHW", 10, 8, "XID-79")],
+    )
+
+    data = db.dashboard_data(populated_db)
+
+    assert [(d["date"], d["hw"]) for d in data["daily"]] == [("2026-08-08", 1)]
+    assert data["hwBreakdown"]["total"] == 1
+
+
+def test_rollup_date_window_seeks_end_time_index(populated_db):
+    """The rollup UTC window keeps an indexed end_time range so narrow windows do not scan the table."""
+    _seed_rollup(populated_db, [])
+    clauses, params = db._rollup_clauses(since="2026-08-08", until="2026-08-08")
+    sql = "EXPLAIN QUERY PLAN SELECT COUNT(*) FROM webui_run_fact WHERE " + " AND ".join(clauses)
+    with sqlite3.connect(populated_db) as conn:
+        conn.execute("CREATE INDEX idx_webui_run_fact_end_time ON webui_run_fact(end_time)")
+        plan = " ".join(row[-1] for row in conn.execute(sql, params).fetchall())
+    # A julianday()-only filter still names the index, but as a full SCAN; require a range SEARCH.
+    assert "SEARCH webui_run_fact USING COVERING INDEX idx_webui_run_fact_end_time" in plan
+
+
 def test_dashboard_rejects_malformed_dates(tmp_path):
     p = tmp_path / "invalid-dates.db"
     out = SQLiteOutput(str(p))

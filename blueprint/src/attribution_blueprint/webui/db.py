@@ -315,27 +315,9 @@ def _filtered_clauses(
     if raw_outcome is not None:
         clauses.append("r.outcome = ?")
         params.append(raw_outcome)
-    # Compare instants, not stored text: end_time keeps its source offset, and
-    # the UI date window is a UTC day. The stored-text range widened by one day
-    # covers every UTC offset (at most 14 hours) and lets SQLite seek the
-    # end_time index before the exact julianday() check.
-    # A widened day past year 1 or 9999 cannot be represented; that text bound
-    # then excludes nothing, so it is dropped and only the exact check remains.
-    if since is not None:
-        clauses.append("julianday(c.end_time) >= julianday(?)")
-        params.append(since)
-        lower_text = _widened_iso_day(since, -1)
-        if lower_text is not None:
-            clauses.append("c.end_time >= ?")
-            params.append(lower_text)
-    if until is not None:
-        upper = _iso_next_day(until)
-        clauses.append("julianday(c.end_time) < julianday(?)")
-        params.append(upper)
-        upper_text = _widened_iso_day(upper, 1)
-        if upper_text is not None:
-            clauses.append("c.end_time < ?")
-            params.append(upper_text)
+    window_clauses, window_params = _utc_day_window_clauses("c.end_time", since=since, until=until)
+    clauses.extend(window_clauses)
+    params.extend(window_params)
     if status == "failed":
         clauses.append("r.outcome != ?")
         params.append("Pass")
@@ -612,6 +594,50 @@ def _widened_iso_day(iso_date: str, days: int) -> str | None:
         return None
 
 
+def _utc_day_window_clauses(
+    column: str,
+    *,
+    since: str | None,
+    until: str | None,
+) -> tuple[list[str], list[Any]]:
+    """Build an inclusive UTC-day window on a stored ISO-8601 end time.
+
+    Compares instants, not stored text: end times keep their source offset, and
+    the UI date window is a UTC day. The stored-text range widened by one day
+    covers every UTC offset (at most 14 hours) and lets SQLite seek the end-time
+    index before the exact ``julianday()`` check. A widened day past year 1 or
+    9999 cannot be represented; that text bound then excludes nothing, so it is
+    dropped and only the exact check remains.
+
+    Args:
+        column: Qualified end-time column, such as ``c.end_time``.
+        since: Inclusive lower date bound.
+        until: Inclusive upper date bound.
+
+    Returns:
+        SQL clause fragments and bound parameters.
+    """
+
+    clauses: list[str] = []
+    params: list[Any] = []
+    if since is not None:
+        clauses.append(f"julianday({column}) >= julianday(?)")
+        params.append(since)
+        lower_text = _widened_iso_day(since, -1)
+        if lower_text is not None:
+            clauses.append(f"{column} >= ?")
+            params.append(lower_text)
+    if until is not None:
+        upper = _iso_next_day(until)
+        clauses.append(f"julianday({column}) < julianday(?)")
+        params.append(upper)
+        upper_text = _widened_iso_day(upper, 1)
+        if upper_text is not None:
+            clauses.append(f"{column} < ?")
+            params.append(upper_text)
+    return clauses, params
+
+
 def date_range_bounds(path: str) -> tuple[str | None, str | None]:
     """Return the first and last UTC run end days for the date picker.
 
@@ -831,12 +857,9 @@ def _rollup_clauses(
     if outcome is not None:
         clauses.append("outcome = ?")
         params.append(outcome)
-    if since is not None:
-        clauses.append("end_time >= ?")
-        params.append(since)
-    if until is not None:
-        clauses.append("end_time < ?")
-        params.append(_iso_next_day(until))
+    window_clauses, window_params = _utc_day_window_clauses("end_time", since=since, until=until)
+    clauses.extend(window_clauses)
+    params.extend(window_params)
     return clauses, params
 
 
@@ -955,7 +978,7 @@ def _daily_rollup_breakdown_conn(
 
     clauses, params = _rollup_clauses(outcome=outcome, since=since, until=until)
     sql = _append_rollup_where(
-        "SELECT end_day AS day, root_symptom AS symptom, COUNT(*) AS n FROM webui_run_fact",
+        "SELECT date(end_time) AS day, root_symptom AS symptom, COUNT(*) AS n FROM webui_run_fact",
         clauses,
     )
     sql += " GROUP BY day, symptom"
@@ -1496,8 +1519,9 @@ def _dashboard_data_from_rollup_conn(
     # Daily buckets only cover the outcomes the day-by-day charts plot;
     # 'Fail Undetermined' is intentionally omitted (matches DailyBucket in
     # the React interfaces). Window totals come from windowed_runs.
+    # date(end_time) is the UTC day, matching the window; the stored end_day may keep the source-local day.
     daily_sql = (
-        "SELECT end_day AS day, "
+        "SELECT date(end_time) AS day, "
         "SUM(gpu_hours) AS gpu_hours, "
         "SUM(CASE WHEN outcome = 'Fail InfraHW' THEN 1 ELSE 0 END) AS hw, "
         "SUM(CASE WHEN outcome = 'Fail InfraSW' THEN 1 ELSE 0 END) AS sw, "
@@ -1518,7 +1542,9 @@ def _dashboard_data_from_rollup_conn(
             params,
             fallback_gpu_count=fallback_gpu_count,
         )
-    rollup_lo_hi = conn.execute("SELECT MIN(end_time) AS lo, MAX(end_time) AS hi FROM webui_run_fact").fetchone()
+    rollup_lo_hi = conn.execute(
+        "SELECT MIN(date(end_time)) AS lo, MAX(date(end_time)) AS hi FROM webui_run_fact"
+    ).fetchone()
     db_total_runs = _db_total_runs_conn(conn)
     db_min, db_max = _db_date_bounds_conn(conn)
     days = _date_spine(
