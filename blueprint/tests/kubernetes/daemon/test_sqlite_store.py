@@ -1121,6 +1121,11 @@ def test_observation_journal_does_not_change_placement_view(tmp_path):
 
 def test_watch_coverage_and_gaps_survive_reopen(tmp_path):
     path = tmp_path / "placements.db"
+    # Stay inside the 30-day retention window so pruning keeps every row.
+    listed = datetime.now(timezone.utc).replace(microsecond=0) - timedelta(days=1)
+    listed_at = listed.strftime("%Y-%m-%dT%H:%M:%SZ")
+    gap_started_at = (listed - timedelta(seconds=30)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    relisted_at = (listed + timedelta(minutes=1)).strftime("%Y-%m-%dT%H:%M:%SZ")
     store = SQLitePlacementStore(str(path))
     store.complete_watch_list(
         cluster_id="cluster-a",
@@ -1129,7 +1134,7 @@ def test_watch_coverage_and_gaps_survive_reopen(tmp_path):
         api_version="v1",
         kind="Pod",
         resource_version="10",
-        completed_at="2026-10-14T00:00:00Z",
+        completed_at=listed_at,
         gap_id=None,
     )
     gap_id = store.begin_coverage_gap(
@@ -1140,8 +1145,8 @@ def test_watch_coverage_and_gaps_survive_reopen(tmp_path):
         kind="Pod",
         reason="WATCH_SOURCE_CHANGED",
         start_resource_version="10",
-        started_at="2026-10-13T23:59:30Z",
-        detected_at="2026-10-14T00:00:00Z",
+        started_at=gap_started_at,
+        detected_at=listed_at,
     )
     store.complete_watch_list(
         cluster_id="cluster-a",
@@ -1150,26 +1155,26 @@ def test_watch_coverage_and_gaps_survive_reopen(tmp_path):
         api_version="v1",
         kind="Pod",
         resource_version="20",
-        completed_at="2026-10-14T00:01:00Z",
+        completed_at=relisted_at,
         gap_id=gap_id,
     )
 
     reopened = SQLitePlacementStore(str(path))
     coverage = reopened.get_watch_coverage("cluster-a", "team-a", "pods")
     assert coverage is not None
-    assert coverage.coverage_started_at == "2026-10-14T00:00:00Z"
+    assert coverage.coverage_started_at == listed_at
     assert coverage.resource_version == "20"
-    assert coverage.checkpointed_at == "2026-10-14T00:01:00Z"
+    assert coverage.checkpointed_at == relisted_at
     assert reopened.list_watch_coverages("cluster-a", "team-a") == [
         coverage
     ]
     [gap] = reopened.list_coverage_gaps("cluster-a", "team-a")
     assert gap.reason == "WATCH_SOURCE_CHANGED"
     assert gap.start_resource_version == "10"
-    assert gap.started_at == "2026-10-13T23:59:30Z"
-    assert gap.detected_at == "2026-10-14T00:00:00Z"
+    assert gap.started_at == gap_started_at
+    assert gap.detected_at == listed_at
     assert gap.end_resource_version == "20"
-    assert gap.recovered_at == "2026-10-14T00:01:00Z"
+    assert gap.recovered_at == relisted_at
 
 
 def test_history_pruning_advances_coverage_boundary(tmp_path):
