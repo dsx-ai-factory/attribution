@@ -487,6 +487,8 @@ contexts_path = "path/to/static-contexts.json"
 | -------------------- | ---------------------------- | ------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `contexts_path`      | Alternative to inline fields | none               | JSON file containing either a context list or an object with a `contexts` list. Each context requires `id`, `start_time`, `end_time` (timezone-aware), and `nodes`; duplicate `id` values are rejected. Optional `timezone` values are validated as IANA names. |
 | `id`                 | No for inline mode           | `static-<hash>`    | Execution context ID. The default hash is derived from `start_time`, `end_time`, and `nodes`.                                                                                                                                                                   |
+| `run_id`             | No                           | none               | Provider run identity when `id` is a separate processing key. Only non-empty strings are used. |
+| `job_id`             | No                           | `run_id`, then `id` | Provider job identity. An explicit value takes precedence over the run identity. |
 | `start_time`         | Yes for inline mode          | none               | Timezone-aware ISO-8601 start time.                                                                                                                                                                                                                             |
 | `end_time`           | Yes for inline mode          | none               | Timezone-aware ISO-8601 end time.                                                                                                                                                                                                                               |
 | `timezone`           | No                           | inferred when safe | IANA timezone used to interpret offsetless evidence. Set it when timestamps use a non-hour numeric offset or the workload uses a regional timezone, such as `Asia/Kolkata` or `America/Los_Angeles`.                                                            |
@@ -559,13 +561,16 @@ Unexpected exceptions propagate; they are not classified as invalid events.
 
 The event `data` object uses ExecutionContext field names: `id`, `start_time`,
 `end_time` (with UTC offset) and a non-empty `nodes` list are required;
-`job_id`, `attempt_id`, `scheduler`, `state`, `name`, `user_name`,
+`run_id`, `job_id`, `attempt_id`, `scheduler`, `state`, `name`, `user_name`,
 `workload_framework`, `timezone`, `time_limit`, `gpu_count`, `cancelled_by`,
 `failed_nodes`, `failed_node`, `std_out`, `std_err`, `namespace`, `pod_names`,
 `pod_nodes`, and `cluster` are optional. `failed_node` is used when `failed_nodes`
 is absent or empty; otherwise, the lexicographically first entry in
 `failed_nodes` supplies `failed_node`. A `time_limit` of 0 means no limit, and
-the context omits it.
+the context omits it. A non-empty string `run_id` preserves the provider run
+identity when `id` is a separate processing key; unusable `run_id` values are
+ignored. A missing or empty `job_id` defaults to `run_id`, then `id`; an explicit
+job ID takes precedence.
 CloudEvent `subject`, when it is a non-empty string, is retained as
 `event_subject`; any other value is ignored without skipping the event. `cluster`
 is retained unchanged; the VictoriaLogs and PromQL connectors query it when
@@ -935,7 +940,7 @@ Fields:
 
 The bundled Loki templates are examples. If your labels are not `service_name`, `app`, or `host_name`, set `query`, `queries`, `query_kwargs`, and `node_label` for your environment.
 
-Custom templates may use `{job_id}` (the execution context ID) and any `{key}` supplied in `query_kwargs`. Literal `{` and `}` in LogQL label selectors must be doubled (`{{`, `}}`).
+Custom templates may use `{job_id}` (the provider `run_id`, falling back to the execution context `id`) and any `{key}` supplied in `query_kwargs`. Literal `{` and `}` in LogQL label selectors must be doubled (`{{`, `}}`).
 
 ### VictoriaLogs SYSLOG Or APPLOG
 
@@ -984,7 +989,7 @@ Fields:
 | `queries` | No | Custom LogsQL template list replacing the bundled templates; takes precedence over `query`. |
 
 The bundled templates target `service_name`, `app`, `slurm_job_id`, and `host_name`.
-Templates may use `{job_id}` (the execution context ID) and any `{key}` supplied
+Templates may use `{job_id}` (the provider `run_id`, falling back to the execution context `id`) and any `{key}` supplied
 in `query_kwargs`. LogsQL queries are paginated backward in time when a response
 reaches `limit`; rows at a page boundary are deduplicated. The collector report is
 `partial` with a reason when a template argument is missing, invalid response

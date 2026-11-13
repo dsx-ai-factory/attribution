@@ -6,6 +6,11 @@ The Blueprint SQLite output stores execution contexts and attribution runs in a
 local database. This document records schema version `1`, implemented by the
 SQLite output connector.
 
+Contexts are grouped by job ID, attempt ID, and scheduler type. An explicit
+`job_id` is preserved; otherwise the job ID defaults to a non-empty string
+`run_id`, then `id`. Separate processing contexts for the same job and attempt
+create additional attribution runs under that execution context.
+
 The schema has three core tables:
 
 - `schema_version`, records the applied schema version.

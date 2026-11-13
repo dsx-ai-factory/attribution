@@ -19,7 +19,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from attribution_blueprint import mca_registry as _registry
 from attribution_blueprint.exceptions import MCAError
 from attribution_blueprint.mca_registry import _PARAM
-from attribution_blueprint.types import ExecutionContext
+from attribution_blueprint.types import ExecutionContext, context_run_id
 
 
 def _iana_timezone_key(value: object, field: str) -> str:
@@ -48,6 +48,8 @@ class StaticExecutionContextAdapter:
         self,
         *,
         id: str | None = None,
+        run_id: str | None = None,
+        job_id: str | None = None,
         start_time: datetime | None = None,
         end_time: datetime | None = None,
         nodes: list[str] | None = None,
@@ -63,6 +65,8 @@ class StaticExecutionContextAdapter:
         timezone: str | None = None,
         contexts: list[ExecutionContext] | None = None,
     ):
+        self._run_id = run_id
+        self._job_id = job_id
         if gpu_count is not None and gpu_count < 0:
             raise ValueError("static ECA: gpu_count must be non-negative")
         if contexts is not None:
@@ -71,6 +75,9 @@ class StaticExecutionContextAdapter:
             self._contexts = []
             for ctx in contexts:
                 normalized = dict(ctx)
+                provider_id = normalized.get("run_id")
+                if isinstance(provider_id, str) and provider_id != "":
+                    normalized["job_id"] = normalized.get("job_id") or context_run_id(normalized)
                 context_timezone = normalized.get("timezone")
                 if context_timezone is not None and context_timezone != "":
                     normalized["timezone"] = _iana_timezone_key(
@@ -145,9 +152,11 @@ class StaticExecutionContextAdapter:
             "nodes": self._nodes,
             "start_time": self._start_time,
             "end_time": self._end_time,
-            "job_id": self._id,
             "state": self._state,
         }
+        if isinstance(self._run_id, str) and self._run_id != "":
+            ctx["run_id"] = self._run_id
+        ctx["job_id"] = str(self._job_id) if self._job_id not in (None, "") else context_run_id(ctx)
         if self._name is not None:
             ctx["name"] = self._name
         if self._user_name is not None:
@@ -269,7 +278,8 @@ def _normalize_context(raw_context: object, index: int, path: Path) -> Execution
     ctx["attempt_id"] = str(raw_context.get("attempt_id", "0"))
     ctx["workload_type"] = str(raw_context.get("workload_type", ""))
     ctx["scheduler"] = str(raw_context.get("scheduler", "static"))
-    ctx["job_id"] = str(raw_context.get("job_id", ctx["id"]))
+    job_id = raw_context.get("job_id")
+    ctx["job_id"] = str(job_id) if job_id not in (None, "") else context_run_id(ctx)
     ctx["state"] = str(raw_context.get("state", "UNKNOWN"))
     context_timezone = raw_context.get("timezone")
     if context_timezone is not None and context_timezone != "":
@@ -313,6 +323,8 @@ def _build(spec: dict, ctx: dict) -> StaticExecutionContextAdapter:
     try:
         return StaticExecutionContextAdapter(
             id=id_str,
+            run_id=spec.get("run_id"),
+            job_id=spec.get("job_id"),
             start_time=start_time,
             end_time=end_time,
             nodes=nodes,
@@ -336,6 +348,8 @@ _registry.register_component(
     name="static",
     schema={
         "id": _PARAM,
+        "run_id": _PARAM,
+        "job_id": _PARAM,
         "start_time": _PARAM,
         "end_time": _PARAM,
         "nodes": _PARAM,

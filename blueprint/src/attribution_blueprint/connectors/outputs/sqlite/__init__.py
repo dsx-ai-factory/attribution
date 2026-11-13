@@ -14,7 +14,7 @@ from attribution_blueprint import (
 from attribution_blueprint.exceptions import MCAError
 from attribution_blueprint.mca_registry import _PARAM
 from attribution_blueprint.result import service_outcome
-from attribution_blueprint.types import ExecutionContext
+from attribution_blueprint.types import ExecutionContext, context_run_id
 
 # Schema version persisted as POC metadata. The current shape stores
 # Blueprint-facing taxonomy columns while keeping the raw service outcome in
@@ -215,7 +215,7 @@ class SQLiteOutput:
             self._conn = self._connect()
 
         ctx = dict(context)
-        job_id = ctx.get("job_id") or ctx.get("id", "")
+        job_id = ctx.get("job_id") or context_run_id(ctx)
         # Connector-supplied: Slurm uses SLUID; Kueue uses its canonical
         # Workload/admission/restart-derived ID.
         attempt_id = ctx.get("attempt_id", "")

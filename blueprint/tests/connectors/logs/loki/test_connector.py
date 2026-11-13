@@ -5,6 +5,7 @@ import json
 from datetime import datetime, timezone
 
 import pytest
+from pytest_mock import MockerFixture
 
 from attribution_blueprint.connectors.auth import MTLSAuth, TokenAuth
 from attribution_blueprint.connectors.logs.loki import LokiConnector
@@ -47,7 +48,7 @@ def test_renders_query_and_passes_time_window_in_ns(mocker):
     assert kwargs["data"]["limit"] == 5000
 
 
-def test_processing_id_preserves_provider_job_query(mocker):
+def test_processing_id_preserves_provider_job_query(mocker: MockerFixture) -> None:
     """Different processing items query the original provider run."""
     post = _mock_response(mocker, [])
     conn = LokiConnector(

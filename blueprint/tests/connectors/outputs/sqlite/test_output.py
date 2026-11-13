@@ -3,7 +3,11 @@
 
 import json
 import sqlite3
+from copy import deepcopy
 from datetime import datetime, timezone
+from pathlib import Path
+
+import pytest
 
 from attribution_blueprint.connectors.outputs.sqlite import SCHEMA_VERSION, SQLiteOutput
 
@@ -36,6 +40,40 @@ def _make_context(
 
 def _connect(db):
     return sqlite3.connect(str(db))
+
+
+@pytest.mark.parametrize(
+    "job_id,attempts,expected_rows",
+    [
+        pytest.param(None, ("1", "2"), [("provider-run", "1"), ("provider-run", "2")], id="distinct-attempts"),
+        pytest.param(None, ("1", "1"), [("provider-run", "1")], id="repeat-attempt"),
+        pytest.param("parent-job", ("1", "2"), [("parent-job", "1"), ("parent-job", "2")], id="explicit-job"),
+    ],
+)
+def test_provider_run_groups_processing_items_without_overriding_job_identity(
+    tmp_path: Path, job_id: str | None, attempts: tuple[str, str], expected_rows: list[tuple[str, str]]
+) -> None:
+    """Group by provider job and attempt, retaining separate attribution runs and caller data."""
+    contexts = []
+    for index, attempt in enumerate(attempts):
+        context = {**_make_context(sluid=f"processing-{index}"), "run_id": "provider-run", "attempt_id": attempt}
+        context.pop("job_id")
+        if job_id is not None:
+            context["job_id"] = job_id
+        contexts.append(context)
+    original = deepcopy(contexts)
+    path = tmp_path / "out.db"
+    output = SQLiteOutput(str(path))
+    try:
+        for context in contexts:
+            output.write(context, {})
+    finally:
+        output.close()
+    with sqlite3.connect(path) as connection:
+        rows = connection.execute("SELECT job_id, attempt_id FROM execution_context ORDER BY attempt_id").fetchall()
+        assert rows == expected_rows
+        assert connection.execute("SELECT COUNT(*) FROM attribution_run").fetchone()[0] == 2
+    assert contexts == original
 
 
 def test_write_creates_all_tables_and_schema_version_row(tmp_path):

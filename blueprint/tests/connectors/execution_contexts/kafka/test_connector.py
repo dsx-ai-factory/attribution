@@ -9,6 +9,7 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 import pytest
+from pytest_mock import MockerFixture
 
 from attribution_blueprint.connectors.execution_contexts.kafka import (
     KafkaExecutionContextAdapter,
@@ -16,7 +17,10 @@ from attribution_blueprint.connectors.execution_contexts.kafka import (
     events as events_module,
 )
 from attribution_blueprint.connectors.execution_contexts.kafka.connector import KafkaConsumerError
+from attribution_blueprint.connectors.logs.victorialogs import VictoriaLogsConnector
+from attribution_blueprint.connectors.outputs.kafka import KafkaOutput
 from attribution_blueprint.exceptions import MCAError
+from attribution_blueprint.types import Source
 
 FIXTURE = Path(__file__).parents[3] / "fixtures" / "kafka_completion_events.json"
 EVENT_TYPE = "com.example.job.completed.v1"
@@ -224,6 +228,60 @@ def test_discover_maps_structured_event_to_context():
     assert ctx["pod_nodes"]["job-a1-worker-1"] == "example-node-002"
     assert "cancelled_by" not in ctx
     assert consumer.commits == [{0: 2}]
+
+
+@pytest.mark.parametrize("encoding", ["structured", "binary"])
+@pytest.mark.parametrize(
+    "job_id,expected_job",
+    [
+        pytest.param(None, "provider-run", id="provider-default"),
+        pytest.param("parent-job", "parent-job", id="explicit-job"),
+    ],
+)
+def test_provider_identity_survives_input_log_query_and_result(
+    mocker: MockerFixture, encoding: str, job_id: str | None, expected_job: str
+) -> None:
+    """Keep routing, job identity and trigger correlation through the connector boundaries."""
+    event = _events()[0]
+    event["data"].update(id="processing-1", run_id="provider-run")
+    event["data"].pop("job_id", None)
+    if job_id is not None:
+        event["data"]["job_id"] = job_id
+    messages = _structured([event]) if encoding == "structured" else [_binary(event)]
+    adapter, _ = _make_eca(messages)
+    [context] = adapter.discover()
+    assert (context["id"], context["run_id"], context["job_id"]) == ("processing-1", "provider-run", expected_job)
+    response = mocker.Mock(text="")
+    post = mocker.patch("requests.Session.post", return_value=response)
+    logs = VictoriaLogsConnector(
+        endpoint="http://logs.example", source=Source.APPLOG, templates={Source.APPLOG: ['job:="{job_id}"']}
+    )
+    assert logs.collect(context) == []
+    assert 'job:="provider-run"' in post.call_args.kwargs["data"]["query"]
+    producer = mocker.Mock()
+    producer.produce.side_effect = lambda _topic, **record: record["on_delivery"](None, None)
+    producer.flush.return_value = 0
+    KafkaOutput(producer=producer, topic="results").write(context, {})
+    record = producer.produce.call_args.kwargs
+    result = json.loads(record["value"])
+    assert record["key"] == b"provider-run"
+    assert result["data"]["job_id"] == expected_job
+    assert result["data"]["trigger_event_id"] == event["id"]
+    assert result["data"]["attempt_id"] == event["data"]["attempt_id"]
+
+
+@pytest.mark.parametrize("run_id", [None, "", 3, True], ids=["none", "empty", "integer", "boolean"])
+def test_discover_ignores_unusable_provider_identity(run_id: object) -> None:
+    """An unusable optional run ID must not reject the event or replace its legacy identity."""
+    event = _events()[0]
+    event["data"].update(id="processing-1", run_id=run_id)
+    event["data"].pop("job_id", None)
+    adapter, _ = _make_eca(_structured([event]))
+
+    [context] = adapter.discover()
+
+    assert "run_id" not in context
+    assert context["job_id"] == "processing-1"
 
 
 def test_discover_omits_zero_time_limit():
