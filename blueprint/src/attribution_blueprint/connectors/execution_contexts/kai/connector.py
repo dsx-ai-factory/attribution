@@ -47,7 +47,7 @@ from loguru import logger
 from attribution_blueprint.connectors.execution_contexts.kai.attempts import (
     PodGroupAttempt,
     attempts_from_podgroup_history,
-    observations_from_live_resources,
+    snapshots_from_live_resources,
 )
 from attribution_blueprint.connectors.execution_contexts.kai.helpers import (
     POD_GROUP_ANNOTATION as _POD_GROUP_ANNOTATION,
@@ -174,7 +174,11 @@ def _parse_dt(value: str | None) -> datetime | None:
 def _latest_resources_by_uid(
     observations: list[dict],
 ) -> dict[str, dict]:
-    """Restore each resource from its latest deterministic observation."""
+    """Restore the latest resource version, preferring full live data on ties.
+
+    Daemon snapshots omit spec. At the same version, their later collection
+    time must not displace live placement and deadline fields.
+    """
     selected: dict[str, tuple[tuple, dict]] = {}
     for observation in observations:
         metadata = observation.get("metadata") or {}
@@ -193,6 +197,7 @@ def _latest_resources_by_uid(
                 else -1
             ),
             resource_version,
+            "spec" in observation,
             observed_at,
             json.dumps(
                 observation,
@@ -1142,7 +1147,7 @@ class KaiExecutionContextAdapter:
                 ),
             )
             live_observations = (
-                observations_from_live_resources(
+                snapshots_from_live_resources(
                     podgroup,
                     members,
                     owner_jobs,
