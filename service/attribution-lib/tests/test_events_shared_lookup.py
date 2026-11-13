@@ -170,7 +170,7 @@ def test_joins_against_rules_view_see_both_tiers():
 
 
 class TestSharedLookupTmpdirForkSafety:
-    """`_get_shared_lookup_tmpdir()`'s `atexit` cleanup is registered once per
+    """`_get_shared_lookup_tmpdir()`'s `Finalize` cleanup is registered once per
     process and, along with the module globals it reads, inherited by any
     `os.fork()`'d child (e.g. a pre-fork server's worker process). A child
     must not delete the directory on its own exit: it didn't create it, and
@@ -190,7 +190,7 @@ class TestSharedLookupTmpdirForkSafety:
 
         pid = os.fork()
         if pid == 0:
-            # Child: simulate its inherited atexit handler firing on its own exit.
+            # Child: simulate its inherited cleanup handler firing on its own exit.
             try:
                 events_module._cleanup_shared_lookup_tmpdir()
             finally:
