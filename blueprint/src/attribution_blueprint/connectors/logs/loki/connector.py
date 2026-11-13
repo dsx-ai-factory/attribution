@@ -29,6 +29,7 @@ from attribution_blueprint.types import (
     Source,
     TimeseriesEntry,
     assert_aware,
+    context_run_id,
 )
 
 DEFAULT_LIMIT = 5000
@@ -170,7 +171,7 @@ class LokiConnector:
         queries: list[str] = []
         for tmpl in self._templates:
             try:
-                query = tmpl.format(job_id=context.get("id", ""), **self._query_kwargs)
+                query = tmpl.format(job_id=context_run_id(context), **self._query_kwargs)
             except KeyError as e:
                 logger.warning(f"loki template missing kwarg {e}; skipping query")
                 continue

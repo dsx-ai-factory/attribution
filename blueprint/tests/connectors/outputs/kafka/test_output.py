@@ -101,6 +101,34 @@ def test_result_matches_rfc_and_waits_for_delivery(rfc, context, attribution):
     assert attribution == original
 
 
+@pytest.mark.parametrize("run_id", ["provider-run", None, "", 3, True])
+def test_processing_id_keeps_original_run_routing(run_id, context, attribution):
+    """Use an explicit run identity for routing without changing result correlation."""
+    producer = FakeProducer()
+    ctx = {**context, "id": "processing-1", "run_id": run_id}
+    KafkaOutput(producer=producer, topic="results").write(ctx, attribution)
+
+    record = producer.messages[0][1]
+    event = json.loads(record["value"])
+    assert record["key"] == (b"provider-run" if run_id == "provider-run" else b"processing-1")
+    assert event["data"]["job_id"] == context["job_id"]
+    assert event["data"]["attempt_id"] == context["attempt_id"]
+    assert event["data"]["trigger_event_id"] == context["event_id"]
+    assert event["subject"] == context["event_subject"]
+
+
+def test_original_run_supplies_missing_job_identity(attribution):
+    """A processing key does not leak into fallback job identity or subject."""
+    producer = FakeProducer()
+    KafkaOutput(producer=producer, topic="results").write({"id": "processing-1", "run_id": "original-run"}, attribution)
+
+    record = producer.messages[0][1]
+    event = json.loads(record["value"])
+    assert record["key"] == b"original-run"
+    assert event["data"]["job_id"] == "original-run"
+    assert event["subject"] == "jobs/original-run"
+
+
 def test_preserves_service_fields_and_evidence_extensions(context, attribution):
     producer = FakeProducer()
     attribution.update(
