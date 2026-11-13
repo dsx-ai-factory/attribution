@@ -315,12 +315,9 @@ def _filtered_clauses(
     if raw_outcome is not None:
         clauses.append("r.outcome = ?")
         params.append(raw_outcome)
-    if since is not None:
-        clauses.append("c.end_time >= ?")
-        params.append(since)
-    if until is not None:
-        clauses.append("c.end_time < ?")
-        params.append(_iso_next_day(until))
+    window_clauses, window_params = _utc_day_window_clauses("c.end_time", since=since, until=until)
+    clauses.extend(window_clauses)
+    params.extend(window_params)
     if status == "failed":
         clauses.append("r.outcome != ?")
         params.append("Pass")
@@ -580,13 +577,82 @@ def _iso_next_day(iso_date: str) -> str:
     return (d + timedelta(days=1)).isoformat()
 
 
+def _widened_iso_day(iso_date: str, days: int) -> str | None:
+    """Shift an ISO date by whole days for the indexed text prefilter.
+
+    Args:
+        iso_date: ISO calendar date.
+        days: Signed number of days to shift.
+
+    Returns:
+        The shifted ISO calendar date, or None when it falls outside the
+        representable calendar (before year 1 or after year 9999).
+    """
+
+    try:
+        return (date.fromisoformat(iso_date[:10]) + timedelta(days=days)).isoformat()
+    except OverflowError:
+        return None
+
+
+def _utc_day_window_clauses(
+    column: str,
+    *,
+    since: str | None,
+    until: str | None,
+) -> tuple[list[str], list[Any]]:
+    """Build an inclusive UTC-day window on a stored ISO-8601 end time.
+
+    Compares instants, not stored text: end times keep their source offset, and
+    the UI date window is a UTC day. The stored-text range widened by one day
+    covers every UTC offset (at most 14 hours) and lets SQLite seek the end-time
+    index before the exact ``julianday()`` check. A widened day past year 1 or
+    9999 cannot be represented; that text bound then excludes nothing, so it is
+    dropped and only the exact check remains.
+
+    Args:
+        column: Qualified end-time column, such as ``c.end_time``.
+        since: Inclusive lower date bound.
+        until: Inclusive upper date bound.
+
+    Returns:
+        SQL clause fragments and bound parameters.
+    """
+
+    clauses: list[str] = []
+    params: list[Any] = []
+    if since is not None:
+        clauses.append(f"julianday({column}) >= julianday(?)")
+        params.append(since)
+        lower_text = _widened_iso_day(since, -1)
+        if lower_text is not None:
+            clauses.append(f"{column} >= ?")
+            params.append(lower_text)
+    if until is not None:
+        upper = _iso_next_day(until)
+        clauses.append(f"julianday({column}) < julianday(?)")
+        params.append(upper)
+        upper_text = _widened_iso_day(upper, 1)
+        if upper_text is not None:
+            clauses.append(f"{column} < ?")
+            params.append(upper_text)
+    return clauses, params
+
+
 def date_range_bounds(path: str) -> tuple[str | None, str | None]:
-    """Return (min, max) of c.end_time in the DB as ISO strings, or (None, None)
-    when empty. Used by the webui to populate the date picker without pulling
-    the entire row set."""
+    """Return the first and last UTC run end days for the date picker.
+
+    Uses the same attributed-run, UTC-day calculation as the dashboard bounds,
+    so the metadata endpoint and the dashboard advertise the same window.
+
+    Args:
+        path: SQLite database path.
+
+    Returns:
+        Inclusive ``(min, max)`` ISO day pair; both None when the database holds no runs.
+    """
     with _connect(path) as conn:
-        row = conn.execute("SELECT MIN(end_time) AS lo, MAX(end_time) AS hi FROM execution_context").fetchone()
-    return (row["lo"], row["hi"]) if row else (None, None)
+        return _db_date_bounds_conn(conn)
 
 
 def get_run(path: str, run_id: str) -> RunRow | None:
@@ -716,7 +782,7 @@ def _daily_breakdown_conn(
 
     clauses, params = _filtered_clauses(outcome=outcome, since=since, until=until)
     sql = _append_where(
-        "SELECT substr(c.end_time, 1, 10) AS day, r.raw_result_json "
+        "SELECT date(c.end_time) AS day, r.raw_result_json "
         "FROM attribution_run r JOIN execution_context c ON c.id = r.execution_context_id",
         clauses,
     )
@@ -792,12 +858,9 @@ def _rollup_clauses(
     if outcome is not None:
         clauses.append("outcome = ?")
         params.append(outcome)
-    if since is not None:
-        clauses.append("end_time >= ?")
-        params.append(since)
-    if until is not None:
-        clauses.append("end_time < ?")
-        params.append(_iso_next_day(until))
+    window_clauses, window_params = _utc_day_window_clauses("end_time", since=since, until=until)
+    clauses.extend(window_clauses)
+    params.extend(window_params)
     return clauses, params
 
 
@@ -916,7 +979,7 @@ def _daily_rollup_breakdown_conn(
 
     clauses, params = _rollup_clauses(outcome=outcome, since=since, until=until)
     sql = _append_rollup_where(
-        "SELECT end_day AS day, root_symptom AS symptom, COUNT(*) AS n FROM webui_run_fact",
+        "SELECT date(end_time) AS day, root_symptom AS symptom, COUNT(*) AS n FROM webui_run_fact",
         clauses,
     )
     sql += " GROUP BY day, symptom"
@@ -1326,7 +1389,9 @@ def _db_total_runs_conn(conn: sqlite3.Connection) -> int:
 
 
 def _db_date_bounds_conn(conn: sqlite3.Connection) -> tuple[str | None, str | None]:
-    """Return the first and last run end days held by the whole database.
+    """Return the first and last UTC run end days held by the whole database.
+
+    Days come from ``date(end_time)`` so they match the UTC daily buckets.
 
     Args:
         conn: SQLite connection.
@@ -1336,14 +1401,12 @@ def _db_date_bounds_conn(conn: sqlite3.Connection) -> tuple[str | None, str | No
     """
 
     row = conn.execute(
-        "SELECT MIN(c.end_time) AS lo, MAX(c.end_time) AS hi "
+        "SELECT MIN(date(c.end_time)) AS lo, MAX(date(c.end_time)) AS hi "
         "FROM attribution_run r JOIN execution_context c ON c.id = r.execution_context_id"
     ).fetchone()
     if row is None:
         return None, None
-    lo = row["lo"][:10] if row["lo"] is not None else None
-    hi = row["hi"][:10] if row["hi"] is not None else None
-    return lo, hi
+    return row["lo"], row["hi"]
 
 
 def _pareto_ledger(entries: list[dict[str, Any]], name: str) -> list[dict[str, Any]]:
@@ -1457,8 +1520,9 @@ def _dashboard_data_from_rollup_conn(
     # Daily buckets only cover the outcomes the day-by-day charts plot;
     # 'Fail Undetermined' is intentionally omitted (matches DailyBucket in
     # the React interfaces). Window totals come from windowed_runs.
+    # date(end_time) is the UTC day, matching the window; the stored end_day may keep the source-local day.
     daily_sql = (
-        "SELECT end_day AS day, "
+        "SELECT date(end_time) AS day, "
         "SUM(gpu_hours) AS gpu_hours, "
         "SUM(CASE WHEN outcome = 'Fail InfraHW' THEN 1 ELSE 0 END) AS hw, "
         "SUM(CASE WHEN outcome = 'Fail InfraSW' THEN 1 ELSE 0 END) AS sw, "
@@ -1479,7 +1543,9 @@ def _dashboard_data_from_rollup_conn(
             params,
             fallback_gpu_count=fallback_gpu_count,
         )
-    rollup_lo_hi = conn.execute("SELECT MIN(end_time) AS lo, MAX(end_time) AS hi FROM webui_run_fact").fetchone()
+    rollup_lo_hi = conn.execute(
+        "SELECT MIN(date(end_time)) AS lo, MAX(date(end_time)) AS hi FROM webui_run_fact"
+    ).fetchone()
     db_total_runs = _db_total_runs_conn(conn)
     db_min, db_max = _db_date_bounds_conn(conn)
     days = _date_spine(
@@ -1873,7 +1939,7 @@ def dashboard_data(
     )
     # Same intentional omission of 'Fail Undetermined' as the rollup daily_sql above.
     daily_sql = (
-        "SELECT substr(c.end_time, 1, 10) AS day, "
+        "SELECT date(c.end_time) AS day, "
         f"SUM({gpu_expr}) AS gpu_hours, "
         "SUM(CASE WHEN r.outcome = 'Fail InfraHW' THEN 1 ELSE 0 END) AS hw, "
         "SUM(CASE WHEN r.outcome = 'Fail InfraSW' THEN 1 ELSE 0 END) AS sw, "
@@ -1887,7 +1953,10 @@ def dashboard_data(
     with _connect(path) as conn:
         metric_row = conn.execute(metric_sql, tuple(params)).fetchone()
         window_gpu_count = _window_gpu_count_conn(conn, clauses, params)
-        lo_hi = conn.execute("SELECT MIN(end_time) AS lo, MAX(end_time) AS hi FROM execution_context").fetchone()
+        # UTC days, matching the date(c.end_time) daily buckets.
+        lo_hi = conn.execute(
+            "SELECT MIN(date(end_time)) AS lo, MAX(date(end_time)) AS hi FROM execution_context"
+        ).fetchone()
         db_total_runs = _db_total_runs_conn(conn)
         db_min, db_max = _db_date_bounds_conn(conn)
         summary = db_summary(path)
