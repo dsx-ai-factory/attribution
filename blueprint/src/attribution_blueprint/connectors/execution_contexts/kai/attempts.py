@@ -167,6 +167,33 @@ def snapshots_from_live_resources(
     ]
 
 
+def _normalize_snapshot(snapshot: dict) -> dict:
+    """Normalize optional containers without inventing lifecycle evidence.
+
+    Preserve spec presence: retained snapshots omit it, while live snapshots
+    include it. Unknown generations and timestamps remain absent or null.
+    """
+    metadata = snapshot.get("metadata") or {}
+    selected = snapshot.get("selectedMetadata") or {}
+    status = snapshot.get("status") or {}
+    return {
+        **snapshot,
+        "metadata": {
+            **metadata,
+            "ownerReferences": metadata.get("ownerReferences") or [],
+        },
+        "selectedMetadata": {
+            **selected,
+            "labels": selected.get("labels") or {},
+            "annotations": selected.get("annotations") or {},
+        },
+        "status": {
+            **status,
+            "conditions": status.get("conditions") or [],
+        },
+    }
+
+
 def attempts_from_podgroup_history(
     history: dict,
     *,
@@ -176,14 +203,19 @@ def attempts_from_podgroup_history(
     """Reconstruct attempts from scheduling starts, restarts, and exact-owner evidence.
 
     Missing owners or starts produce no attempt; unresolved boundaries preserve
-    uncertainty rather than claim Pod membership."""
-    snapshots = history.get("observations") or []
+    uncertainty rather than claim Pod membership. Normalize optional containers
+    here so internal helpers can rely on their presence.
+    """
+    snapshots = [
+        _normalize_snapshot(snapshot)
+        for snapshot in history.get("observations") or []
+    ]
     resolved = _resolve_evidence(snapshots)
     podgroups = observations_by_uid(
         item
         for item in snapshots
         if item.get("kind") == "PodGroup"
-        and (item.get("metadata") or {}).get("name") == pod_group_name
+        and item["metadata"].get("name") == pod_group_name
     )
     terminals = resolved.terminals
     pod_events = resolved.pods
@@ -192,12 +224,12 @@ def attempts_from_podgroup_history(
     attempts = []
     for pod_group_uid, timeline in podgroups.items():
         latest = timeline[-1]
-        metadata = latest.get("metadata") or {}
-        selected = latest.get("selectedMetadata") or {}
+        metadata = latest["metadata"]
+        selected = latest["selectedMetadata"]
         owner = _podgroup_owner(
             {
                 **metadata,
-                "annotations": selected.get("annotations") or {},
+                "annotations": selected["annotations"],
             }
         )
         if owner is None:
@@ -410,8 +442,7 @@ def _podgroup_boundaries(
                 selected_metadata["deletionTimestamp"]
                 for snapshot in deletion_observations
                 if (
-                    selected_metadata := snapshot.get("selectedMetadata")
-                    or {}
+                    selected_metadata := snapshot["selectedMetadata"]
                 ).get("deletionTimestamp")
             ),
             key=parse_time,
@@ -472,7 +503,7 @@ def _podgroup_owner(metadata: dict) -> dict | None:
     if owner is None:
         candidates = [
             reference
-            for reference in metadata.get("ownerReferences") or []
+            for reference in metadata["ownerReferences"]
             if reference.get("name") and reference.get("uid")
         ]
         owner = candidates[0] if len(candidates) == 1 else None
@@ -535,7 +566,7 @@ def _has_initial_execution(
             return True
 
     for job in job_events.values():
-        metadata = job.get("metadata") or {}
+        metadata = job["metadata"]
         if _job_owned_by(job, owner) and _resource_in_attempt(
             job,
             "0",
@@ -552,7 +583,7 @@ def _has_initial_execution(
 
 def _job_owned_by(job: dict, owner: dict) -> bool:
     """Match the exact Job or JobSet UID to isolate recreated workloads."""
-    metadata = job.get("metadata") or {}
+    metadata = job["metadata"]
     if owner["kind"] == "Job":
         return metadata.get("uid") == owner["uid"]
     controller = controller_owner(metadata)
@@ -569,7 +600,7 @@ def _pod_owned_by(
     jobs: dict[str, dict],
 ) -> bool:
     """Verify the Pod controller against the resolved workload ownership chain."""
-    controller = controller_owner(pod.get("metadata") or {})
+    controller = controller_owner(pod["metadata"])
     if controller is None:
         return True
     if controller["kind"] != "Job":
@@ -596,12 +627,7 @@ def _scoped_restart_starts(
     for snapshot, generation, timestamp in candidates:
         kind = snapshot.get("kind")
         if kind == "Pod":
-            annotations = (
-                (snapshot.get("selectedMetadata") or {}).get(
-                    "annotations"
-                )
-                or {}
-            )
+            annotations = snapshot["selectedMetadata"]["annotations"]
             matches = (
                 annotations.get(POD_GROUP_ANNOTATION)
                 == pod_group_name
@@ -754,7 +780,7 @@ def _coalesce_initial_allocation(
                 )
             ):
                 continue
-            status = snapshot.get("status") or {}
+            status = snapshot["status"]
             execution_start = status.get("startTime")
             earlier |= bool(execution_start and parse_time(execution_start) < end)
             pending |= (
@@ -762,7 +788,7 @@ def _coalesce_initial_allocation(
                 and not execution_start
                 and begin <= parse_time(snapshot["observedAt"]) < end
             )
-            for condition in status.get("conditions") or []:
+            for condition in status["conditions"]:
                 if (
                     condition.get("type") == "PodScheduled"
                     and condition.get("status") == "True"
@@ -794,7 +820,7 @@ def _infer_job_restarts(snapshots: list[dict]) -> dict[str, str]:
             continue
         generation = restart_attempt(snapshot)
         controller = controller_owner(
-            snapshot.get("metadata") or {}
+            snapshot["metadata"]
         )
         if (
             generation is not None
@@ -819,7 +845,7 @@ def _job_restart(
     generation = restart_attempt(snapshot)
     if generation is not None:
         return generation
-    job_uid = (snapshot.get("metadata") or {}).get("uid")
+    job_uid = snapshot["metadata"].get("uid")
     return inferred_job_restarts.get(job_uid)
 
 
@@ -832,8 +858,8 @@ def _terminal_events(
         kind = snapshot.get("kind")
         if kind not in {"Job", "JobSet"}:
             continue
-        status = snapshot.get("status") or {}
-        conditions = status.get("conditions") or []
+        status = snapshot["status"]
+        conditions = status["conditions"]
         has_job_terminal = any(
             condition.get("status") == "True"
             and condition.get("type") in {"Failed", "Complete"}
@@ -848,7 +874,7 @@ def _terminal_events(
             events.append(
                 {
                     "kind": "Job",
-                    "uid": (snapshot.get("metadata") or {}).get(
+                    "uid": snapshot["metadata"].get(
                         "uid"
                     ),
                     "type": "Complete",
@@ -878,7 +904,7 @@ def _terminal_events(
             events.append(
                 {
                     "kind": kind,
-                    "uid": (snapshot.get("metadata") or {}).get("uid"),
+                    "uid": snapshot["metadata"].get("uid"),
                     "type": condition_type,
                     "reason": condition.get("reason"),
                     "time": transition,
@@ -1026,7 +1052,7 @@ def _resource_in_attempt(
         and observed_restart != expected_restart
     ):
         return False
-    timestamp = (snapshot.get("status") or {}).get(
+    timestamp = snapshot["status"].get(
         "startTime"
     ) or snapshot.get("observedAt")
     if timestamp is None:
@@ -1043,9 +1069,7 @@ def _pod_matches_attempt(
     *,
     allow_unannotated: bool,
 ) -> bool:
-    annotations = (
-        (snapshot.get("selectedMetadata") or {}).get("annotations") or {}
-    )
+    annotations = snapshot["selectedMetadata"]["annotations"]
     observed_group = annotations.get(POD_GROUP_ANNOTATION)
     if observed_group != pod_group_name and not (
         observed_group is None and allow_unannotated
@@ -1058,6 +1082,6 @@ def _pod_matches_attempt(
 
 
 def _pod_timestamp(snapshot: dict) -> str | None:
-    return (snapshot.get("status") or {}).get(
+    return snapshot["status"].get(
         "startTime"
     ) or snapshot.get("observedAt")
