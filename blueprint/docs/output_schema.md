@@ -172,6 +172,13 @@ CREATE TABLE IF NOT EXISTS webui_node_day_fact (
 );
 ```
 
+The dashboard date window is a UTC day. Write `end_day` in both rollup tables
+as the UTC day of the run's end time, `date(end_time)` in SQLite. The dashboard
+derives `webui_run_fact` days from `end_time` and does not read its `end_day`,
+but `webui_node_day_fact` has no end time to normalize, so window GPU capacity
+uses its `end_day` as written. A producer that wrote source-local days must
+regenerate `webui_node_day_fact`.
+
 ## Kafka result events
 
 Kafka output publishes structured CloudEvents 1.0 JSON with an
