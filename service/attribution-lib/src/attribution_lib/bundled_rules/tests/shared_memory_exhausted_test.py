@@ -18,6 +18,8 @@ _NCCL_SHM_FULL = (
     "1: NCCL WARN Error: failed to extend /dev/shm/nccl-rWUhkP to 9637892 bytes, error: No space left on device (28)"
 )
 _PEER_CLOSED = "0: NCCL WARN Connection closed by remote peer node02<1234>"
+_PEER_RESET = "1: NCCL WARN socketProgressOpt: Call to recv from 127.0.0.1<28601> failed : Connection reset by peer"
+_SHM_PATH_AFTER_ENOSPC = "0: OSError: [Errno 28] No space left on device: '/dev/shm/torch_1'"
 _HW_BUS_ERROR = "1: Caught signal 7 (Bus error: nonexistent physical address)"
 
 
@@ -58,6 +60,14 @@ def test_full_shm_is_fail_user_and_drops_teardown_peer(attribute_logs):
     assert outcome.root_cause_symptom == "Shared memory exhausted"
     assert "Connection closed" not in result.symptoms
     assert "bus error" not in result.symptoms
+
+
+def test_full_shm_outranks_peer_reset(attribute_logs):
+    result = attribute_logs([_WORKER_BUS_ERROR, _SHM_PATH_AFTER_ENOSPC, _PEER_RESET])
+
+    outcome = result.outcome_attr.value()
+    assert outcome.outcome == "Fail User"
+    assert outcome.root_cause_symptom == "Shared memory exhausted"
 
 
 def test_worker_bus_error_without_full_shm_stays_multicategory(attribute_logs):

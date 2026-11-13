@@ -421,7 +421,7 @@ line   = "ERROR: Unexpected bus error encountered in worker. This might be cause
 [[extractor]]
 name     = "DataLoaderWorkerBusError"
 match_re = "Unexpected bus error encountered in worker"
-emit     = { type = "bad_node", symptom = "DataLoader worker bus error" }
+emit     = { type = "bad_node", symptom = "DataLoader worker bus error", demotion = "alias else" }
 [[extractor.cases]]
 expect  = "bad"
 line    = "ERROR: Unexpected bus error encountered in worker. This might be caused by insufficient shared memory (shm)."
@@ -430,7 +430,7 @@ symptom = "DataLoader worker bus error"
 # Full /dev/shm: PyTorch tensor sharing (</torch_...>) or NCCL shared memory segments.
 [[extractor]]
 name     = "SharedMemoryExhausted"
-match_re = '(?:</torch_|/dev/shm/)[^\r\n]*No space left on device'
+match_re = '(?:</torch_|/dev/shm/)[^\r\n]*No space left on device|No space left on device[^\r\n]*/dev/shm/'
 emit     = { type = "bad_node", symptom = "Shared memory exhausted" }
 [[extractor.cases]]
 expect  = "bad"
@@ -439,6 +439,10 @@ symptom = "Shared memory exhausted"
 [[extractor.cases]]
 expect  = "bad"
 line    = "NCCL WARN Error: failed to extend /dev/shm/nccl-rWUhkP to 9637892 bytes, error: No space left on device (28)"
+symptom = "Shared memory exhausted"
+[[extractor.cases]]
+expect  = "bad"
+line    = "OSError: [Errno 28] No space left on device: '/dev/shm/torch_1'"
 symptom = "Shared memory exhausted"
 [[extractor.cases]]
 expect = "none"

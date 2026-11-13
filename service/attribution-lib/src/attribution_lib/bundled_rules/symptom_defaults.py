@@ -2291,10 +2291,12 @@ outcome_symptom(
     doc="bus-error",
 )
 
+# LOW, like cudaError out of memory, so it outranks LOW_GENERIC peer errors
+# such as Connection reset by peer from ranks that lose the failed rank.
 outcome_symptom(
     "Shared memory exhausted",
     outcome="Fail User",
-    priority=OutcomePriority.LOW_GENERIC,
+    priority=OutcomePriority.LOW,
     doc="dataloader-exception",
 )
 
