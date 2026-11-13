@@ -73,6 +73,21 @@ to the rules engine as a string. When no stronger evidence exists,
 `COMPLETED` produces the successful fallback symptom. Other unrecognized
 states produce the failed fallback symptom.
 
+`cancelled_by` is a resolved identity, not a raw scheduler field. For a
+`CANCELLED` workload, the bundled rules map it to a symptom: `root` to
+`Cancelled by root`, `Timeout` to `Cancelled by Timeout`,
+`site-automation-account` to `Cancelled by cluster operators`, and any other
+identity to `Cancelled by user`. Separately, a `Fail User` outcome is
+reclassified as `Cancelled by User` unless the identity is `root`, `Timeout`,
+or `PyTorch NCCL watchdog`, or starts with `svc-`. Stronger infrastructure
+evidence still takes precedence over both.
+Slurm's `sacct` reports `CANCELLED by <uid>`, and the Blueprint's Slurm
+connector resolves UID 0 before it sends the workload (refer to
+[SLURM Cancellations](SCHEDULER_REQUIREMENTS.md#slurm-cancellations)). A
+client that builds workloads from `sacct` itself must apply the same
+resolution, or a root `scancel` arrives as `cancelled_by: "0"` and may be
+attributed to the user.
+
 Creating an identical attributor while the first one still exists returns
 HTTP 409 (`DuplicateAttributorError`). The response's `att_id` identifies the
 existing session; it does not establish that the session is stale or safe to
