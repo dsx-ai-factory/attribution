@@ -18,6 +18,8 @@ navigation:
     contents:
       - page: Service Operator Guide
         path: service-operators.md
+      - page: Blueprint Upgrade Guide
+        path: blueprint-upgrading.md
 
   - section: Reference
     contents:

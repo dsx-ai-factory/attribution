@@ -971,6 +971,7 @@ Fields:
 | `endpoint` | Yes | VictoriaLogs base URL. |
 | `timeout_seconds` | No | HTTP timeout. Defaults to `60.0`. |
 | `limit` | No | Maximum records per query response. Defaults to `5000`; must be positive. |
+| `max_pages` | No | Maximum responses per query. Defaults to `20`; must be a positive integer. Increase for larger collection windows, at the cost of more requests and memory. |
 | `node_field` | No | Row field used as the node name and to scope each query to context nodes. Defaults to `host_name`; set to `""` to disable node filtering and row-based node lookup. |
 | `auth.type` | No | Optional `token` or `mtls` authentication. Omit the entire `auth` block for an unauthenticated endpoint. |
 | `auth.token_env` | For token | Environment variable containing the bearer token. |
@@ -985,9 +986,16 @@ Fields:
 The bundled templates target `service_name`, `app`, `slurm_job_id`, and `host_name`.
 Templates may use `{job_id}` (the execution context ID) and any `{key}` supplied
 in `query_kwargs`. LogsQL queries are paginated backward in time when a response
-reaches `limit`; rows at a page boundary are deduplicated. If more than `limit`
-records share one timestamp, the connector warns that some records may be
-truncated.
+reaches `limit`; rows at a page boundary are deduplicated. The collector report is
+`partial` with a reason when a template argument is missing, invalid response
+records or rows with invalid `_time` or non-string `_msg` are skipped, the page budget is
+exhausted, a later request fails after rows have been fetched, or a saturated
+response cannot advance past one timestamp, has no parseable `_time`, or reaches
+the window start. Available entries are retained. Other configured queries still
+run after HTTP errors or timeouts. If all attempted queries fail without a
+response, the first request error propagates. A successful empty query combined
+with a failed query reports partial coverage with no observations. Refer to the
+[upgrade guide](../../docs/blueprint-upgrading.md#victorialogs-partial-collection-reporting) for caller changes.
 
 The bundled templates do not use `{cluster}`. A custom template can scope its
 query to a cluster with `{cluster}` and a `cluster` entry in `query_kwargs`.
