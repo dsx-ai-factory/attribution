@@ -379,6 +379,31 @@ def test_analyze_skips_failing_collector_other_contexts_unaffected():
     ]
 
 
+def test_missing_local_applog_reports_error_and_keeps_other_sources(tmp_path):
+    """A missing configured APPLOG file is reported with its path while SYSLOG evidence still ingests."""
+    from attribution_blueprint.connectors.logs.local_file import LocalFileLogConnector
+
+    eca = MagicMock()
+    eca.discover_by_ids.return_value = [_make_ctx("1")]
+    missing = tmp_path / "does-not-exist.log"
+    applog = LocalFileLogConnector(log_path_templates=[str(missing)])
+    syslog = MagicMock(source="SYSLOG")
+    syslog.collect.return_value = [_make_obs()]
+    attr = _make_attribution_mock()
+    pipeline = _make_pipeline(eca, [applog, syslog], attribution=attr)
+
+    results = pipeline.analyze(ids=["1"])
+
+    applog_report, syslog_report = results[0]["connector_reports"]
+    assert applog_report["connector"] == "LocalFileLogConnector"
+    assert applog_report["status"] == "error"
+    assert str(missing) in applog_report["reason"]
+    assert applog_report["observation_count"] == 0
+    assert syslog_report["status"] == "ok"
+    assert attr.ingest_observation.call_count == 1
+    assert results[0]["evidence_status"] == "partial"
+
+
 def test_dump_observations_writes_files(tmp_path):
     import json
 

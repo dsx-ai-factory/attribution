@@ -848,7 +848,7 @@ Scheduler-specific placeholders such as `{array_id}` and `{attempt_index}` are n
 
 `max_bytes` caps each file by reading the last N bytes. This keeps large training logs from exhausting memory.
 
-If a rendered path is a directory, every regular file directly inside it is read (non-recursive). Paths that do not exist are skipped silently; paths that exist but cannot be read are logged as warnings.
+If a rendered path is a directory, every regular file directly inside it is read (non-recursive). Paths that do not exist are logged as warnings. When a configured APPLOG path does not exist and no other configured path exists and can be listed, the connector report has status `error` and a reason naming the missing paths, and attribution continues with the other sources. Paths that exist but cannot be read are logged as warnings.
 
 ### Local File SYSLOG
 

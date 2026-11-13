@@ -67,7 +67,9 @@ class LocalFileLogConnector:
     regular file directly inside the directory is read (non-recursive); if it
     resolves to a file, that file is read. For SYSLOG, each path is a base
     directory containing one child directory per context node. Missing APPLOG
-    paths are skipped silently, while missing SYSLOG node directories warn.
+    paths warn, and when no other configured APPLOG path exists and can be
+    listed ``collect`` raises :class:`MCAError` naming them so the run reports
+    the evidence gap. Missing SYSLOG node directories warn.
     A file whose name ends in ``.jsonl`` is read as one JSON entry per line
     and sent unchanged; for SYSLOG such a path names the file directly
     instead of a base directory.
@@ -99,6 +101,19 @@ class LocalFileLogConnector:
         return self._source
 
     def collect(self, context: ExecutionContext) -> list[Observation]:
+        """Read the configured log paths for one execution context.
+
+        Args:
+            context: Execution context that supplies path placeholders and,
+                for SYSLOG, the node directories to read.
+
+        Returns:
+            One observation per readable, non-empty file.
+
+        Raises:
+            MCAError: For APPLOG, when a rendered path is missing and no
+                other rendered path exists and can be listed.
+        """
         # Reject naive datetimes at the boundary; the service rejects them and
         # attribution_lib has paths that crash on them.
         assert_aware(context["start_time"], "start_time")
@@ -107,8 +122,35 @@ class LocalFileLogConnector:
             return self._collect_syslog(context)
         observations: list[Observation] = []
         seen: set[Path] = set()
+        missing: list[Path] = []
+        found_input = False
         for template in self._templates:
-            for path in self._resolve_paths(template, context):
+            rendered = self._render_template(template, context)
+            if rendered is None:
+                continue
+            configured = Path(rendered)
+            # Check the configured path before directory expansion and before the
+            # resolved-target dedup: an existing empty directory is still input, and
+            # dangling symlinks to one target are distinct missing inputs.
+            if _is_missing(configured):
+                if configured not in missing:
+                    logger.warning(
+                        f"local_file {self._source.name}: no file at {configured} for ctx {context.get('id')}"
+                    )
+                    missing.append(configured)
+                continue
+            # is_dir() and iterdir() can raise PermissionError on filesystems where a
+            # parent dir is accessible but the leaf isn't (common with Lustre user dirs).
+            # Such a path yields no evidence, so it does not count as input.
+            try:
+                paths = self._resolve_paths(configured)
+            except PermissionError as e:
+                logger.warning(
+                    f"local_file: permission denied inspecting {configured} for ctx {context.get('id')}: {e}"
+                )
+                continue
+            found_input = True
+            for path in paths:
                 resolved = path.resolve()
                 if resolved in seen:
                     continue
@@ -116,6 +158,9 @@ class LocalFileLogConnector:
                 observation = self._file_observation(path, context)
                 if observation is not None:
                     observations.append(observation)
+        if missing and found_input is False:
+            paths = ", ".join(str(path) for path in missing)
+            raise MCAError(f"local_file {self._source.name}: configured input not found: {paths}")
         return observations
 
     def _file_observation(self, path: Path, context: ExecutionContext) -> Optional[Observation]:
@@ -258,36 +303,21 @@ class LocalFileLogConnector:
             logger.warning(f"local_file SYSLOG: no syslog directories found for ctx {context.get('id')}")
         return observations
 
-    def _resolve_paths(self, template: str, context: ExecutionContext) -> list[Path]:
-        # `{std_out}` / `{std_err}` are pre-rendered by each ECA — the
-        # Slurm ECA, for instance, resolves `%j`/`%x`/`${SLURM_*}` before
-        # writing these to the context (see
-        # `connectors/execution_contexts/slurm/filename_patterns.py`),
-        # so by the time we see them they're fully-resolved filesystem
-        # paths. The local_file connector therefore only handles generic
-        # Python `.format()` placeholders against cross-cutting
-        # `ExecutionContext` fields. Adding new placeholders here means
-        # extending the cross-cutting `ExecutionContext` TypedDict, not
-        # baking scheduler-specific token syntax into this file.
-        rendered = self._render_template(template, context)
-        if rendered is None:
-            return []
-        path = Path(rendered)
-        # is_dir() can raise PermissionError on filesystems where a parent
-        # dir is accessible but the leaf isn't (common with Lustre user dirs).
-        # Treat that as "no file we can read here" and return empty.
-        try:
-            is_dir = path.is_dir()
-        except PermissionError as e:
-            logger.warning(f"local_file: permission denied stat'ing {path} for ctx {context.get('id')}: {e}")
-            return []
-        if is_dir:
-            try:
-                children = sorted(p for p in path.iterdir() if p.is_file())
-            except PermissionError as e:
-                logger.warning(f"local_file: permission denied listing {path} for ctx {context.get('id')}: {e}")
-                return []
-            return children
+    def _resolve_paths(self, path: Path) -> list[Path]:
+        """Expand one rendered path into the files to read.
+
+        Args:
+            path: Rendered configured path; a directory expands to the regular
+                files directly inside it.
+
+        Returns:
+            The files to read.
+
+        Raises:
+            PermissionError: When the path cannot be stat'ed or listed.
+        """
+        if path.is_dir():
+            return sorted(p for p in path.iterdir() if p.is_file())
         return [path]
 
     def _render_template(self, template: str, context: ExecutionContext) -> str | None:
@@ -301,6 +331,16 @@ class LocalFileLogConnector:
             Rendered path text, or ``None`` when the template is invalid or
             resolves to an empty path.
         """
+        # `{std_out}` / `{std_err}` are pre-rendered by each ECA — the
+        # Slurm ECA, for instance, resolves `%j`/`%x`/`${SLURM_*}` before
+        # writing these to the context (see
+        # `connectors/execution_contexts/slurm/filename_patterns.py`),
+        # so by the time we see them they're fully-resolved filesystem
+        # paths. The local_file connector therefore only handles generic
+        # Python `.format()` placeholders against cross-cutting
+        # `ExecutionContext` fields. Adding new placeholders here means
+        # extending the cross-cutting `ExecutionContext` TypedDict, not
+        # baking scheduler-specific token syntax into this file.
         std_out = context.get("std_out")
         if std_out is None:
             std_out = ""
@@ -387,6 +427,21 @@ _registry.register_component(
     schema={"paths": _PARAM, "max_bytes": _PARAM},
     build=_build,
 )
+
+
+def _is_missing(path: Path) -> bool:
+    """Return whether ``path`` does not exist.
+
+    Only a missing path counts. Other stat errors, such as permission denied,
+    return ``False`` so the reader reports them with their own warning.
+    """
+    try:
+        path.stat()
+    except (FileNotFoundError, NotADirectoryError):
+        return True
+    except OSError:
+        return False
+    return False
 
 
 def _jsonl_entries(path: Path, body: str, context: ExecutionContext) -> Optional[list[TimeseriesEntry]]:
