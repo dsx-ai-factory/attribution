@@ -10,12 +10,43 @@ from datetime import datetime, timezone
 RESTART_LABEL = "jobset.sigs.k8s.io/restart-attempt"
 
 
-def restart_starts(observations: list[dict]) -> dict[str, str]:
+def restart_starts(
+    observations: list[dict],
+    inferred_job_restarts: dict[str, str] | None = None,
+) -> dict[str, str]:
+    """Return earliest restart starts, optionally resolving unlabeled Jobs."""
     starts = {}
+    for _observation, restart, timestamp in restart_start_candidates(
+        observations,
+        inferred_job_restarts,
+    ):
+        if (
+            restart not in starts
+            or parse_time(timestamp) < parse_time(starts[restart])
+        ):
+            starts[restart] = timestamp
+    return starts
+
+
+def restart_start_candidates(
+    observations: list[dict],
+    inferred_job_restarts: dict[str, str] | None = None,
+) -> list[tuple[dict, str, str]]:
+    """Preserve restart starts until callers apply workload-specific scope."""
+    candidates = []
     for observation in observations:
-        if observation.get("kind") not in {"Job", "Pod"}:
+        kind = observation.get("kind")
+        if kind not in {"Job", "Pod"}:
             continue
         restart = restart_attempt(observation)
+        if (
+            restart is None
+            and kind == "Job"
+            and inferred_job_restarts
+        ):
+            restart = inferred_job_restarts.get(
+                (observation.get("metadata") or {}).get("uid")
+            )
         if restart is None:
             continue
         status = observation.get("status") or {}
@@ -24,12 +55,9 @@ def restart_starts(observations: list[dict]) -> dict[str, str]:
             or observation.get("sourceTimestamp")
             or observation.get("observedAt")
         )
-        if timestamp and (
-            restart not in starts
-            or parse_time(timestamp) < parse_time(starts[restart])
-        ):
-            starts[restart] = timestamp
-    return starts
+        if timestamp:
+            candidates.append((observation, restart, timestamp))
+    return candidates
 
 
 def restart_attempt(observation: dict) -> str | None:
@@ -95,3 +123,85 @@ def parse_time(value: str) -> datetime:
         if parsed.tzinfo is None
         else parsed.astimezone(timezone.utc)
     )
+
+
+def resource_from_observation(observation: dict) -> dict:
+    """Restore the Kubernetes fields selected into a retained observation."""
+    metadata = dict(observation.get("metadata") or {})
+    selected = observation.get("selectedMetadata") or {}
+    for field in ("labels", "annotations", "deletionTimestamp"):
+        if selected.get(field):
+            metadata[field] = selected[field]
+    return {
+        "apiVersion": observation.get("apiVersion") or "",
+        "kind": observation.get("kind") or "",
+        "metadata": metadata,
+        "spec": observation.get("spec") or {},
+        "status": observation.get("status") or {},
+    }
+
+
+def kai_podgroup_start_timestamp(resource: dict) -> str | None:
+    """Read KAI's PodGroup start from projected status or source metadata."""
+    status_value = (resource.get("status") or {}).get(
+        "lastStartTimestamp"
+    )
+    if status_value:
+        return str(status_value)
+    metadata_annotations = (
+        (resource.get("metadata") or {}).get("annotations") or {}
+    )
+    retained_annotations = (
+        (resource.get("selectedMetadata") or {}).get("annotations") or {}
+    )
+    value = metadata_annotations.get(
+        "kai.scheduler/last-start-timestamp",
+    ) or retained_annotations.get(
+        "kai.scheduler/last-start-timestamp"
+    )
+    return str(value) if value else None
+
+
+def retained_history_covers_window(
+    coverage: dict,
+    required_sources: set[str],
+    start: datetime,
+    end: datetime,
+) -> bool:
+    """Return whether retained watches continuously cover a time window."""
+    disabled = coverage.get("disabledWatches") or {}
+    sources = {
+        item.get("sourceName"): item
+        for item in coverage.get("sources") or []
+    }
+    for source_name in required_sources:
+        if source_name in disabled:
+            return False
+        source = sources.get(source_name)
+        if source is None:
+            return False
+        try:
+            coverage_start = parse_time(source["coverageStartedAt"])
+            checkpoint = parse_time(source["checkpointedAt"])
+        except (KeyError, TypeError, ValueError):
+            return False
+        if coverage_start > start or checkpoint < end:
+            return False
+
+    for gap in coverage.get("gaps") or []:
+        if gap.get("sourceName") not in required_sources:
+            continue
+        try:
+            gap_start = parse_time(gap["startedAt"])
+            gap_end = (
+                parse_time(gap["recoveredAt"])
+                if gap.get("recoveredAt")
+                else None
+            )
+        except (KeyError, TypeError, ValueError):
+            return False
+        if gap_start <= end and (
+            gap_end is None or gap_end >= start
+        ):
+            return False
+    return True

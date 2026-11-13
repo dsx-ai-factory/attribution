@@ -8,6 +8,9 @@ from dataclasses import dataclass
 from functools import partial
 from typing import Callable, Iterable, Protocol
 
+from attribution_blueprint.kubernetes.attempts import (
+    kai_podgroup_start_timestamp,
+)
 from attribution_blueprint.kubernetes.daemon.resolvers import normalize_resource
 
 _ATTEMPT_METADATA_KEYS = frozenset(
@@ -184,10 +187,7 @@ def selected_status(kind: str, resource: dict) -> dict:
             "succeeded",
         )
         selected = _normalize_conditions(selected)
-        last_start = ((resource.get("metadata") or {}).get("annotations") or {}).get(
-            "kai.scheduler/last-start-timestamp"
-        )
-        if last_start:
+        if last_start := kai_podgroup_start_timestamp(resource):
             selected["lastStartTimestamp"] = last_start
         return selected
     return {}
