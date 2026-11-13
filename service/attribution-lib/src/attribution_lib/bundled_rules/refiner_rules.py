@@ -408,6 +408,7 @@ _CONNECTION_CLOSED_TRIGGERS = [
     "Node failure reported by slurm",
     "NaN reported by Megatron",
     "cudaError out of memory",
+    "Shared memory exhausted",
 ]
 
 # Specific application errors that explain why NVRx detected a failure.

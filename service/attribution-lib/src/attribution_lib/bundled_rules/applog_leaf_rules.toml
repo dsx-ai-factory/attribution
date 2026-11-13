@@ -406,12 +406,43 @@ symptom = "Gloo connectFullMesh failed"
 # i.e. _bad(node, "bus error", source.derived(rule="alias else"), demotion="alias else").
 [[extractor]]
 name     = "BusErrorKeyword"
-match_re = "bus error"
+match_re = "bus error(?! encountered in worker)"
 emit     = { type = "bad_node", symptom = "bus error", derived_rule = "alias else", demotion = "alias else" }
 [[extractor.cases]]
 expect  = "bad"
 line    = "bus error"
 symptom = "bus error"
+[[extractor.cases]]
+expect = "none"
+line   = "ERROR: Unexpected bus error encountered in worker. This might be caused by insufficient shared memory (shm)."
+
+# PyTorch prints this for any SIGBUS in a DataLoader worker, so it does not
+# prove that shared memory is full. SharedMemoryExhausted supplies that proof.
+[[extractor]]
+name     = "DataLoaderWorkerBusError"
+match_re = "Unexpected bus error encountered in worker"
+emit     = { type = "bad_node", symptom = "DataLoader worker bus error" }
+[[extractor.cases]]
+expect  = "bad"
+line    = "ERROR: Unexpected bus error encountered in worker. This might be caused by insufficient shared memory (shm)."
+symptom = "DataLoader worker bus error"
+
+# Full /dev/shm: PyTorch tensor sharing (</torch_...>) or NCCL shared memory segments.
+[[extractor]]
+name     = "SharedMemoryExhausted"
+match_re = '(?:</torch_|/dev/shm/)[^\r\n]*No space left on device'
+emit     = { type = "bad_node", symptom = "Shared memory exhausted" }
+[[extractor.cases]]
+expect  = "bad"
+line    = "RuntimeError: unable to write to file </torch_2914_1838475476_0>: No space left on device (28)"
+symptom = "Shared memory exhausted"
+[[extractor.cases]]
+expect  = "bad"
+line    = "NCCL WARN Error: failed to extend /dev/shm/nccl-rWUhkP to 9637892 bytes, error: No space left on device (28)"
+symptom = "Shared memory exhausted"
+[[extractor.cases]]
+expect = "none"
+line   = "OSError: [Errno 28] No space left on device: '/lustre/ckpt/iter_0001000/model.pt'"
 
 # NcclWarnMessageTruncated: only the original 512/256 signature identifies an
 # invalid NIC selection. Other truncation sizes remain diagnostic observations.

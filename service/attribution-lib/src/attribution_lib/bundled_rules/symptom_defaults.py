@@ -2285,6 +2285,20 @@ outcome_symptom(
 )
 
 outcome_symptom(
+    "DataLoader worker bus error",
+    outcome="Fail MultiCategory",
+    priority=OutcomePriority.LOW_USER,
+    doc="bus-error",
+)
+
+outcome_symptom(
+    "Shared memory exhausted",
+    outcome="Fail User",
+    priority=OutcomePriority.LOW_GENERIC,
+    doc="dataloader-exception",
+)
+
+outcome_symptom(
     "Cancelled by Timeout",
     outcome="Fail User",
     priority=OutcomePriority.LOW_USER,
