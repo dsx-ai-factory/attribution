@@ -47,6 +47,9 @@ exclude = [
     "from botocore.exceptions",
     "Could not install packages",
     "No such file or directory: '/tmp",
+    # Crashpad probes CPU frequency files that containers do not expose; the ENOENT is harmless.
+    "/cpufreq/scaling_cur_freq: No such file or directory",
+    "/cpufreq/scaling_max_freq: No such file or directory",
     "you are running uWSGI as root",
     "This is a development server",
     "dist-packages/transformers",
