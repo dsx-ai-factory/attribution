@@ -7,9 +7,8 @@ Like the Slurm and Kueue mapping helpers, this module knows the scheduler's
 payload format but has no consumer, offset, or rebalance state.
 
 data must supply id, nodes, and timezone-aware start_time/end_time. job_id
-falls back to a valid run_id, then id; attempt_id to "0"; scheduler to the
-configured default; state to UNKNOWN. Other supported fields retain their
-ExecutionContext names.
+falls back to id; attempt_id to "0"; scheduler to the configured default;
+state to UNKNOWN. Other supported fields retain their ExecutionContext names.
 CloudEvent id and source are retained as event_id and event_source. Kubernetes
 namespace, pod_names, and pod_nodes remain extensions, as in the Kueue adapter.
 failed_nodes keeps the full list and supplies the lexicographically first
@@ -28,7 +27,7 @@ from typing import NotRequired
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from attribution_blueprint.orchestrator import _service_timezone_name
-from attribution_blueprint.types import ExecutionContext, context_run_id
+from attribution_blueprint.types import ExecutionContext
 
 _OPTIONAL_STR_FIELDS = (
     "name",
@@ -134,15 +133,12 @@ def _context_from_data(
         "nodes": _str_list(data["nodes"], "nodes", event_id),
         "start_time": _aware_datetime(data["start_time"], "start_time", event_id),
         "end_time": _aware_datetime(data["end_time"], "end_time", event_id),
+        "job_id": _str_or_default(data.get("job_id"), ctx_id),
         "attempt_id": _str_or_default(data.get("attempt_id"), "0"),
         "state": _str_or_default(data.get("state"), "UNKNOWN"),
         "event_id": event_id,
         "event_source": event_source,
     }
-    run_id = data.get("run_id")
-    if isinstance(run_id, str) and run_id != "":
-        ctx["run_id"] = run_id
-    ctx["job_id"] = _str_or_default(data.get("job_id"), context_run_id(ctx))
     if ctx["end_time"] < ctx["start_time"]:
         raise EventError(f"CloudEvent {event_id} end_time is before start_time")
     if event_subject is not None:

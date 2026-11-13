@@ -4,7 +4,6 @@
 import sys
 
 import pytest
-
 from attribution_blueprint import mca_registry as reg
 from attribution_blueprint.exceptions import RegistryError
 
@@ -169,8 +168,6 @@ def test_built_schema_has_expected_shape():
     }
     assert set(schema["eca"]["_selector"]["static"]) == {
         "id",
-        "run_id",
-        "job_id",
         "attempt_id",
         "start_time",
         "end_time",

@@ -128,6 +128,33 @@ def test_processing_id_keeps_original_run_routing(
     assert event["subject"] == context["event_subject"]
 
 
+def test_distinct_attempts_share_run_routing_and_keep_trigger_correlation(
+    context: dict[str, object], attribution: dict[str, object]
+) -> None:
+    """Caller-prepared attempts share a provider key while retaining their own correlation."""
+    producer = FakeProducer()
+    output = KafkaOutput(producer=producer, topic="results")
+    for attempt in ("1", "2"):
+        output.write(
+            {
+                **context,
+                "id": f"processing-{attempt}",
+                "run_id": "provider-run",
+                "attempt_id": attempt,
+                "event_id": f"event-{attempt}",
+            },
+            attribution,
+        )
+
+    records = [record for _topic, record in producer.messages]
+    assert [record["key"] for record in records] == [b"provider-run", b"provider-run"]
+    data = [json.loads(record["value"])["data"] for record in records]
+    assert [(item["job_id"], item["attempt_id"], item["trigger_event_id"]) for item in data] == [
+        (context["job_id"], "1", "event-1"),
+        (context["job_id"], "2", "event-2"),
+    ]
+
+
 def test_original_run_supplies_missing_job_identity(attribution: dict[str, object]) -> None:
     """A processing key does not leak into fallback job identity or subject."""
     producer = FakeProducer()

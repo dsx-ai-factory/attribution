@@ -1,13 +1,11 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-import json
 from datetime import datetime, timezone
-from pathlib import Path
 
 import pytest
 
-from attribution_blueprint.connectors.execution_contexts.static import StaticExecutionContextAdapter, _build
+from attribution_blueprint.connectors.execution_contexts.static import StaticExecutionContextAdapter
 
 
 def _make_eca(**overrides):
@@ -38,36 +36,6 @@ def test_discover_by_ids_returns_single_context():
     assert ctx["name"] == "sample-training"
     assert ctx["user_name"] == "alice"
     assert ctx["std_out"] == "/path/to/logs/job.out"
-
-
-@pytest.mark.parametrize("mode", ["inline", "json", "contexts"])
-@pytest.mark.parametrize(
-    "job_id,expected_job",
-    [
-        pytest.param(None, "provider-run", id="provider-default"),
-        pytest.param("parent-job", "parent-job", id="explicit-job"),
-    ],
-)
-def test_static_modes_preserve_provider_identity(
-    tmp_path: Path, mode: str, job_id: str | None, expected_job: str
-) -> None:
-    """All static input modes retain a provider run and respect an explicit job ID."""
-    context = {**_make_eca().discover()[0], "id": "processing-1", "run_id": "provider-run"}
-    context.pop("job_id")
-    if job_id is not None:
-        context["job_id"] = job_id
-    if mode == "inline":
-        adapter = _build(context, {})
-    elif mode == "json":
-        path = tmp_path / "contexts.json"
-        path.write_text(json.dumps([context], default=str))
-        adapter = _build({"contexts_path": str(path)}, {})
-    else:
-        adapter = StaticExecutionContextAdapter(contexts=[context])
-
-    [actual] = adapter.discover()
-
-    assert (actual["id"], actual["run_id"], actual["job_id"]) == ("processing-1", "provider-run", expected_job)
 
 
 def test_discover_by_ids_validates_then_returns_single_context():

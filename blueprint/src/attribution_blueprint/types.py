@@ -16,7 +16,7 @@ class ExecutionContext(TypedDict):
     """
 
     id: str
-    # Original provider run identity when id is a distinct processing key.
+    # Caller-supplied provider run identity when id is a distinct processing key.
     # Log selectors and Kafka result keys use this value, falling back to id.
     run_id: NotRequired[str]
     nodes: list[str]
