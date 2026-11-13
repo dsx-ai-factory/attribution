@@ -499,7 +499,7 @@ def test_date_bounds_span_runs_the_rollup_table_left_behind(tmp_path):
     assert payload["metrics"]["windowedRuns"] == 1
 
 
-def test_rollup_date_window_normalizes_end_time_offsets_to_utc(populated_db):
+def test_rollup_date_window_normalizes_end_time_offsets_to_utc(populated_db: str) -> None:
     """The rollup path buckets runs by UTC day like the normalized path, ignoring a source-local end_day (#210)."""
     # 2026-08-07T17:30-07:00 is 2026-08-08T00:30 UTC; end_day keeps the source-local day on purpose.
     _seed_rollup(
@@ -521,7 +521,7 @@ def test_rollup_date_window_normalizes_end_time_offsets_to_utc(populated_db):
     assert aug7["hwBreakdown"]["total"] == 0
 
 
-def test_rollup_unfiltered_spine_uses_utc_days(populated_db):
+def test_rollup_unfiltered_spine_uses_utc_days(populated_db: str) -> None:
     """Without a window, the rollup chart spine starts and ends on the UTC day of offset runs."""
     # Both rows share the source-local end_day 2026-08-07, but 23:30-07:00 is 2026-08-08T06:30 UTC.
     _seed_rollup(
@@ -539,7 +539,7 @@ def test_rollup_unfiltered_spine_uses_utc_days(populated_db):
     assert data["hwBreakdown"]["total"] == 2
 
 
-def test_rollup_date_window_seeks_end_time_index(populated_db):
+def test_rollup_date_window_seeks_end_time_index(populated_db: str) -> None:
     """The rollup UTC window keeps an indexed end_time range so narrow windows do not scan the table."""
     _seed_rollup(populated_db, [])
     clauses, params = db._rollup_clauses(since="2026-08-08", until="2026-08-08")
