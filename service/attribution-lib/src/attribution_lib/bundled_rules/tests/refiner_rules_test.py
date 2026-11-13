@@ -4308,23 +4308,22 @@ class TestXid149AndNvlinkFiltering:
         bad_nodes = _make_bad_nodes(
             obs_ctx,
             {
-                # Stored lowercase: JobNodeAttributions normalizes hostnames on add.
-                "nvl72d151-t13": [xid_149_21, *peer_symptoms],
-                "nvl72d151-t01": peer_symptoms,
-                "nvl72d103-t05": ["cudaErrorNvlinkUncorrectable"],
+                "node01": [xid_149_21, *peer_symptoms],
+                "node02": peer_symptoms,
+                "node03": ["cudaErrorNvlinkUncorrectable"],
             },
         )
         _run(stream, job_info, symptoms, bad_nodes)
         assert xid_149_21 in symptoms
-        assert xid_149_21 in bad_nodes["nvl72d151-t13"].attributions
+        assert xid_149_21 in bad_nodes["node01"].attributions
         for symptom in peer_symptoms:
-            assert symptom not in bad_nodes["nvl72d151-t13"].attributions
-            assert symptom not in bad_nodes["nvl72d151-t01"].attributions
-            assert bad_nodes["nvl72d151-t01"].attributions[symptom].has_interesting()
-        assert not bad_nodes["nvl72d151-t01"].has_bad()
-        assert "cudaErrorNvlinkUncorrectable" not in bad_nodes["nvl72d103-t05"].attributions
-        assert bad_nodes["nvl72d103-t05"].attributions["cudaErrorNvlinkUncorrectable"].has_interesting()
-        assert not bad_nodes["nvl72d103-t05"].has_bad()
+            assert symptom not in bad_nodes["node01"].attributions
+            assert symptom not in bad_nodes["node02"].attributions
+            assert bad_nodes["node02"].attributions[symptom].has_interesting()
+        assert not bad_nodes["node02"].has_bad()
+        assert "cudaErrorNvlinkUncorrectable" not in bad_nodes["node03"].attributions
+        assert bad_nodes["node03"].attributions["cudaErrorNvlinkUncorrectable"].has_interesting()
+        assert not bad_nodes["node03"].has_bad()
 
     def test_no_xid149_discards_nvlink_symptoms(self, stream, obs_ctx, job_info):
         symptoms = _make_symptoms(obs_ctx, "effective_ber_high", "plr_tx_bw_loss_high")
