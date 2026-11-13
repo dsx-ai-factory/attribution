@@ -16,6 +16,11 @@ def _build_auth(spec: dict) -> Auth:
     return build_auth(spec, "loki")
 
 
+def _has_nonblank_query(queries: list | None) -> bool:
+    """Whether every configured query is a nonblank string, and there is at least one."""
+    return bool(queries) and all(isinstance(q, str) and q.strip() for q in queries)
+
+
 def _build(spec: dict, ctx: dict) -> LokiConnector:
     from attribution_blueprint.mca import _coerce_float
 
@@ -40,6 +45,16 @@ def _build(spec: dict, ctx: dict) -> LokiConnector:
         query_kwargs=dict(spec.get("query_kwargs", {})),
         timeout_seconds=timeout,
     )
+    if source not in TEMPLATES and not _has_nonblank_query(queries):
+        # Health-check output has no bundled LogQL template: its stream labels
+        # are whatever the site's health check logs under, so the site must name
+        # the selector rather than hitting the connector's ValueError at build.
+        # An explicitly empty list is the same misconfiguration: the connector
+        # would run no query and return nothing without complaint. A blank
+        # entry would be sent to Loki as an empty query.
+        raise MCAError(
+            f"log.{source.name.lower()}.loki requires query or queries; no bundled templates for this source"
+        )
     if queries is not None:
         kwargs["templates"] = {source: list(queries)}
     # `node_label` controls which Loki stream label the connector reads to

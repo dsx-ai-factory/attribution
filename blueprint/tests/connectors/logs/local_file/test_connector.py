@@ -501,3 +501,68 @@ def test_name_and_user_name_placeholders_substitute(tmp_path):
     obs = conn.collect(ctx)
     assert len(obs) == 1
     assert _text(obs[0]) == "from alice\n"
+
+
+def test_health_check_reads_one_directory_per_node_and_declares_the_node(tmp_path):
+    """HEALTH_CHECK uses the SYSLOG layout: one child directory per context node.
+
+    Each entry declares that node, so an ISO or RFC 5424 line, whose hostname the
+    service cannot parse, still reaches it, and each keeps its own timestamp.
+    """
+    node_dir = tmp_path / "health" / "node-a"
+    node_dir.mkdir(parents=True)
+    (node_dir / "check.log").write_text(
+        "May  1 00:00:04 node-a health-check[42]: drained\n"
+        "2026-05-01T00:30:00Z node-a health-check: drained again\n"
+        "undated line\n"
+    )
+    conn = LocalFileLogConnector(log_path_templates=[str(tmp_path / "health")], source=Source.HEALTH_CHECK)
+
+    obs = conn.collect(_ctx(tmp_path, std_out_template=""))
+
+    assert len(obs) == 1
+    assert obs[0]["context"]["source"] == Source.HEALTH_CHECK
+    node = [{"kind": "node", "hostname": "node-a"}]
+    assert json.loads(obs[0]["body"]) == [
+        {
+            "body": "May  1 00:00:04 node-a health-check[42]: drained",
+            "ts": int(datetime(2026, 5, 1, 0, 0, 4, tzinfo=timezone.utc).timestamp()) * 10**9,
+            "resources": node,
+        },
+        {
+            "body": "2026-05-01T00:30:00Z node-a health-check: drained again",
+            "ts": int(datetime(2026, 5, 1, 0, 30, 0, tzinfo=timezone.utc).timestamp()) * 10**9,
+            "resources": node,
+        },
+    ]
+
+
+def test_health_check_line_after_the_job_ends_keeps_its_year_and_window(tmp_path):
+    """A drain logged after the job ends is the case HEALTH_CHECK collection exists for.
+
+    It must be dated in the job's year and fall inside the observation window, or the
+    service drops it and the drain never reaches the verdict.
+    """
+    node_dir = tmp_path / "health" / "node-a"
+    node_dir.mkdir(parents=True)
+    (node_dir / "check.log").write_text("May  1 01:04:00 node-a health-check[42]: drained\n")
+    conn = LocalFileLogConnector(log_path_templates=[str(tmp_path / "health")], source=Source.HEALTH_CHECK)
+
+    obs = conn.collect(_ctx(tmp_path, std_out_template=""))
+
+    dated = datetime.fromtimestamp(json.loads(obs[0]["body"])[0]["ts"] / 1e9, tz=timezone.utc)
+    window = obs[0]["context"]["time_interval"]
+    assert dated == datetime(2026, 5, 1, 1, 4, 0, tzinfo=timezone.utc)
+    assert window["start"] <= dated <= window["end"]
+
+
+def test_health_check_skips_files_of_nodes_outside_the_job(tmp_path):
+    """Only the context's nodes are read; another node's directory is not."""
+    for node in ("node-a", "node-b"):
+        (tmp_path / "health" / node).mkdir(parents=True)
+        (tmp_path / "health" / node / "check.log").write_text(f"May  1 00:00:04 {node} health-check: drained\n")
+    conn = LocalFileLogConnector(log_path_templates=[str(tmp_path / "health")], source=Source.HEALTH_CHECK)
+
+    obs = conn.collect(_ctx(tmp_path, std_out_template=""))
+
+    assert [json.loads(o["body"])[0]["resources"][0]["hostname"] for o in obs] == ["node-a"]

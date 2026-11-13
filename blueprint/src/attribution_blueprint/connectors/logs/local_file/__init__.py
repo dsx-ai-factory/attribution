@@ -10,7 +10,7 @@ from typing import Optional
 
 from loguru import logger
 
-from attribution_blueprint.connectors.logs import entries_from_text, log_observation
+from attribution_blueprint.connectors.logs import DEFAULT_TIME_INTERVAL, entries_from_text, log_observation
 from attribution_blueprint.connectors.logs.syslog import syslog_entries_from_text
 from attribution_blueprint.exceptions import MCAError
 from attribution_blueprint.types import (
@@ -22,6 +22,11 @@ from attribution_blueprint.types import (
 )
 
 DEFAULT_MAX_BYTES = 2 * 1024 * 1024 * 1024  # 2 GB
+
+# Node-scoped sources read one child directory per context node, so every entry
+# declares its node. The service drops a HEALTH_CHECK or SYSLOG entry with no node
+# it can identify, and it can read a node only out of an RFC 3164 line.
+_PER_NODE_SOURCES = frozenset({Source.SYSLOG, Source.HEALTH_CHECK})
 
 # Suffix multipliers for human-readable byte sizes. Binary (1024^n) — matches
 # how dd/du/free report by default and how filesystem caps are typically set.
@@ -65,11 +70,11 @@ class LocalFileLogConnector:
     ``{name}``, ``{user_name}``, ``{start_time_ns}``, ``{end_time_ns}``).
     For APPLOG, after substitution, if the path resolves to a directory, every
     regular file directly inside the directory is read (non-recursive); if it
-    resolves to a file, that file is read. For SYSLOG, each path is a base
+    resolves to a file, that file is read. For SYSLOG and HEALTH_CHECK, each path is a base
     directory containing one child directory per context node. Missing APPLOG
-    paths are skipped silently, while missing SYSLOG node directories warn.
+    paths are skipped silently, while missing per-node directories warn.
     A file whose name ends in ``.jsonl`` is read as one JSON entry per line
-    and sent unchanged; for SYSLOG such a path names the file directly
+    and sent unchanged; for SYSLOG and HEALTH_CHECK such a path names the file directly
     instead of a base directory.
 
     ``max_bytes_per_file`` defaults to :data:`DEFAULT_MAX_BYTES` (2 GB) so a
@@ -103,7 +108,7 @@ class LocalFileLogConnector:
         # attribution_lib has paths that crash on them.
         assert_aware(context["start_time"], "start_time")
         assert_aware(context["end_time"], "end_time")
-        if self._source == Source.SYSLOG:
+        if self._source in _PER_NODE_SOURCES:
             return self._collect_syslog(context)
         observations: list[Observation] = []
         seen: set[Path] = set()
@@ -154,14 +159,15 @@ class LocalFileLogConnector:
         return log_observation(source=self._source, entries=entries, context=context)
 
     def _collect_syslog(self, context: ExecutionContext) -> list[Observation]:
-        """Collect static syslog files from one child directory per context node.
+        """Collect static syslog or health-check files from one child directory per context node.
 
         Args:
-            context: Execution context whose ``nodes`` identify required syslog
+            context: Execution context whose ``nodes`` identify required
                 child directories below each configured base path.
 
         Returns:
-            One observation per readable, non-empty syslog file.
+            One observation per readable, non-empty file, each entry tagged
+            with the directory's node.
         """
         observations: list[Observation] = []
         seen: set[Path] = set()
@@ -183,7 +189,7 @@ class LocalFileLogConnector:
                     is_file = True  # _file_observation reports the denial
                 if not is_file:
                     logger.warning(
-                        f"local_file SYSLOG: expected syslog file {base} for ctx {context.get('id')}; skipping"
+                        f"local_file {self._source.name}: expected syslog file {base} for ctx {context.get('id')}; skipping"
                     )
                     continue
                 observation = self._file_observation(base, context)
@@ -193,11 +199,13 @@ class LocalFileLogConnector:
             try:
                 base_is_dir = base.is_dir()
             except PermissionError as e:
-                logger.warning(f"local_file SYSLOG: permission denied stat'ing {base} for ctx {context.get('id')}: {e}")
+                logger.warning(
+                    f"local_file {self._source.name}: permission denied stat'ing {base} for ctx {context.get('id')}: {e}"
+                )
                 continue
             if base_is_dir is False:
                 logger.warning(
-                    f"local_file SYSLOG: expected syslog base directory {base} for ctx {context.get('id')}; skipping"
+                    f"local_file {self._source.name}: expected syslog base directory {base} for ctx {context.get('id')}; skipping"
                 )
                 continue
 
@@ -207,13 +215,13 @@ class LocalFileLogConnector:
                     node_is_dir = node_dir.is_dir()
                 except PermissionError as e:
                     logger.warning(
-                        f"local_file SYSLOG: permission denied stat'ing {node_dir} "
+                        f"local_file {self._source.name}: permission denied stat'ing {node_dir} "
                         f"for node {node} ctx {context.get('id')}: {e}"
                     )
                     continue
                 if node_is_dir is False:
                     logger.debug(
-                        f"local_file SYSLOG: missing syslog directory {node_dir} "
+                        f"local_file {self._source.name}: missing syslog directory {node_dir} "
                         f"for node {node} ctx {context.get('id')}"
                     )
                     continue
@@ -222,7 +230,7 @@ class LocalFileLogConnector:
                     paths = sorted(p for p in node_dir.iterdir() if p.is_file())
                 except PermissionError as e:
                     logger.warning(
-                        f"local_file SYSLOG: permission denied listing {node_dir} "
+                        f"local_file {self._source.name}: permission denied listing {node_dir} "
                         f"for node {node} ctx {context.get('id')}: {e}"
                     )
                     continue
@@ -237,7 +245,7 @@ class LocalFileLogConnector:
                         # Not recorded in `seen`, so the same file still reads when it is also
                         # configured as a path, in either order.
                         logger.warning(
-                            f"local_file SYSLOG: skipping {path}, a .jsonl file is read only when "
+                            f"local_file {self._source.name}: skipping {path}, a .jsonl file is read only when "
                             f"configured as the path itself (ctx {context.get('id')})"
                         )
                         continue
@@ -246,16 +254,19 @@ class LocalFileLogConnector:
                         body = self._read(path)
                     except PermissionError as e:
                         logger.warning(
-                            f"local_file SYSLOG: permission denied reading {path} "
+                            f"local_file {self._source.name}: permission denied reading {path} "
                             f"for node {node} ctx {context.get('id')}: {e}"
                         )
                         continue
                     if body == "":
                         continue
-                    entries = syslog_entries_from_text(body, context, node=node)
+                    # A health check reports after the job ends, so date its yearless
+                    # lines against the health-check window end, not the job end.
+                    window_end = DEFAULT_TIME_INTERVAL[self._source](context)["end"]
+                    entries = syslog_entries_from_text(body, context, node=node, window_end=window_end)
                     observations.append(log_observation(source=self._source, entries=entries, context=context))
         if found_syslog_input is False:
-            logger.warning(f"local_file SYSLOG: no syslog directories found for ctx {context.get('id')}")
+            logger.warning(f"local_file {self._source.name}: no syslog directories found for ctx {context.get('id')}")
         return observations
 
     def _resolve_paths(self, template: str, context: ExecutionContext) -> list[Path]:
