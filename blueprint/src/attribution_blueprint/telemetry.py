@@ -1,13 +1,14 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Measure connector requests through the optional OpenTelemetry provider."""
+"""Measure connector requests and query results through the optional OpenTelemetry provider."""
 
 import inspect
 import time
 from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass
+from enum import StrEnum
 from urllib.parse import urlsplit
 
 import requests
@@ -53,6 +54,66 @@ _duration = _meter.create_histogram(
         120,
     ],
 )
+_query_entries = _meter.create_histogram(
+    "attribution.connector.query.entries",
+    unit="{entry}",
+    description="Log entries returned by each paginated query, across all of its pages.",
+    explicit_bucket_boundaries_advisory=[0, 10, 100, 1_000, 5_000, 10_000, 25_000, 50_000, 100_000],
+)
+_query_pages = _meter.create_histogram(
+    "attribution.connector.query.pages",
+    unit="{page}",
+    description="Pages fetched by each paginated query.",
+    explicit_bucket_boundaries_advisory=[1, 2, 3, 5, 10, 20],
+)
+_query_truncations = _meter.create_counter(
+    "attribution.connector.query.truncations",
+    unit="{query}",
+    description="Paginated queries that stopped before reaching the start of their time window.",
+)
+_query_series = _meter.create_histogram(
+    "attribution.connector.query.series",
+    unit="{series}",
+    description="Series returned by each PromQL query.",
+    explicit_bucket_boundaries_advisory=[0, 1, 10, 100, 1_000, 10_000],
+)
+
+
+class QueryTruncation(StrEnum):
+    """Why a paginated query stopped while older entries may remain unread."""
+
+    PAGE_LIMIT = "page_limit"
+    MISSING_TIMESTAMP = "missing_timestamp"
+
+
+def record_paginated_query(
+    connector: str, operation: str, *, entries: int, pages: int, truncation: QueryTruncation | None = None
+) -> None:
+    """Record the result of one paginated log query.
+
+    Args:
+        connector: Fixed connector name.
+        operation: Fixed query path.
+        entries: Entries returned across all pages, before deduplication.
+        pages: Requests issued, including a final empty page.
+        truncation: Why the query stopped early, or None when it reached the window start.
+    """
+    labels = {"connector": connector, "operation": operation}
+    _query_entries.record(entries, labels)
+    _query_pages.record(pages, labels)
+    if truncation is not None:
+        _query_truncations.add(1, {**labels, "reason": truncation})
+
+
+def record_series(connector: str, operation: str, series: int) -> None:
+    """Record the number of series that one PromQL query returned.
+
+    Args:
+        connector: Fixed connector name.
+        operation: Fixed query path.
+        series: Series in the successful result.
+    """
+    _query_series.record(series, {"connector": connector, "operation": operation})
 
 
 def enable_prometheus_endpoint(host: str, port: int) -> None:

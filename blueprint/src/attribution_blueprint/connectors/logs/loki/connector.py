@@ -7,7 +7,7 @@ from attribution_blueprint.connectors.auth import Auth
 from attribution_blueprint.connectors.logs import log_observation
 from attribution_blueprint.connectors.logs.envelope import extract_body_and_node as _extract_body_and_node
 from attribution_blueprint.connectors.logs.loki.templates import TEMPLATES
-from attribution_blueprint.telemetry import MeteredSession
+from attribution_blueprint.telemetry import MeteredSession, QueryTruncation, record_paginated_query
 from attribution_blueprint.types import (
     ExecutionContext,
     NodeResource,
@@ -20,6 +20,7 @@ from attribution_blueprint.types import (
 
 DEFAULT_LIMIT = 5000
 DEFAULT_NODE_LABEL = "host_name"
+QUERY_PATH = "/loki/api/v1/query_range"
 
 # RE2 metacharacters (https://github.com/google/re2/wiki/Syntax). Unlike
 # Python re, RE2 rejects unrecognized escape sequences (e.g. `\-`), so
@@ -79,7 +80,7 @@ class LokiConnector:
         # cluster-wide queries.
         self._node_label = node_label
 
-        self._session = MeteredSession("loki", ("/loki/api/v1/query_range",))
+        self._session = MeteredSession("loki", (QUERY_PATH,))
         kwargs = auth.request_kwargs()
         if "headers" in kwargs:
             self._session.headers.update(kwargs["headers"])
@@ -184,9 +185,11 @@ class LokiConnector:
         """
         out: list[dict] = []
         cur_end = end_ns
-        for page in range(MAX_PAGES):
+        entries = 0
+        truncation = None
+        for pages in range(1, MAX_PAGES + 1):
             response = self._session.post(
-                f"{self._endpoint}/loki/api/v1/query_range",
+                f"{self._endpoint}{QUERY_PATH}",
                 data={"query": query, "start": start_ns, "end": cur_end, "limit": self._limit},
                 timeout=self._timeout,
             )
@@ -196,6 +199,7 @@ class LokiConnector:
             if entry_count == 0:
                 break
             out.extend(streams)
+            entries += entry_count
             if entry_count < self._limit:
                 break
             oldest_ns = min(int(ts) for s in streams for ts, _ in (s.get("values", []) or []))
@@ -207,6 +211,8 @@ class LokiConnector:
                 f"loki: hit MAX_PAGES={MAX_PAGES} for query={query[:80]!r}; "
                 f"older entries before ts={cur_end} may be truncated"
             )
+            truncation = QueryTruncation.PAGE_LIMIT
+        record_paginated_query("loki", QUERY_PATH, entries=entries, pages=pages, truncation=truncation)
         return out
 
     def _inject_node_filter(self, query: str, nodes: list[str]) -> str:
