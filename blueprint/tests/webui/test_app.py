@@ -523,15 +523,20 @@ def test_rollup_date_window_normalizes_end_time_offsets_to_utc(populated_db):
 
 def test_rollup_unfiltered_spine_uses_utc_days(populated_db):
     """Without a window, the rollup chart spine starts and ends on the UTC day of offset runs."""
+    # Both rows share the source-local end_day 2026-08-07, but 23:30-07:00 is 2026-08-08T06:30 UTC.
     _seed_rollup(
         populated_db,
-        [("rollup-offset", "2026-08-07T23:30:00-07:00", "2026-08-07", "offset", "Fail InfraHW", 10, 8, "XID-79")],
+        [
+            ("rollup-utc", "2026-08-07T00:30:00+00:00", "2026-08-07", "utc", "Fail InfraHW", 10, 8, "XID-79"),
+            ("rollup-offset", "2026-08-07T23:30:00-07:00", "2026-08-07", "offset", "Fail InfraHW", 10, 8, "XID-79"),
+        ],
     )
 
     data = db.dashboard_data(populated_db)
 
-    assert [(d["date"], d["hw"]) for d in data["daily"]] == [("2026-08-08", 1)]
-    assert data["hwBreakdown"]["total"] == 1
+    assert [(d["date"], d["hw"]) for d in data["daily"]] == [("2026-08-07", 1), ("2026-08-08", 1)]
+    assert data["hwBreakdown"]["series"] == [{"symptom": "XID-79", "data": [1, 1], "total": 2}]
+    assert data["hwBreakdown"]["total"] == 2
 
 
 def test_rollup_date_window_seeks_end_time_index(populated_db):
