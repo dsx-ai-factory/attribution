@@ -266,9 +266,12 @@ def _gpu_count(run) -> int:
         value = _non_negative_int(raw_scheduler.get(key))
         if value is not None:
             return value
-    alloc_tres_value = gpu_count_from_alloc_tres(raw_scheduler.get("alloc_tres"))
-    if alloc_tres_value is not None:
-        return alloc_tres_value
+    # Stored scheduler JSON is untyped; only a string AllocTRES is parsed.
+    alloc_tres = raw_scheduler.get("alloc_tres")
+    if isinstance(alloc_tres, str):
+        alloc_tres_value = gpu_count_from_alloc_tres(alloc_tres)
+        if alloc_tres_value is not None:
+            return alloc_tres_value
     node_count = len(run.nodes)
     billed_nodes = node_count if node_count > 0 else 1
     return billed_nodes * _gpus_per_node(run)

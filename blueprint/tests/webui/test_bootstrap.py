@@ -380,6 +380,14 @@ def test_run_to_react_treats_cpu_only_slurm_alloc_tres_as_zero_gpus(tmp_path):
     assert r["gpuCount"] == 0
 
 
+@pytest.mark.parametrize("alloc_tres", [4, ["gres/gpu=4"]])
+def test_run_to_react_falls_back_when_stored_alloc_tres_is_not_a_string(tmp_path, alloc_tres):
+    """Stored scheduler JSON is untyped; a non-string AllocTRES counts as missing."""
+    run = _seed_one(tmp_path, gpus_per_node=8, alloc_tres=alloc_tres)
+    r = bootstrap.run_to_react(run)
+    assert r["gpuCount"] == 16
+
+
 @pytest.mark.parametrize(("attempt_ordinal", "expected"), [(None, 1), (0, 1), (1, 2), (2, 3), ("2", 3), ("²", 1), ("", 1), (-1, 1)])
 def test_run_to_react_displays_one_based_attempt_ordinal(tmp_path, attempt_ordinal, expected):
     """Show the zero-based Slurm attempt ordinal as a one-based attempt number."""

@@ -141,27 +141,25 @@ def _parse_state(state: str) -> tuple[str, str | None]:
     return state, None
 
 
-def gpu_count_from_alloc_tres(alloc_tres: object) -> int | None:
+def gpu_count_from_alloc_tres(alloc_tres: str) -> int | None:
     """Return the number of GPUs in a Slurm AllocTRES string.
 
     This is the single AllocTRES GPU parser shared by the Slurm connector and
     the web UI fallback for saved runs.
 
     Args:
-        alloc_tres: Raw AllocTRES value, such as
+        alloc_tres: AllocTRES field from sacct, such as
             ``cpu=16,gres/gpu=4,gres/gpu:h200=4``.
 
     Returns:
         The generic ``gres/gpu`` count when present. Typed entries such as
         ``gres/gpu:h200`` repeat that count, so they are summed only when the
         generic entry is absent. Returns 0 for a valid resource list without
-        GPU entries. Returns None when AllocTRES is missing or unavailable
+        GPU entries. Returns None when AllocTRES is empty or unavailable
         (for example ``(null)``) or when any GPU entry is not a non-negative
         integer, so callers keep their fallback instead of recording a
         fabricated count.
     """
-    if not isinstance(alloc_tres, str):
-        return None
     generic: int | None = None
     typed = 0
     saw_resource = False
