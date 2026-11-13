@@ -1576,6 +1576,55 @@ expected_symptom = "(non-fatal) Bad Token"
 expected_rule = "alias else"
 
 [[cases]]
+description = "megatron first rerun not reproducible is interesting"
+line = "0: ERROR:megatron.core.rerun_state_machine:Rank 0, node host-f85954d2, device 1, iteration #56427: First rerun: unexpected result is not reproducible within the tolerance (11520.0 != inf)!"
+expect = "interesting"
+expected_symptom = "Unexpected value not reproduced on same GPU"
+expected_rule = "megatron-rerun:First rerun: unexpected result is not reproducible within the tolerance"
+
+[[cases]]
+description = "megatron possible transient error is interesting"
+line = "0: ERROR:megatron.core.rerun_state_machine:Rank 0, node host-f85954d2, device 1, iteration #56427: Possible transient error!!"
+expect = "interesting"
+expected_symptom = "Transient error reported by Megatron"
+expected_rule = "megatron-rerun:Possible transient error"
+
+[[cases]]
+description = "megatron second rerun not reproducible is interesting"
+line = "0: Second rerun: unexpected result is not reproducible on a different GPU, therefore was likely incorrect (11520.0 != inf)"
+expect = "interesting"
+expected_symptom = "Unexpected value not reproduced on other GPU"
+expected_rule = "megatron-rerun:Second rerun: unexpected result is not reproducible on a different GPU"
+
+[[cases]]
+description = "megatron possible persistent error is interesting"
+line = "0: ERROR:megatron.core.rerun_state_machine:Rank 0, node host-f85954d2, device 1, iteration #56427: Possible persistent error!!"
+expect = "interesting"
+expected_symptom = "Persistent error reported by Megatron"
+expected_rule = "megatron-rerun:Possible persistent error"
+
+[[cases]]
+description = "megatron first rerun reproducible is interesting"
+line = "0: ERROR:megatron.core.rerun_state_machine:Rank 0, node host-f85954d2, device 1, iteration #56427: First rerun: unexpected result is reproducible within the tolerance (inf = inf). Need to rerun on a different GPU to verify correctness.!"
+expect = "interesting"
+expected_symptom = "Unexpected value reproduced on same GPU"
+expected_rule = "megatron-rerun:First rerun: unexpected result is reproducible within the tolerance"
+
+[[cases]]
+description = "megatron second rerun reproducible is interesting"
+line = "0: Second rerun: unexpected result is reproducible on a different GPU, therefore it was likely correct (inf = inf)"
+expect = "interesting"
+expected_symptom = "Unexpected value reproduced on other GPU"
+expected_rule = "megatron-rerun:Second rerun: unexpected result is reproducible on a different GPU"
+
+[[cases]]
+description = "megatron correct result is interesting"
+line = "0: ERROR:megatron.core.rerun_state_machine:Rank 0, node host-f85954d2, device 1, iteration #56427: Correct result (but possible Application error) (found Inf in local grad norm)!"
+expect = "interesting"
+expected_symptom = "Application error reported by Megatron"
+expected_rule = "megatron-rerun:Correct result (but possible Application error)"
+
+[[cases]]
 description = "value error tasks not found is bad during job"
 line = "0: ValueError: Tasks not found"
 tflops_start = true

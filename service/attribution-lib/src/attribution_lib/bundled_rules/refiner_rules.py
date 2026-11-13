@@ -120,6 +120,8 @@ _REFINER_ORDER = [
     "CspEventPrecedenceAndCascades",
     "CancellationResolution",
     "SimpleSymptomCascades",
+    # Before NvrxFailureUserCauseCascade, which reads "Bad Token" and the verdicts.
+    "MegatronRerunVerdict",
     "MulticastNvErrSuppression",
     "WatchdogTerminateResolution",
     "NodeOfflineComposite",
@@ -419,7 +421,27 @@ _NVRX_FAILURE_USER_CAUSES = (
     "Python Exception: RuntimeError: pinned activation buffer budget exceeded",
     "Python Exception: FileNotFoundError: checkpoint iteration not found",
     "Bad Token",
+    "Unexpected value reproduced on other GPU",
+    "Application error reported by Megatron",
 )
+
+# Megatron rerun verdicts
+_MEGATRON_RERUN_OUTCOME_SYMPTOMS = frozenset(
+    {
+        "Unexpected value reproduced on same GPU",
+        "Unexpected value reproduced on other GPU",
+        "Application error reported by Megatron",
+    }
+)
+_MEGATRON_RERUN_SYMPTOMS = _MEGATRON_RERUN_OUTCOME_SYMPTOMS | {
+    "Unexpected value not reproduced on same GPU",
+    "Transient error reported by Megatron",
+    "Unexpected value not reproduced on other GPU",
+    "Persistent error reported by Megatron",
+}
+# Megatron writes "iteration #N" in the unexpected-result line and in each
+# verdict line that has the rank prefix.
+_MEGATRON_ITERATION = re.compile(r"iteration #(\d+)")
 
 _XID145_RXPIPE_SYMPTOM = "XID-145-RLW_RXPIPE-8"
 # Slurm sends SIGKILL KillWait after SIGTERM, and KillWait was 120 s on every
@@ -1808,6 +1830,63 @@ def simple_symptom_cascades(context: RefinerContext):
         symptoms.discard("No CUDA runtime is found")
 
 
+@refiner_def(name="MegatronRerunVerdict", author="NVIDIA Attribution team", priority=_priority("MegatronRerunVerdict"))
+def megatron_rerun_verdict(context: RefinerContext):
+    """Replace "Bad Token" with the Megatron rerun verdict for the same iteration.
+
+    A verdict stays on the node that logged it as supporting evidence. It does
+    not make that node a bad node, because the second rerun runs on a different
+    GPU from the one that produced the unexpected value.
+
+    A verdict discards each "Bad Token" line that has the same iteration
+    number, on every node and in the job-level symptoms. A "Bad Token" from
+    another iteration, or with no iteration number, stays. The verdicts that
+    set an outcome are added to the job-level symptoms with all of their
+    source lines.
+
+    Args:
+        context: Refiner context with the job-level symptoms and my_bad_nodes.
+    """
+    symptoms = context.symptoms
+    my_bad_nodes = context.my_bad_nodes
+    if symptoms is None or my_bad_nodes is None:
+        return
+
+    groups = [group for _node, group in my_bad_nodes.symptom_groups()]
+    verdicts = [
+        (symptom, sources)
+        for group in groups
+        for symptom, sources in group.all_items()
+        if symptom in _MEGATRON_RERUN_SYMPTOMS
+    ]
+    if len(verdicts) == 0:
+        return
+
+    for symptom, sources in verdicts:
+        if symptom in _MEGATRON_RERUN_OUTCOME_SYMPTOMS:
+            job_sources = SourceSet(symptom)
+            for source in sources.all_sources():
+                job_sources.add(source)
+            symptoms.add(job_sources)
+
+    iterations = {
+        match.group(1)
+        for _symptom, sources in verdicts
+        for source in sources.all_sources()
+        if (match := _MEGATRON_ITERATION.search(source.datum)) is not None
+    }
+    for symptom_set in [symptoms, *groups]:
+        if "Bad Token" not in symptom_set:
+            continue
+        symptom_set["Bad Token"].discard_selected(
+            [
+                source
+                for source in symptom_set["Bad Token"]
+                if (match := _MEGATRON_ITERATION.search(source.datum)) is not None and match.group(1) in iterations
+            ]
+        )
+
+
 @refiner_def(
     name="MulticastNvErrSuppression", author="NVIDIA Attribution team", priority=_priority("MulticastNvErrSuppression")
 )
@@ -2332,8 +2411,7 @@ def last_resort_symptoms(context: RefinerContext):
         elif job_info.state == "REQUEUED":
             symptoms.add(job_info.source_value("Job requeued", job_info.state, "last resort; slurm status"))
         elif job_info.state == "EVICTED" or (
-            job_info.state == "UNKNOWN"
-            and job_info.scheduler in KUBERNETES_SCHEDULER_TYPES
+            job_info.state == "UNKNOWN" and job_info.scheduler in KUBERNETES_SCHEDULER_TYPES
         ):
             pass
         elif job_info.state != "RUNNING":
@@ -2480,7 +2558,7 @@ def xid149_and_nvlink_filtering(context: RefinerContext):
     """XID-149 priority filtering and nvlink symptom cleanup.
 
     Overall Priority: XID-149.4 > XID-149.10 > other XID-149.x > XID-149.0
-    
+
     Exceptions:
     - XID-149.21 survives XID-149.4
     - A lone XID-149.21 also collapses cascaded bad nodes
