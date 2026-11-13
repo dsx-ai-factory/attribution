@@ -21,9 +21,8 @@ from attribution_blueprint.kubernetes.attempts import (
     observations_by_uid,
     parse_time,
     restart_attempt,
-    restart_starts,
+    restart_start_candidates,
     retained_history_covers_window,
-    within,
 )
 
 
@@ -71,6 +70,15 @@ class PodGroupAttempt:
             self.start_key,
             self.restart_attempt,
         )
+
+
+@dataclass(frozen=True)
+class _ResolvedEvidence:
+    restart_candidates: list[tuple[dict, str, str]]
+    terminals: list[dict]
+    pods: dict[str, dict]
+    jobs: dict[str, dict]
+    job_restarts: dict[str, str]
 
 
 def observations_from_live_resources(
@@ -122,6 +130,9 @@ def observations_from_live_resources(
                 "namespace": resource_metadata.get("namespace") or "",
                 "name": resource_metadata.get("name") or "",
                 "uid": resource_metadata.get("uid"),
+                "resourceVersion": resource_metadata.get(
+                    "resourceVersion"
+                ),
                 "ownerReferences": (
                     resource_metadata.get("ownerReferences") or []
                 ),
@@ -164,23 +175,16 @@ def attempts_from_podgroup_history(
     Missing owners or starts produce no attempt; unresolved boundaries preserve
     uncertainty rather than claim Pod membership."""
     observations = history.get("observations") or []
+    resolved = _resolve_evidence(observations)
     podgroups = observations_by_uid(
         item
         for item in observations
         if item.get("kind") == "PodGroup"
         and (item.get("metadata") or {}).get("name") == pod_group_name
     )
-    restarts = restart_starts(observations)
-    terminals = _terminal_events(observations)
-    pod_events = latest_pod_observations(observations)
-    job_events = {
-        uid: timeline[-1]
-        for uid, timeline in observations_by_uid(
-            item
-            for item in observations
-            if item.get("kind") == "Job"
-        ).items()
-    }
+    terminals = resolved.terminals
+    pod_events = resolved.pods
+    job_events = resolved.jobs
     podgroup_boundaries = _podgroup_boundaries(podgroups)
     attempts = []
     for pod_group_uid, timeline in podgroups.items():
@@ -200,27 +204,15 @@ def attempts_from_podgroup_history(
         if not podgroup_starts:
             continue
         lifetime_start = podgroup_starts[0]["time"]
-        scoped_restarts = {
-            restart: timestamp
-            for restart, timestamp in restarts.items()
-            if parse_time(timestamp) >= parse_time(lifetime_start)
-            and (
-                boundary.end is None
-                or parse_time(timestamp) < parse_time(boundary.end)
-            )
-        }
-        prior_restarts = [
-            (restart, timestamp)
-            for restart, timestamp in restarts.items()
-            if boundary.accept_prior_restart
-            and parse_time(timestamp) < parse_time(lifetime_start)
-        ]
-        if prior_restarts:
-            active_restart, active_timestamp = max(
-                prior_restarts,
-                key=lambda item: (parse_time(item[1]), item[0]),
-            )
-            scoped_restarts[active_restart] = active_timestamp
+        scoped_restarts = _scoped_restart_starts(
+            resolved.restart_candidates,
+            pod_group_name=pod_group_name,
+            owner=owner,
+            jobs=job_events,
+            lifetime_start=lifetime_start,
+            lifetime_end=boundary.end,
+            accept_prior_restart=boundary.accept_prior_restart,
+        )
         recreated = len(podgroups) > 1
         starts = _attempt_starts(
             podgroup_starts,
@@ -230,6 +222,7 @@ def attempts_from_podgroup_history(
                 job_events,
                 pod_group_name=pod_group_name,
                 owner=owner,
+                inferred_job_restarts=resolved.job_restarts,
                 start=lifetime_start,
                 end=min(
                     scoped_restarts.values(),
@@ -248,6 +241,12 @@ def attempts_from_podgroup_history(
                 [history.get("coverage") or {}, *(history.get("coverages") or [])],
                 lifetime_start,
             )
+        assigned_terminals = _assign_terminals(
+            starts,
+            terminals,
+            owner,
+            owner_outcome_end=boundary.owner_outcome_end,
+        )
         for index, start in enumerate(starts):
             first_attempt_for_restart = not any(
                 previous["restart_attempt"] == start["restart_attempt"]
@@ -267,17 +266,11 @@ def attempts_from_podgroup_history(
                 key=parse_time,
                 default=None,
             )
-            terminal = _terminal_for(
-                start,
-                next_start,
-                terminals,
-                (
-                    owner
-                    if boundary.resolved
-                    or boundary.terminal_resolvable
-                    else None
-                ),
-                owner_outcome_end=boundary.owner_outcome_end,
+            terminal = (
+                assigned_terminals[index]
+                if boundary.resolved
+                or boundary.terminal_resolvable
+                else None
             )
             boundary_resolved = next_start is not None or boundary.resolved or (
                 boundary.terminal_resolvable
@@ -324,6 +317,7 @@ def attempts_from_podgroup_history(
                         uid
                         for uid, pod in pod_events.items()
                         if boundary_resolved
+                        and _pod_owned_by(pod, owner, job_events)
                         and _pod_in_attempt(
                             pod,
                             pod_group_name,
@@ -344,11 +338,15 @@ def attempts_from_podgroup_history(
                         uid
                         for uid, job in job_events.items()
                         if boundary_resolved
+                        and _job_owned_by(job, owner)
                         and _resource_in_attempt(
                             job,
                             start["restart_attempt"],
                             start["time"],
                             attempt_end,
+                            inferred_restart=resolved.job_restarts.get(
+                                uid
+                            ),
                             allow_before_start=(
                                 not recreated and index == 0
                             ),
@@ -503,13 +501,18 @@ def _has_initial_execution(
     *,
     pod_group_name: str,
     owner: dict,
+    inferred_job_restarts: dict[str, str],
     start: str,
     end: str | None,
     allow_before_start: bool,
 ) -> bool:
     """Reuse attempt membership rules to verify pre-restart execution."""
     for pod in pod_events.values():
-        if _pod_in_attempt(
+        if _pod_owned_by(
+            pod,
+            owner,
+            job_events,
+        ) and _pod_in_attempt(
             pod,
             pod_group_name,
             "0",
@@ -523,24 +526,103 @@ def _has_initial_execution(
 
     for job in job_events.values():
         metadata = job.get("metadata") or {}
-        if owner["kind"] == "Job":
-            verified = metadata.get("uid") == owner["uid"]
-        else:
-            controller = controller_owner(metadata)
-            verified = bool(
-                controller
-                and controller["kind"] == "JobSet"
-                and controller["uid"] == owner["uid"]
-            )
-        if verified and _resource_in_attempt(
+        if _job_owned_by(job, owner) and _resource_in_attempt(
             job,
             "0",
             start,
             end,
+            inferred_restart=inferred_job_restarts.get(
+                metadata.get("uid")
+            ),
             allow_before_start=allow_before_start,
         ):
             return True
     return False
+
+
+def _job_owned_by(job: dict, owner: dict) -> bool:
+    metadata = job.get("metadata") or {}
+    if owner["kind"] == "Job":
+        return metadata.get("uid") == owner["uid"]
+    controller = controller_owner(metadata)
+    return bool(
+        controller
+        and controller["kind"] == "JobSet"
+        and controller["uid"] == owner["uid"]
+    )
+
+
+def _pod_owned_by(
+    pod: dict,
+    owner: dict,
+    jobs: dict[str, dict],
+) -> bool:
+    controller = controller_owner(pod.get("metadata") or {})
+    if controller is None:
+        return True
+    if controller["kind"] != "Job":
+        return False
+    if owner["kind"] == "Job":
+        return controller["uid"] == owner["uid"]
+    job = jobs.get(controller["uid"])
+    return bool(job and _job_owned_by(job, owner))
+
+
+def _scoped_restart_starts(
+    candidates: list[tuple[dict, str, str]],
+    *,
+    pod_group_name: str,
+    owner: dict,
+    jobs: dict[str, dict],
+    lifetime_start: str,
+    lifetime_end: str | None,
+    accept_prior_restart: bool,
+) -> dict[str, str]:
+    """Collapse restart evidence only after applying incarnation/owner scope."""
+    scoped: dict[str, str] = {}
+    prior = []
+    for observation, generation, timestamp in candidates:
+        kind = observation.get("kind")
+        if kind == "Pod":
+            annotations = (
+                (observation.get("selectedMetadata") or {}).get(
+                    "annotations"
+                )
+                or {}
+            )
+            matches = (
+                annotations.get(POD_GROUP_ANNOTATION)
+                == pod_group_name
+                and _pod_owned_by(observation, owner, jobs)
+            )
+        else:
+            matches = _job_owned_by(observation, owner)
+        if not matches:
+            continue
+
+        timestamp_value = parse_time(timestamp)
+        if timestamp_value < parse_time(lifetime_start):
+            if accept_prior_restart:
+                prior.append((generation, timestamp))
+            continue
+        if (
+            lifetime_end is not None
+            and timestamp_value >= parse_time(lifetime_end)
+        ):
+            continue
+        if (
+            generation not in scoped
+            or timestamp_value < parse_time(scoped[generation])
+        ):
+            scoped[generation] = timestamp
+
+    if prior:
+        active_generation, active_timestamp = max(
+            prior,
+            key=lambda item: (parse_time(item[1]), item[0]),
+        )
+        scoped[active_generation] = active_timestamp
+    return scoped
 
 
 def _attempt_starts(
@@ -687,7 +769,47 @@ def _coalesce_initial_allocation(
     return result
 
 
-def _terminal_events(observations: list[dict]) -> list[dict]:
+def _infer_job_restarts(observations: list[dict]) -> dict[str, str]:
+    """Infer a Job generation only when its explicitly labeled Pods agree."""
+    pod_generations_by_job: dict[str, set[str]] = {}
+    for observation in observations:
+        if observation.get("kind") != "Pod":
+            continue
+        generation = restart_attempt(observation)
+        controller = controller_owner(
+            observation.get("metadata") or {}
+        )
+        if (
+            generation is not None
+            and controller
+            and controller["kind"] == "Job"
+        ):
+            pod_generations_by_job.setdefault(
+                controller["uid"],
+                set(),
+            ).add(generation)
+    return {
+        job_uid: next(iter(generations))
+        for job_uid, generations in pod_generations_by_job.items()
+        if len(generations) == 1
+    }
+
+
+def _job_restart(
+    observation: dict,
+    inferred_job_restarts: dict[str, str],
+) -> str | None:
+    generation = restart_attempt(observation)
+    if generation is not None:
+        return generation
+    job_uid = (observation.get("metadata") or {}).get("uid")
+    return inferred_job_restarts.get(job_uid)
+
+
+def _terminal_events(
+    observations: list[dict],
+    inferred_job_restarts: dict[str, str],
+) -> list[dict]:
     events = []
     for observation in observations:
         kind = observation.get("kind")
@@ -715,7 +837,10 @@ def _terminal_events(observations: list[dict]) -> list[dict]:
                     "type": "Complete",
                     "reason": None,
                     "time": status["completionTime"],
-                    "restart_attempt": restart_attempt(observation),
+                    "restart_attempt": _job_restart(
+                        observation,
+                        inferred_job_restarts,
+                    ),
                 }
             )
         for condition in conditions:
@@ -741,7 +866,10 @@ def _terminal_events(observations: list[dict]) -> list[dict]:
                     "reason": condition.get("reason"),
                     "time": transition,
                     "restart_attempt": (
-                        restart_attempt(observation)
+                        _job_restart(
+                            observation,
+                            inferred_job_restarts,
+                        )
                         if kind == "Job"
                         else str(max(int(status.get("restarts") or 0) - 1, 0))
                         if condition_type == "RestartingJobSet"
@@ -749,42 +877,84 @@ def _terminal_events(observations: list[dict]) -> list[dict]:
                     ),
                 }
             )
-    return sorted(events, key=lambda item: parse_time(item["time"]))
+    unique = {
+        json.dumps(event, sort_keys=True, separators=(",", ":")): event
+        for event in events
+    }
+    return sorted(
+        unique.values(),
+        key=lambda item: (
+            parse_time(item["time"]),
+            json.dumps(item, sort_keys=True, separators=(",", ":")),
+        ),
+    )
 
 
-def _terminal_for(
-    start: dict,
-    next_start: str | None,
+def _resolve_evidence(observations: list[dict]) -> _ResolvedEvidence:
+    job_restarts = _infer_job_restarts(observations)
+    return _ResolvedEvidence(
+        restart_candidates=restart_start_candidates(
+            observations,
+            job_restarts,
+        ),
+        terminals=_terminal_events(observations, job_restarts),
+        pods=latest_pod_observations(observations),
+        jobs={
+            uid: timeline[-1]
+            for uid, timeline in observations_by_uid(
+                observation
+                for observation in observations
+                if observation.get("kind") == "Job"
+            ).items()
+        },
+        job_restarts=job_restarts,
+    )
+
+
+def _assign_terminals(
+    starts: list[dict],
     terminals: list[dict],
-    owner: dict | None,
+    owner: dict,
     *,
     owner_outcome_end: str | None,
-) -> dict | None:
-    return next(
-        (
-            terminal
-            for terminal in terminals
-            if owner is not None
-            and terminal["kind"] == owner["kind"]
-            and terminal["uid"] == owner["uid"]
-            and within(
-                terminal["time"],
-                start["time"],
-                next_start,
-                include_end=True,
+) -> list[dict | None]:
+    """Assign each exact-owner terminal to at most one attempt.
+
+    Starts are ordered. Trying the preceding interval first makes a terminal
+    at a shared boundary close that attempt without also closing the next.
+    """
+    assigned: list[dict | None] = [None] * len(starts)
+    for terminal in terminals:
+        if (
+            terminal["kind"] != owner["kind"]
+            or terminal["uid"] != owner["uid"]
+        ):
+            continue
+        terminal_time = parse_time(terminal["time"])
+        if (
+            owner_outcome_end is not None
+            and terminal_time >= parse_time(owner_outcome_end)
+        ):
+            continue
+        for index, start in enumerate(starts):
+            start_time = parse_time(start["time"])
+            next_time = (
+                parse_time(starts[index + 1]["time"])
+                if index + 1 < len(starts)
+                else None
             )
-            and (
-                owner_outcome_end is None
-                or parse_time(terminal["time"])
-                < parse_time(owner_outcome_end)
-            )
-            and terminal["restart_attempt"] in {
-                None,
-                start["restart_attempt"],
-            }
-        ),
-        None,
-    )
+            if (
+                terminal_time >= start_time
+                and (next_time is None or terminal_time <= next_time)
+                and terminal["restart_attempt"]
+                in {None, start["restart_attempt"]}
+            ):
+                if assigned[index] is None:
+                    assigned[index] = terminal
+                # This interval owns the transition even when another
+                # observation already supplied its terminal details.
+                break
+    return assigned
 
 
 def _pod_in_attempt(
@@ -827,9 +997,12 @@ def _resource_in_attempt(
     start: str,
     end: str | None,
     *,
+    inferred_restart: str | None = None,
     allow_before_start: bool,
 ) -> bool:
     observed_restart = restart_attempt(observation)
+    if observed_restart is None:
+        observed_restart = inferred_restart
     if (
         observed_restart is not None
         and observed_restart != expected_restart

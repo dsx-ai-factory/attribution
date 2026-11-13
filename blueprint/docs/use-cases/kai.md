@@ -95,12 +95,13 @@ defines retention and recovery limits.
 - Job deadlines are forwarded from `activeDeadlineSeconds`; for JobSets, the
   shortest verified child deadline and earliest child failure reason are used.
 - `PREEMPTED`, `EVICTED`, and `REQUEUED` are not detected yet.
-- A context represents the lifetime of one PodGroup incarnation, not an
-  individual scheduling attempt.
-- Hierarchical PodGroups are emitted with `podgroup_shape = "hierarchical"`;
+- Started contexts represent canonical scheduling attempts split by PodGroup
+  allocation boundaries and JobSet restart generations. An unscheduled live
+  PodGroup retains its UID-based context.
+- Hierarchical PodGroups are handled at the top-owner level;
   subgroup-specific attempt semantics are not inferred.
 
-The PodGroup and its owning Job or JobSet must still exist when discovery
-runs. The KAI adapter uses daemon evidence for placement recovery, not
-discovery of deleted PodGroups. Run attribution within both resources'
-retention windows.
+With retained history enabled, deleted
+PodGroup attempts can be discovered while the required Pod, Job, JobSet, and
+PodGroup observations remain within the daemon retention and continuous-watch
+coverage windows.

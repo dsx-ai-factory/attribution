@@ -171,6 +171,44 @@ def _parse_dt(value: str | None) -> datetime | None:
     return dt
 
 
+def _latest_resources_by_uid(
+    observations: list[dict],
+) -> dict[str, dict]:
+    """Restore each resource from its latest deterministic observation."""
+    selected: dict[str, tuple[tuple, dict]] = {}
+    for observation in observations:
+        metadata = observation.get("metadata") or {}
+        uid = metadata.get("uid")
+        observed_at = _parse_dt(observation.get("observedAt"))
+        if not uid or observed_at is None:
+            continue
+        resource_version = str(
+            metadata.get("resourceVersion") or ""
+        )
+        key = (
+            bool(resource_version),
+            (
+                int(resource_version)
+                if resource_version.isdigit()
+                else -1
+            ),
+            resource_version,
+            observed_at,
+            json.dumps(
+                observation,
+                sort_keys=True,
+                separators=(",", ":"),
+                default=str,
+            ),
+        )
+        if uid not in selected or key > selected[uid][0]:
+            selected[uid] = (key, observation)
+    return {
+        uid: resource_from_observation(observation)
+        for uid, (_key, observation) in selected.items()
+    }
+
+
 def _split_csv(value: str) -> list[str]:
     """CSV-split a string, stripping whitespace and dropping empty entries."""
     return [piece.strip() for piece in value.split(",") if piece.strip()]
@@ -836,15 +874,9 @@ class KaiExecutionContextAdapter:
             if not attempts:
                 continue
 
-            resources_by_uid = {
-                metadata["uid"]: resource_from_observation(
-                    observation
-                )
-                for observation in observations
-                if (
-                    metadata := observation.get("metadata") or {}
-                ).get("uid")
-            }
+            resources_by_uid = _latest_resources_by_uid(
+                observations
+            )
             pods = {
                 uid: resource
                 for uid, resource in resources_by_uid.items()

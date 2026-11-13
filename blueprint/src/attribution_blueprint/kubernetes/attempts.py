@@ -10,12 +10,43 @@ from datetime import datetime, timezone
 RESTART_LABEL = "jobset.sigs.k8s.io/restart-attempt"
 
 
-def restart_starts(observations: list[dict]) -> dict[str, str]:
+def restart_starts(
+    observations: list[dict],
+    inferred_job_restarts: dict[str, str] | None = None,
+) -> dict[str, str]:
+    """Return earliest restart starts, optionally resolving unlabeled Jobs."""
     starts = {}
+    for _observation, restart, timestamp in restart_start_candidates(
+        observations,
+        inferred_job_restarts,
+    ):
+        if (
+            restart not in starts
+            or parse_time(timestamp) < parse_time(starts[restart])
+        ):
+            starts[restart] = timestamp
+    return starts
+
+
+def restart_start_candidates(
+    observations: list[dict],
+    inferred_job_restarts: dict[str, str] | None = None,
+) -> list[tuple[dict, str, str]]:
+    """Preserve restart starts until callers apply workload-specific scope."""
+    candidates = []
     for observation in observations:
-        if observation.get("kind") not in {"Job", "Pod"}:
+        kind = observation.get("kind")
+        if kind not in {"Job", "Pod"}:
             continue
         restart = restart_attempt(observation)
+        if (
+            restart is None
+            and kind == "Job"
+            and inferred_job_restarts
+        ):
+            restart = inferred_job_restarts.get(
+                (observation.get("metadata") or {}).get("uid")
+            )
         if restart is None:
             continue
         status = observation.get("status") or {}
@@ -24,12 +55,9 @@ def restart_starts(observations: list[dict]) -> dict[str, str]:
             or observation.get("sourceTimestamp")
             or observation.get("observedAt")
         )
-        if timestamp and (
-            restart not in starts
-            or parse_time(timestamp) < parse_time(starts[restart])
-        ):
-            starts[restart] = timestamp
-    return starts
+        if timestamp:
+            candidates.append((observation, restart, timestamp))
+    return candidates
 
 
 def restart_attempt(observation: dict) -> str | None:
