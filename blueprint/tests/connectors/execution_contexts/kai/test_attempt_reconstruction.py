@@ -1229,9 +1229,9 @@ def test_initial_retry_allocation_requires_continuous_evidence(delay, evidence, 
     if evidence == "earlier-terminal":
         observations.append({
             "kind": "Job", "metadata": {"uid": "failed-job", "name": "failed"},
-            "observedAt": ts(100),
+            "observedAt": ts(boundary),
             "selectedMetadata": {"labels": {_RESTART_LABEL: "1"}},
-            "status": {"conditions": [{"type": "Failed", "status": "True", "lastTransitionTime": ts(100)}]},
+            "status": {"conditions": [{"type": "Failed", "status": "True", "lastTransitionTime": ts(boundary)}]},
         })
     observations.extend([running, _podgroup_observation(owner, ts(boundary), status={"lastStartTimestamp": ts(boundary)})])
     after = reconstruct(observations)
