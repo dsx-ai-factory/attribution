@@ -156,21 +156,21 @@ def gpu_count_from_alloc_tres(alloc_tres: str) -> int | None:
         ``gres/gpu:h200`` repeat that count, so they are summed only when the
         generic entry is absent. Returns 0 for a valid resource list without
         GPU entries. Returns None when AllocTRES is empty or unavailable
-        (for example ``(null)``) or when any GPU entry is not a non-negative
-        integer, so callers keep their fallback instead of recording a
-        fabricated count.
+        (for example ``(null)``) or when any GPU entry has no value or is not
+        a non-negative integer, so callers keep their fallback instead of
+        recording a fabricated count.
     """
     generic: int | None = None
     typed = 0
     saw_resource = False
     for part in alloc_tres.split(","):
         key, sep, raw_value = part.partition("=")
-        if sep == "":
-            continue
-        saw_resource = True
         key = key.strip()
+        if sep != "":
+            saw_resource = True
         if key != "gres/gpu" and not key.startswith("gres/gpu:"):
             continue
+        # A GPU entry without "=" has an empty value and is rejected below.
         raw_value = raw_value.strip()
         if not raw_value.isdecimal():
             return None
