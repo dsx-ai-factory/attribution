@@ -58,6 +58,44 @@ def _reconstruct(history):
     )
 
 
+def _live_resource(snapshot, **fields):
+    """Build a live API resource from explicit test snapshot fields."""
+    return {
+        "apiVersion": {
+            "Pod": "v1",
+            "JobSet": "jobset.x-k8s.io/v1alpha2",
+            "PodGroup": "scheduling.run.ai/v2alpha2",
+        }[snapshot["kind"]],
+        "kind": snapshot["kind"],
+        "metadata": {
+            "namespace": "team-a",
+            **snapshot["metadata"],
+            **snapshot.get("selectedMetadata", {}),
+        },
+        "status": copy.deepcopy(snapshot.get("status", {})),
+        **fields,
+    }
+
+
+def _placement(uid, node, seconds, **fields):
+    return PlacementRecord(
+        namespace="team-a",
+        pod_name=uid,
+        pod_uid=uid,
+        node_name=node,
+        observed_at=_ts(seconds),
+        scheduled_at=_ts(seconds),
+        **fields,
+    )
+
+
+def _retained_attempts(history):
+    evidence = KaiExecutionContextAdapter._evidence_from_histories(
+        [history], pod_group_name="pg-training"
+    )
+    return KaiExecutionContextAdapter._combine_attempt_evidence(evidence)
+
+
 def _owner_reference(kind: str, name: str, uid: str) -> OwnerReference:
     return OwnerReference(
         api_version=("jobset.x-k8s.io/v1alpha2" if kind == "JobSet" else "batch/v1"),
@@ -88,6 +126,7 @@ def _pod(
     pod_group_name: str = "pg-training",
     node: str | None = None,
     reason: str | None = None,
+    job_uid: str = "job-uid",
 ) -> dict:
     selected_metadata = {"annotations": {"pod-group-name": pod_group_name}}
     if restart is not None:
@@ -99,7 +138,10 @@ def _pod(
         "Pod",
         uid,
         observed_at,
-        metadata={"name": name},
+        metadata={
+            "name": name,
+            "ownerReferences": [{"kind": "Job", "uid": job_uid, "controller": True}],
+        },
         selectedMetadata=selected_metadata,
         status=status,
     )
@@ -360,7 +402,7 @@ def test_active_restart_carries_across_scheduling_boundaries():
     history = {
         "observations": [
             _podgroup(owner, _ts(0), status={"lastStartTimestamp": _ts(0)}),
-            _pod("pod-old", "old-pod", _ts(60), start_time=_ts(60), restart="0"),
+            _pod("pod-old", "old-pod", _ts(60), start_time=_ts(60), restart="0", job_uid="job-old"),
             _podgroup(owner, _ts(3600), status={"lastStartTimestamp": _ts(3600)}),
             _snapshot(
                 "Job",
@@ -370,12 +412,35 @@ def test_active_restart_carries_across_scheduling_boundaries():
                 selectedMetadata={"labels": {_RESTART_LABEL: "1"}},
                 status={"startTime": _ts(3600)},
             ),
-            _pod("pod-new", "new-pod", _ts(3660), start_time=_ts(3660), restart="1"),
+            _pod(
+                "pod-new",
+                "new-pod",
+                _ts(3660),
+                start_time=_ts(3660),
+                restart="1",
+                job_uid="job-new",
+            ),
             _podgroup(owner, _ts(7200), status={"lastStartTimestamp": _ts(7200)}),
-            _pod("pod-latest", "latest-pod", _ts(7260), start_time=_ts(7260), restart="1"),
+            _pod(
+                "pod-latest",
+                "latest-pod",
+                _ts(7260),
+                start_time=_ts(7260),
+                restart="1",
+                job_uid="job-new",
+            ),
         ]
     }
 
+    history["observations"].append(
+        _snapshot(
+            "Job",
+            "job-old",
+            _ts(60),
+            metadata={"ownerReferences": [owner]},
+            selectedMetadata={"labels": {_RESTART_LABEL: "0"}},
+        )
+    )
     attempts = attempts_from_podgroup_history(history, pod_group_name="pg-training", now=_dt(10800))
 
     assert len(attempts) == 3
@@ -393,7 +458,9 @@ def test_restart_boundaries_are_scoped_to_podgroup_incarnation():
     history = {
         "observations": [
             _podgroup(owner, _ts(0), uid="podgroup-old", status={"lastStartTimestamp": _ts(0)}),
-            _pod("pod-old", "old-pod", _ts(60), start_time=_ts(60), restart="1"),
+            _pod(
+                "pod-old", "old-pod", _ts(60), start_time=_ts(60), restart="1", job_uid="worker-job"
+            ),
             _podgroup(
                 owner,
                 _ts(2100),
@@ -404,10 +471,26 @@ def test_restart_boundaries_are_scoped_to_podgroup_incarnation():
             _podgroup(
                 owner, _ts(2100), uid="podgroup-new", status={"lastStartTimestamp": _ts(1800)}
             ),
-            _pod("pod-new", "new-pod", _ts(2400), start_time=_ts(2400), restart="1"),
+            _pod(
+                "pod-new",
+                "new-pod",
+                _ts(2400),
+                start_time=_ts(2400),
+                restart="1",
+                job_uid="worker-job",
+            ),
         ]
     }
 
+    history["observations"].append(
+        _snapshot(
+            "Job",
+            "worker-job",
+            _ts(60),
+            metadata={"ownerReferences": [owner]},
+            selectedMetadata={"labels": {_RESTART_LABEL: "1"}},
+        )
+    )
     attempts = _reconstruct(history)
 
     assert len(attempts) == 2
@@ -454,7 +537,15 @@ def test_initial_boundary_preserves_nonzero_restart_evidence_time(
 ):
     owner = _owner(owner_kind, "training", "owner-uid")
     initial_pods = (
-        [_pod("pod-initial", "initial-pod", initial_pod_time, start_time=initial_pod_time)]
+        [
+            _pod(
+                "pod-initial",
+                "initial-pod",
+                initial_pod_time,
+                start_time=initial_pod_time,
+                job_uid=("owner-uid" if owner_kind == "Job" else "job-initial"),
+            )
+        ]
         if initial_pod_time
         else []
     )
@@ -474,11 +565,22 @@ def test_initial_boundary_preserves_nonzero_restart_evidence_time(
                 "observedAt": restart_time,
                 "status": {"startTime": restart_time},
             },
-            _pod("pod-current", "current-pod", pod_time, start_time=pod_time, restart="2"),
+            _pod(
+                "pod-current",
+                "current-pod",
+                pod_time,
+                start_time=pod_time,
+                restart="2",
+                job_uid=("owner-uid" if owner_kind == "Job" else "job-current"),
+            ),
             _podgroup(owner, _ts(0), status={"lastStartTimestamp": _ts(0)}),
         ]
     }
 
+    if initial_pod_time and owner_kind == "JobSet":
+        history["observations"].append(
+            _snapshot("Job", "job-initial", initial_pod_time, metadata={"ownerReferences": [owner]})
+        )
     attempts = _reconstruct(history)
 
     assert [attempt.start_time.strftime("%H:%M") for attempt in attempts] == (expected_starts)
@@ -537,7 +639,14 @@ def test_recreated_podgroups_with_same_restart_isolate_pods_and_terminal():
     history = {
         "observations": [
             _podgroup(owner, _ts(0), uid="podgroup-old", status={"lastStartTimestamp": _ts(0)}),
-            _pod("pod-old", "trainer-old", _ts(60), start_time=_ts(60), restart="0"),
+            _pod(
+                "pod-old",
+                "trainer-old",
+                _ts(60),
+                start_time=_ts(60),
+                restart="0",
+                job_uid="worker-job",
+            ),
             _podgroup(
                 owner,
                 _ts(900),
@@ -546,7 +655,14 @@ def test_recreated_podgroups_with_same_restart_isolate_pods_and_terminal():
                 eventType="DELETED",
             ),
             _podgroup(owner, _ts(960), uid="podgroup-new", status={"lastStartTimestamp": _ts(600)}),
-            _pod("pod-new", "trainer-new", _ts(960), start_time=_ts(660), restart="0"),
+            _pod(
+                "pod-new",
+                "trainer-new",
+                _ts(960),
+                start_time=_ts(660),
+                restart="0",
+                job_uid="worker-job",
+            ),
             _snapshot(
                 "JobSet",
                 "jobset-uid",
@@ -557,6 +673,15 @@ def test_recreated_podgroups_with_same_restart_isolate_pods_and_terminal():
         ]
     }
 
+    history["observations"].append(
+        _snapshot(
+            "Job",
+            "worker-job",
+            _ts(60),
+            metadata={"ownerReferences": [owner]},
+            selectedMetadata={"labels": {_RESTART_LABEL: "0"}},
+        )
+    )
     attempts = _reconstruct(history)
 
     assert len(attempts) == 2
@@ -571,57 +696,23 @@ def test_recreated_podgroups_with_same_restart_isolate_pods_and_terminal():
     assert new.pod_uids == frozenset({"pod-new"})
     assert new.membership_resolved is False
 
-    mixed_history = {"observations": history["observations"][:-1], "coverage": {}}
+    mixed_history = {
+        "observations": history["observations"][:5] + history["observations"][6:],
+        "coverage": {},
+    }
     [retained] = KaiExecutionContextAdapter._evidence_from_histories(
         [mixed_history], pod_group_name="pg-training"
     )
-    live_podgroup = {
-        "apiVersion": "scheduling.run.ai/v2alpha2",
-        "kind": "PodGroup",
-        "metadata": {
-            "namespace": "team-a",
-            "name": "pg-training",
-            "uid": "podgroup-new",
-            "ownerReferences": [owner],
-        },
-        "status": {"lastStartTimestamp": _ts(600)},
-    }
-    live_owner = {
-        "apiVersion": "jobset.x-k8s.io/v1alpha2",
-        "kind": "JobSet",
-        "metadata": {"namespace": "team-a", "name": "training", "uid": "jobset-uid"},
-        "status": {},
-    }
+    records = history["observations"]
+    live_podgroup = _live_resource(records[3])
+    live_owner = _live_resource(records[5], status={})
     live_pods = [
-        {
-            "apiVersion": "v1",
-            "kind": "Pod",
-            "metadata": {
-                "namespace": "team-a",
-                "name": "trainer-old",
-                "uid": "pod-old",
-                "resourceVersion": "2",
-                "annotations": {"pod-group-name": "pg-training"},
-                "labels": {_RESTART_LABEL: "0"},
-            },
-            "spec": {"nodeName": "old-node"},
-            "status": {"startTime": _ts(60), "reason": "NodeLost"},
-        },
-        {
-            "apiVersion": "v1",
-            "kind": "Pod",
-            "metadata": {
-                "namespace": "team-a",
-                "name": "trainer-new",
-                "uid": "pod-new",
-                "resourceVersion": "2",
-                "annotations": {"pod-group-name": "pg-training"},
-                "labels": {_RESTART_LABEL: "0"},
-            },
-            "spec": {"nodeName": "new-node"},
-            "status": {"startTime": _ts(660)},
-        },
+        _live_resource(records[1], spec={"nodeName": "old-node"}),
+        _live_resource(records[4], spec={"nodeName": "new-node"}),
     ]
+    live_pods[0]["status"]["reason"] = "NodeLost"
+    for pod in live_pods:
+        pod["metadata"]["resourceVersion"] = "2"
     now = datetime(2026, 10, 14, 11, tzinfo=timezone.utc)
     live_observations = snapshots_from_live_resources(
         live_podgroup, live_pods, [], live_owner, now=now
@@ -681,6 +772,7 @@ def test_recreated_podgroup_excludes_foreign_owner_job_failure():
         restart="1",
         node="old-owner-node",
         reason="NodeLost",
+        job_uid="new-job",
     )
     foreign_pod["metadata"]["ownerReferences"] = [
         {"kind": "Job", "uid": "foreign-old-job", "controller": True}
@@ -708,6 +800,7 @@ def test_recreated_podgroup_excludes_foreign_owner_job_failure():
                 start_time=_ts(720),
                 restart="1",
                 node="new-owner-node",
+                job_uid="new-job",
             ),
             _snapshot(
                 "JobSet",
@@ -719,12 +812,9 @@ def test_recreated_podgroup_excludes_foreign_owner_job_failure():
         ]
     }
 
-    [workload_evidence] = KaiExecutionContextAdapter._evidence_from_histories(
-        [history], pod_group_name="pg-training"
-    )
     new_evidence = next(
         evidence
-        for evidence in KaiExecutionContextAdapter._combine_attempt_evidence([workload_evidence])
+        for evidence in _retained_attempts(history)
         if evidence.attempt.pod_group_uid == "podgroup-new"
     )
     assert new_evidence.attempt.job_uids == frozenset({"new-job"})
@@ -736,35 +826,8 @@ def test_recreated_podgroup_excludes_foreign_owner_job_failure():
     assert "failed_node" not in context
 
 
-def test_unstarted_replacement_keeps_closed_old_execution_recoverable():
-    owner = _owner("Job", "trainer", "job-uid")
-    history = {
-        "observations": [
-            _pod("pod-old", "trainer-old", _ts(60), start_time=_ts(60)),
-            _podgroup(owner, _ts(840), uid="podgroup-old", eventType="DELETED"),
-            _podgroup(owner, _ts(0), uid="podgroup-old", status={"lastStartTimestamp": _ts(0)}),
-            _podgroup(owner, _ts(900), uid="podgroup-new"),
-            _snapshot(
-                "Job",
-                "job-uid",
-                _ts(1200),
-                metadata={"name": "trainer"},
-                status={"conditions": [_condition("Complete", _ts(1200))]},
-            ),
-        ]
-    }
-
-    attempts = _reconstruct(history)
-
-    assert len(attempts) == 1
-    assert attempts[0].boundary_resolved is True
-    assert attempts[0].terminal is not None
-    assert attempts[0].terminal["type"] == "Complete"
-    assert attempts[0].open is False
-    assert attempts[0].pod_uids == frozenset({"pod-old"})
-
-
-def test_next_scheduling_start_preserves_earlier_membership_after_gc():
+@pytest.mark.parametrize("reallocated", [False, True])
+def test_next_scheduling_start_preserves_earlier_membership_after_gc(reallocated):
     owner = _owner("Job", "trainer", "job-uid")
     history = {
         "observations": [
@@ -786,16 +849,20 @@ def test_next_scheduling_start_preserves_earlier_membership_after_gc():
         ]
     }
 
+    if not reallocated:
+        del history["observations"][2:4]
     attempts = attempts_from_podgroup_history(history, pod_group_name="pg-training", now=_dt(10800))
 
-    assert len(attempts) == 2
-    first, second = attempts
-    assert first.boundary_resolved is True
-    assert first.terminal is None
-    assert first.pod_uids == frozenset({"pod-first"})
-    assert second.boundary_resolved is True
-    assert second.terminal is not None
-    assert second.pod_uids == frozenset({"pod-second"})
+    assert len(attempts) == (2 if reallocated else 1)
+    last = attempts[-1]
+    assert last.boundary_resolved is True
+    assert last.terminal["type"] == "Complete"
+    assert last.open is False
+    assert last.pod_uids == frozenset({"pod-second" if reallocated else "pod-first"})
+    if reallocated:
+        assert attempts[0].boundary_resolved is True
+        assert attempts[0].terminal is None
+        assert attempts[0].pod_uids == frozenset({"pod-first"})
 
 
 def test_unstarted_replacement_without_terminal_remains_uncertain():
@@ -815,13 +882,14 @@ def test_unstarted_replacement_without_terminal_remains_uncertain():
     assert attempts[0].open is False
 
 
+@pytest.mark.parametrize("node", [None, "node-a"])
 @pytest.mark.parametrize("completed, expected_state", [(False, "NODE_FAIL"), (True, "COMPLETED")])
-def test_retained_member_pod_node_loss_does_not_require_placement(completed, expected_state):
+def test_retained_member_pod_node_loss_does_not_require_placement(completed, expected_state, node):
     owner = _owner("Job", "trainer", "job-uid")
     history = {
         "observations": [
             _podgroup(owner, _ts(0), status={"lastStartTimestamp": _ts(0)}),
-            _pod("lost-pod", "lost-pod", _ts(60), start_time=_ts(60), reason="NodeLost"),
+            _pod("lost-pod", "lost-pod", _ts(60), start_time=_ts(60), reason="NodeLost", node=node),
         ]
     }
     if completed:
@@ -834,15 +902,12 @@ def test_retained_member_pod_node_loss_does_not_require_placement(completed, exp
                 status={"conditions": [_condition("Complete", _ts(3600))]},
             )
         )
-    [workload_evidence] = KaiExecutionContextAdapter._evidence_from_histories(
-        [history], pod_group_name="pg-training"
-    )
-    [evidence] = KaiExecutionContextAdapter._combine_attempt_evidence([workload_evidence])
+    [evidence] = _retained_attempts(history)
     context = _context_from_attempt_evidence(evidence)
 
     assert context["state"] == expected_state
-    assert context["nodes"] == []
-    assert "failed_node" not in context
+    assert context["nodes"] == ([node] if node else [])
+    assert context.get("failed_node") == (node if not completed else None)
 
 
 def test_latest_pod_deterministically_controls_context_state():
@@ -895,22 +960,9 @@ def test_reconstructed_attempt_rejects_time_only_placement_membership():
         _AttemptEvidence(
             attempt=attempt,
             placements={
-                "current-pod": PlacementRecord(
-                    namespace="team-a",
-                    pod_name="current-pod",
-                    pod_uid="current-pod",
-                    node_name="node-current",
-                    observed_at=_ts(300),
-                    scheduled_at=_ts(300),
-                ),
-                "excluded-pod": PlacementRecord(
-                    namespace="team-a",
-                    pod_name="excluded-pod",
-                    pod_uid="excluded-pod",
-                    node_name="node-excluded",
-                    observed_at=_ts(360),
-                    scheduled_at=_ts(360),
-                    node_failure_reason="NodeLost",
+                "current-pod": _placement("current-pod", "node-current", 300),
+                "excluded-pod": _placement(
+                    "excluded-pod", "node-excluded", 360, node_failure_reason="NodeLost"
                 ),
             },
         )
@@ -932,7 +984,7 @@ def _retry_history(delay=5, owner_kind="JobSet"):
         selectedMetadata={"labels": {_RESTART_LABEL: "1"}},
         status={"startTime": _ts(100)},
     )
-    pending = _pod("new", "new", _ts(100), start_time=_ts(100), restart="1")
+    pending = _pod("new", "new", _ts(100), start_time=_ts(100), restart="1", job_uid="new-job")
     pending["status"] = {"phase": "Pending"}
     running = copy.deepcopy(pending)
     running.update(
@@ -946,14 +998,21 @@ def _retry_history(delay=5, owner_kind="JobSet"):
     return {
         "observations": [
             _podgroup(owner, _ts(0), status={"lastStartTimestamp": _ts(0)}),
-            _pod("old", "old", _ts(1), start_time=_ts(1), restart="0"),
+            _pod(
+                "old",
+                "old",
+                _ts(1),
+                start_time=_ts(1),
+                restart="0",
+                job_uid=("old-job" if owner_kind == "JobSet" else "new-job"),
+            ),
             job,
             pending,
             _snapshot(
                 "Job",
                 "old-job",
                 _ts(100),
-                metadata={"name": "old-job"},
+                metadata={"name": "old-job", "ownerReferences": [owner]},
                 selectedMetadata={"labels": {_RESTART_LABEL: "0"}},
                 status={"conditions": [_condition("Failed", _ts(100))]},
             ),
@@ -989,7 +1048,7 @@ def _retry_attempts(history):
     )
 
 
-@pytest.mark.parametrize("missing", ["gap", "late-watch", "missing-coverage", "missing-scheduled"])
+@pytest.mark.parametrize("missing", ["gap", "late-watch", "missing-coverage", "missing-scheduled", "unowned-pods"])
 def test_initial_retry_allocation_requires_continuous_evidence(retry_history, missing):
     coverage = retry_history["coverage"]
     if missing == "gap":
@@ -998,6 +1057,9 @@ def test_initial_retry_allocation_requires_continuous_evidence(retry_history, mi
         coverage["sources"][0]["coverageStartedAt"] = _ts(101)
     elif missing == "missing-coverage":
         retry_history["coverage"] = {}
+    elif missing == "unowned-pods":
+        for pod in (retry_history["observations"][3], retry_history["observations"][-2]):
+            pod["metadata"]["ownerReferences"] = []
     else:
         retry_history["observations"][-2]["status"]["conditions"] = []
     assert len(_retry_attempts(retry_history)) == 3
@@ -1086,9 +1148,8 @@ def test_unlabeled_job_start_uses_owned_pod_generation(retry_history):
     assert attempts[-1].pod_uids == frozenset({"new"})
 
 
-@pytest.mark.parametrize("repeated", [False, True])
-def test_boundary_terminal_closes_only_previous_attempt(retry_history, repeated):
-    for reason in ["InitialReason", "UpdatedReason"] if repeated else ["InitialReason"]:
+def test_boundary_terminal_closes_only_previous_attempt(retry_history):
+    for reason in ["InitialReason", "UpdatedReason"]:
         retry_history["observations"].insert(
             -2,
             _snapshot(
@@ -1155,7 +1216,7 @@ def test_live_spec_survives_equal_version_history(kind, spec, retained_version, 
         assert result["spec"] == spec
         assert result["status"] == {"phase": "Running"}
     else:
-        assert result["spec"] == {}
+        assert result["spec"] == spec
         assert result["status"] == {"phase": "Failed"}
 
 
@@ -1216,3 +1277,60 @@ def test_retry_reconstruction_accepts_missing_or_null_optional_containers(nullab
     before = copy.deepcopy(replay)
     assert _retry_attempts({**history, "observations": replay}) == expected
     assert replay == before
+
+
+@pytest.mark.parametrize("retirement", ["deleted", "unscheduled-successor"])
+def test_retired_attempt_without_terminal_has_bounded_uncertain_end(retirement):
+    owner = _owner("Job", "trainer", "job-uid")
+    retired = (
+        _podgroup(owner, _ts(1800), eventType="DELETED")
+        if retirement == "deleted"
+        else _podgroup(owner, _ts(1800), uid="successor")
+    )
+    records = [_podgroup(owner, _ts(0), status={"lastStartTimestamp": _ts(0)}), retired]
+    history = {"observations": records}
+    for now in (_dt(7200), _dt(14400)):
+        [attempt] = attempts_from_podgroup_history(history, pod_group_name="pg-training", now=now)
+        assert attempt.end_time == _dt(1800)
+        assert not attempt.open
+        assert not attempt.membership_resolved
+
+
+def test_pod_scheduled_before_boundary_stays_in_earlier_attempt():
+    owner = _owner("Job", "trainer", "job-uid")
+    pod = _pod("delayed", "delayed", _ts(3602), start_time=_ts(3602))
+    pod["status"]["conditions"] = [_condition("PodScheduled", _ts(3599))]
+    attempts = _reconstruct(
+        {
+            "observations": [
+                _podgroup(owner, _ts(0), status={"lastStartTimestamp": _ts(0)}),
+                _podgroup(owner, _ts(3600), status={"lastStartTimestamp": _ts(3600)}),
+                pod,
+            ]
+        }
+    )
+    assert [a.pod_uids for a in attempts] == [frozenset({"delayed"}), frozenset()]
+
+
+@pytest.mark.parametrize(
+    "references",
+    [
+        [],
+        [{"kind": "Job", "uid": "job-uid", "controller": False}],
+        [{"kind": "Job", "uid": "other-job", "controller": True}],
+    ],
+)
+def test_historical_pods_require_matching_job_controller(references):
+    owner = _owner("Job", "trainer", "job-uid")
+    pod = _pod(
+        "foreign", "foreign", _ts(60), start_time=_ts(60), node="foreign-node", reason="NodeLost"
+    )
+    pod["metadata"]["ownerReferences"] = references
+    [evidence] = _retained_attempts(
+        {"observations": [_podgroup(owner, _ts(0), status={"lastStartTimestamp": _ts(0)}), pod]}
+    )
+    assert not evidence.attempt.pod_uids
+    context = _context_from_attempt_evidence(evidence)
+    assert context["nodes"] == []
+    assert context["state"] != "NODE_FAIL"
+    assert "failed_node" not in context

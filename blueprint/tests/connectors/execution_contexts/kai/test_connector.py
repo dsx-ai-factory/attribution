@@ -1095,6 +1095,7 @@ def test_started_live_and_retained_resources_share_canonical_attempt(mocker):
                     "metadata": {
                         "name": "retained-pod",
                         "uid": "retained-pod-uid",
+                        "ownerReferences": [{"kind": "Job", "uid": "uid-job-uid-pg-a", "controller": True}],
                     },
                     "selectedMetadata": {
                         "annotations": {
@@ -1397,3 +1398,12 @@ def test_builder_coerces_cli_and_environment_boolean_strings():
             {"placement_records_enabled": "sometimes"},
             ctx={"framework": "eca"},
         )
+
+
+@pytest.mark.parametrize("subgroups, expected", [([], "owned"), ([{"name": "workers"}], "hierarchical")])
+def test_live_podgroup_shape_is_preserved(mocker, subgroups, expected):
+    podgroup = _podgroup()
+    podgroup["spec"]["subGroups"] = subgroups
+    _wire_kubectl(mocker, [podgroup], [], [_job("pg-a-job", "uid-job-uid-pg-a")])
+    [context] = KaiExecutionContextAdapter().discover_by_ids(["team-alpha/pg-a"])
+    assert context["podgroup_shape"] == expected

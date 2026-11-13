@@ -270,7 +270,9 @@ def attempts_from_podgroup_history(
         if owner["kind"] == "JobSet":
             starts = _coalesce_initial_allocation(
                 starts,
-                snapshots,
+                [snapshot for snapshot in snapshots
+                 if snapshot.get("kind") == "Pod"
+                 and _pod_owned_by(snapshot, owner, job_events)],
                 terminals,
                 pod_group_name,
                 [history.get("coverage") or {}, *(history.get("coverages") or [])],
@@ -338,6 +340,8 @@ def attempts_from_podgroup_history(
                         if terminal is not None
                         else parse_time(attempt_end)
                         if attempt_end is not None
+                        else max(parse_time(start["time"]), parse_time(boundary.observed_end))
+                        if boundary.retired and boundary.observed_end is not None
                         else now
                     ),
                     terminal=terminal,
@@ -347,7 +351,9 @@ def attempts_from_podgroup_history(
                         and not boundary.retired
                     ),
                     boundary_resolved=boundary_resolved,
-                    membership_resolved=not ambiguous_predated_pod,
+                    membership_resolved=not ambiguous_predated_pod and not (
+                        boundary.retired and attempt_end is None and terminal is None
+                    ),
                     pod_uids=frozenset(
                         uid
                         for uid, pod in pod_events.items()
@@ -401,6 +407,7 @@ def attempts_from_podgroup_history(
 @dataclass(frozen=True)
 class _PodGroupBoundary:
     end: str | None
+    observed_end: str | None
     owner_outcome_end: str | None
     retired: bool
     resolved: bool
@@ -471,6 +478,13 @@ def _podgroup_boundaries(
         retired = bool(deletion_observations) or has_successor
         boundaries[pod_group_uid] = _PodGroupBoundary(
             end=end,
+            # Collection time bounds a retired interval but cannot prove the
+            # exact execution or membership boundary.
+            observed_end=min(
+                [item["observedAt"] for item in deletion_observations]
+                + ([incarnations[index + 1][2][0]["observedAt"]] if has_successor else []),
+                key=parse_time, default=None,
+            ),
             owner_outcome_end=replacement,
             retired=retired,
             # A standalone deleted PodGroup still has an exact owner UID.
@@ -602,7 +616,7 @@ def _pod_owned_by(
     """Verify the Pod controller against the resolved workload ownership chain."""
     controller = controller_owner(pod["metadata"])
     if controller is None:
-        return True
+        return False
     if controller["kind"] != "Job":
         return False
     if owner["kind"] == "Job":
@@ -1082,6 +1096,14 @@ def _pod_matches_attempt(
 
 
 def _pod_timestamp(snapshot: dict) -> str | None:
+    """Use scheduling evidence for allocation membership before kubelet start."""
+    scheduled = [condition["lastTransitionTime"]
+                 for condition in snapshot["status"]["conditions"]
+                 if condition.get("type") == "PodScheduled"
+                 and condition.get("status") == "True"
+                 and condition.get("lastTransitionTime")]
+    if scheduled:
+        return min(scheduled, key=parse_time)
     return snapshot["status"].get(
         "startTime"
     ) or snapshot.get("observedAt")

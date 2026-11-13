@@ -106,6 +106,7 @@ class KaiExecutionContext(TypedDict):
     owner_kind: str
     owner_name: str
     owner_uid: str
+    podgroup_shape: NotRequired[str]
     owner_state: str  # native owner wording; see `_owner_state`
     failed_node: NotRequired[str]
     time_limit: NotRequired[int]
@@ -176,10 +177,12 @@ def _latest_resources_by_uid(
 ) -> dict[str, dict]:
     """Restore the latest resource version, preferring full live data on ties.
 
-    Daemon snapshots omit spec. At the same version, their later collection
-    time must not displace live placement and deadline fields.
+    Daemon snapshots omit spec. Preserve the latest available full spec for
+    the same UID even when a newer retained status wins. This spec is the last
+    available value, not a claim that it was fetched at the selected version.
     """
     selected: dict[str, tuple[tuple, dict]] = {}
+    full: dict[str, tuple[tuple, dict]] = {}
     for observation in observations:
         metadata = observation.get("metadata") or {}
         uid = metadata.get("uid")
@@ -206,10 +209,15 @@ def _latest_resources_by_uid(
                 default=str,
             ),
         )
+        if "spec" in observation and (uid not in full or key > full[uid][0]):
+            full[uid] = (key, observation)
         if uid not in selected or key > selected[uid][0]:
             selected[uid] = (key, observation)
     return {
-        uid: resource_from_observation(observation)
+        uid: resource_from_observation({
+            **observation,
+            **({"spec": full[uid][1]["spec"]} if uid in full else {}),
+        })
         for uid, (_key, observation) in selected.items()
     }
 
@@ -442,6 +450,8 @@ def _base_context(
         "end_time": end_time,
         "state": state,
     }
+    if "spec" in podgroup:
+        context["podgroup_shape"] = "hierarchical" if spec.get("subGroups") else "owned"
     if queue_name := spec.get("queue"):
         context["queue_name"] = queue_name
     if (min_member := _non_negative_int(spec.get("minMember"))) is not None:
@@ -721,7 +731,7 @@ def _context_from_attempt_evidence(
         or pod_evidence.has_node_failure
     ) and context["state"] != "COMPLETED":
         context["state"] = "NODE_FAIL"
-    if node_loss_nodes:
+    if context["state"] == "NODE_FAIL" and node_loss_nodes:
         context["failed_node"] = min(node_loss_nodes)
     if evidence.retained_coverage:
         context["history_complete"] = any(
