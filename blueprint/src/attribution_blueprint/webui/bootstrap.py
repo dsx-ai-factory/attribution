@@ -12,6 +12,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from attribution_blueprint.connectors.execution_contexts.slurm.connector import gpu_count_from_alloc_tres
 from attribution_blueprint.taxonomy import taxonomy_for_service_value
 from attribution_blueprint.webui.attribution_detail import attribution_detail, decision_graph_section
 from attribution_blueprint.webui.diagnose import diagnose_card
@@ -250,41 +251,6 @@ def _gpus_per_node(run) -> int:
     return 4
 
 
-def _gpu_count_from_alloc_tres(alloc_tres: Any) -> int | None:
-    """Parse Slurm AllocTRES GPU count.
-
-    Args:
-        alloc_tres: Raw AllocTRES value, such as ``cpu=8,gres/gpu=4``.
-
-    Returns:
-        The job GPU count when AllocTRES is present. Returns 0 for a
-        CPU-only AllocTRES string and None when AllocTRES is missing.
-    """
-    if not isinstance(alloc_tres, str):
-        return None
-    if alloc_tres.strip() == "":
-        return None
-    total = 0
-    saw_resource = False
-    saw_gpu = False
-    for part in alloc_tres.split(","):
-        key, sep, raw_value = part.partition("=")
-        if sep == "":
-            continue
-        saw_resource = True
-        if key.strip().startswith("gres/gpu") is False:
-            continue
-        saw_gpu = True
-        value = _non_negative_int(raw_value)
-        if value is not None:
-            total += value
-    if saw_gpu is True:
-        return total
-    if saw_resource is True:
-        return 0
-    return None
-
-
 def _gpu_count(run) -> int:
     """Return the number of GPUs allocated to the job.
 
@@ -300,9 +266,12 @@ def _gpu_count(run) -> int:
         value = _non_negative_int(raw_scheduler.get(key))
         if value is not None:
             return value
-    alloc_tres_value = _gpu_count_from_alloc_tres(raw_scheduler.get("alloc_tres"))
-    if alloc_tres_value is not None:
-        return alloc_tres_value
+    # Stored scheduler JSON is untyped; only a string AllocTRES is parsed.
+    alloc_tres = raw_scheduler.get("alloc_tres")
+    if isinstance(alloc_tres, str):
+        alloc_tres_value = gpu_count_from_alloc_tres(alloc_tres)
+        if alloc_tres_value is not None:
+            return alloc_tres_value
     node_count = len(run.nodes)
     billed_nodes = node_count if node_count > 0 else 1
     return billed_nodes * _gpus_per_node(run)

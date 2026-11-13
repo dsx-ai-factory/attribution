@@ -368,10 +368,24 @@ def test_run_to_react_sums_typed_slurm_alloc_tres_gpu_counts(tmp_path):
     assert r["gpuCount"] == 6
 
 
+def test_run_to_react_does_not_double_count_generic_and_typed_alloc_tres(tmp_path):
+    run = _seed_one(tmp_path, gpus_per_node=8, alloc_tres="cpu=16,gres/gpu=4,gres/gpu:h200=4")
+    r = bootstrap.run_to_react(run)
+    assert r["gpuCount"] == 4
+
+
 def test_run_to_react_treats_cpu_only_slurm_alloc_tres_as_zero_gpus(tmp_path):
     run = _seed_one(tmp_path, gpus_per_node=8, alloc_tres="cpu=24,mem=96G")
     r = bootstrap.run_to_react(run)
     assert r["gpuCount"] == 0
+
+
+@pytest.mark.parametrize("alloc_tres", [4, ["gres/gpu=4"]])
+def test_run_to_react_falls_back_when_stored_alloc_tres_is_not_a_string(tmp_path, alloc_tres):
+    """Stored scheduler JSON is untyped; a non-string AllocTRES counts as missing."""
+    run = _seed_one(tmp_path, gpus_per_node=8, alloc_tres=alloc_tres)
+    r = bootstrap.run_to_react(run)
+    assert r["gpuCount"] == 16
 
 
 @pytest.mark.parametrize(("attempt_ordinal", "expected"), [(None, 1), (0, 1), (1, 2), (2, 3), ("2", 3), ("²", 1), ("", 1), (-1, 1)])
