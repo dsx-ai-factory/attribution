@@ -125,16 +125,26 @@ class LocalFileLogConnector:
         missing: list[Path] = []
         found_input = False
         for template in self._templates:
-            for path in self._resolve_paths(template, context):
+            rendered = self._render_template(template, context)
+            if rendered is None:
+                continue
+            configured = Path(rendered)
+            # Check the configured path before directory expansion and before the
+            # resolved-target dedup: an existing empty directory is still input, and
+            # dangling symlinks to one target are distinct missing inputs.
+            if _is_missing(configured):
+                if configured not in missing:
+                    logger.warning(
+                        f"local_file {self._source.name}: no file at {configured} for ctx {context.get('id')}"
+                    )
+                    missing.append(configured)
+                continue
+            found_input = True
+            for path in self._resolve_paths(configured, context):
                 resolved = path.resolve()
                 if resolved in seen:
                     continue
                 seen.add(resolved)
-                if _is_missing(path):
-                    logger.warning(f"local_file {self._source.name}: no file at {path} for ctx {context.get('id')}")
-                    missing.append(path)
-                    continue
-                found_input = True
                 observation = self._file_observation(path, context)
                 if observation is not None:
                     observations.append(observation)
@@ -283,21 +293,17 @@ class LocalFileLogConnector:
             logger.warning(f"local_file SYSLOG: no syslog directories found for ctx {context.get('id')}")
         return observations
 
-    def _resolve_paths(self, template: str, context: ExecutionContext) -> list[Path]:
-        # `{std_out}` / `{std_err}` are pre-rendered by each ECA — the
-        # Slurm ECA, for instance, resolves `%j`/`%x`/`${SLURM_*}` before
-        # writing these to the context (see
-        # `connectors/execution_contexts/slurm/filename_patterns.py`),
-        # so by the time we see them they're fully-resolved filesystem
-        # paths. The local_file connector therefore only handles generic
-        # Python `.format()` placeholders against cross-cutting
-        # `ExecutionContext` fields. Adding new placeholders here means
-        # extending the cross-cutting `ExecutionContext` TypedDict, not
-        # baking scheduler-specific token syntax into this file.
-        rendered = self._render_template(template, context)
-        if rendered is None:
-            return []
-        path = Path(rendered)
+    def _resolve_paths(self, path: Path, context: ExecutionContext) -> list[Path]:
+        """Expand one rendered path into the files to read.
+
+        Args:
+            path: Rendered configured path; a directory expands to the regular
+                files directly inside it.
+            context: Execution context, used for log messages.
+
+        Returns:
+            The files to read, or an empty list when the path cannot be listed.
+        """
         # is_dir() can raise PermissionError on filesystems where a parent
         # dir is accessible but the leaf isn't (common with Lustre user dirs).
         # Treat that as "no file we can read here" and return empty.
@@ -326,6 +332,16 @@ class LocalFileLogConnector:
             Rendered path text, or ``None`` when the template is invalid or
             resolves to an empty path.
         """
+        # `{std_out}` / `{std_err}` are pre-rendered by each ECA — the
+        # Slurm ECA, for instance, resolves `%j`/`%x`/`${SLURM_*}` before
+        # writing these to the context (see
+        # `connectors/execution_contexts/slurm/filename_patterns.py`),
+        # so by the time we see them they're fully-resolved filesystem
+        # paths. The local_file connector therefore only handles generic
+        # Python `.format()` placeholders against cross-cutting
+        # `ExecutionContext` fields. Adding new placeholders here means
+        # extending the cross-cutting `ExecutionContext` TypedDict, not
+        # baking scheduler-specific token syntax into this file.
         std_out = context.get("std_out")
         if std_out is None:
             std_out = ""

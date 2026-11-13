@@ -41,21 +41,28 @@ def _collect_with_warnings(conn: LocalFileLogConnector, ctx: dict) -> tuple[list
     return obs, warnings
 
 
-def test_raises_and_warns_when_every_configured_path_is_missing(tmp_path):
-    """A configured APPLOG input that does not exist is an evidence gap, not a successful empty read."""
+def _collection_error_with_warnings(conn: LocalFileLogConnector, ctx: dict) -> tuple[MCAError, list[str]]:
+    """Collect expecting MCAError while capturing WARNING log lines."""
     from loguru import logger
-
-    missing = tmp_path / "absent.log"
-    conn = LocalFileLogConnector(log_path_templates=["{std_out}"])
 
     warnings: list[str] = []
     sink_id = logger.add(lambda msg: warnings.append(str(msg)), level="WARNING")
     try:
-        with pytest.raises(MCAError, match="absent.log"):
-            conn.collect(_ctx(tmp_path, str(missing)))
+        with pytest.raises(MCAError) as excinfo:
+            conn.collect(ctx)
     finally:
         logger.remove(sink_id)
+    return excinfo.value, warnings
 
+
+def test_raises_and_warns_when_every_configured_path_is_missing(tmp_path):
+    """A configured APPLOG input that does not exist is an evidence gap, not a successful empty read."""
+    missing = tmp_path / "absent.log"
+    conn = LocalFileLogConnector(log_path_templates=["{std_out}"])
+
+    error, warnings = _collection_error_with_warnings(conn, _ctx(tmp_path, str(missing)))
+
+    assert "absent.log" in str(error)
     assert any(str(missing) in warning for warning in warnings)
 
 
@@ -87,6 +94,51 @@ def test_existing_empty_directory_is_not_reported_missing(tmp_path):
 
     assert obs == []
     assert warnings == []
+
+
+@pytest.mark.parametrize("empty_dir_first", [True, False])
+def test_existing_empty_directory_next_to_missing_path_does_not_raise(tmp_path, empty_dir_first):
+    """An existing empty directory is configured input, so a missing sibling path only warns."""
+    empty_dir = tmp_path / "job-empty"
+    empty_dir.mkdir()
+    missing = tmp_path / "absent.log"
+    templates = [str(empty_dir), str(missing)] if empty_dir_first else [str(missing), str(empty_dir)]
+    conn = LocalFileLogConnector(log_path_templates=templates)
+
+    obs, warnings = _collect_with_warnings(conn, _ctx(tmp_path, ""))
+
+    assert obs == []
+    assert len(warnings) == 1
+    assert str(missing) in warnings[0]
+
+
+def test_dangling_symlinks_to_one_target_are_each_reported_missing(tmp_path):
+    """Missing configured paths are reported before deduplication by resolved target."""
+    target = tmp_path / "unavailable"
+    out_link = tmp_path / "job.out"
+    err_link = tmp_path / "job.err"
+    out_link.symlink_to(target)
+    err_link.symlink_to(target)
+    conn = LocalFileLogConnector(log_path_templates=[str(out_link), str(err_link)])
+
+    error, warnings = _collection_error_with_warnings(conn, _ctx(tmp_path, ""))
+
+    assert str(out_link) in str(error)
+    assert str(err_link) in str(error)
+    assert any(str(out_link) in warning for warning in warnings)
+    assert any(str(err_link) in warning for warning in warnings)
+
+
+def test_same_missing_path_from_std_out_and_std_err_is_reported_once(tmp_path):
+    """Slurm writes StdErr to the StdOut path when --error is unset, so one missing file is one gap."""
+    missing = tmp_path / "12345.out"
+    conn = LocalFileLogConnector(log_path_templates=["{std_out}", "{std_err}"])
+    ctx = _ctx(tmp_path, std_out_template=str(missing), std_err=str(missing))
+
+    error, warnings = _collection_error_with_warnings(conn, ctx)
+
+    assert str(error).count(str(missing)) == 1
+    assert len(warnings) == 1
 
 
 def test_reads_existing_file_and_emits_one_observation(tmp_path):
