@@ -3,6 +3,7 @@
 
 import json
 from datetime import datetime, timezone
+from pathlib import Path
 
 import pytest
 
@@ -110,6 +111,29 @@ def test_existing_empty_directory_next_to_missing_path_does_not_raise(tmp_path, 
     assert obs == []
     assert len(warnings) == 1
     assert str(missing) in warnings[0]
+
+
+@pytest.mark.parametrize("unlistable_dir_first", [True, False])
+def test_unlistable_directory_does_not_hide_missing_path(tmp_path, mocker, unlistable_dir_first):
+    """A directory that cannot be listed yields no evidence, so a missing sibling path is still an error."""
+    unlistable = tmp_path / "job"
+    unlistable.mkdir()
+    missing = tmp_path / "job.out"
+    original_iterdir = Path.iterdir
+
+    def iterdir(self):
+        if self == unlistable:
+            raise PermissionError(13, "denied", str(self))
+        return original_iterdir(self)
+
+    mocker.patch.object(Path, "iterdir", iterdir)
+    templates = [str(unlistable), str(missing)] if unlistable_dir_first else [str(missing), str(unlistable)]
+    conn = LocalFileLogConnector(log_path_templates=templates)
+
+    error, warnings = _collection_error_with_warnings(conn, _ctx(tmp_path, ""))
+
+    assert str(missing) in str(error)
+    assert any("permission denied" in warning and str(unlistable) in warning for warning in warnings)
 
 
 def test_dangling_symlinks_to_one_target_are_each_reported_missing(tmp_path):

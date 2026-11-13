@@ -67,9 +67,9 @@ class LocalFileLogConnector:
     regular file directly inside the directory is read (non-recursive); if it
     resolves to a file, that file is read. For SYSLOG, each path is a base
     directory containing one child directory per context node. Missing APPLOG
-    paths warn, and when no configured APPLOG path exists ``collect`` raises
-    :class:`MCAError` naming them so the run reports the evidence gap. Missing
-    SYSLOG node directories warn.
+    paths warn, and when no other configured APPLOG path exists and can be
+    listed ``collect`` raises :class:`MCAError` naming them so the run reports
+    the evidence gap. Missing SYSLOG node directories warn.
     A file whose name ends in ``.jsonl`` is read as one JSON entry per line
     and sent unchanged; for SYSLOG such a path names the file directly
     instead of a base directory.
@@ -111,8 +111,8 @@ class LocalFileLogConnector:
             One observation per readable, non-empty file.
 
         Raises:
-            MCAError: For APPLOG, when at least one path was configured and
-                none of the rendered paths exists.
+            MCAError: For APPLOG, when a rendered path is missing and no
+                other rendered path exists and can be listed.
         """
         # Reject naive datetimes at the boundary; the service rejects them and
         # attribution_lib has paths that crash on them.
@@ -139,8 +139,18 @@ class LocalFileLogConnector:
                     )
                     missing.append(configured)
                 continue
+            # is_dir() and iterdir() can raise PermissionError on filesystems where a
+            # parent dir is accessible but the leaf isn't (common with Lustre user dirs).
+            # Such a path yields no evidence, so it does not count as input.
+            try:
+                paths = self._resolve_paths(configured)
+            except PermissionError as e:
+                logger.warning(
+                    f"local_file: permission denied inspecting {configured} for ctx {context.get('id')}: {e}"
+                )
+                continue
             found_input = True
-            for path in self._resolve_paths(configured, context):
+            for path in paths:
                 resolved = path.resolve()
                 if resolved in seen:
                     continue
@@ -293,32 +303,21 @@ class LocalFileLogConnector:
             logger.warning(f"local_file SYSLOG: no syslog directories found for ctx {context.get('id')}")
         return observations
 
-    def _resolve_paths(self, path: Path, context: ExecutionContext) -> list[Path]:
+    def _resolve_paths(self, path: Path) -> list[Path]:
         """Expand one rendered path into the files to read.
 
         Args:
             path: Rendered configured path; a directory expands to the regular
                 files directly inside it.
-            context: Execution context, used for log messages.
 
         Returns:
-            The files to read, or an empty list when the path cannot be listed.
+            The files to read.
+
+        Raises:
+            PermissionError: When the path cannot be stat'ed or listed.
         """
-        # is_dir() can raise PermissionError on filesystems where a parent
-        # dir is accessible but the leaf isn't (common with Lustre user dirs).
-        # Treat that as "no file we can read here" and return empty.
-        try:
-            is_dir = path.is_dir()
-        except PermissionError as e:
-            logger.warning(f"local_file: permission denied stat'ing {path} for ctx {context.get('id')}: {e}")
-            return []
-        if is_dir:
-            try:
-                children = sorted(p for p in path.iterdir() if p.is_file())
-            except PermissionError as e:
-                logger.warning(f"local_file: permission denied listing {path} for ctx {context.get('id')}: {e}")
-                return []
-            return children
+        if path.is_dir():
+            return sorted(p for p in path.iterdir() if p.is_file())
         return [path]
 
     def _render_template(self, template: str, context: ExecutionContext) -> str | None:
