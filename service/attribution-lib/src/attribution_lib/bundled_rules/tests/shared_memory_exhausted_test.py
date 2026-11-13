@@ -20,6 +20,10 @@ _NCCL_SHM_FULL = (
 _PEER_CLOSED = "0: NCCL WARN Connection closed by remote peer node02<1234>"
 _PEER_RESET = "1: NCCL WARN socketProgressOpt: Call to recv from 127.0.0.1<28601> failed : Connection reset by peer"
 _SHM_PATH_AFTER_ENOSPC = "0: OSError: [Errno 28] No space left on device: '/dev/shm/torch_1'"
+_IB_RETRY_EXCEEDED = (
+    "0: NET/IB: Got completion from peer 192.0.2.2<1234> with status=IBV_WC_RETRY_EXC_ERR(12) "
+    "opcode=UNKNOWN_OPCODE(65386) vendor_err=129  localGid ::ffff:192.0.2.1 remoteGids::ffff:192.0.2.2 hca mlx5_0"
+)
 _HW_BUS_ERROR = "1: Caught signal 7 (Bus error: nonexistent physical address)"
 
 
@@ -64,6 +68,14 @@ def test_full_shm_is_fail_user_and_drops_teardown_peer(attribute_logs):
 
 def test_full_shm_outranks_peer_reset(attribute_logs):
     result = attribute_logs([_WORKER_BUS_ERROR, _SHM_PATH_AFTER_ENOSPC, _PEER_RESET])
+
+    outcome = result.outcome_attr.value()
+    assert outcome.outcome == "Fail User"
+    assert outcome.root_cause_symptom == "Shared memory exhausted"
+
+
+def test_full_shm_outranks_ib_retry_on_same_node(attribute_logs):
+    result = attribute_logs([_TORCH_SHM_FULL, _IB_RETRY_EXCEEDED])
 
     outcome = result.outcome_attr.value()
     assert outcome.outcome == "Fail User"

@@ -381,6 +381,7 @@ _NON_IB_ROOT_CAUSE_PATTERNS = [
     "%DataLoader Exception%",
     "%S3 Exception%",
     "%cudaError out of memory%",
+    "%Shared memory exhausted%",
     "%System-out of memory%",
     "%LustreError%",
     "%assert number_image_tags <= number_of_images%",

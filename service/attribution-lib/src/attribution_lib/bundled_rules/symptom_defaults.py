@@ -2297,7 +2297,7 @@ outcome_symptom(
     "Shared memory exhausted",
     outcome="Fail User",
     priority=OutcomePriority.LOW,
-    doc="dataloader-exception",
+    doc="file-write-failed",
 )
 
 outcome_symptom(
