@@ -8,12 +8,13 @@ import pytest
 from attribution_blueprint.connectors.execution_contexts.kai.attempts import (
     PodGroupAttempt,
     attempts_from_podgroup_history,
-    observations_from_live_resources,
+    snapshots_from_live_resources,
 )
 from attribution_blueprint.connectors.execution_contexts.kai.connector import (
     KaiExecutionContextAdapter,
     _AttemptEvidence,
     _context_from_attempt_evidence,
+    _latest_resources_by_uid,
     _WorkloadEvidence,
 )
 from attribution_blueprint.kubernetes.daemon.client import KubernetesDaemonClient
@@ -877,7 +878,7 @@ def test_recreated_podgroups_with_same_restart_isolate_pods_and_terminal():
         },
     ]
     now = datetime(2026, 10, 14, 11, tzinfo=timezone.utc)
-    live_observations = observations_from_live_resources(
+    live_observations = snapshots_from_live_resources(
         live_podgroup,
         live_pods,
         [],
@@ -1516,3 +1517,34 @@ def test_retry_reconstruction_is_stable_under_replay():
         replay = copy.deepcopy(observations + observations)
         random.Random(seed).shuffle(replay)
         assert reconstruct(replay) == expected
+
+
+@pytest.mark.parametrize("kind, spec", [
+    ("Pod", {"nodeName": "node-a"}),
+    ("Job", {"activeDeadlineSeconds": 600}),
+])
+@pytest.mark.parametrize("retained_version", ["4", "5"])
+@pytest.mark.parametrize("reverse", [False, True])
+def test_live_spec_survives_equal_version_history(kind, spec, retained_version, reverse):
+    live = {
+        "kind": kind,
+        "metadata": {"uid": "resource-uid", "resourceVersion": "4"},
+        "observedAt": "2026-10-14T10:00:00Z",
+        "spec": spec,
+        "status": {"phase": "Running"},
+    }
+    # Actual daemon responses retain status and metadata, but omit spec.
+    retained = {
+        "kind": kind,
+        "metadata": {"uid": "resource-uid", "resourceVersion": retained_version},
+        "observedAt": "2026-10-14T10:02:00Z",
+        "status": {"phase": "Failed"},
+    }
+    snapshots = [retained, live] if reverse else [live, retained]
+    result = _latest_resources_by_uid(snapshots)["resource-uid"]
+    if retained_version == "4":
+        assert result["spec"] == spec
+        assert result["status"] == {"phase": "Running"}
+    else:
+        assert result["spec"] == {}
+        assert result["status"] == {"phase": "Failed"}

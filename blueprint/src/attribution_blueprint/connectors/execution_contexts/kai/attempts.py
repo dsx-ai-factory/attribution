@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""KAI attempt boundaries reconstructed from retained PodGroup history."""
+"""Reconstruct KAI attempts from Kubernetes resource snapshots."""
 
 from __future__ import annotations
 
@@ -31,6 +31,7 @@ def attempt_id_for(
     start_key: str,
     restart_attempt: str,
 ) -> str:
+    """Return a stable identity for a PodGroup allocation and restart generation."""
     canonical = json.dumps(
         {
             "boundary": start_key,
@@ -46,6 +47,7 @@ def attempt_id_for(
 
 @dataclass(frozen=True)
 class PodGroupAttempt:
+    """Describe one allocation or restart interval and its proven resource membership."""
     pod_group_uid: str
     namespace: str
     pod_group_name: str
@@ -74,6 +76,7 @@ class PodGroupAttempt:
 
 @dataclass(frozen=True)
 class _ResolvedEvidence:
+    """Share generation inference across boundaries, terminals, and membership."""
     restart_candidates: list[tuple[dict, str, str]]
     terminals: list[dict]
     pods: dict[str, dict]
@@ -81,7 +84,7 @@ class _ResolvedEvidence:
     job_restarts: dict[str, str]
 
 
-def observations_from_live_resources(
+def snapshots_from_live_resources(
     podgroup: dict,
     pods: list[dict],
     owner_jobs: list[dict],
@@ -89,7 +92,7 @@ def observations_from_live_resources(
     *,
     now: datetime,
 ) -> list[dict]:
-    """Normalize live Kubernetes resources into retained observations."""
+    """Project live resources into the daemon snapshot schema, retaining live spec."""
     metadata = podgroup.get("metadata") or {}
     pod_group_name = metadata.get("name")
     if not pod_group_name or not metadata.get("uid"):
@@ -104,7 +107,7 @@ def observations_from_live_resources(
         or now.isoformat()
     )
 
-    def observation(resource: dict, kind: str) -> dict:
+    def snapshot(resource: dict, kind: str) -> dict:
         resource_metadata = resource.get("metadata") or {}
         selected_metadata = {
             field: dict(values)
@@ -139,7 +142,7 @@ def observations_from_live_resources(
             },
             "eventType": "MODIFIED",
             "observedAt": (
-                (resource.get("status") or {}).get("startTime")
+                status.get("startTime")
                 or resource_metadata.get("creationTimestamp")
                 or fallback
             ),
@@ -156,10 +159,10 @@ def observations_from_live_resources(
     ):
         uid = (resource.get("metadata") or {}).get("uid")
         if kind and uid:
-            resources[(kind, uid)] = observation(resource, kind)
+            resources[(kind, uid)] = snapshot(resource, kind)
 
     return [
-        observation(podgroup, "PodGroup"),
+        snapshot(podgroup, "PodGroup"),
         *resources.values(),
     ]
 
@@ -174,11 +177,11 @@ def attempts_from_podgroup_history(
 
     Missing owners or starts produce no attempt; unresolved boundaries preserve
     uncertainty rather than claim Pod membership."""
-    observations = history.get("observations") or []
-    resolved = _resolve_evidence(observations)
+    snapshots = history.get("observations") or []
+    resolved = _resolve_evidence(snapshots)
     podgroups = observations_by_uid(
         item
-        for item in observations
+        for item in snapshots
         if item.get("kind") == "PodGroup"
         and (item.get("metadata") or {}).get("name") == pod_group_name
     )
@@ -235,7 +238,7 @@ def attempts_from_podgroup_history(
         if owner["kind"] == "JobSet":
             starts = _coalesce_initial_allocation(
                 starts,
-                observations,
+                snapshots,
                 terminals,
                 pod_group_name,
                 [history.get("coverage") or {}, *(history.get("coverages") or [])],
@@ -398,16 +401,16 @@ def _podgroup_boundaries(
         incarnations
     ):
         deletion_observations = [
-            observation
-            for observation in timeline
-            if observation.get("eventType") == "DELETED"
+            snapshot
+            for snapshot in timeline
+            if snapshot.get("eventType") == "DELETED"
         ]
         deletion = min(
             (
                 selected_metadata["deletionTimestamp"]
-                for observation in deletion_observations
+                for snapshot in deletion_observations
                 if (
-                    selected_metadata := observation.get("selectedMetadata")
+                    selected_metadata := snapshot.get("selectedMetadata")
                     or {}
                 ).get("deletionTimestamp")
             ),
@@ -458,6 +461,13 @@ def _podgroup_boundaries(
 
 
 def _podgroup_owner(metadata: dict) -> dict | None:
+    """Select the workload owner used to match Pods, restarts, and completion events.
+
+    Prefer the top owner or controller. If neither resolves, accept a sole
+    named owner reference with a UID. With multiple unresolved candidates,
+    return None because choosing one could attribute the attempt to the wrong
+    workload.
+    """
     owner = resolve_owner(metadata)
     if owner is None:
         candidates = [
@@ -485,8 +495,8 @@ def _podgroup_owner(metadata: dict) -> dict | None:
 
 def _podgroup_starts(timeline: list[dict]) -> list[dict]:
     starts = {}
-    for observation in timeline:
-        timestamp = kai_podgroup_start_timestamp(observation)
+    for snapshot in timeline:
+        timestamp = kai_podgroup_start_timestamp(snapshot)
         if timestamp:
             starts[str(timestamp)] = {
                 "key": str(timestamp),
@@ -541,6 +551,7 @@ def _has_initial_execution(
 
 
 def _job_owned_by(job: dict, owner: dict) -> bool:
+    """Match the exact Job or JobSet UID to isolate recreated workloads."""
     metadata = job.get("metadata") or {}
     if owner["kind"] == "Job":
         return metadata.get("uid") == owner["uid"]
@@ -557,6 +568,7 @@ def _pod_owned_by(
     owner: dict,
     jobs: dict[str, dict],
 ) -> bool:
+    """Verify the Pod controller against the resolved workload ownership chain."""
     controller = controller_owner(pod.get("metadata") or {})
     if controller is None:
         return True
@@ -581,11 +593,11 @@ def _scoped_restart_starts(
     """Collapse restart evidence only after applying incarnation/owner scope."""
     scoped: dict[str, str] = {}
     prior = []
-    for observation, generation, timestamp in candidates:
-        kind = observation.get("kind")
+    for snapshot, generation, timestamp in candidates:
+        kind = snapshot.get("kind")
         if kind == "Pod":
             annotations = (
-                (observation.get("selectedMetadata") or {}).get(
+                (snapshot.get("selectedMetadata") or {}).get(
                     "annotations"
                 )
                 or {}
@@ -593,10 +605,10 @@ def _scoped_restart_starts(
             matches = (
                 annotations.get(POD_GROUP_ANNOTATION)
                 == pod_group_name
-                and _pod_owned_by(observation, owner, jobs)
+                and _pod_owned_by(snapshot, owner, jobs)
             )
         else:
-            matches = _job_owned_by(observation, owner)
+            matches = _job_owned_by(snapshot, owner)
         if not matches:
             continue
 
@@ -696,13 +708,18 @@ def _attempt_starts(
 
 def _coalesce_initial_allocation(
     starts: list[dict],
-    observations: list[dict],
+    snapshots: list[dict],
     terminal_events: list[dict],
     pod_group_name: str,
     coverages: list[dict],
     lifetime_start: str,
 ) -> list[dict]:
-    """Join a retry's first allocation only when continuous history proves it."""
+    """Join retry preparation to its first allocation when history proves continuity.
+
+    Require a Pending-to-scheduled Pod transition in the same generation and
+    uninterrupted watches. Earlier execution or a terminal blocks the merge;
+    missing evidence leaves separate boundaries rather than guessing a retry.
+    """
     result = []
     for start in starts:
         previous = result[-1] if result else None
@@ -725,25 +742,25 @@ def _coalesce_initial_allocation(
         ):
             continue
         pending, allocated, earlier = False, False, False
-        for observation in observations:
+        for snapshot in snapshots:
             if (
-                observation.get("kind") != "Pod"
-                or restart_attempt(observation) != start["restart_attempt"]
+                snapshot.get("kind") != "Pod"
+                or restart_attempt(snapshot) != start["restart_attempt"]
                 or not _pod_matches_attempt(
-                    observation,
+                    snapshot,
                     pod_group_name,
                     start["restart_attempt"],
                     allow_unannotated=False,
                 )
             ):
                 continue
-            status = observation.get("status") or {}
+            status = snapshot.get("status") or {}
             execution_start = status.get("startTime")
             earlier |= bool(execution_start and parse_time(execution_start) < end)
             pending |= (
                 status.get("phase") == "Pending"
                 and not execution_start
-                and begin <= parse_time(observation["observedAt"]) < end
+                and begin <= parse_time(snapshot["observedAt"]) < end
             )
             for condition in status.get("conditions") or []:
                 if (
@@ -769,15 +786,15 @@ def _coalesce_initial_allocation(
     return result
 
 
-def _infer_job_restarts(observations: list[dict]) -> dict[str, str]:
+def _infer_job_restarts(snapshots: list[dict]) -> dict[str, str]:
     """Infer a Job generation only when its explicitly labeled Pods agree."""
     pod_generations_by_job: dict[str, set[str]] = {}
-    for observation in observations:
-        if observation.get("kind") != "Pod":
+    for snapshot in snapshots:
+        if snapshot.get("kind") != "Pod":
             continue
-        generation = restart_attempt(observation)
+        generation = restart_attempt(snapshot)
         controller = controller_owner(
-            observation.get("metadata") or {}
+            snapshot.get("metadata") or {}
         )
         if (
             generation is not None
@@ -796,26 +813,26 @@ def _infer_job_restarts(observations: list[dict]) -> dict[str, str]:
 
 
 def _job_restart(
-    observation: dict,
+    snapshot: dict,
     inferred_job_restarts: dict[str, str],
 ) -> str | None:
-    generation = restart_attempt(observation)
+    generation = restart_attempt(snapshot)
     if generation is not None:
         return generation
-    job_uid = (observation.get("metadata") or {}).get("uid")
+    job_uid = (snapshot.get("metadata") or {}).get("uid")
     return inferred_job_restarts.get(job_uid)
 
 
 def _terminal_events(
-    observations: list[dict],
+    snapshots: list[dict],
     inferred_job_restarts: dict[str, str],
 ) -> list[dict]:
     events = []
-    for observation in observations:
-        kind = observation.get("kind")
+    for snapshot in snapshots:
+        kind = snapshot.get("kind")
         if kind not in {"Job", "JobSet"}:
             continue
-        status = observation.get("status") or {}
+        status = snapshot.get("status") or {}
         conditions = status.get("conditions") or []
         has_job_terminal = any(
             condition.get("status") == "True"
@@ -831,14 +848,14 @@ def _terminal_events(
             events.append(
                 {
                     "kind": "Job",
-                    "uid": (observation.get("metadata") or {}).get(
+                    "uid": (snapshot.get("metadata") or {}).get(
                         "uid"
                     ),
                     "type": "Complete",
                     "reason": None,
                     "time": status["completionTime"],
                     "restart_attempt": _job_restart(
-                        observation,
+                        snapshot,
                         inferred_job_restarts,
                     ),
                 }
@@ -861,13 +878,13 @@ def _terminal_events(
             events.append(
                 {
                     "kind": kind,
-                    "uid": (observation.get("metadata") or {}).get("uid"),
+                    "uid": (snapshot.get("metadata") or {}).get("uid"),
                     "type": condition_type,
                     "reason": condition.get("reason"),
                     "time": transition,
                     "restart_attempt": (
                         _job_restart(
-                            observation,
+                            snapshot,
                             inferred_job_restarts,
                         )
                         if kind == "Job"
@@ -890,21 +907,22 @@ def _terminal_events(
     )
 
 
-def _resolve_evidence(observations: list[dict]) -> _ResolvedEvidence:
-    job_restarts = _infer_job_restarts(observations)
+def _resolve_evidence(snapshots: list[dict]) -> _ResolvedEvidence:
+    """Resolve snapshots once so boundaries and resource membership use the same generations."""
+    job_restarts = _infer_job_restarts(snapshots)
     return _ResolvedEvidence(
         restart_candidates=restart_start_candidates(
-            observations,
+            snapshots,
             job_restarts,
         ),
-        terminals=_terminal_events(observations, job_restarts),
-        pods=latest_pod_observations(observations),
+        terminals=_terminal_events(snapshots, job_restarts),
+        pods=latest_pod_observations(snapshots),
         jobs={
             uid: timeline[-1]
             for uid, timeline in observations_by_uid(
-                observation
-                for observation in observations
-                if observation.get("kind") == "Job"
+                snapshot
+                for snapshot in snapshots
+                if snapshot.get("kind") == "Job"
             ).items()
         },
         job_restarts=job_restarts,
@@ -958,7 +976,7 @@ def _assign_terminals(
 
 
 def _pod_in_attempt(
-    observation: dict,
+    snapshot: dict,
     pod_group_name: str,
     expected_restart: str,
     start: str,
@@ -969,14 +987,14 @@ def _pod_in_attempt(
     allow_restart_before_start: bool,
 ) -> bool:
     if not _pod_matches_attempt(
-        observation,
+        snapshot,
         pod_group_name,
         expected_restart,
         allow_unannotated=allow_unannotated,
     ):
         return False
-    observed_restart = restart_attempt(observation)
-    timestamp = _pod_timestamp(observation)
+    observed_restart = restart_attempt(snapshot)
+    timestamp = _pod_timestamp(snapshot)
     if timestamp is None:
         return False
     if end is not None and parse_time(timestamp) >= parse_time(end):
@@ -992,7 +1010,7 @@ def _pod_in_attempt(
 
 
 def _resource_in_attempt(
-    observation: dict,
+    snapshot: dict,
     expected_restart: str,
     start: str,
     end: str | None,
@@ -1000,7 +1018,7 @@ def _resource_in_attempt(
     inferred_restart: str | None = None,
     allow_before_start: bool,
 ) -> bool:
-    observed_restart = restart_attempt(observation)
+    observed_restart = restart_attempt(snapshot)
     if observed_restart is None:
         observed_restart = inferred_restart
     if (
@@ -1008,9 +1026,9 @@ def _resource_in_attempt(
         and observed_restart != expected_restart
     ):
         return False
-    timestamp = (observation.get("status") or {}).get(
+    timestamp = (snapshot.get("status") or {}).get(
         "startTime"
-    ) or observation.get("observedAt")
+    ) or snapshot.get("observedAt")
     if timestamp is None:
         return False
     if end is not None and parse_time(timestamp) >= parse_time(end):
@@ -1019,27 +1037,27 @@ def _resource_in_attempt(
 
 
 def _pod_matches_attempt(
-    observation: dict,
+    snapshot: dict,
     pod_group_name: str,
     expected_restart: str,
     *,
     allow_unannotated: bool,
 ) -> bool:
     annotations = (
-        (observation.get("selectedMetadata") or {}).get("annotations") or {}
+        (snapshot.get("selectedMetadata") or {}).get("annotations") or {}
     )
     observed_group = annotations.get(POD_GROUP_ANNOTATION)
     if observed_group != pod_group_name and not (
         observed_group is None and allow_unannotated
     ):
         return False
-    observed_restart = restart_attempt(observation)
+    observed_restart = restart_attempt(snapshot)
     if observed_restart is not None and observed_restart != expected_restart:
         return False
     return True
 
 
-def _pod_timestamp(observation: dict) -> str | None:
-    return (observation.get("status") or {}).get(
+def _pod_timestamp(snapshot: dict) -> str | None:
+    return (snapshot.get("status") or {}).get(
         "startTime"
-    ) or observation.get("observedAt")
+    ) or snapshot.get("observedAt")
