@@ -1,0 +1,237 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+# Runs NVIDIA Attribution inside a Kubernetes cluster. The chart deploys up to
+# three components, each with its own enable flag:
+#
+#   service    the Attribution Service (the rules engine, HTTP API on :8000)
+#   runner     the Blueprint on a loop: discovers finished workloads, collects
+#              evidence, asks the Service, and writes the results
+#   dashboard  the web UI (:8080) that reads the results database
+#
+# By default all three run in one pod, which is the bundled deployment. To give
+# components separate lifecycles, install the chart more than once with
+# different components enabled, for example one release with only the Service
+# and another with only the runner that points at it (refer to examples/).
+#
+# The pod is a one-replica StatefulSet. The results database is SQLite, which
+# has a single writer, on a ReadWriteOnce volume that the runner and the
+# dashboard share, and the Service keeps its sessions in memory.
+#
+# The Service API has no authentication. In the bundled deployment it listens
+# on the pod's localhost only. If you expose it (service.api.enabled), restrict
+# who can reach it with networkPolicy.service.from, and use a CNI that enforces
+# NetworkPolicy: without enforcement every pod in the cluster can call it.
+
+# The bundle image built from blueprint/docker/Dockerfile. There is no default:
+# publish the image to a registry that your cluster can pull from. A component
+# can use a different image (service.image, runner.image, dashboard.image).
+image:
+  repository: ""
+  tag: ""
+  pullPolicy: IfNotPresent
+
+imagePullSecrets: []
+
+service:
+  enabled: true
+  # Optional overrides. Empty values use the shared image and the chart's
+  # default command, which starts uvicorn for the Service on service.port.
+  image:
+    repository: ""
+    tag: ""
+  command: []
+  args: []
+  port: 8000
+  api:
+    # Create a ClusterIP Service for the API on service.port and make the
+    # Service listen on all addresses. Leave it false in the bundled
+    # deployment, where only the runner in the same pod calls the API, over
+    # localhost. Set it to true for a Service-only release that other
+    # installations call.
+    enabled: false
+    annotations: {}
+  # Service settings, for example the DuckDB event-storage limits that the
+  # operator guide lists. Entries use the Kubernetes EnvVar and EnvFromSource
+  # shapes, so a value can come from an existing Secret.
+  env: []
+  envFrom: []
+  extraVolumeMounts: []
+  # The Service probes use /v2/healthz. When the Service listens only on
+  # localhost, the probes run inside the container, because the kubelet
+  # connects to the pod address. That command runs the bundle image's Python;
+  # set probes.command to a command that exists in your image if you override
+  # service.image or service.command.
+  probes:
+    command: []
+    readiness: {initialDelaySeconds: 15, periodSeconds: 15, timeoutSeconds: 5}
+    liveness: {initialDelaySeconds: 60, periodSeconds: 30, timeoutSeconds: 5, failureThreshold: 6}
+  resources:
+    requests: {cpu: "1", memory: 2Gi}
+    limits: {memory: 8Gi}
+
+runner:
+  enabled: true
+  image:
+    repository: ""
+    tag: ""
+  command: []
+  args: []
+  # The Service that the runner calls. Empty means the Service in the same pod,
+  # http://127.0.0.1:<service.port>. Required when service.enabled is false.
+  serviceUrl: ""
+  # Seconds between passes.
+  intervalSeconds: 300
+  # Each pass covers the time from the last mark to the current time minus this
+  # delay. A workload that started in the last settleSeconds waits for the next
+  # pass. The delay does not hold back a workload that is still running: both
+  # adapters select every workload whose lifetime overlaps the window, so a
+  # running workload is attributed with the state RUNNING, and again by each
+  # later pass until it finishes. The last run of a workload reflects its
+  # terminal state.
+  settleSeconds: 900
+  # How far back the first pass for a namespace looks. Keep it inside how long
+  # your cluster keeps finished workload objects: the adapters skip a workload
+  # whose owning Job or JobSet is gone, and pod logs exist only while the pods
+  # do. Must be larger than settleSeconds.
+  initialLookbackSeconds: 21600
+  # Extra Blueprint command-line arguments, one per entry, added to every pass.
+  extraArgs: []
+  env: []
+  envFrom: []
+  extraVolumeMounts: []
+  resources:
+    requests: {cpu: 250m, memory: 512Mi}
+    limits: {memory: 2Gi}
+
+dashboard:
+  enabled: true
+  image:
+    repository: ""
+    tag: ""
+  command: []
+  args: []
+  port: 8080
+  # The results database that the dashboard reads. It must be a file path under /data, the
+  # only path the runner and the dashboard share. The default matches the path
+  # the generated Blueprint configuration writes to.
+  databasePath: /data/attributions.db
+  probes:
+    path: /
+    readiness: {initialDelaySeconds: 15, periodSeconds: 15}
+    liveness: {initialDelaySeconds: 60, periodSeconds: 30, failureThreshold: 6}
+  resources:
+    requests: {cpu: 100m, memory: 256Mi}
+    limits: {memory: 1Gi}
+
+# The Blueprint configuration for the runner. By default the chart generates it
+# from the eca, logs, workload and extraConfig values below. To use your own
+# complete TOML file instead, point config.existing at a ConfigMap or a Secret
+# key. The chart then mounts that file as the whole configuration: it does not
+# generate TOML and rejects extraConfig. The runner still adds the namespace
+# and the time window of each pass on the command line, so eca.component must
+# name the adapter your file configures.
+config:
+  existing:
+    configMap: {name: "", key: blueprint.toml}
+    secret: {name: "", key: blueprint.toml}
+
+# Namespaces whose workloads the runner attributes. Required when the runner is
+# enabled, with no default. The adapters' time-range discovery is per
+# namespace, so the runner visits each in turn, and with rbac.scope=namespaced
+# each namespace gets a read-only Role.
+namespaces: []
+
+# Generated configuration and RBAC, used only when the runner is enabled.
+eca:
+  # kai: Job- and JobSet-owned KAI Scheduler PodGroups.
+  # kueue: Kueue Workloads that own Jobs or JobSets.
+  # (static and slurm do not apply inside a cluster.)
+  component: kai
+  timeoutSeconds: 60
+  # kueue only: the Workload CRD "<group>/<version>" when the cluster serves a
+  # different one than the Blueprint's default. Empty keeps the default.
+  workloadApiVersion: ""
+
+logs:
+  # The pod-log component the Blueprint uses. kubectl_logs runs `kubectl logs`
+  # with the pod's service account, so the image must contain `kubectl`; the
+  # runner exits with a message if it does not.
+  connector: kubectl_logs
+  # Keep false when the application prefixes lines with a rank ("[rank 0] ...")
+  # so the Blueprint can parse the prefix at the start of the line.
+  timestamps: false
+  # Read only from the workload's start.
+  sinceContextStart: true
+  maxBytesPerPod: 16MB
+  timeoutSeconds: 60
+
+workload:
+  # Ranks per node: the Blueprint assumes one rank per GPU when it builds the
+  # node-to-ranks map it sends to the Service.
+  gpusPerNode: 8
+
+serviceTimeoutSeconds: 60
+
+# TOML appended to the generated configuration, for sections the chart does not
+# model (for example a [log.syslog] source or a metrics connector). Not used
+# with config.existing.
+extraConfig: ""
+
+persistence:
+  # null enables the volume when the runner or the dashboard is enabled: the
+  # runner keeps its per-namespace marks there and writes the results database
+  # there, and the dashboard reads it. A Service-only release has no volume.
+  # Set false to use an emptyDir instead, which loses the marks and the results
+  # database when the pod restarts. Set true to always use the volume. Either
+  # way a Service-only release mounts no volume, because the Service writes none.
+  enabled: null
+  # Use an existing claim instead of creating one, for example to start a
+  # dashboard on a database that another installation writes.
+  existingClaim: ""
+  size: 10Gi
+  storageClassName: ""
+
+rbac:
+  # Create the read-only access the runner needs. Set false to manage it
+  # yourself. Ignored when the runner is disabled: no RBAC is rendered then.
+  create: true
+  # namespaced: a Role and RoleBinding in each of `namespaces`.
+  # cluster: one ClusterRole and ClusterRoleBinding; use it only when the
+  # namespaces list is long or changes often.
+  scope: namespaced
+
+# Restricts ingress to the pod. A component that no source can reach under the
+# policy is unreachable, so the chart requires a source for each exposed port.
+networkPolicy:
+  enabled: true
+  # "from" entries for the Service API on service.port. Required when
+  # service.api.enabled is true.
+  service:
+    from: []
+  # "from" entries for the dashboard on dashboard.port, for example the ingress
+  # controller's namespace. Required when ingress.enabled is true.
+  dashboard:
+    from: []
+
+# An optional standard Ingress for the dashboard.
+ingress:
+  enabled: false
+  className: ""
+  annotations: {}
+  hosts: []
+  # - host: attribution.example.com
+  #   path: /
+  #   pathType: Prefix
+  tls: []
+  # - secretName: attribution-tls
+  #   hosts: [attribution.example.com]
+
+# Extra pod volumes, mounted into a container with its extraVolumeMounts.
+extraVolumes: []
+
+podSecurityContext: {}
+securityContext: {}
+nodeSelector: {}
+tolerations: []
+affinity: {}

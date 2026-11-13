@@ -1,0 +1,46 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+{{- include "attribution.validate" . }}
+{{- $name := include "attribution.fullname" . }}
+{{- if .Values.dashboard.enabled }}
+# The dashboard (web UI).
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $name }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "attribution.labels" . | nindent 4 }}
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "attribution.selectorLabels" . | nindent 4 }}
+  ports:
+    - {name: web, port: {{ .Values.dashboard.port }}, targetPort: web, protocol: TCP}
+{{- end }}
+{{- if and .Values.service.enabled .Values.service.api.enabled }}
+{{- if .Values.dashboard.enabled }}
+---
+{{- end }}
+# The Attribution Service API, for installations other than this pod's runner.
+# It has no authentication: restrict who can call it with
+# networkPolicy.service.from.
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $name }}-api
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "attribution.labels" . | nindent 4 }}
+  {{- with .Values.service.api.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "attribution.selectorLabels" . | nindent 4 }}
+  ports:
+    - {name: api, port: {{ .Values.service.port }}, targetPort: api, protocol: TCP}
+{{- end }}

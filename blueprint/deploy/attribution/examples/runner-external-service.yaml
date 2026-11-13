@@ -1,0 +1,21 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+# The runner and the dashboard, calling a Service that another installation
+# manages (for example the one in service-only.yaml). Nothing in this release
+# starts a Service.
+image:
+  repository: registry.example/attribution
+  tag: "1.0.0"
+
+service:
+  enabled: false
+
+runner:
+  serviceUrl: http://attribution-service-api.attribution-service.svc:8000
+
+namespaces:
+  - team-a
+
+eca:
+  component: kueue

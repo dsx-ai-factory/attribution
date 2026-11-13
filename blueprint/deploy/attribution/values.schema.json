@@ -1,0 +1,237 @@
+{
+  "$schema": "https://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "additionalProperties": false,
+  "definitions": {
+    "port": {"type": "integer", "minimum": 1, "maximum": 65535},
+    "componentImage": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "repository": {"type": "string"},
+        "tag": {"type": "string"}
+      }
+    },
+    "stringList": {"type": "array", "items": {"type": "string"}},
+    "objectList": {"type": "array", "items": {"type": "object"}},
+    "probe": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "initialDelaySeconds": {"type": "integer", "minimum": 0},
+        "periodSeconds": {"type": "integer", "minimum": 1},
+        "timeoutSeconds": {"type": "integer", "minimum": 1},
+        "failureThreshold": {"type": "integer", "minimum": 1},
+        "successThreshold": {"type": "integer", "minimum": 1}
+      }
+    },
+    "configKeyRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "name": {"type": "string"},
+        "key": {"type": "string"}
+      }
+    },
+    "sources": {"type": "array", "items": {"type": "object"}}
+  },
+  "properties": {
+    "image": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "repository": {"type": "string"},
+        "tag": {"type": "string"},
+        "pullPolicy": {"enum": ["Always", "IfNotPresent", "Never"]}
+      }
+    },
+    "imagePullSecrets": {
+      "type": "array",
+      "items": {"type": "object", "required": ["name"], "properties": {"name": {"type": "string", "minLength": 1}}}
+    },
+    "service": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {"type": "boolean"},
+        "image": {"$ref": "#/definitions/componentImage"},
+        "command": {"$ref": "#/definitions/stringList"},
+        "args": {"$ref": "#/definitions/stringList"},
+        "port": {"$ref": "#/definitions/port"},
+        "api": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": {"type": "boolean"},
+            "annotations": {"type": "object"}
+          }
+        },
+        "env": {"$ref": "#/definitions/objectList"},
+        "envFrom": {"$ref": "#/definitions/objectList"},
+        "extraVolumeMounts": {"$ref": "#/definitions/objectList"},
+        "probes": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "command": {"$ref": "#/definitions/stringList"},
+            "readiness": {"$ref": "#/definitions/probe"},
+            "liveness": {"$ref": "#/definitions/probe"}
+          }
+        },
+        "resources": {"type": "object"}
+      }
+    },
+    "runner": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {"type": "boolean"},
+        "image": {"$ref": "#/definitions/componentImage"},
+        "command": {"$ref": "#/definitions/stringList"},
+        "args": {"$ref": "#/definitions/stringList"},
+        "serviceUrl": {"type": "string", "pattern": "^(https?://.+)?$"},
+        "intervalSeconds": {"type": "integer", "minimum": 1},
+        "settleSeconds": {"type": "integer", "minimum": 0},
+        "initialLookbackSeconds": {"type": "integer", "minimum": 1},
+        "extraArgs": {"$ref": "#/definitions/stringList"},
+        "env": {"$ref": "#/definitions/objectList"},
+        "envFrom": {"$ref": "#/definitions/objectList"},
+        "extraVolumeMounts": {"$ref": "#/definitions/objectList"},
+        "resources": {"type": "object"}
+      }
+    },
+    "dashboard": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {"type": "boolean"},
+        "image": {"$ref": "#/definitions/componentImage"},
+        "command": {"$ref": "#/definitions/stringList"},
+        "args": {"$ref": "#/definitions/stringList"},
+        "port": {"$ref": "#/definitions/port"},
+        "databasePath": {"type": "string", "pattern": "^/.+"},
+        "probes": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "path": {"type": "string", "pattern": "^/"},
+            "readiness": {"$ref": "#/definitions/probe"},
+            "liveness": {"$ref": "#/definitions/probe"}
+          }
+        },
+        "resources": {"type": "object"}
+      }
+    },
+    "config": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "existing": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "configMap": {"$ref": "#/definitions/configKeyRef"},
+            "secret": {"$ref": "#/definitions/configKeyRef"}
+          }
+        }
+      }
+    },
+    "namespaces": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {"type": "string", "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$", "maxLength": 63}
+    },
+    "eca": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "component": {"enum": ["kai", "kueue"]},
+        "timeoutSeconds": {"type": "integer", "minimum": 1},
+        "workloadApiVersion": {"type": "string"}
+      }
+    },
+    "logs": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "connector": {"type": "string", "pattern": "^[a-z][a-z0-9_]*$"},
+        "timestamps": {"type": "boolean"},
+        "sinceContextStart": {"type": "boolean"},
+        "maxBytesPerPod": {"type": "string", "pattern": "^[0-9]+(\\.[0-9]+)?\\s*([kKmMgG][bB]?|[bB])?$"},
+        "timeoutSeconds": {"type": "integer", "minimum": 1}
+      }
+    },
+    "workload": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "gpusPerNode": {"type": "integer", "minimum": 1}
+      }
+    },
+    "serviceTimeoutSeconds": {"type": "integer", "minimum": 1},
+    "extraConfig": {"type": "string"},
+    "persistence": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {"type": ["boolean", "null"]},
+        "existingClaim": {"type": "string"},
+        "size": {"type": "string", "minLength": 1},
+        "storageClassName": {"type": "string"}
+      }
+    },
+    "rbac": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "create": {"type": "boolean"},
+        "scope": {"enum": ["namespaced", "cluster"]}
+      }
+    },
+    "networkPolicy": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {"type": "boolean"},
+        "service": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {"from": {"$ref": "#/definitions/sources"}}
+        },
+        "dashboard": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {"from": {"$ref": "#/definitions/sources"}}
+        }
+      }
+    },
+    "ingress": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {"type": "boolean"},
+        "className": {"type": "string"},
+        "annotations": {"type": "object"},
+        "hosts": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["host"],
+            "properties": {
+              "host": {"type": "string", "minLength": 1},
+              "path": {"type": "string"},
+              "pathType": {"enum": ["Prefix", "Exact", "ImplementationSpecific"]}
+            }
+          }
+        },
+        "tls": {"type": "array", "items": {"type": "object"}}
+      }
+    },
+    "extraVolumes": {"$ref": "#/definitions/objectList"},
+    "podSecurityContext": {"type": "object"},
+    "securityContext": {"type": "object"},
+    "nodeSelector": {"type": "object"},
+    "tolerations": {"type": "array"},
+    "affinity": {"type": "object"}
+  }
+}
