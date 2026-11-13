@@ -325,10 +325,11 @@ def _filtered_clauses(
         escaped = _escape_like(job_query.strip())
         clauses.append(
             "(c.job_id LIKE ? ESCAPE '\\' OR c.user_name LIKE ? ESCAPE '\\' "
-            f"OR r.raw_result_json LIKE ? ESCAPE '\\' OR {responsible_nodes_column} LIKE ? ESCAPE '\\')"
+            f"OR r.raw_result_json LIKE ? ESCAPE '\\' OR {responsible_nodes_column} LIKE ? ESCAPE '\\' "
+            "OR c.nodes_json LIKE ? ESCAPE '\\' OR COALESCE(c.attempt_id, r.id) LIKE ? ESCAPE '\\')"
         )
         like = f"%{escaped}%"
-        params.extend([like, like, like, like])
+        params.extend([like] * 6)
     for value, path in (
         (symptom, "$.verdict.root_symptom.symptom"),
         (rule, "$.verdict.root_symptom.source.rule"),

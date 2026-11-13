@@ -121,7 +121,7 @@ def test_first_pick_skips_author_bots_and_requested_specialists() -> None:
 
 def test_excluded_reviewers_are_never_primary() -> None:
     """Excluded team members are skipped, even when the author requests them."""
-    team = [*TEAM, {"login": "flx42", "type": "User"}]
+    team = [*TEAM, {"login": "flx42", "type": "User"}, {"login": "shamisp", "type": "User"}]
     timeline = [requested("flx42", "2026-09-21T16:00:00Z")]
     picks = {ar.next_primary(pr(requested=("flx42",)), timeline, team, random.Random(seed)) for seed in range(50)}
     assert picks == {"alice", "bob", "carol"}
