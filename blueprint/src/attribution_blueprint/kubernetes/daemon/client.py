@@ -5,12 +5,12 @@ from __future__ import annotations
 
 from datetime import datetime
 
-import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
 from attribution_blueprint.connectors.auth import Auth
 from attribution_blueprint.kubernetes.daemon.models import PlacementRecord
+from attribution_blueprint.telemetry import MeteredSession
 
 
 class KubernetesDaemonClient:
@@ -23,7 +23,7 @@ class KubernetesDaemonClient:
             raise ValueError("timeout_seconds must be positive")
         self.endpoint = endpoint.rstrip("/")
         self.timeout_seconds = timeout_seconds
-        self.session = requests.Session()
+        self.session = MeteredSession("kubernetes_daemon", ("/v1/placements", "/v1/history"))
         adapter = HTTPAdapter(
             max_retries=Retry(
                 total=3,

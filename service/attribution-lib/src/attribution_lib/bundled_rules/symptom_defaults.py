@@ -2516,6 +2516,14 @@ outcome_symptom(
     doc="job-requeued",
 )
 
+# Added after the outcome is set, when preemption explains the job end.
+outcome_symptom(
+    "Job preempted",
+    outcome="Pass",
+    priority=OutcomePriority.FALLBACK,
+    doc="slurm-preempted",
+)
+
 outcome_symptom(
     "sigkill_handler] Killing subprocess",
     outcome="Fail User",
@@ -2898,4 +2906,47 @@ outcome_symptom(
     priority=OutcomePriority.LOW,
     doc="irisc-not-responding",
     hw_cause="irisc not responding",
+)
+
+# A local verbs command failure identifies the reporting node, but does not
+# establish a physical NIC defect. Existing specific syslog diagnoses retain
+# their current classifications.
+outcome_symptom(
+    "Local HCA command failure",
+    outcome="Fail InfraHW",
+    priority=OutcomePriority.LOW,
+    doc="local-hca-command-failure",
+    hw_cause="Unknown HW Cause",
+    fallback_prefix=True,
+)
+
+# Keep unresolved QP EAGAIN at its existing priority tier while applying the
+# local-command hardware classification.
+outcome_symptom(
+    "Local HCA command failure (ibv_modify_qp eno 11)",
+    outcome="Fail InfraHW",
+    priority=OutcomePriority.MEDIUM_SW,
+    doc="local-hca-command-failure",
+    hw_cause="Unknown HW Cause",
+)
+
+# Preserve the existing QP timeout tier when an unresolved peer takes the
+# local-command path.
+outcome_symptom(
+    "Local HCA command failure (ibv_modify_qp eno 110)",
+    outcome="Fail InfraHW",
+    priority=OutcomePriority.MEDIUM_SW,
+    doc="local-hca-command-failure",
+    hw_cause="Unknown HW Cause",
+)
+
+# Only a local command failure plus independent corroboration establishes the
+# stronger NIC diagnosis. Independent causes retain precedence; the refiner
+# demotes only the command and syslog sources used by this diagnosis.
+outcome_symptom(
+    "Corroborated local HCA command failure",
+    outcome="Fail InfraHW",
+    priority=OutcomePriority.LOW,
+    doc="local-hca-command-failure",
+    hw_cause="Known HW Cause - Node (NIC)",
 )

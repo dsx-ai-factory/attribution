@@ -23,6 +23,7 @@ concurrency:
 
 permissions:
   contents: write
+  pages: read
 
 jobs:
   publish:
@@ -47,7 +48,7 @@ jobs:
 
       - name: Build relocatable walkthrough
         working-directory: docs/attribution-tour
-        run: pnpm build --base /walkthroughs/attribution-process/ --out dist
+        run: pnpm build --base /${{ github.event.repository.name }}/walkthroughs/attribution-process/ --out dist
 
       - name: Stage Pages landing page
         run: |
@@ -71,3 +72,17 @@ jobs:
           publish_dir: docs/attribution-tour/dist
           destination_dir: walkthroughs/attribution-process
           full_commit_message: Publish attribution process walkthrough from ${{ github.sha }}
+
+      - name: Read GitHub Pages address
+        id: pages
+        uses: actions/configure-pages@45bfe0192ca1faeb007ade9deae92b16b8254a0d # v6
+
+      # A wrong build base still deploys, but the page renders blank because
+      # its scripts and stylesheets 404. Load the live page to catch that.
+      - name: Check published walkthrough loads its assets
+        env:
+          PAGES_BASE_URL: ${{ steps.pages.outputs.base_url }}
+        run: >-
+          python3 .github/scripts/check_pages_deploy.py
+          "${PAGES_BASE_URL%/}/walkthroughs/attribution-process/"
+          docs/attribution-tour/dist/index.html

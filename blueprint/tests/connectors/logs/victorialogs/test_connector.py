@@ -414,3 +414,82 @@ def test_invalid_source_and_limit_raise_value_error():
         VictoriaLogsConnector(endpoint="http://victorialogs.example", source="unknown")
     with pytest.raises(ValueError, match="limit"):
         _connector(limit=0)
+
+
+def _cluster_connector(query_kwargs=None, **kwargs):
+    return VictoriaLogsConnector(
+        endpoint="http://victorialogs.example",
+        source=Source.SYSLOG,
+        query_kwargs={"cluster": "cluster-a", "service_name": "example-service"}
+        if query_kwargs is None
+        else query_kwargs,
+        templates={Source.SYSLOG: ['cluster:="{cluster}" service_name:="{service_name}"']},
+        node_field=None,
+        **kwargs,
+    )
+
+
+def _queried(post):
+    return [call.kwargs["data"]["query"] for call in post.call_args_list]
+
+
+@pytest.mark.parametrize("context_cluster", [None, "", "cluster-b"])
+def test_cluster_from_context_disabled_uses_configured_cluster(context_cluster, mocker):
+    post = mocker.patch("requests.Session.post", return_value=_response("", mocker))
+    context = _context()
+    if context_cluster is not None:
+        context["cluster"] = context_cluster
+
+    _cluster_connector().collect(context)
+
+    assert _queried(post) == ['cluster:="cluster-a" service_name:="example-service"']
+
+
+def test_cluster_from_context_uses_each_context_cluster(mocker):
+    post = mocker.patch("requests.Session.post", return_value=_response("", mocker))
+    conn = _cluster_connector(cluster_from_context=True)
+
+    conn.collect({**_context(), "cluster": "cluster-b"})
+    conn.collect({**_context(), "cluster": "cluster-c"})
+    conn.collect(_context())
+
+    assert _queried(post) == [
+        'cluster:="cluster-b" service_name:="example-service"',
+        'cluster:="cluster-c" service_name:="example-service"',
+        'cluster:="cluster-a" service_name:="example-service"',
+    ]
+    assert conn._query_kwargs["cluster"] == "cluster-a"
+
+
+@pytest.mark.parametrize("context_cluster", [None, "", 7])
+def test_cluster_from_context_falls_back_without_context_cluster(context_cluster, mocker):
+    post = mocker.patch("requests.Session.post", return_value=_response("", mocker))
+    context = _context()
+    if context_cluster is not None:
+        context["cluster"] = context_cluster
+
+    _cluster_connector(cluster_from_context=True).collect(context)
+
+    assert _queried(post) == ['cluster:="cluster-a" service_name:="example-service"']
+
+
+def test_cluster_from_context_supplies_cluster_missing_from_query_kwargs(mocker):
+    post = mocker.patch("requests.Session.post", return_value=_response("", mocker))
+    warning = mocker.patch.object(victorialogs.logger, "warning")
+    conn = _cluster_connector(query_kwargs={"service_name": "example-service"}, cluster_from_context=True)
+
+    conn.collect({**_context(), "cluster": "cluster-b"})
+    assert _queried(post) == ['cluster:="cluster-b" service_name:="example-service"']
+
+    assert conn.collect(_context()) == []
+    assert post.call_count == 1
+    assert "cluster" in warning.call_args.args[0]
+
+
+@pytest.mark.parametrize("context_cluster", ['cluster-b" or "', "cluster\\b", "cluster`b", "cluster\nb"])
+def test_cluster_from_context_rejects_unsafe_context_cluster(context_cluster, mocker):
+    post = mocker.patch("requests.Session.post")
+
+    with pytest.raises(ValueError, match="context cluster"):
+        _cluster_connector(cluster_from_context=True).collect({**_context(), "cluster": context_cluster})
+    post.assert_not_called()

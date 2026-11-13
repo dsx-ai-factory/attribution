@@ -533,6 +533,77 @@ def test_victorialogs_example_config_loads():
     assert all(isinstance(connector, VictoriaLogsConnector) for connector in cfg.log_connectors)
 
 
+_CLUSTER_FROM_CONTEXT_SECTIONS = {
+    "log": (
+        '[log.syslog]\ncomponent = "victorialogs"\n'
+        '[log.syslog.victorialogs]\nendpoint = "http://127.0.0.1:9428"\n'
+        'query_kwargs = { cluster = "cluster-a" }\n',
+        "NVAB_LOG_SYSLOG_VICTORIALOGS_CLUSTER_FROM_CONTEXT",
+        ["log", "syslog", "victorialogs", "cluster_from_context"],
+    ),
+    "metrics": (
+        '[metrics.node_metrics]\ncomponent = "promql"\n'
+        '[metrics.node_metrics.promql]\nendpoint = "http://127.0.0.1:8428"\n'
+        'cluster = "cluster-a"\n',
+        "NVAB_METRICS_NODE_METRICS_PROMQL_CLUSTER_FROM_CONTEXT",
+        ["metrics", "node_metrics", "promql", "cluster_from_context"],
+    ),
+}
+
+
+def _cluster_from_context_connector(framework, tmp_path, *, toml_value=None, environ=None, cli_value=None):
+    from attribution_blueprint.mca import build_config, load_settings
+
+    section, _env, _cli = _CLUSTER_FROM_CONTEXT_SECTIONS[framework]
+    if toml_value is not None:
+        section += f"cluster_from_context = {toml_value}\n"
+    p = tmp_path / "c.toml"
+    p.write_text(_victorialogs_config(section))
+    cli = [[*_cli, cli_value]] if cli_value is not None else None
+    cfg = build_config(load_settings(p, cli_invocations=cli, environ=environ or {}))
+    connectors = cfg.log_connectors if framework == "log" else cfg.metrics_connectors
+    assert len(connectors) == 1
+    return connectors[0]
+
+
+@pytest.mark.parametrize("framework", ["log", "metrics"])
+def test_cluster_from_context_defaults_to_false(framework, tmp_path):
+    assert _cluster_from_context_connector(framework, tmp_path)._cluster_from_context is False
+
+
+@pytest.mark.parametrize("framework", ["log", "metrics"])
+@pytest.mark.parametrize(("toml_value", "expected"), [("true", True), ("false", False), ('"yes"', True)])
+def test_cluster_from_context_from_toml(framework, toml_value, expected, tmp_path):
+    connector = _cluster_from_context_connector(framework, tmp_path, toml_value=toml_value)
+    assert connector._cluster_from_context is expected
+
+
+@pytest.mark.parametrize("framework", ["log", "metrics"])
+@pytest.mark.parametrize(("value", "expected"), [("true", True), ("1", True), ("false", False), ("0", False)])
+def test_cluster_from_context_from_env(framework, value, expected, tmp_path):
+    env_name = _CLUSTER_FROM_CONTEXT_SECTIONS[framework][1]
+    connector = _cluster_from_context_connector(framework, tmp_path, toml_value="false", environ={env_name: value})
+    assert connector._cluster_from_context is expected
+
+
+@pytest.mark.parametrize("framework", ["log", "metrics"])
+def test_cluster_from_context_from_cli(framework, tmp_path):
+    connector = _cluster_from_context_connector(framework, tmp_path, cli_value="true")
+    assert connector._cluster_from_context is True
+
+
+@pytest.mark.parametrize(
+    ("framework", "field"),
+    [
+        ("log", r"log\.syslog\.victorialogs\.cluster_from_context"),
+        ("metrics", r"metrics\.node_metrics\.promql\.cluster_from_context"),
+    ],
+)
+def test_cluster_from_context_rejects_non_bool(framework, field, tmp_path):
+    with pytest.raises(MCAError, match=rf"{field}='maybe' must be a bool"):
+        _cluster_from_context_connector(framework, tmp_path, toml_value='"maybe"')
+
+
 def test_slurm_cluster_tz_from_toml(tmp_path):
     """Slurm ECA `cluster_tz` flows from TOML so the connector anchors sacct
     timestamps to the cluster timezone, not the blueprint host's."""
