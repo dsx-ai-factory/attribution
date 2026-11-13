@@ -2285,6 +2285,22 @@ outcome_symptom(
 )
 
 outcome_symptom(
+    "DataLoader worker bus error",
+    outcome="Fail MultiCategory",
+    priority=OutcomePriority.LOW_USER,
+    doc="bus-error",
+)
+
+# LOW, like cudaError out of memory, so it outranks LOW_GENERIC peer errors
+# such as Connection reset by peer from ranks that lose the failed rank.
+outcome_symptom(
+    "Shared memory exhausted",
+    outcome="Fail User",
+    priority=OutcomePriority.LOW,
+    doc="file-write-failed",
+)
+
+outcome_symptom(
     "Cancelled by Timeout",
     outcome="Fail User",
     priority=OutcomePriority.LOW_USER,
