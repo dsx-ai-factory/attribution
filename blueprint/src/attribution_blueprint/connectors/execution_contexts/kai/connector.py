@@ -612,6 +612,7 @@ def _parse_pod_group(
 def _history_attempt_state(
     attempt: PodGroupAttempt,
 ) -> tuple[str, str]:
+    """Translate reconstructed outcomes into service and native owner states."""
     terminal = attempt.terminal
     if terminal is None:
         return (
@@ -641,6 +642,7 @@ def _history_complete(
     attempt: PodGroupAttempt,
     coverage: dict,
 ) -> bool:
+    """Require resolved boundaries, membership, and watch coverage for the full attempt."""
     if (
         not attempt.boundary_resolved
         or not attempt.membership_resolved
@@ -786,8 +788,8 @@ class KaiExecutionContextAdapter:
 
     def discover_by_ids(self, ids: list[str]) -> list[KaiExecutionContext]:
         """Look up PodGroups by `<namespace>/<name>` (or bare `<name>` when the
-        adapter is namespace-scoped). PodGroups that do not exist are skipped;
-        any other failed lookup raises."""
+        adapter is namespace-scoped). Failed lookups use retained history when
+        available; otherwise missing PodGroups are skipped and other errors raise."""
         podgroups: list[dict] = []
         retained_evidence: list[_WorkloadEvidence] = []
         for ref in ids:
@@ -973,6 +975,7 @@ class KaiExecutionContextAdapter:
         *,
         pod_group_name: str | None,
     ) -> list[_WorkloadEvidence]:
+        """Group retained snapshots, placements, and coverage by PodGroup for reconstruction."""
         now = datetime.now(tz=timezone.utc)
         evidence_items = []
         for history in histories:
@@ -1027,7 +1030,7 @@ class KaiExecutionContextAdapter:
 
         The window is checked after member Pods and owners are resolved:
         a member Pod may predate its PodGroup, and the owner supplies the end.
-        A failed list raises.
+        A failed list uses retained history when available; otherwise it raises.
         `nodelist` entries may be CSVs of plain node names; a PodGroup
         survives if any member Pod ran on one of them.
         """
@@ -1221,6 +1224,7 @@ class KaiExecutionContextAdapter:
         *,
         time_range: tuple[datetime, datetime] | None = None,
     ) -> list[KaiExecutionContext]:
+        """Combine live and retained contexts, retain pending groups, and filter by time."""
         if not podgroups and not retained_evidence:
             return []
         live_evidence, pending_contexts = self._collect_live_evidence(

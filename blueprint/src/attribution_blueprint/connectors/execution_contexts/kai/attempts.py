@@ -867,6 +867,7 @@ def _terminal_events(
     snapshots: list[dict],
     inferred_job_restarts: dict[str, str],
 ) -> list[dict]:
+    """Extract and deduplicate Job/JobSet outcomes, including restart failures."""
     events = []
     for snapshot in snapshots:
         kind = snapshot.get("kind")
@@ -1026,6 +1027,7 @@ def _pod_in_attempt(
     allow_before_start: bool,
     allow_restart_before_start: bool,
 ) -> bool:
+    """Match Pod generation and timing, allowing earlier starts only when permitted."""
     if not _pod_matches_attempt(
         snapshot,
         pod_group_name,
@@ -1058,6 +1060,7 @@ def _resource_in_attempt(
     inferred_restart: str | None = None,
     allow_before_start: bool,
 ) -> bool:
+    """Match a Job snapshot to an attempt by generation and execution time."""
     observed_restart = restart_attempt(snapshot)
     if observed_restart is None:
         observed_restart = inferred_restart
