@@ -267,6 +267,27 @@ def test_the_pod_total_is_capped_to_the_tail():
     assert _text(obs[0]) == "BBB\nEND\n"
 
 
+def test_the_cap_is_applied_as_containers_are_read(mocker):
+    """Memory does not grow with the number of containers: the joined log is
+    trimmed after each one, and the result is still the tail of the full join."""
+    from attribution_blueprint.connectors.logs import kubernetes_logs as module
+
+    cap = 100
+    names = [f"c{i}" for i in range(8)]
+    logs = {("p", name): f"{name}:" + "x" * 150 + "\n" for name in names}
+    seen: list[int] = []
+    real = module._tail_bytes
+    mocker.patch.object(
+        module, "_tail_bytes", side_effect=lambda body, size: (seen.append(len(body.encode())), real(body, size))[1]
+    )
+
+    client = _FakeClient({"p": _pod(*names)}, logs)
+    obs = KubernetesLogsConnector(client=client, max_bytes_per_pod=cap).collect(_ctx(pod_names=["p"], pod_nodes={}))
+
+    assert max(seen) <= 2 * cap + 200  # one capped read of up to a container's log plus the kept tail
+    assert _text(obs[0]) == "".join(logs[("p", n)] for n in names)[-cap:]
+
+
 def test_emits_the_same_observation_as_kubectl_logs_for_the_same_text(mocker):
     """The API path and the kubectl path must be interchangeable: same text in,
     same entries (timestamps, node stamping, rank prefix handling) out."""

@@ -192,7 +192,10 @@ class KubernetesLogsConnector:
 
     def _read_pod(self, pod: str, namespace: str, context: ExecutionContext) -> str:
         """One pod's log, its containers' logs joined in order, or "" when the pod
-        cannot be read. A container that fails is skipped without losing the rest."""
+        cannot be read. A container that fails is skipped without losing the rest.
+
+        With a cap, the joined log is trimmed to its tail after each container, so
+        memory stays near twice the cap however many containers the pod has."""
         try:
             containers = self._containers(pod, namespace)
         except KubernetesClientError as error:
@@ -202,25 +205,26 @@ class KubernetesLogsConnector:
             logger.warning(f"kubernetes_logs: pod {pod} in {namespace} lists no containers; skipping")
             return ""
 
-        parts: list[str] = []
+        joined = ""
         for container in containers:
             try:
-                parts.append(
-                    self._client.read_pod_log(
-                        pod,
-                        namespace=namespace,
-                        container=container,
-                        previous=self._previous,
-                        timestamps=self._timestamps,
-                        since_seconds=self._since_seconds(context) if self._since_context_start else None,
-                        max_bytes=self._max_bytes,
-                    )
+                part = self._client.read_pod_log(
+                    pod,
+                    namespace=namespace,
+                    container=container,
+                    previous=self._previous,
+                    timestamps=self._timestamps,
+                    since_seconds=self._since_seconds(context) if self._since_context_start else None,
+                    max_bytes=self._max_bytes,
                 )
+                joined += part
+                if self._max_bytes is not None:
+                    joined = _tail_bytes(joined, self._max_bytes)
             except KubernetesClientError as error:
                 # One container that never started (HTTP 400) or has no
                 # previous instance must not lose the others' logs.
                 logger.warning(f"kubernetes_logs: could not read {namespace}/{pod} container {container}: {error}")
-        return "".join(parts)
+        return joined
 
 
 # --- MCA registration -----------------------------------------------------
