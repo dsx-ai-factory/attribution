@@ -315,3 +315,196 @@ def test_default_timeout_is_applied_to_discovery_api_calls(mocker):
     api_client.call_api("/apis", "GET", _request_timeout=None)
 
     call_api.assert_called_once_with("/apis", "GET", _request_timeout=7)
+
+
+# --- read_pod_log ---------------------------------------------------------
+
+
+class _FakeLogResponse:
+    """Stands in for the urllib3 response of a streamed pod-log read."""
+
+    def __init__(self, chunks: list[bytes], stream_error: Exception | None = None):
+        """Store the canned data and start with no recorded calls."""
+        self.chunks = chunks
+        self.stream_error = stream_error
+        self.chunk_sizes: list[int] = []
+        self.released = False
+
+    def stream(self, amt):
+        """Yield the chunks, raising the configured error after the first one."""
+        self.chunk_sizes.append(amt)
+        yield from self.chunks[:1]
+        if self.stream_error is not None:
+            raise self.stream_error
+        yield from self.chunks[1:]
+
+    def release_conn(self):
+        """Record that the connection was released."""
+        self.released = True
+
+
+def _log_client(mocker, response=None, error: Exception | None = None):
+    """A client whose CoreV1Api is a recording fake; returns (client, calls)."""
+    client = KubernetesClient(timeout_seconds=7)
+    client._api = SimpleNamespace(client=object())
+    calls: list[tuple] = []
+
+    class _FakeCoreV1Api:
+        def __init__(self, api_client):
+            """Store the canned data and start with no recorded calls."""
+            calls.append(("init", api_client))
+
+        def read_namespaced_pod_log(self, name, namespace, **kwargs):
+            """Record the request and return the canned response, or raise the configured error."""
+            calls.append(("read", name, namespace, kwargs))
+            if error is not None:
+                raise error
+            return response
+
+    mocker.patch("kubernetes.client.CoreV1Api", _FakeCoreV1Api)
+    return client, calls
+
+
+def test_read_pod_log_passes_options_and_streams_without_preloading(mocker):
+    """Read pod log passes options and streams without preloading."""
+    response = _FakeLogResponse([b"line1\n", b"line2\n"])
+    client, calls = _log_client(mocker, response)
+
+    text = client.read_pod_log(
+        "pod-0", namespace="team-a", container="trainer", previous=True, timestamps=True, since_seconds=30
+    )
+
+    assert text == "line1\nline2\n"
+    assert calls[0][1] is client._api.client  # built from the shared, already-configured ApiClient
+    _, name, namespace, kwargs = calls[1]
+    assert (name, namespace) == ("pod-0", "team-a")
+    assert kwargs == {
+        "container": "trainer",
+        "previous": True,
+        "timestamps": True,
+        "since_seconds": 30,
+        "_preload_content": False,
+        "_request_timeout": 7,
+    }
+    assert response.released
+
+
+def test_read_pod_log_omits_unset_flags(mocker):
+    """Read pod log omits unset flags."""
+    client, calls = _log_client(mocker, _FakeLogResponse([b"x"]))
+    client.read_pod_log("pod-0", namespace="team-a")
+    kwargs = calls[1][3]
+    assert kwargs["previous"] is None and kwargs["timestamps"] is None
+    assert kwargs["container"] is None and kwargs["since_seconds"] is None
+
+
+def test_read_pod_log_keeps_only_the_tail_and_bounds_what_it_holds(mocker):
+    """Read pod log keeps only the tail and bounds what it holds."""
+    response = _FakeLogResponse([b"aaaa", b"bbbb", b"cccc"])
+    client, _ = _log_client(mocker, response)
+
+    assert client.read_pod_log("pod-0", namespace="team-a", max_bytes=6) == "bbcccc"
+
+
+def test_read_pod_log_decodes_a_tail_that_cuts_a_character_in_half(mocker):
+    # "é" is two bytes; a cap that splits it must not raise.
+    """Read pod log decodes a tail that cuts a character in half."""
+    client, _ = _log_client(mocker, _FakeLogResponse(["é".encode() * 3]))
+    text = client.read_pod_log("pod-0", namespace="team-a", max_bytes=5)
+    assert text.endswith("éé")
+
+
+def test_read_pod_log_raises_with_the_status_and_no_body(mocker):
+    """Read pod log raises with the status and no body."""
+
+    class _ApiError(Exception):
+        status = 404
+        reason = "Not Found"
+
+    client, _ = _log_client(mocker, error=_ApiError('{"secret": "body"}'))
+    with pytest.raises(KubernetesClientError) as raised:
+        client.read_pod_log("gone", namespace="team-a")
+    assert raised.value.status == 404
+    assert "secret" not in str(raised.value)
+
+
+def test_read_pod_log_releases_the_connection_when_the_stream_fails(mocker):
+    """Read pod log releases the connection when the stream fails."""
+    response = _FakeLogResponse([b"partial"], stream_error=TimeoutError("read timed out"))
+    client, _ = _log_client(mocker, response)
+
+    with pytest.raises(KubernetesClientError):
+        client.read_pod_log("pod-0", namespace="team-a")
+    assert response.released
+
+
+def test_read_pod_log_wraps_a_failure_to_build_the_client(mocker):
+    """Loading credentials is part of the read: a failure is a client error, not a raw exception."""
+    client = KubernetesClient()
+    mocker.patch.object(client, "_build_client", side_effect=RuntimeError("no credentials"))
+
+    with pytest.raises(KubernetesClientError) as raised:
+        client.read_pod_log("pod-0", namespace="team-a")
+    assert raised.value.status is None
+    assert "no credentials" in str(raised.value)
+
+
+@pytest.mark.parametrize("max_bytes", [0, -1])
+def test_read_pod_log_rejects_a_non_positive_cap(mocker, max_bytes):
+    """Zero would keep nothing and a negative cap has no meaning; both fail before any request."""
+    client, calls = _log_client(mocker, _FakeLogResponse([b"x"]))
+    with pytest.raises(ValueError):
+        client.read_pod_log("pod-0", namespace="team-a", max_bytes=max_bytes)
+    assert calls == []
+
+
+def test_read_pod_log_streams_a_real_http_response_through_the_metrics_wrapper():
+    """End to end against a local server, through the same wrapper every API call goes through.
+
+    The wrapper records response sizes by reading the body, which would consume
+    a streamed log; pod logs must be exempt, so the tail is still returned.
+    """
+    import threading
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+    from kubernetes import client as kubernetes_client
+
+    from attribution_blueprint.kubernetes.client import _set_default_request_timeout
+
+    body = b"".join(b"line %06d\n" % i for i in range(50_000))
+    paths: list[str] = []
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_GET(self):
+            paths.append(self.path)
+            self.send_response(200)
+            self.send_header("Content-Type", "text/plain")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *args):
+            """Keep the test output quiet."""
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        api_client = kubernetes_client.ApiClient(
+            kubernetes_client.Configuration(host=f"http://127.0.0.1:{server.server_port}")
+        )
+        _set_default_request_timeout(api_client, 10)
+        client = KubernetesClient(timeout_seconds=10)
+        client._api = SimpleNamespace(client=api_client)
+
+        tail = client.read_pod_log("pod-0", namespace="team-a", container="trainer", max_bytes=1000)
+        whole = client.read_pod_log("pod-0", namespace="team-a", container="trainer")
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+    assert len(tail.encode()) == 1000
+    assert tail.rstrip().endswith("line 049999")
+    assert whole.encode() == body
+    assert paths[0].startswith("/api/v1/namespaces/team-a/pods/pod-0/log")

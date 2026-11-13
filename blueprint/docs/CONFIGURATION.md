@@ -772,7 +772,8 @@ The supported log components are:
 - `local_file`, read files visible on the blueprint host
 - `loki`, query Loki over HTTP
 - `victorialogs`, query VictoriaLogs over HTTP using LogsQL
-- `kubectl_logs`, collect Kubernetes pod logs for Kueue workloads
+- `kubectl_logs`, collect Kubernetes pod logs for Kueue workloads by running `kubectl logs`
+- `kubernetes_logs`, collect the same pod logs through the Kubernetes API, with no `kubectl` binary
 
 Prefer [pre-shaped entries](#pre-shaped-entries) for `local_file`: a path ending in `.jsonl` is read as observation entries, one JSON object per line, each carrying its own timestamp and node. Raw log files are also accepted, as the per-source sections below describe.
 
@@ -1069,6 +1070,56 @@ Omitting `max_bytes_per_pod` keeps the default 16 MiB cap. It does not disable
 truncation. The current TOML configuration surface supports changing the cap,
 but not disabling it entirely.
 
+The bundle image does not contain `kubectl`. Inside a container, use
+[`kubernetes_logs`](#kubernetes-api-pod-logs), or build an image that adds `kubectl`.
+
+### Kubernetes API Pod Logs
+
+Use `kubernetes_logs` to collect pod stdout as APPLOG or SYSLOG observations
+through the Kubernetes API, with the same Python client that the Kubernetes
+adapters use. It needs no `kubectl` binary, so it runs from the bundle image
+with the pod's service account. For the same logs it emits the same
+observations as `kubectl_logs`: the same entry parsing, node stamping from
+`pod_nodes`, and trailing-bytes cap.
+
+```toml
+[log.applog]
+component = "kubernetes_logs"
+
+[log.applog.kubernetes_logs]
+timestamps = false
+since_context_start = true
+timeout_seconds = 60
+```
+
+Fields:
+
+| Field                 | Required | Default         | Meaning                                                                                          |
+| --------------------- | -------- | --------------- | ------------------------------------------------------------------------------------------------ |
+| `kubeconfig`          | No       | client default  | Optional kubeconfig path. Without `kubeconfig` and `context`, the client loads the file named by `KUBECONFIG`, or `~/.kube/config` when `KUBECONFIG` is unset, if that file exists, and otherwise the in-cluster service account credentials. |
+| `context`             | No       | current context | Optional kubeconfig context name.                                                                |
+| `container`           | No       | all containers  | Container name. When omitted, the connector reads every init, regular, and ephemeral container, in that order, and joins the logs with no separator, as `kubectl logs --all-containers` prints them. |
+| `timestamps`          | No       | `true`          | Ask the API to prefix each line with a timestamp.                                                |
+| `previous`            | No       | `false`         | Read the previous container instance.                                                            |
+| `since_context_start` | No       | `false`         | Read only from the start of the execution context. The log API takes a relative window, so the connector measures it back from the time of each read, with a minimum of one second. |
+| `max_bytes_per_pod`   | No       | `16MB`          | Positive tail cap, as an integer or a size string such as `16MB`; zero, negative, and unparseable values are configuration errors. The connector applies the cap to each container and again to the joined pod log, so for a pod with several containers the earliest lines of the earlier containers can be dropped. It streams the response, so memory stays bounded however long the log is. |
+| `timeout_seconds`     | No       | `60`            | Timeout for each Kubernetes API request.                                                         |
+
+The identity that the Blueprint uses needs `get` on `pods` and on `pods/log` in
+each workload's namespace. To check access, run this command as that identity
+and confirm that it prints `yes`:
+
+```bash
+kubectl auth can-i get pods/log --namespace <namespace>
+```
+
+A pod that is missing, a pod that the identity may not read, and a container
+that has not started each produce a warning and are skipped. The connector
+still collects the other pods and containers, so check the warnings when a pod
+is absent from the diagnosis. As with `kubectl_logs`, set `timestamps = false`
+so that the platform does not add a prefix before an application-provided rank
+prefix. `kubernetes_logs` has no `kubectl_path`.
+
 ## Metrics Collection
 
 PromQL metrics are optional. Configure them when node metrics are available from Prometheus, Mimir, or a compatible endpoint.
@@ -1204,7 +1255,7 @@ Response size measures the decoded body, not compressed bytes on the wire.
 It includes the body of an error response.
 Command calls measure encoded stdout. Streamed HTTP responses omit size.
 Kafka output records no response size.
-Kubernetes watch and log-follow calls record no response size, because their bodies are streams that the metrics must not read.
+Kubernetes watch, log-follow, and pod-log calls record no response size, because their bodies are streams that the metrics must not read.
 The Kafka input consumer is not measured.
 The `kubernetes-daemon` watch process is not measured because its watch streams are long-lived.
 
