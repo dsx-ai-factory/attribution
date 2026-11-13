@@ -287,7 +287,7 @@ def test_create_attributor_preserves_original_conflict_as_cause(mocker):
         data=DuplicateAttributorError(model_type="DuplicateAttributorError", att_id="active-attr-id"),
     )
     conn = AttributionConnector("http://svc:8000")
-    create = mocker.patch.object(conn._api, "new_attribution_v2_attributor_post", side_effect=error)
+    create = mocker.patch.object(conn._api, "new_attribution_v2_attributor_post_with_http_info", side_effect=error)
 
     with pytest.raises(AttributorConflictError) as excinfo:
         conn.create_attributor(_info())
@@ -310,7 +310,7 @@ def test_create_attributor_preserves_original_conflict_as_cause(mocker):
 )
 def test_create_attributor_preserves_other_exception_identity(mocker, error):
     conn = AttributionConnector("http://svc:8000")
-    create = mocker.patch.object(conn._api, "new_attribution_v2_attributor_post", side_effect=error)
+    create = mocker.patch.object(conn._api, "new_attribution_v2_attributor_post_with_http_info", side_effect=error)
 
     with pytest.raises(type(error)) as excinfo:
         conn.create_attributor(_info())

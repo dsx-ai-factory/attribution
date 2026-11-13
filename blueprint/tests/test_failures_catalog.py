@@ -190,6 +190,69 @@ def catalog_by_id() -> dict[str, Any]:
     return {entry["id"]: entry for entry in _catalog_entries()}
 
 
+@pytest.mark.parametrize(
+    "entry_id",
+    [
+        "cancelled-due-to-task-failure",
+        "ib-device-settings-mismatch",
+        "kernel-oops",
+        "nvrx-ft-launcher-exit-0",
+        "oom-kill-of-user-task",
+        "xid-69",
+        "nv-err-invalid-object",
+        "nv-err-no-memory",
+    ],
+)
+def test_additional_catalog_guidance_has_safe_actions_and_evidence(catalog_by_id, entry_id):
+    """Keep tenant recovery steps and accessible handoff evidence with each entry."""
+    entry = catalog_by_id[entry_id]
+    assert set(entry["personas"]) == {"tenant_sre"}
+    assert "internal_notes" not in entry
+    assert "recommended_action" not in entry
+    assert "verification" not in entry
+    assert entry["severity"] in {"low", "medium", "high"}
+    tenant = entry["personas"]["tenant_sre"]
+    numbers = re.findall(r"^(\d+)\. ", tenant["action"], re.MULTILINE)
+    assert numbers == [str(n) for n in range(1, len(numbers) + 1)]
+    assert len(numbers) >= 3
+    assert "cluster administrator or cloud provider" in tenant["action"]
+    assert "NVIDIA Attribution diagnosis" in tenant["support_details"]
+    assert "if available" in tenant["support_details"]
+    for signal in entry.get("signals", []):
+        re.compile(signal["pattern"])
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        "Memory cgroup out of memory: Killed process 1234 (python)",
+        "Memory cgroup Out of memory: Killed process 1234 (python)",
+        "kubepods-pod01234567_89ab_cdef_0123_456789abcdef.slice: "
+        "A process of this unit has been killed by the OOM killer",
+        "kubepods-burstable-pod01234567_89ab_cdef_0123_456789abcdef.slice: "
+        "A process of this unit has been killed by the OOM killer",
+    ],
+)
+def test_user_task_oom_guidance_covers_task_and_pod_signals(catalog_by_id, message):
+    """Recognize both OOM log formats without treating ordinary pod startup as a kill."""
+    patterns = [signal["pattern"] for signal in catalog_by_id["oom-kill-of-user-task"]["signals"]]
+    assert any(re.search(pattern, message) for pattern in patterns)
+    assert not any(re.search(pattern, "pod started successfully") for pattern in patterns)
+
+
+def test_informational_and_ambiguous_guidance_does_not_invent_recovery(catalog_by_id):
+    """Keep successful launcher exits informational and distinct memory failures separate."""
+    success = catalog_by_id["nvrx-ft-launcher-exit-0"]
+    assert success["severity"] == "low"
+    assert "No corrective action is required for this symptom." in success["personas"]["tenant_sre"]["action"]
+    assert "signals" not in success
+    assert "signals" not in catalog_by_id["ib-device-settings-mismatch"]
+    memory = catalog_by_id["nv-err-no-memory"]
+    assert "NV_ERR_NO_MEMORY mem_multicast_fabric.c" in memory["aliases"]
+    assert "Out of memory" not in memory["aliases"]
+    assert "CUDA" in memory["personas"]["tenant_sre"]["action"]
+
+
 @pytest.mark.parametrize("entry_id,vendor", [("ib-error-12", "0"), ("ib-error-12-vendor-129", "129")])
 @pytest.mark.parametrize("direction", ["send", "receive"])
 @pytest.mark.parametrize("status", ["12", "IBV_WC_RETRY_EXC_ERR(12)"])

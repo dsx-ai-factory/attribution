@@ -1,13 +1,13 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-import requests
 from loguru import logger
 
 from attribution_blueprint.connectors.auth import Auth
 from attribution_blueprint.connectors.logs import log_observation
 from attribution_blueprint.connectors.logs.envelope import extract_body_and_node as _extract_body_and_node
 from attribution_blueprint.connectors.logs.loki.templates import TEMPLATES
+from attribution_blueprint.telemetry import MeteredSession
 from attribution_blueprint.types import (
     ExecutionContext,
     NodeResource,
@@ -79,7 +79,7 @@ class LokiConnector:
         # cluster-wide queries.
         self._node_label = node_label
 
-        self._session = requests.Session()
+        self._session = MeteredSession("loki", ("/loki/api/v1/query_range",))
         kwargs = auth.request_kwargs()
         if "headers" in kwargs:
             self._session.headers.update(kwargs["headers"])

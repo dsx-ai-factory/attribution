@@ -7,6 +7,10 @@ from __future__ import annotations
 
 import threading
 
+from attribution_blueprint.telemetry import track
+
+_STREAMING_QUERY_KEYS = frozenset({"watch", "follow"})
+
 
 class KubernetesClientError(RuntimeError):
     """A Kubernetes API read failed.
@@ -169,6 +173,15 @@ def _set_default_request_timeout(api_client, timeout_seconds: float) -> None:
     def call_api_with_timeout(*args, **kwargs):
         if kwargs.get("_request_timeout") is None:
             kwargs["_request_timeout"] = timeout_seconds
-        return call_api(*args, **kwargs)
+        method = args[1] if len(args) > 1 else kwargs["method"]
+        with track("kubernetes", method) as call:
+            response = call_api(*args, **kwargs)
+            query_params = args[3] if len(args) > 3 else kwargs.get("query_params")
+            # Watch and follow bodies are streams; reading .data consumes them. Add new streaming calls to the skip set.
+            if kwargs.get("_preload_content") is False and _STREAMING_QUERY_KEYS.isdisjoint(dict(query_params or ())):
+                data = getattr(response, "data", None)
+                if isinstance(data, bytes):
+                    call.response_bytes = len(data)
+            return response
 
     api_client.call_api = call_api_with_timeout

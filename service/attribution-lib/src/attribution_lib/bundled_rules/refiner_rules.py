@@ -32,6 +32,7 @@ from attribution_lib.observation import Context as ObservationContext
 from attribution_lib.observation.inbound import Source as ObsSource
 from attribution_lib.bundled_rules.common.outcome_helpers import (
     KUBERNETES_SCHEDULER_TYPES,
+    apply_preemption_pass,
     apply_user_cancellation_reclassification,
 )
 from attribution_lib.outcome import OutcomeAttribution
@@ -2829,35 +2830,7 @@ def outcome_reclassification_refiner(context: RefinerContext):
     nvrx_exit_fields = (job_info.exit_code, job_info.exit_code_signal)
     is_nvrx = NVRX_TAG in job_info.tags
     nvrx_failed = is_nvrx and any(v is not None and v != 0 for v in nvrx_exit_fields)
-    has_only_preemption_fallback = all(
-        symptom == "job failed" for symptom in attribution_result.symptoms.symptoms()
-    )
-
-    # Kubernetes scheduler preemption must not mask evidence-backed
-    # failures. Other scheduler types retain their original behavior.
-    if (
-        job_info.attributed_cancellation is None
-        and not nvrx_failed
-        and (job_info.scheduler not in KUBERNETES_SCHEDULER_TYPES or has_only_preemption_fallback)
-        and job_info.state is not None
-        and job_info.state.upper() == "PREEMPTED"
-    ):
-        previous_source = None
-        if attribution_result.outcome_attr is not None:
-            previous_source = attribution_result.outcome_attr.one_source()
-
-        if previous_source is None:
-            previous_source = job_info.source(job_info.state, "slurm state")
-
-        new_outcome = OutcomeAttribution(
-            outcome="Pass",
-            hw_cause="Not Applicable",
-            root_cause_symptom="SLURM preempted",
-        )
-
-        attribution_result.outcome_attr = SourceSet(new_outcome).add(
-            previous_source.derived(rule="reclassified: slurm preempted")
-        )
+    if not nvrx_failed and apply_preemption_pass(attribution_result, job_info):
         return
 
     # Reclassify TIMEOUT to Pass when it's the only symptom (unless NVRx reports a failure)
