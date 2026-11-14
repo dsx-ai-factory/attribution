@@ -4376,6 +4376,37 @@ class TestGb200PriorityRootCause:
         assert "Python Exception" in symptoms
         assert "PyTorch NCCL watchdog" in symptoms
 
+    def test_imex_stop_after_cycle_end_keeps_cause(self, stream, obs_ctx):
+        """A node reboot after the NVRx cycle ended does not discard the cycle's cause."""
+        cycle_end = datetime(2024, 1, 1, 10, 34, 18, tzinfo=ZoneInfo("UTC"))
+        job_info = default_job_info(job_end_time=_DEFAULT_END, interest_end_time=cycle_end)
+        symptoms = _make_symptoms(
+            obs_ctx, "XID-94-CONTAINED_ERROR-CE", source_time=datetime(2024, 1, 1, 10, 34, 18, tzinfo=ZoneInfo("UTC"))
+        )
+        symptoms.update(
+            _make_symptoms(
+                obs_ctx,
+                "Stopping nvidia-imex.service",
+                source_time=datetime(2024, 1, 1, 10, 35, 52, tzinfo=ZoneInfo("UTC")),
+            )
+        )
+        _run(stream, job_info, symptoms)
+        assert "XID-94-CONTAINED_ERROR-CE" in symptoms
+
+    def test_imex_stop_before_cycle_end_keeps_only_root_cause(self, stream, obs_ctx):
+        """A priority symptom inside the cycle still discards the other symptoms."""
+        cycle_end = datetime(2024, 1, 1, 10, 34, 18, tzinfo=ZoneInfo("UTC"))
+        job_info = default_job_info(job_end_time=_DEFAULT_END, interest_end_time=cycle_end)
+        symptoms = _make_symptoms(
+            obs_ctx,
+            "XID-94-CONTAINED_ERROR-CE",
+            "Stopping nvidia-imex.service",
+            source_time=datetime(2024, 1, 1, 10, 30, 0, tzinfo=ZoneInfo("UTC")),
+        )
+        _run(stream, job_info, symptoms)
+        assert "Stopping nvidia-imex.service" in symptoms
+        assert "XID-94-CONTAINED_ERROR-CE" not in symptoms
+
 
 class TestDagCascadePruning:
     def test_xid171_prunes_xid48_and_xid94(self, stream, obs_ctx, job_info):
