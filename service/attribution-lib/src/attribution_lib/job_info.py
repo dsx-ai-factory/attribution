@@ -170,6 +170,9 @@ class JobInfo(NamedTuple):
     allocation_failure: Optional[SchedulerFailure] = None
     # Associated execution evidence does not overwrite the raw allocation fields.
     execution_cancellation: Optional[ExecutionCancellation] = None
+    # Time this execution stopped running when it stops before interest_end_time,
+    # e.g. an NVRx cycle whose record window runs to the next cycle's start.
+    execution_end_time: Optional[datetime] = None
     # Temporary bridge until cluster context enters as native CLUSTER_CONTEXT
     # observations scoped to non-job cluster resources, where rules can consume
     # it through normal event, scrub, and cascade processing. Remove this field then.
@@ -402,6 +405,7 @@ class JobInfoBuilder:
     _failed_node: Optional[str] = None
     _allocation_failure: Optional[SchedulerFailure] = None
     _execution_cancellation: Optional[ExecutionCancellation] = None
+    _execution_end_time: Optional[datetime] = None
     _cluster_incident_context: Optional[ClusterIncidentContext] = None
     _cluster_incident_context_set: bool
     _cluster: str
@@ -565,6 +569,21 @@ class JobInfoBuilder:
         self._execution_cancellation = evidence
         return self
 
+    def execution_end_time(self, in_execution_end_time: datetime) -> "JobInfoBuilder":
+        """Supply the time this execution stopped running, when it precedes the interest end.
+
+        Args:
+            in_execution_end_time: Timezone-aware end of the execution, for example
+                an NVRx cycle's own end time.
+
+        Returns:
+            This builder.
+        """
+        if self._execution_end_time is not None:
+            raise JobInfoDuplicateFieldError("execution_end_time")
+        self._execution_end_time = utils.check_datetime(in_execution_end_time)
+        return self
+
     def cluster_incident_context(self, context: Optional[ClusterIncidentContext]) -> "JobInfoBuilder":
         """Supply client-projected incident context for attribution refiners.
 
@@ -674,6 +693,7 @@ class JobInfoBuilder:
             failed_node=self._failed_node,
             allocation_failure=self._allocation_failure,
             execution_cancellation=self._execution_cancellation,
+            execution_end_time=self._execution_end_time,
             cluster_incident_context=self._cluster_incident_context,
             cluster=self._cluster,
             nodes=derived_nodes,

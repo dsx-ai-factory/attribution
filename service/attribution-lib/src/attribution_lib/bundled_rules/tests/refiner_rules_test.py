@@ -4377,9 +4377,12 @@ class TestGb200PriorityRootCause:
         assert "PyTorch NCCL watchdog" in symptoms
 
     def test_imex_stop_after_cycle_end_keeps_cause(self, stream, obs_ctx):
-        """A node reboot after the NVRx cycle ended does not discard the cycle's cause."""
+        """A node reboot after the NVRx cycle ended does not discard the cycle's cause.
+
+        The record window runs to the next cycle's start, so the reboot is inside it.
+        """
         cycle_end = datetime(2024, 1, 1, 10, 34, 18, tzinfo=ZoneInfo("UTC"))
-        job_info = default_job_info(job_end_time=_DEFAULT_END, interest_end_time=cycle_end)
+        job_info = default_job_info(job_end_time=_DEFAULT_END, execution_end_time=cycle_end)
         symptoms = _make_symptoms(
             obs_ctx, "XID-94-CONTAINED_ERROR-CE", source_time=datetime(2024, 1, 1, 10, 34, 18, tzinfo=ZoneInfo("UTC"))
         )
@@ -4412,7 +4415,7 @@ class TestGb200PriorityRootCause:
     def test_imex_stop_before_cycle_end_keeps_only_root_cause(self, stream, obs_ctx, imex_times):
         """A priority symptom with a source in the cycle, or with no time, discards the other symptoms."""
         cycle_end = datetime(2024, 1, 1, 10, 34, 18, tzinfo=ZoneInfo("UTC"))
-        job_info = default_job_info(job_end_time=_DEFAULT_END, interest_end_time=cycle_end)
+        job_info = default_job_info(job_end_time=_DEFAULT_END, execution_end_time=cycle_end)
         symptoms = _make_symptoms(
             obs_ctx, "XID-94-CONTAINED_ERROR-CE", source_time=datetime(2024, 1, 1, 10, 30, 0, tzinfo=ZoneInfo("UTC"))
         )

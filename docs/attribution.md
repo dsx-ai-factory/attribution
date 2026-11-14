@@ -36,6 +36,8 @@ Primary data for attribution comes from logs, metrics, and telemetry. It is impo
 
 A supplied cancellation provides the record's cancellation symptom, regardless of the record's raw scheduler state. Independent faults still take precedence. `allocation_failure` changes attribution only together with a cancellation. When the record's state is `NODE_FAIL` and the allocation's failed node is not among the record's nodes, the inherited node failure is not attributed to the record, unless the record's own `failed_node` names a different node that is among its nodes. Omitting both inputs keeps existing behavior.
 
+`JobInfoBuilder.execution_end_time` is an optional time at which the record's execution stopped running, when that time is before `interest_end_time`. An NVRx cycle record is an example: its window runs to the next cycle's start. The GB200 priority rule ignores a priority symptom whose every timed source is after this time. Omitting it keeps existing behavior.
+
 ## Attribution Process Overview
 
 ### State management
