@@ -126,3 +126,31 @@ def test_reports_in_separate_observations_pair_within_their_own_observation(requ
 
     flagged_ranks = {node: [rank_report.rank for rank_report in report.rank_scores] for node, report in digest.items()}
     assert flagged_ranks == {"node-a": [1], "node-b": [5]}
+
+
+@pytest.mark.parametrize(
+    "line_batches",
+    [
+        pytest.param([[BOTTOM_WITH_SLOW_RANK], [TOP]], id="bottom-line-in-the-first-observation"),
+        pytest.param([[TOP], [BOTTOM_WITH_SLOW_RANK]], id="bottom-line-in-the-second-observation"),
+    ],
+)
+def test_bottom_group_does_not_pair_with_top_group_of_another_observation(
+    request, event_manager, job_info, line_batches
+):
+    digest, _ = _ingest_and_collect(request, event_manager, job_info, *line_batches)
+
+    assert digest == {}
+
+
+def test_rank_scores_follow_the_order_of_ingest(request, event_manager, job_info):
+    """An observation id is a salted hash, so it must not decide the order of the reports."""
+    reports = [
+        [f"^^^^ Bottom 1 Ranks with lowest  Etpt(TF): {score}/5/node-b,", TOP]
+        for score in ("213.46", "200.00", "190.00", "180.00")
+    ]
+
+    digest, _ = _ingest_and_collect(request, event_manager, job_info, *reports)
+
+    scores = [rank_report.score for rank_report in digest["node-b"].rank_scores]
+    assert scores == [213.46, 200.0, 190.0, 180.0]
