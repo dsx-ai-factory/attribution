@@ -380,9 +380,7 @@ _NON_IB_ROOT_CAUSE_PATTERNS = [
     "%http.client.RemoteDisconnected%",
     "%DataLoader Exception%",
     "%S3 Exception%",
-    "%cudaError out of memory%",
     "%Shared memory exhausted%",
-    "%System-out of memory%",
     "%LustreError%",
     "%assert number_image_tags <= number_of_images%",
     "%wandb.errors.CommError: Run initialization has timed out%",
@@ -487,6 +485,12 @@ _KERNEL_CRASH_SYMPTOMS = frozenset(
     }
 )
 _IB_ERROR_12_PREFIX = "IB Error-12"
+_SYSLOG_OOM_SYMPTOMS = (
+    "System-out of memory",
+    "OOM kill of user task",
+    "OOM kill of system service",
+    "OOM kill of a system pod",
+)
 
 
 # IBSymptomCleanup helpers
@@ -495,6 +499,23 @@ _IB_ERROR_12_PREFIX = "IB Error-12"
 def _is_ib_error_12(symptom: str) -> bool:
     """Match Error-12 as a complete code, including its formatted variants."""
     return symptom == _IB_ERROR_12_PREFIX or symptom.startswith(f"{_IB_ERROR_12_PREFIX} ")
+
+
+def _has_syslog_oom(errors: SymptomSet) -> bool:
+    """Check whether a syslog line reports an OOM in this symptom group.
+
+    Args:
+        errors: The symptoms of one node, or the job-level symptoms.
+
+    Returns:
+        True if a syslog source backs one of the OOM symptoms.
+    """
+    return any(
+        source.source_context.source == ObsSource.SYSLOG
+        for oom in _SYSLOG_OOM_SYMPTOMS
+        if oom in errors
+        for source in errors[oom]
+    )
 
 
 def _deactivate_bad_pairs(event_stream: EventStream, rule_name: str) -> None:
@@ -1997,7 +2018,7 @@ def ib_symptom_cleanup(context: RefinerContext):
                     break
             if found_root_cause:
                 break
-        if found_root_cause:
+        if found_root_cause or _has_syslog_oom(errors):
             _discard_ib_cascade(symptoms)
             _discard_ib_cascade(errors)
 
