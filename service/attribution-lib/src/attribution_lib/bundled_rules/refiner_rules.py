@@ -75,6 +75,7 @@ declare_rule_names(
     NodeNotRespondingProvenance.SLURM_NODE_REASON.value,
     FailedNodeResolution.SLURM_FAILED_NODE_FIELD.value,
     FailedNodeResolution.SINGLE_ALLOCATED_NODE_INFERENCE.value,
+    FailedNodeResolution.CYCLE_OWNED_ALLOCATION_FAILURE.value,
 )
 
 _REFINER_BASE = FilterPriority.FINAL
@@ -600,6 +601,9 @@ def scheduler_node_failure_refiner(context: RefinerContext):
 
     When slurm reports a job as NODE_FAIL it names the failed node (or, on a
     single-node job, the sole allocated node necessarily is the one that failed).
+    An NVRx cycle that is not the allocation's last cycle never carries NODE_FAIL;
+    when the caller marks such a record as the owner of the allocation's NODE_FAIL,
+    the allocation's failed node is attributed to that record instead.
     Emits "Node failure reported by slurm", a member of _NODE_FAILURE_SYMPTOMS that
     ScrubBadNodes reads, so this runs earlier in the SCRUB phase.
     """
@@ -612,6 +616,16 @@ def scheduler_node_failure_refiner(context: RefinerContext):
         # failure remains allocation evidence. Independent faults still apply.
         return
     if job_info.state != "NODE_FAIL":
+        owned = job_info.allocation_failure
+        if (
+            owned is not None
+            and owned.owner_execution_id == job_info.id
+            and owned.state == "NODE_FAIL"
+            and owned.node.strip() != ""
+        ):
+            resolution = FailedNodeResolution.CYCLE_OWNED_ALLOCATION_FAILURE
+            source = job_info.source(owned.state + owned.node, resolution.value)
+            my_bad_nodes.add([owned.node], SourceSet.new_one("Node failure reported by slurm", source))
         return
 
     failed_node = job_info.failed_node

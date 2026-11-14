@@ -11,3 +11,4 @@ class FailedNodeResolution(StrEnum):
 
     SLURM_FAILED_NODE_FIELD = "slurm_failed_node_field"
     SINGLE_ALLOCATED_NODE_INFERENCE = "single_allocated_node_inference"
+    CYCLE_OWNED_ALLOCATION_FAILURE = "cycle_owned_allocation_failure"
