@@ -4376,6 +4376,91 @@ class TestGb200PriorityRootCause:
         assert "Python Exception" in symptoms
         assert "PyTorch NCCL watchdog" in symptoms
 
+    _XID94_TIME = datetime(2024, 1, 1, 10, 34, 18, tzinfo=ZoneInfo("UTC"))
+    _NVRX_FAILURE_TIME = datetime(2024, 1, 1, 10, 34, 20, tzinfo=ZoneInfo("UTC"))
+    _REBOOT_TIME = datetime(2024, 1, 1, 10, 35, 52, tzinfo=ZoneInfo("UTC"))
+
+    def _xid94_and_imex(self, obs_ctx, imex_times, nvrx_failure: bool) -> SymptomSet:
+        """Build an XID-94 cause, an imex stop at the given times, and optionally the NVRx failure.
+
+        Args:
+            obs_ctx: Observation context for the sources.
+            imex_times: One source time per imex stop line; None for an untimed line.
+            nvrx_failure: Whether to add the NVRx detected failure symptom.
+
+        Returns:
+            The symptom set.
+        """
+        symptoms = _make_symptoms(obs_ctx, "XID-94-CONTAINED_ERROR-CE", source_time=self._XID94_TIME)
+        if nvrx_failure is True:
+            symptoms.update(_make_symptoms(obs_ctx, "NVRx detected failure", source_time=self._NVRX_FAILURE_TIME))
+        imex = SourceSet("Stopping nvidia-imex.service")
+        for line_num, time in enumerate(imex_times, start=1):
+            imex.add(_make_source(obs_ctx, line_num=line_num)._replace(time=time))
+        symptoms.add(imex)
+        return symptoms
+
+    def test_imex_stop_after_nvrx_failure_keeps_cause(self, stream, obs_ctx, job_info):
+        """A node reboot after NVRx detected the failure does not discard the failure's cause.
+
+        An NVRx cycle record's window runs to the next cycle's start, so the reboot is inside it.
+        """
+        symptoms = self._xid94_and_imex(obs_ctx, [self._REBOOT_TIME], nvrx_failure=True)
+        _run(stream, job_info, symptoms)
+        assert "XID-94-CONTAINED_ERROR-CE" in symptoms
+        assert "Stopping nvidia-imex.service" in symptoms
+
+    @pytest.mark.parametrize(
+        "imex_times",
+        [
+            pytest.param([datetime(2024, 1, 1, 10, 30, 0, tzinfo=ZoneInfo("UTC"))], id="before"),
+            pytest.param([datetime(2024, 1, 1, 10, 34, 20, tzinfo=ZoneInfo("UTC"))], id="at_cutoff"),
+            pytest.param([None], id="untimed"),
+            pytest.param(
+                [
+                    datetime(2024, 1, 1, 10, 30, 0, tzinfo=ZoneInfo("UTC")),
+                    datetime(2024, 1, 1, 10, 35, 52, tzinfo=ZoneInfo("UTC")),
+                ],
+                id="before_and_after",
+            ),
+        ],
+    )
+    def test_imex_stop_by_nvrx_failure_keeps_only_root_cause(self, stream, obs_ctx, job_info, imex_times):
+        """A priority symptom logged by the NVRx failure, or with no time, discards the other symptoms."""
+        symptoms = self._xid94_and_imex(obs_ctx, imex_times, nvrx_failure=True)
+        _run(stream, job_info, symptoms)
+        assert "Stopping nvidia-imex.service" in symptoms
+        assert "XID-94-CONTAINED_ERROR-CE" not in symptoms
+
+    def test_imex_stop_after_earliest_of_several_nvrx_failures_keeps_cause(self, stream, obs_ctx, job_info):
+        """The cutoff is the earliest timed NVRx failure source; later and untimed sources do not move it."""
+        symptoms = self._xid94_and_imex(obs_ctx, [self._REBOOT_TIME], nvrx_failure=True)
+        later_failure = datetime(2024, 1, 1, 10, 36, 0, tzinfo=ZoneInfo("UTC"))
+        for line_num, time in enumerate([later_failure, None], start=2):
+            symptoms["NVRx detected failure"].add(_make_source(obs_ctx, line_num=line_num)._replace(time=time))
+        _run(stream, job_info, symptoms)
+        assert "XID-94-CONTAINED_ERROR-CE" in symptoms
+
+    def test_xid149_after_nvrx_failure_kept_beside_earlier_imex_stop(self, stream, obs_ctx, job_info):
+        """A late priority symptom stays when an earlier priority symptom discards the other symptoms."""
+        symptoms = self._xid94_and_imex(
+            obs_ctx, [datetime(2024, 1, 1, 10, 30, 0, tzinfo=ZoneInfo("UTC"))], nvrx_failure=True
+        )
+        symptoms.update(
+            _make_symptoms(obs_ctx, "XID-149.4-NETIR_LINK_DOWN-ALIGNMENT_LOSS-0", source_time=self._REBOOT_TIME)
+        )
+        _run(stream, job_info, symptoms)
+        assert "Stopping nvidia-imex.service" in symptoms
+        assert "XID-149.4-NETIR_LINK_DOWN-ALIGNMENT_LOSS-0" in symptoms
+        assert "XID-94-CONTAINED_ERROR-CE" not in symptoms
+
+    def test_imex_stop_without_nvrx_failure_keeps_only_root_cause(self, stream, obs_ctx, job_info):
+        """Without an NVRx failure there is no cutoff, so a later imex stop still discards the other symptoms."""
+        symptoms = self._xid94_and_imex(obs_ctx, [self._REBOOT_TIME], nvrx_failure=False)
+        _run(stream, job_info, symptoms)
+        assert "Stopping nvidia-imex.service" in symptoms
+        assert "XID-94-CONTAINED_ERROR-CE" not in symptoms
+
 
 class TestDagCascadePruning:
     def test_xid171_prunes_xid48_and_xid94(self, stream, obs_ctx, job_info):
