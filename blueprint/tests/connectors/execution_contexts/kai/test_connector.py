@@ -745,6 +745,25 @@ def test_active_jobset_window_ends_now(mocker):
     assert ctx["end_time"] >= before
 
 
+def test_jobset_top_owner_annotation_without_group_is_accepted(mocker):
+    pg = _podgroup(owner=False)
+    pg["metadata"]["annotations"] = {
+        "kai.scheduler/top-owner-metadata": (
+            "name: pg-a-job\nuid: uid-job-uid-pg-a\nkind: JobSet\nversion: v1alpha2\n"
+        )
+    }
+    jobset = _jobset("pg-a-job", "uid-job-uid-pg-a", completed_at="2026-05-01T13:00:00Z")
+    _wire_kubectl(mocker, [pg], [], jobsets=[jobset])
+
+    [ctx] = KaiExecutionContextAdapter().discover_by_ids(["team-alpha/pg-a"])
+
+    assert ctx["owner_kind"] == "JobSet"
+    assert ctx["owner_name"] == "pg-a-job"
+    assert ctx["owner_uid"] == "uid-job-uid-pg-a"
+    assert ctx["state"] == "COMPLETED"
+    assert ctx["end_time"] == datetime(2026, 5, 1, 13, 0, tzinfo=timezone.utc)
+
+
 def test_jobset_joins_only_pods_from_current_child_jobs(mocker):
     pg = _podgroup(owner_kind="JobSet")
     jobset_name = "pg-a-job"
