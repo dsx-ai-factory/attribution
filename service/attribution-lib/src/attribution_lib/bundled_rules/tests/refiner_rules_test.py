@@ -4392,17 +4392,34 @@ class TestGb200PriorityRootCause:
         )
         _run(stream, job_info, symptoms)
         assert "XID-94-CONTAINED_ERROR-CE" in symptoms
+        assert "Stopping nvidia-imex.service" in symptoms
 
-    def test_imex_stop_before_cycle_end_keeps_only_root_cause(self, stream, obs_ctx):
-        """A priority symptom inside the cycle still discards the other symptoms."""
+    @pytest.mark.parametrize(
+        "imex_times",
+        [
+            pytest.param([datetime(2024, 1, 1, 10, 30, 0, tzinfo=ZoneInfo("UTC"))], id="inside"),
+            pytest.param([datetime(2024, 1, 1, 10, 34, 18, tzinfo=ZoneInfo("UTC"))], id="at_cutoff"),
+            pytest.param([None], id="untimed"),
+            pytest.param(
+                [
+                    datetime(2024, 1, 1, 10, 30, 0, tzinfo=ZoneInfo("UTC")),
+                    datetime(2024, 1, 1, 10, 35, 52, tzinfo=ZoneInfo("UTC")),
+                ],
+                id="before_and_after",
+            ),
+        ],
+    )
+    def test_imex_stop_before_cycle_end_keeps_only_root_cause(self, stream, obs_ctx, imex_times):
+        """A priority symptom with a source in the cycle, or with no time, discards the other symptoms."""
         cycle_end = datetime(2024, 1, 1, 10, 34, 18, tzinfo=ZoneInfo("UTC"))
         job_info = default_job_info(job_end_time=_DEFAULT_END, interest_end_time=cycle_end)
         symptoms = _make_symptoms(
-            obs_ctx,
-            "XID-94-CONTAINED_ERROR-CE",
-            "Stopping nvidia-imex.service",
-            source_time=datetime(2024, 1, 1, 10, 30, 0, tzinfo=ZoneInfo("UTC")),
+            obs_ctx, "XID-94-CONTAINED_ERROR-CE", source_time=datetime(2024, 1, 1, 10, 30, 0, tzinfo=ZoneInfo("UTC"))
         )
+        imex = SourceSet("Stopping nvidia-imex.service")
+        for line_num, time in enumerate(imex_times, start=1):
+            imex.add(_make_source(obs_ctx, line_num=line_num)._replace(time=time))
+        symptoms.add(imex)
         _run(stream, job_info, symptoms)
         assert "Stopping nvidia-imex.service" in symptoms
         assert "XID-94-CONTAINED_ERROR-CE" not in symptoms
