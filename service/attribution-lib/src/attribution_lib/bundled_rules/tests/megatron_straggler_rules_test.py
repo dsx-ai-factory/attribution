@@ -46,14 +46,12 @@ def job_info() -> JobInfo:
 
 
 def _ingest_and_collect(
-    request: pytest.FixtureRequest, event_manager, job_info: JobInfo, lines: list[str]
-) -> tuple[dict[str, StragglerNodeReport], IngestSummary]:
-    """Ingest application log lines. Return the ``megatron_straggler`` digest and the ingest summary."""
-    first_line_time = job_info.job_start_time + timedelta(minutes=10)
-    entries = [
-        make_applog_entry(line, (first_line_time + timedelta(seconds=offset)).timestamp() * 1e9)
-        for offset, line in enumerate(lines)
-    ]
+    request: pytest.FixtureRequest, event_manager, job_info: JobInfo, *line_batches: list[str]
+) -> tuple[dict[str, StragglerNodeReport], list[IngestSummary]]:
+    """Ingest each batch of application log lines as one observation.
+
+    Return the ``megatron_straggler`` digest and the ingest summary of each observation.
+    """
     context = ObservationContext(
         time_interval=TimeInterval(start=job_info.job_start_time, end=job_info.job_end_time),
         source=ObservationSource.APPLOG,
@@ -61,9 +59,16 @@ def _ingest_and_collect(
         timezone=UTC,
     )
     attributor = Attributor.new(event_manager.create_stream(request.node.name), job_info)
-    observation_id = attributor.ingest(InboundObservation(context, entries))
+    observation_ids = []
+    for batch_number, lines in enumerate(line_batches, start=1):
+        first_line_time = job_info.job_start_time + timedelta(minutes=10 * batch_number)
+        entries = [
+            make_applog_entry(line, (first_line_time + timedelta(seconds=offset)).timestamp() * 1e9)
+            for offset, line in enumerate(lines)
+        ]
+        observation_ids.append(attributor.ingest(InboundObservation(context, entries)))
     digest = attributor.attribute(run_collectors=True).collectors["megatron_straggler"]
-    return digest, attributor.ingested_observations[observation_id].summary
+    return digest, [attributor.ingested_observations[observation_id].summary for observation_id in observation_ids]
 
 
 def test_rank_below_the_inferred_threshold_is_reported_on_its_node(request, event_manager, job_info):
@@ -102,8 +107,22 @@ def test_report_in_python_default_log_format_passes_the_prefilter(request, event
         MEGATRON_LOGGER_PREFIX + TOP,
     ]
 
-    digest, summary = _ingest_and_collect(request, event_manager, job_info, lines)
+    digest, (summary,) = _ingest_and_collect(request, event_manager, job_info, lines)
 
     assert list(digest) == ["node-b"]
     # The prefilter still drops the other "INFO:megatron" line.
     assert summary.dropped[DropReason.PRE_FILTERED] == 1
+
+
+def test_reports_in_separate_observations_pair_within_their_own_observation(request, event_manager, job_info):
+    """Line numbers restart in each observation, so a Bottom group must not pair with another report's Top group."""
+    first_report = [
+        "^^^^ Bottom 1 Ranks with lowest  Etpt(TF): 100.00/1/node-a,",
+        "^^^^ Top    1 Ranks with highest Etpt(TF): 110.00/2/node-a,",
+    ]
+    second_report = [BOTTOM_WITH_SLOW_RANK, TOP]
+
+    digest, _ = _ingest_and_collect(request, event_manager, job_info, first_report, second_report)
+
+    flagged_ranks = {node: [rank_report.rank for rank_report in report.rank_scores] for node, report in digest.items()}
+    assert flagged_ranks == {"node-a": [1], "node-b": [5]}

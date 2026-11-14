@@ -115,8 +115,11 @@ class MegatronStragglerParseState:
             type_ids.append(bottom_typ)
 
         type_ph = sql_placeholders(len(type_ids))
+        # Line numbers restart in each observation. Order by observation first, so that a
+        # Bottom group stays next to the Top group of its own report.
         rows = event_stream.query_raw(
-            f"SELECT event_type, payload FROM events WHERE context_id=? AND event_type IN ({type_ph}) AND status=1 ORDER BY line_num ASC",
+            f"SELECT event_type, payload FROM events WHERE context_id=? AND event_type IN ({type_ph}) AND status=1 "
+            "ORDER BY obs_context_id ASC, line_num ASC",
             [event_stream.ctx_id] + type_ids,
         )
 
