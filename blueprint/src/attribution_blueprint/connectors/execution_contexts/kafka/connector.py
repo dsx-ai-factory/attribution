@@ -273,10 +273,12 @@ class KafkaExecutionContextAdapter:
             raise
 
     def _on_assign(self, consumer: Consumer, partitions: list[Any]) -> None:
-        """Apply pauses before records from a new assignment can be delivered."""
+        """Restore flow control because native pauses survive reassignment."""
         consumer.assign(partitions)
         if self._paused:
             consumer.pause(partitions)
+        else:
+            consumer.resume(partitions)
 
     def _require_mode(self, mode: str) -> None:
         """Keep one-shot and streaming lifecycles exclusive on one consumer."""
