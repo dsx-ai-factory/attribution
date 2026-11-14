@@ -4376,23 +4376,36 @@ class TestGb200PriorityRootCause:
         assert "Python Exception" in symptoms
         assert "PyTorch NCCL watchdog" in symptoms
 
-    def test_imex_stop_after_cycle_end_keeps_cause(self, stream, obs_ctx):
-        """A node reboot after the NVRx cycle ended does not discard the cycle's cause.
+    _XID94_TIME = datetime(2024, 1, 1, 10, 34, 18, tzinfo=ZoneInfo("UTC"))
+    _NVRX_FAILURE_TIME = datetime(2024, 1, 1, 10, 34, 20, tzinfo=ZoneInfo("UTC"))
+    _REBOOT_TIME = datetime(2024, 1, 1, 10, 35, 52, tzinfo=ZoneInfo("UTC"))
 
-        The record window runs to the next cycle's start, so the reboot is inside it.
+    def _xid94_and_imex(self, obs_ctx, imex_times, nvrx_failure: bool) -> SymptomSet:
+        """Build an XID-94 cause, an imex stop at the given times, and optionally the NVRx failure.
+
+        Args:
+            obs_ctx: Observation context for the sources.
+            imex_times: One source time per imex stop line; None for an untimed line.
+            nvrx_failure: Whether to add the NVRx detected failure symptom.
+
+        Returns:
+            The symptom set.
         """
-        cycle_end = datetime(2024, 1, 1, 10, 34, 18, tzinfo=ZoneInfo("UTC"))
-        job_info = default_job_info(job_end_time=_DEFAULT_END, execution_end_time=cycle_end)
-        symptoms = _make_symptoms(
-            obs_ctx, "XID-94-CONTAINED_ERROR-CE", source_time=datetime(2024, 1, 1, 10, 34, 18, tzinfo=ZoneInfo("UTC"))
-        )
-        symptoms.update(
-            _make_symptoms(
-                obs_ctx,
-                "Stopping nvidia-imex.service",
-                source_time=datetime(2024, 1, 1, 10, 35, 52, tzinfo=ZoneInfo("UTC")),
-            )
-        )
+        symptoms = _make_symptoms(obs_ctx, "XID-94-CONTAINED_ERROR-CE", source_time=self._XID94_TIME)
+        if nvrx_failure is True:
+            symptoms.update(_make_symptoms(obs_ctx, "NVRx detected failure", source_time=self._NVRX_FAILURE_TIME))
+        imex = SourceSet("Stopping nvidia-imex.service")
+        for line_num, time in enumerate(imex_times, start=1):
+            imex.add(_make_source(obs_ctx, line_num=line_num)._replace(time=time))
+        symptoms.add(imex)
+        return symptoms
+
+    def test_imex_stop_after_nvrx_failure_keeps_cause(self, stream, obs_ctx, job_info):
+        """A node reboot after NVRx detected the failure does not discard the failure's cause.
+
+        An NVRx cycle record's window runs to the next cycle's start, so the reboot is inside it.
+        """
+        symptoms = self._xid94_and_imex(obs_ctx, [self._REBOOT_TIME], nvrx_failure=True)
         _run(stream, job_info, symptoms)
         assert "XID-94-CONTAINED_ERROR-CE" in symptoms
         assert "Stopping nvidia-imex.service" in symptoms
@@ -4400,8 +4413,8 @@ class TestGb200PriorityRootCause:
     @pytest.mark.parametrize(
         "imex_times",
         [
-            pytest.param([datetime(2024, 1, 1, 10, 30, 0, tzinfo=ZoneInfo("UTC"))], id="inside"),
-            pytest.param([datetime(2024, 1, 1, 10, 34, 18, tzinfo=ZoneInfo("UTC"))], id="at_cutoff"),
+            pytest.param([datetime(2024, 1, 1, 10, 30, 0, tzinfo=ZoneInfo("UTC"))], id="before"),
+            pytest.param([datetime(2024, 1, 1, 10, 34, 20, tzinfo=ZoneInfo("UTC"))], id="at_cutoff"),
             pytest.param([None], id="untimed"),
             pytest.param(
                 [
@@ -4412,17 +4425,16 @@ class TestGb200PriorityRootCause:
             ),
         ],
     )
-    def test_imex_stop_before_cycle_end_keeps_only_root_cause(self, stream, obs_ctx, imex_times):
-        """A priority symptom with a source in the cycle, or with no time, discards the other symptoms."""
-        cycle_end = datetime(2024, 1, 1, 10, 34, 18, tzinfo=ZoneInfo("UTC"))
-        job_info = default_job_info(job_end_time=_DEFAULT_END, execution_end_time=cycle_end)
-        symptoms = _make_symptoms(
-            obs_ctx, "XID-94-CONTAINED_ERROR-CE", source_time=datetime(2024, 1, 1, 10, 30, 0, tzinfo=ZoneInfo("UTC"))
-        )
-        imex = SourceSet("Stopping nvidia-imex.service")
-        for line_num, time in enumerate(imex_times, start=1):
-            imex.add(_make_source(obs_ctx, line_num=line_num)._replace(time=time))
-        symptoms.add(imex)
+    def test_imex_stop_by_nvrx_failure_keeps_only_root_cause(self, stream, obs_ctx, job_info, imex_times):
+        """A priority symptom logged by the NVRx failure, or with no time, discards the other symptoms."""
+        symptoms = self._xid94_and_imex(obs_ctx, imex_times, nvrx_failure=True)
+        _run(stream, job_info, symptoms)
+        assert "Stopping nvidia-imex.service" in symptoms
+        assert "XID-94-CONTAINED_ERROR-CE" not in symptoms
+
+    def test_imex_stop_without_nvrx_failure_keeps_only_root_cause(self, stream, obs_ctx, job_info):
+        """Without an NVRx failure there is no cutoff, so a later imex stop still discards the other symptoms."""
+        symptoms = self._xid94_and_imex(obs_ctx, [self._REBOOT_TIME], nvrx_failure=False)
         _run(stream, job_info, symptoms)
         assert "Stopping nvidia-imex.service" in symptoms
         assert "XID-94-CONTAINED_ERROR-CE" not in symptoms

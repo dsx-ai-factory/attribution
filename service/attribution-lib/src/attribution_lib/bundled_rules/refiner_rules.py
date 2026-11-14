@@ -2564,20 +2564,39 @@ def xid149_and_nvlink_filtering(context: RefinerContext):
                         my_bad_nodes[k].discard(symptom)
 
 
-def _seen_before_execution_end(sources: SourceSet, execution_end: Optional[datetime]) -> bool:
-    """Return whether a symptom was logged at or before the end of the execution.
+_NVRX_FAILURE_SYMPTOM = "NVRx detected failure"
+
+
+def _nvrx_failure_time(symptoms: SymptomSet) -> Optional[datetime]:
+    """Return the earliest time at which NVRx detected a failure.
+
+    Args:
+        symptoms: Job-level symptoms.
+
+    Returns:
+        The earliest timed source of the NVRx failure symptom, or None when the
+        symptom is absent or has no timed source.
+    """
+    if _NVRX_FAILURE_SYMPTOM not in symptoms:
+        return None
+    times = [source.time for source in symptoms[_NVRX_FAILURE_SYMPTOM] if source.time is not None]
+    return min(times) if len(times) > 0 else None
+
+
+def _seen_by(sources: SourceSet, cutoff: Optional[datetime]) -> bool:
+    """Return whether a symptom was logged at or before a cutoff.
 
     Args:
         sources: Sources of one symptom.
-        execution_end: Time the execution stopped running, or None for no limit.
+        cutoff: Latest time a source may have, or None for no limit.
 
     Returns:
-        True when ``execution_end`` is None, or when a source has no time or a
-        time at or before ``execution_end``.
+        True when ``cutoff`` is None, or when a source has no time or a time at
+        or before ``cutoff``.
     """
-    if execution_end is None:
+    if cutoff is None:
         return True
-    return any(source.time is None or source.time <= execution_end for source in sources)
+    return any(source.time is None or source.time <= cutoff for source in sources)
 
 
 @refiner_def(
@@ -2600,15 +2619,12 @@ def gb200_priority_root_cause(context: RefinerContext):
     all_root_cause_patterns = [
         pattern for priority_group in root_cause_symptoms_by_priority for pattern in priority_group
     ]
-    # An NVRx cycle record's window runs to the next cycle's start, so a node reboot
-    # during the restart can log a priority symptom inside the window. Such a symptom
-    # did not end the cycle and must not discard the real cause.
-    execution_end = context.job_info.execution_end_time if context.job_info is not None else None
+    # A priority symptom logged only after NVRx detected the failure, for example by a
+    # node that reboots during the restart, did not cause it and must not discard the cause.
+    nvrx_failure_time = _nvrx_failure_time(symptoms)
     matching_root_cause_symptoms = []
     for symptom in all_symptoms:
-        if any(rc in symptom for rc in all_root_cause_patterns) and _seen_before_execution_end(
-            symptoms[symptom], execution_end
-        ):
+        if any(rc in symptom for rc in all_root_cause_patterns) and _seen_by(symptoms[symptom], nvrx_failure_time):
             matching_root_cause_symptoms.append(symptom)
 
     # If we found any root cause symptoms, keep only those
