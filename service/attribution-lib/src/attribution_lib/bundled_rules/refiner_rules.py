@@ -381,6 +381,7 @@ _NON_IB_ROOT_CAUSE_PATTERNS = [
     "%DataLoader Exception%",
     "%S3 Exception%",
     "%cudaError out of memory%",
+    "%Shared memory exhausted%",
     "%System-out of memory%",
     "%LustreError%",
     "%assert number_image_tags <= number_of_images%",
@@ -408,6 +409,7 @@ _CONNECTION_CLOSED_TRIGGERS = [
     "Node failure reported by slurm",
     "NaN reported by Megatron",
     "cudaError out of memory",
+    "Shared memory exhausted",
 ]
 
 # Specific application errors that explain why NVRx detected a failure.
@@ -2483,6 +2485,7 @@ def xid149_and_nvlink_filtering(context: RefinerContext):
     
     Exceptions:
     - XID-149.21 survives XID-149.4
+    - A lone XID-149.21 also collapses cascaded bad nodes
     """
     symptoms = context.symptoms
     my_bad_nodes = context.my_bad_nodes
@@ -2513,7 +2516,9 @@ def xid149_and_nvlink_filtering(context: RefinerContext):
                 if "XID-149.0-" in sym:
                     symptoms.discard(sym)
 
-        if has_xid_149_4 or has_xid_149_10:
+        # 149.21 is already in the keep list. A job whose only link-down is 149.21
+        # must collapse peer nodes the same way 149.4 and 149.10 do.
+        if has_xid_149_4 or has_xid_149_10 or any(sym.startswith("XID-149.21-") for sym in xid_149_symptoms):
             clean_bad_nodes_of_cascaded_symptoms(
                 my_bad_nodes,
                 [

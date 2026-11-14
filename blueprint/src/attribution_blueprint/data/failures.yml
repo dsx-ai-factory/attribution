@@ -11663,6 +11663,9 @@ failures:
   - kind: log
     pattern: cudaErrorMemoryAllocation
     note: Direct enum name
+  - kind: log
+    pattern: ncclMemAlloc failed
+    note: NCCL could not allocate its communication buffers in GPU memory
   - kind: metric
     pattern: DCGM_FI_DEV_FB_USED
     note: GPU framebuffer used at or near total

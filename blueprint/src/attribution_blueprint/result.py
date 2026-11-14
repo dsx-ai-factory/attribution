@@ -12,7 +12,7 @@ from attribution_blueprint.taxonomy import taxonomy_for_service_value
 class ConnectorReport(TypedDict):
     connector: str
     source: str
-    status: Literal["ok", "error"]
+    status: Literal["ok", "partial", "error"]
     reason: str
     observation_count: int
 
