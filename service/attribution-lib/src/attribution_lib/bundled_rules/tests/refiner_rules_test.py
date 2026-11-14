@@ -4432,6 +4432,28 @@ class TestGb200PriorityRootCause:
         assert "Stopping nvidia-imex.service" in symptoms
         assert "XID-94-CONTAINED_ERROR-CE" not in symptoms
 
+    def test_imex_stop_after_earliest_of_several_nvrx_failures_keeps_cause(self, stream, obs_ctx, job_info):
+        """The cutoff is the earliest timed NVRx failure source; later and untimed sources do not move it."""
+        symptoms = self._xid94_and_imex(obs_ctx, [self._REBOOT_TIME], nvrx_failure=True)
+        later_failure = datetime(2024, 1, 1, 10, 36, 0, tzinfo=ZoneInfo("UTC"))
+        for line_num, time in enumerate([later_failure, None], start=2):
+            symptoms["NVRx detected failure"].add(_make_source(obs_ctx, line_num=line_num)._replace(time=time))
+        _run(stream, job_info, symptoms)
+        assert "XID-94-CONTAINED_ERROR-CE" in symptoms
+
+    def test_xid149_after_nvrx_failure_kept_beside_earlier_imex_stop(self, stream, obs_ctx, job_info):
+        """A late priority symptom stays when an earlier priority symptom discards the other symptoms."""
+        symptoms = self._xid94_and_imex(
+            obs_ctx, [datetime(2024, 1, 1, 10, 30, 0, tzinfo=ZoneInfo("UTC"))], nvrx_failure=True
+        )
+        symptoms.update(
+            _make_symptoms(obs_ctx, "XID-149.4-NETIR_LINK_DOWN-ALIGNMENT_LOSS-0", source_time=self._REBOOT_TIME)
+        )
+        _run(stream, job_info, symptoms)
+        assert "Stopping nvidia-imex.service" in symptoms
+        assert "XID-149.4-NETIR_LINK_DOWN-ALIGNMENT_LOSS-0" in symptoms
+        assert "XID-94-CONTAINED_ERROR-CE" not in symptoms
+
     def test_imex_stop_without_nvrx_failure_keeps_only_root_cause(self, stream, obs_ctx, job_info):
         """Without an NVRx failure there is no cutoff, so a later imex stop still discards the other symptoms."""
         symptoms = self._xid94_and_imex(obs_ctx, [self._REBOOT_TIME], nvrx_failure=False)

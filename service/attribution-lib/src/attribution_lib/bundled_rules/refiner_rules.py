@@ -2619,16 +2619,16 @@ def gb200_priority_root_cause(context: RefinerContext):
     all_root_cause_patterns = [
         pattern for priority_group in root_cause_symptoms_by_priority for pattern in priority_group
     ]
+    matching_root_cause_symptoms = []
+    for symptom in all_symptoms:
+        if any(rc in symptom for rc in all_root_cause_patterns):
+            matching_root_cause_symptoms.append(symptom)
+
     # A priority symptom logged only after NVRx detected the failure, for example by a
     # node that reboots during the restart, did not cause it and must not discard the cause.
     nvrx_failure_time = _nvrx_failure_time(symptoms)
-    matching_root_cause_symptoms = []
-    for symptom in all_symptoms:
-        if any(rc in symptom for rc in all_root_cause_patterns) and _seen_by(symptoms[symptom], nvrx_failure_time):
-            matching_root_cause_symptoms.append(symptom)
-
     # If we found any root cause symptoms, keep only those
-    if matching_root_cause_symptoms:
+    if any(_seen_by(symptoms[sym], nvrx_failure_time) for sym in matching_root_cause_symptoms):
         for sym in all_symptoms:
             if sym not in matching_root_cause_symptoms:
                 symptoms.discard(sym)
