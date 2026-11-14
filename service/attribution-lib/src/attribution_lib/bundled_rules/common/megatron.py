@@ -44,15 +44,12 @@ class MegatronStragglerData:
     reports: list["MegatronStragglerGroup"] = field(default_factory=list)
     top_scores: list[float] = field(default_factory=list)
     bottom_scores: list[float] = field(default_factory=list)
-    # Observation id of each entry in ``reports``, in the same order.
-    report_observations: list[Optional[int]] = field(default_factory=list)
 
     def update(self, other: "MegatronStragglerData") -> None:
         """Update this data structure with data from another."""
         self.reports.extend(other.reports)
         self.top_scores.extend(other.top_scores)
         self.bottom_scores.extend(other.bottom_scores)
-        self.report_observations.extend(other.report_observations)
 
 
 class MegatronStragglerItem(NamedTuple):
@@ -122,14 +119,13 @@ class MegatronStragglerParseState:
         # so that a Bottom group stays next to the Top group of its own report. Order the
         # observations by ingest: event ids increase with each ingest, and observation ids are hashes.
         rows = event_stream.query_raw(
-            "SELECT obs_context_id, event_type, payload FROM events "
-            f"WHERE context_id=? AND event_type IN ({type_ph}) AND status=1 "
+            f"SELECT event_type, payload FROM events WHERE context_id=? AND event_type IN ({type_ph}) AND status=1 "
             "ORDER BY MIN(id) OVER (PARTITION BY obs_context_id) ASC, line_num ASC, id ASC",
             [event_stream.ctx_id] + type_ids,
         )
 
         res = MegatronStragglerData()
-        for obs_id, evt_type, payload_json in rows:
+        for evt_type, payload_json in rows:
             if payload_json is None:
                 continue
             payload = json.loads(payload_json)
@@ -144,7 +140,6 @@ class MegatronStragglerParseState:
                 res.bottom_scores.extend(scores)
 
             res.reports.append(data)
-            res.report_observations.append(obs_id)
         return res
 
 
@@ -169,7 +164,7 @@ def filter_megatron_stragglers(
         if not _is_bottom_in_scope(group, params):
             i += 1
             continue
-        top_group = _paired_top_group(data, i, params)
+        top_group = _paired_top_group(groups, i, params)
         if top_group is None and params.infer_threshold_from_data:
             i += 1
             continue
@@ -186,8 +181,15 @@ def _is_bottom_in_scope(group: MegatronStragglerGroup, params: MegatronStraggler
     return group.qualifier.value() == StragglerQualifier.WORST
 
 
+def _observation_id(group: MegatronStragglerGroup) -> Optional[int]:
+    """Id of the observation that holds the group's report line."""
+    if not group.ranks:
+        return None
+    return group.ranks[0].source.source_context.id
+
+
 def _paired_top_group(
-    data: MegatronStragglerData, index: int, params: MegatronStragglerParams
+    groups: list[MegatronStragglerGroup], index: int, params: MegatronStragglerParams
 ) -> Optional[MegatronStragglerGroup]:
     """Return the BEST-qualifier group paired with the WORST at ``index``, else None.
 
@@ -195,15 +197,13 @@ def _paired_top_group(
     the threshold would come from another report. It must also share the same
     ``score_type``; otherwise inferring the threshold would mix unrelated score scales.
     """
-    groups = data.reports
     if index + 1 >= len(groups):
-        return None
-    if data.report_observations[index + 1] != data.report_observations[index]:
         return None
     bottom = groups[index]
     nxt = groups[index + 1]
     if (
-        nxt.score_type.value() == bottom.score_type.value()
+        _observation_id(nxt) == _observation_id(bottom)
+        and nxt.score_type.value() == bottom.score_type.value()
         and nxt.score_type.value() in params.score_types
         and nxt.qualifier.value() == StragglerQualifier.BEST
     ):

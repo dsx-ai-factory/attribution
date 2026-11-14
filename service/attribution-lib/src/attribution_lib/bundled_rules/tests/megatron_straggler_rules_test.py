@@ -45,30 +45,47 @@ def job_info() -> JobInfo:
     return create_simple_job_info(timezone=UTC, nodes=["node-a", "node-b"], ranks_per_node=4)
 
 
-def _ingest_and_collect(
-    request: pytest.FixtureRequest, event_manager, job_info: JobInfo, *line_batches: list[str]
-) -> tuple[dict[str, StragglerNodeReport], list[IngestSummary]]:
-    """Ingest each batch of application log lines as one observation.
-
-    Return the ``megatron_straggler`` digest and the ingest summary of each observation.
-    """
+def _observation(job_info: JobInfo, lines: list[str], *, minutes_after_start: int) -> InboundObservation:
+    """Build one observation of application log lines. The first line is ``minutes_after_start`` after the job start."""
     context = ObservationContext(
         time_interval=TimeInterval(start=job_info.job_start_time, end=job_info.job_end_time),
         source=ObservationSource.APPLOG,
         format=ObservationFormat.ENTRY_TIMESERIES,
         timezone=UTC,
     )
-    attributor = Attributor.new(event_manager.create_stream(request.node.name), job_info)
-    observation_ids = []
-    for batch_number, lines in enumerate(line_batches, start=1):
-        first_line_time = job_info.job_start_time + timedelta(minutes=10 * batch_number)
-        entries = [
-            make_applog_entry(line, (first_line_time + timedelta(seconds=offset)).timestamp() * 1e9)
-            for offset, line in enumerate(lines)
-        ]
-        observation_ids.append(attributor.ingest(InboundObservation(context, entries)))
+    first_line_time = job_info.job_start_time + timedelta(minutes=minutes_after_start)
+    entries = [
+        make_applog_entry(line, (first_line_time + timedelta(seconds=offset)).timestamp() * 1e9)
+        for offset, line in enumerate(lines)
+    ]
+    return InboundObservation(context, entries)
+
+
+def _collect(
+    event_manager, job_info: JobInfo, stream_name: str, observations: list[InboundObservation]
+) -> tuple[dict[str, StragglerNodeReport], list[IngestSummary]]:
+    """Ingest the observations in the given order into the stream ``stream_name``.
+
+    Return the ``megatron_straggler`` digest and the ingest summary of each observation.
+    """
+    attributor = Attributor.new(event_manager.create_stream(stream_name), job_info)
+    observation_ids = [attributor.ingest(observation) for observation in observations]
     digest = attributor.attribute(run_collectors=True).collectors["megatron_straggler"]
     return digest, [attributor.ingested_observations[observation_id].summary for observation_id in observation_ids]
+
+
+def _ingest_and_collect(
+    request: pytest.FixtureRequest, event_manager, job_info: JobInfo, *line_batches: list[str]
+) -> tuple[dict[str, StragglerNodeReport], list[IngestSummary]]:
+    """Ingest each batch of application log lines as one observation. The batches are ten minutes apart.
+
+    Return the ``megatron_straggler`` digest and the ingest summary of each observation.
+    """
+    observations = [
+        _observation(job_info, lines, minutes_after_start=10 * batch_number)
+        for batch_number, lines in enumerate(line_batches, start=1)
+    ]
+    return _collect(event_manager, job_info, request.node.name, observations)
 
 
 def test_rank_below_the_inferred_threshold_is_reported_on_its_node(request, event_manager, job_info):
@@ -144,13 +161,13 @@ def test_bottom_group_does_not_pair_with_top_group_of_another_observation(
 
 
 def test_rank_scores_follow_the_order_of_ingest(request, event_manager, job_info):
-    """An observation id is a salted hash, so it must not decide the order of the reports."""
-    reports = [
-        [f"^^^^ Bottom 1 Ranks with lowest  Etpt(TF): {score}/5/node-b,", TOP]
-        for score in ("213.46", "200.00", "190.00", "180.00")
-    ]
+    """An observation id is a salted hash. An order by that id gives the same digest for both orders of ingest."""
+    slow = _observation(job_info, [BOTTOM_WITH_SLOW_RANK, TOP], minutes_after_start=10)
+    slower_lines = ["^^^^ Bottom 1 Ranks with lowest  Etpt(TF): 200.00/5/node-b,", TOP]
+    slower = _observation(job_info, slower_lines, minutes_after_start=20)
 
-    digest, _ = _ingest_and_collect(request, event_manager, job_info, *reports)
+    slow_first, _ = _collect(event_manager, job_info, f"{request.node.name}-slow-first", [slow, slower])
+    slower_first, _ = _collect(event_manager, job_info, f"{request.node.name}-slower-first", [slower, slow])
 
-    scores = [rank_report.score for rank_report in digest["node-b"].rank_scores]
-    assert scores == [213.46, 200.0, 190.0, 180.0]
+    assert [rank_report.score for rank_report in slow_first["node-b"].rank_scores] == [213.46, 200.0]
+    assert [rank_report.score for rank_report in slower_first["node-b"].rank_scores] == [200.0, 213.46]
