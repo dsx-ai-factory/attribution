@@ -1,6 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from pathlib import Path
 from unittest.mock import MagicMock
@@ -8,7 +9,6 @@ from zoneinfo import ZoneInfo
 
 import pytest
 import yaml
-from attribution_lib.bundled_rules.common.straggler_types import StragglerNodeReport, StragglerRankReport
 from attribution_lib.compound_outcome import (
     CancellationActor,
     FailureDomain,
@@ -57,6 +57,23 @@ def _lib_source(rule: str, obs_id: int = 1, line_num: int = 0, datum: str = "raw
         resources=AllJobResources,
         rule=rule,
     )
+
+
+@dataclass
+class _RankScore:
+    """A dataclass nested in a collector report."""
+
+    rank: int
+    score: float
+
+
+@dataclass
+class _NodeReport:
+    """A stand-in for the per-node report of any collector: a dataclass that carries lib sources."""
+
+    pattern: str
+    rank_scores: list[_RankScore] = field(default_factory=list)
+    sources: list[LibSource] = field(default_factory=list)
 
 
 def _empty_result() -> AttributionResult:
@@ -387,16 +404,14 @@ class TestV2Models:
         assert all(s.type == "NodeSource" for s in sites)
 
     def test_collectors_encode_sources_nested_in_a_dataclass_report(self):
-        """A straggler node report keeps its node, ranks and sources when the collectors digest is encoded."""
-        src = _lib_source(
-            rule="Megatron Straggler Bottom Ranks", line_num=7, datum="Bottom 2 Ranks: 213.46/5, 287.92/1"
-        )
+        """A dataclass report in a collector digest keeps its fields and its sources when it is encoded."""
+        src = _lib_source(rule="some_collector_rule", line_num=7, datum="rank 5 is slow")
         result = _empty_result()
         result.collectors = {
-            "megatron_straggler": {
-                "gpu-node-042": StragglerNodeReport(
-                    pattern="Megatron Pattern",
-                    rank_scores=[StragglerRankReport(rank=5, score=213.46)],
+            "some_digest": {
+                "gpu-node-042": _NodeReport(
+                    pattern="some pattern",
+                    rank_scores=[_RankScore(rank=5, score=213.46)],
                     sources=[src],
                 )
             }
@@ -405,17 +420,17 @@ class TestV2Models:
         response = AttributionResponseV2.from_lib_attribution(set(), result)
 
         assert response.collectors == {
-            "megatron_straggler": {
+            "some_digest": {
                 "gpu-node-042": {
-                    "pattern": "Megatron Pattern",
+                    "pattern": "some pattern",
                     "rank_scores": [{"rank": 5, "score": 213.46}],
                     "sources": [
                         {
                             "observation_id": 1,
                             "source": "applog",
                             "pos": 7,
-                            "line": "Bottom 2 Ranks: 213.46/5, 287.92/1",
-                            "rule": "Megatron Straggler Bottom Ranks",
+                            "line": "rank 5 is slow",
+                            "rule": "some_collector_rule",
                             "time": "2026-03-22T14:03:12Z",
                         }
                     ],
