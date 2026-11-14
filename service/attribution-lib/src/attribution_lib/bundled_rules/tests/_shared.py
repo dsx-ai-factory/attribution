@@ -28,7 +28,6 @@ def default_job_info(
     exit_code: int | None = None,
     tags: frozenset[str] = frozenset(),
     scheduler: Scheduler | None = None,
-    execution_end_time: datetime | None = None,
 ) -> JobInfo:
     """Canonical JobInfo for bundled_rules tests, built through the real JobInfoBuilder.
 
@@ -64,7 +63,5 @@ def default_job_info(
         builder.job_end_time(job_end_time)
     if time_limit is not None:
         builder.time_limit(time_limit)
-    if execution_end_time is not None:
-        builder.execution_end_time(execution_end_time)
     builder.num_gpus(8)
     return builder.build()
