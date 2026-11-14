@@ -2564,6 +2564,22 @@ def xid149_and_nvlink_filtering(context: RefinerContext):
                         my_bad_nodes[k].discard(symptom)
 
 
+def _seen_before_interest_end(sources: SourceSet, interest_end: Optional[datetime]) -> bool:
+    """Return whether a symptom was logged at or before the end of the attribution window.
+
+    Args:
+        sources: Sources of one symptom.
+        interest_end: End of the attribution window, or None for no limit.
+
+    Returns:
+        True when ``interest_end`` is None, or when a source has no time or a
+        time at or before ``interest_end``.
+    """
+    if interest_end is None:
+        return True
+    return any(source.time is None or source.time <= interest_end for source in sources)
+
+
 @refiner_def(
     name="Gb200PriorityRootCause", author="NVIDIA Attribution team", priority=_priority("Gb200PriorityRootCause")
 )
@@ -2584,9 +2600,15 @@ def gb200_priority_root_cause(context: RefinerContext):
     all_root_cause_patterns = [
         pattern for priority_group in root_cause_symptoms_by_priority for pattern in priority_group
     ]
+    # An NVRx cycle record shares syslog with the rest of the allocation, so a node
+    # reboot after the cycle ended can log a priority symptom. Such a symptom did
+    # not end the cycle and must not discard the real cause.
+    interest_end = context.job_info.interest_end_time if context.job_info is not None else None
     matching_root_cause_symptoms = []
     for symptom in all_symptoms:
-        if any(rc in symptom for rc in all_root_cause_patterns):
+        if any(rc in symptom for rc in all_root_cause_patterns) and _seen_before_interest_end(
+            symptoms[symptom], interest_end
+        ):
             matching_root_cause_symptoms.append(symptom)
 
     # If we found any root cause symptoms, keep only those
