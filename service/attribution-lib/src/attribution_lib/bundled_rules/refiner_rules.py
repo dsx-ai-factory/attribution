@@ -381,6 +381,7 @@ _NON_IB_ROOT_CAUSE_PATTERNS = [
     "%DataLoader Exception%",
     "%S3 Exception%",
     "%cudaError out of memory%",
+    "%Shared memory exhausted%",
     "%System-out of memory%",
     "%LustreError%",
     "%assert number_image_tags <= number_of_images%",
@@ -408,6 +409,7 @@ _CONNECTION_CLOSED_TRIGGERS = [
     "Node failure reported by slurm",
     "NaN reported by Megatron",
     "cudaError out of memory",
+    "Shared memory exhausted",
 ]
 
 # Specific application errors that explain why NVRx detected a failure.
