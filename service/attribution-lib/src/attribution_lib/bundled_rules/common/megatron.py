@@ -115,8 +115,12 @@ class MegatronStragglerParseState:
             type_ids.append(bottom_typ)
 
         type_ph = sql_placeholders(len(type_ids))
+        # Line numbers restart in each observation. Keep the events of one observation together,
+        # so that a Bottom group stays next to the Top group of its own report. Order the
+        # observations by ingest: event ids increase with each ingest, and observation ids are hashes.
         rows = event_stream.query_raw(
-            f"SELECT event_type, payload FROM events WHERE context_id=? AND event_type IN ({type_ph}) AND status=1 ORDER BY line_num ASC",
+            f"SELECT event_type, payload FROM events WHERE context_id=? AND event_type IN ({type_ph}) AND status=1 "
+            "ORDER BY MIN(id) OVER (PARTITION BY obs_context_id) ASC, line_num ASC, id ASC",
             [event_stream.ctx_id] + type_ids,
         )
 
@@ -146,8 +150,9 @@ def filter_megatron_stragglers(
     """Filter Megatron groups into per-node straggler reports.
 
     Megatron emits Bottom/Top group pairs in sequence. For each Bottom group:
-    find the next group (must be Top with matching score_type) and use it to
-    compute the per-event threshold when ``infer_threshold_from_data`` is set.
+    find the next group (must be Top from the same observation with matching
+    score_type) and use it to compute the per-event threshold when
+    ``infer_threshold_from_data`` is set.
     A rank in the Bottom group is a straggler iff its score is strictly less
     than the event threshold.
     """
@@ -176,20 +181,29 @@ def _is_bottom_in_scope(group: MegatronStragglerGroup, params: MegatronStraggler
     return group.qualifier.value() == StragglerQualifier.WORST
 
 
+def _observation_id(group: MegatronStragglerGroup) -> Optional[int]:
+    """Id of the observation that holds the group's report line."""
+    if not group.ranks:
+        return None
+    return group.ranks[0].source.source_context.id
+
+
 def _paired_top_group(
     groups: list[MegatronStragglerGroup], index: int, params: MegatronStragglerParams
 ) -> Optional[MegatronStragglerGroup]:
     """Return the BEST-qualifier group paired with the WORST at ``index``, else None.
 
-    The candidate must share the same ``score_type`` as the bottom group; otherwise
-    inferring the threshold would mix unrelated score scales.
+    The candidate must come from the same observation as the bottom group; otherwise
+    the threshold would come from another report. It must also share the same
+    ``score_type``; otherwise inferring the threshold would mix unrelated score scales.
     """
     if index + 1 >= len(groups):
         return None
     bottom = groups[index]
     nxt = groups[index + 1]
     if (
-        nxt.score_type.value() == bottom.score_type.value()
+        _observation_id(nxt) == _observation_id(bottom)
+        and nxt.score_type.value() == bottom.score_type.value()
         and nxt.score_type.value() in params.score_types
         and nxt.qualifier.value() == StragglerQualifier.BEST
     ):
