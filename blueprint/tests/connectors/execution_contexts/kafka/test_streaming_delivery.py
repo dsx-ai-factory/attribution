@@ -160,3 +160,32 @@ def test_pause_before_assignment_and_after_delivery_preserves_records(kafka_spec
         consumer.close()
         source.close()
     _assert_drained(kafka_spec)
+
+
+def test_resume_without_assignment_clears_native_pause_on_reassignment(kafka_spec, completion_event, publish_event):
+    """Native partitions retain pauses across unassign/assign until explicitly resumed."""
+    from confluent_kafka import TopicPartition
+
+    publish_event(completion_event)
+    adapter = _build(kafka_spec, {})
+    try:
+        original = _next_delivery(adapter)
+        adapter.pause()
+        native = adapter._consumer
+        assignment = [TopicPartition(original.topic, original.partition, original.offset)]
+        # Exercise the assignment callback with real native state; no fake
+        # consumer can establish librdkafka's retained pause behavior.
+        adapter._release(native, assignment)
+        native.unassign()
+        adapter.resume()
+        adapter._on_assign(native, assignment)
+
+        replay = _next_delivery(adapter)
+        assert replay.context == original.context
+        with pytest.raises(InvalidReceiptError):
+            adapter.ack(original)
+        assert _committed(adapter, replay) < 0
+        adapter.ack(replay)
+        assert _committed(adapter, replay) == replay.offset + 1
+    finally:
+        adapter.close()
