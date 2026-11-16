@@ -313,7 +313,7 @@ _shared_lookup_counter = 0
 
 
 def _mkdtemp_removed_at_exit(
-    prefix: str, *, root: Optional[str] = None, owner: Optional[object] = None
+    prefix: str, *, root: str | None = None, owner: object | None = None
 ) -> tuple[str, Finalize]:
     """Create a temporary directory that this process removes when it exits.
 
@@ -845,7 +845,7 @@ class EventManager:
         self._streams: dict[str, EventStream] = {}
         self._closed = True
         self._spill_dir: Optional[str] = None
-        self._spill_finalizer: Optional[Finalize] = None
+        self._spill_finalizer: Finalize | None = None
         self._owned_lookup_path: Optional[Path] = None
         self._lookup_detached = True
 
