@@ -16,6 +16,7 @@ from attribution_blueprint.types import (
     Source,
     TimeseriesEntry,
     assert_aware,
+    context_run_id,
 )
 
 DEFAULT_LIMIT = 5000
@@ -105,7 +106,7 @@ class LokiConnector:
         for tmpl in self._templates:
             try:
                 query = tmpl.format(
-                    job_id=context.get("id", ""),
+                    job_id=context_run_id(context),
                     **self._query_kwargs,
                 )
             except KeyError as e:
