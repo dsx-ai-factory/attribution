@@ -7,13 +7,16 @@ from __future__ import annotations
 
 import re
 import subprocess
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
 from packaging.version import InvalidVersion, Version
 
-LITERAL_RE = re.compile(r'^__version__ = "([^"]+)"$', re.MULTILINE)
+LITERAL_PREFIX = '__version__ = "'
+"""Start of the literal line; `LITERAL_RE` and the diff in `changes_beyond_release_edits` build on it."""
+LITERAL_RE = re.compile(rf'^{re.escape(LITERAL_PREFIX)}([^"]+)"$', re.MULTILINE)
 """Literal is a PEP 440 release like 2.0.0 or 2.0.0rc1
 (packaging tools reject anything else, like SemVer)."""
 RELEASABLE = re.compile(r"^\d+\.\d+\.\d+(rc\d+)?$")
@@ -144,18 +147,56 @@ class TagInfo:
     distance: int
 
 
+def changes_beyond_release_edits(
+    repo: Path, rev: str, paths: Sequence[str]
+) -> list[str]:
+    """Paths under `paths` whose content differs between `rev` and HEAD beyond release edits.
+
+    A release PR rewrites the version literal line, each component's CHANGELOG.md
+    and the files `.gitattributes` marks `linguist-generated`.
+    """
+    changelogs = [f":(exclude){comp.path}/CHANGELOG.md" for comp in COMPONENTS.values()]
+    out = git(
+        repo,
+        "diff",
+        "--name-only",
+        "--no-renames",  # a file moved into a generated directory must still show
+        f"-I^{LITERAL_PREFIX}",
+        rev,
+        "HEAD",
+        "--",
+        *paths,
+        *changelogs,
+        ":(exclude,attr:linguist-generated=true)",
+    )
+    return out.splitlines()
+
+
+def since_tag(tag: str | None) -> list[str]:
+    """Revision arguments for the commits on HEAD since `tag`, which may sit on another branch."""
+    if tag is None:
+        return ["HEAD"]
+
+    # `--cherry-pick` drops commits whose change the tag already shipped, such as
+    # the `main` original of a fix that was picked onto the tag's release branch.
+    return ["--cherry-pick", "--right-only", f"{tag}...HEAD"]
+
+
 def distance(repo: Path, name: str, tag: str) -> int:
-    """First-parent commits since `tag` touching the component or its closure."""
+    """Commits since `tag` that change the component or its closure, per `DISTANCE_RULE`."""
+    if not changes_beyond_release_edits(repo, tag, closure_paths(name)):
+        return 0
     out = git(
         repo,
         "rev-list",
         "--count",
         "--first-parent",
-        f"{tag}..HEAD",
+        *since_tag(tag),
         "--",
         *closure_paths(name),
     )
-    return int(out.strip())
+    # The tag's branch can hold a change HEAD lacks, so content differs with no commit to count.
+    return max(1, int(out.strip()))
 
 
 @dataclass(frozen=True)
@@ -166,13 +207,20 @@ class LatestTags:
     """Highest reachable final tag."""
 
 
-def latest_tags(repo: Path, name: str) -> LatestTags:
-    """Highest reachable tag of the component, any flavour and stable-only."""
-    out = git(repo, "tag", "--merged", "HEAD", "--list", f"{name}-v*")
+def latest_tags(repo: Path, name: str, ceiling: Version | None) -> LatestTags:
+    """Highest tag of the component on any branch: any flavour and stable-only.
+
+    Release tags live on release branches, so most are not reachable from HEAD.
+    Tags above `ceiling`, the component's literal, belong to a newer release
+    branch, such as its rc while a patch lands on this one.
+    """
+    out = git(repo, "tag", "--list", f"{name}-v*")
     candidates = [
         (version, tag)
         for tag in out.split()
         if (version := version_from_tag(name, tag)) is not None
+        # when patching 2.0.1 while 2.1.0rc1 exists on a newer branch, ceiling makes "latest tag" 2.0.0 instead of the rc.
+        and (ceiling is None or version <= ceiling)
     ]
 
     def pick(pool: list[tuple[Version, str]]) -> Optional[TagInfo]:
