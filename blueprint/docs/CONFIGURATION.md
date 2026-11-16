@@ -971,7 +971,9 @@ Fields:
 | `endpoint` | Yes | VictoriaLogs base URL. |
 | `timeout_seconds` | No | HTTP timeout. Defaults to `60.0`. |
 | `limit` | No | Maximum records per query response. Defaults to `5000`; must be positive. |
-| `max_pages` | No | Maximum responses per query. Defaults to `20`; must be a positive integer. Increase for larger collection windows, at the cost of more requests and memory. |
+| `max_pages` | No | Maximum responses per query, or per window slice when `window_slice_seconds` is set. Defaults to `20`; must be a positive integer. Increase for larger collection windows, at the cost of more requests and memory. |
+| `window_slice_seconds` | No | Split each collection window into the fewest equal slices no longer than this many seconds, and read each slice as its own query with its own `max_pages` budget. Omit to read the window as one range. A long window then keeps rows from its whole span rather than only the newest `limit × max_pages` rows, at the cost of more requests and memory. |
+| `query_concurrency` | No | Maximum requests one collection sends at the same time, across its queries and window slices. Defaults to `1`, which reads them one after another. Callers that collect several contexts at once multiply this load on the endpoint. |
 | `node_field` | No | Row field used as the node name and to scope each query to context nodes. Defaults to `host_name`; set to `""` to disable node filtering and row-based node lookup. |
 | `auth.type` | No | Optional `token` or `mtls` authentication. Omit the entire `auth` block for an unauthenticated endpoint. |
 | `auth.token_env` | For token | Environment variable containing the bearer token. |
@@ -986,7 +988,9 @@ Fields:
 The bundled templates target `service_name`, `app`, `slurm_job_id`, and `host_name`.
 Templates may use `{job_id}` (the provider `run_id`, falling back to the execution context `id`) and any `{key}` supplied
 in `query_kwargs`. LogsQL queries are paginated backward in time when a response
-reaches `limit`; rows at a page boundary are deduplicated. The collector report is
+reaches `limit`; rows at a page boundary are deduplicated. With `window_slice_seconds`,
+each slice paginates on its own, and a partial reason names the query and slice. Reads
+can run concurrently, but rows merge and errors report in query and slice order. The collector report is
 `partial` with a reason when a template argument is missing, invalid response
 records or rows with invalid `_time` or non-string `_msg` are skipped, the page budget is
 exhausted, a later request fails after rows have been fetched, or a saturated
