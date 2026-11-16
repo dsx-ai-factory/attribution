@@ -1,6 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from pathlib import Path
 from unittest.mock import MagicMock
@@ -56,6 +57,23 @@ def _lib_source(rule: str, obs_id: int = 1, line_num: int = 0, datum: str = "raw
         resources=AllJobResources,
         rule=rule,
     )
+
+
+@dataclass
+class _RankScore:
+    """A dataclass nested in a collector report."""
+
+    rank: int
+    score: float
+
+
+@dataclass
+class _NodeReport:
+    """A stand-in for the per-node report of any collector: a dataclass that carries lib sources."""
+
+    pattern: str
+    rank_scores: list[_RankScore] = field(default_factory=list)
+    sources: list[LibSource] = field(default_factory=list)
 
 
 def _empty_result() -> AttributionResult:
@@ -384,6 +402,64 @@ class TestV2Models:
         sites = response.symptoms["link_flap"]
         assert [s.node for s in sites] == ["node-a", "node-b"]
         assert all(s.type == "NodeSource" for s in sites)
+
+    def test_collectors_encode_sources_nested_in_a_dataclass_report(self):
+        """A dataclass report in a collector digest keeps its fields and its sources when it is encoded."""
+        src = _lib_source(rule="some_collector_rule", line_num=7, datum="rank 5 is slow")
+        result = _empty_result()
+        result.collectors = {
+            "some_digest": {
+                "gpu-node-042": _NodeReport(
+                    pattern="some pattern",
+                    rank_scores=[_RankScore(rank=5, score=213.46)],
+                    sources=[src],
+                )
+            }
+        }
+
+        response = AttributionResponseV2.from_lib_attribution(set(), result)
+
+        assert response.collectors == {
+            "some_digest": {
+                "gpu-node-042": {
+                    "pattern": "some pattern",
+                    "rank_scores": [{"rank": 5, "score": 213.46}],
+                    "sources": [
+                        {
+                            "observation_id": 1,
+                            "source": "applog",
+                            "pos": 7,
+                            "line": "rank 5 is slow",
+                            "rule": "some_collector_rule",
+                            "time": "2026-03-22T14:03:12Z",
+                        }
+                    ],
+                }
+            }
+        }
+
+    def test_collectors_encode_sources_outside_dataclasses(self):
+        """A source that a collector returns in a plain container is encoded in the same API shape."""
+        src = _lib_source(rule="some_collector_rule")
+        result = _empty_result()
+        result.collectors = {"some_digest": {"evidence": [src]}}
+
+        response = AttributionResponseV2.from_lib_attribution(set(), result)
+
+        assert response.collectors == {
+            "some_digest": {
+                "evidence": [
+                    {
+                        "observation_id": 1,
+                        "source": "applog",
+                        "pos": 0,
+                        "line": "raw",
+                        "rule": "some_collector_rule",
+                        "time": "2026-03-22T14:03:12Z",
+                    }
+                ]
+            }
+        }
 
 
 def test_fallback_catalog_ids_resolve_in_packaged_catalog() -> None:
