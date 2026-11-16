@@ -175,7 +175,7 @@ def test_resume_without_assignment_clears_native_pause_on_reassignment(kafka_spe
         assignment = [TopicPartition(original.topic, original.partition, original.offset)]
         # Exercise the assignment callback with real native state; no fake
         # consumer can establish librdkafka's retained pause behavior.
-        adapter._release(native, assignment)
+        adapter._on_revoke(native, assignment)
         native.unassign()
         adapter.resume()
         adapter._on_assign(native, assignment)

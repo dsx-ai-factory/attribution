@@ -11,22 +11,8 @@ from types import SimpleNamespace
 import pytest
 import requests
 from opentelemetry import metrics
-from opentelemetry.sdk.metrics import MeterProvider
-from opentelemetry.sdk.metrics.export import InMemoryMetricReader
 
 from attribution_blueprint import telemetry
-
-
-@pytest.fixture(scope="module")
-def reader():
-    """Set the process provider once.
-
-    Returns:
-        The reader used by this module.
-    """
-    reader = InMemoryMetricReader()
-    metrics.set_meter_provider(MeterProvider(metric_readers=[reader]))
-    return reader
 
 
 def points(reader, connector, name):
