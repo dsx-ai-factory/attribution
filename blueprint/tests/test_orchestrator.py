@@ -530,9 +530,8 @@ def test_wire_carries_runapi_scheduler():
     assert info["workload"]["scheduler"] == "runapi"
 
 
-def test_wire_omits_connector_only_scheduler_identity():
-    """The static adapter uses `scheduler="static"` for local provenance, not
-    as a service scheduler, so it is omitted from the wire."""
+def test_wire_uses_supported_workload_type_for_connector_only_identity():
+    """Preserve an explicit legacy scheduler type when connector provenance is not a service scheduler."""
     ctx = _make_ctx("ctx-7")
     ctx["workload_type"] = "slurm"
     ctx["scheduler"] = "static"
@@ -541,7 +540,7 @@ def test_wire_omits_connector_only_scheduler_identity():
     info = _wire(pipeline._build_attributor_info(ctx))
 
     assert info["workload"]["type"] == "slurm"
-    assert "scheduler" not in info["workload"]
+    assert info["workload"]["scheduler"] == "slurm"
 
 
 def test_build_attributor_info_honors_gpus_per_node():

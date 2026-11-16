@@ -11,6 +11,7 @@ import attribution_lib
 import attribution_lib.core as core
 from attribution_lib.attr_types import JobNodeAttributions
 from attribution_lib.bundled_rules.common.outcome_helpers import apply_outcome_reclassification_rules
+from attribution_lib.bundled_rules.common.scheduler_formatting import NODE_FAILURE, render
 from attribution_lib.bundled_rules.common.scrub_helpers import get_clean_bad_nodes
 from attribution_lib.core import (
     AttributionResult,
@@ -2033,16 +2034,10 @@ class TestSingleNodeNodeFail:
         )
         assert "" not in my_bad_nodes.attributions
 
-    @pytest.mark.parametrize("scheduler", [Scheduler.KUEUE, Scheduler.KAI])
-    def test_queue_scheduler_nodefail_uses_slurm_symptom_and_provenance(
+    @pytest.mark.parametrize("scheduler", [Scheduler.KUEUE, Scheduler.KAI, Scheduler.RUNAPI])
+    def test_non_slurm_scheduler_nodefail_uses_scheduler_symptom_and_provenance(
         self, event_stream, simple_job_factory, scheduler
     ):
-        """Queue schedulers reuse the existing "slurm" symptom/provenance.
-
-        A scheduler-specific string would need to be added to every existing
-        cascade_discards/pattern list that references
-        "Node failure reported by slurm", which is easy to miss.
-        """
         job_info = simple_job_factory(
             state="NODE_FAIL",
             nodes=["node-a", "node-b"],
@@ -2052,12 +2047,12 @@ class TestSingleNodeNodeFail:
 
         my_bad_nodes = self._attributed_bad_nodes(event_stream, job_info)
 
-        source = next(iter(my_bad_nodes["node-b"].attributions[self._NODE_FAILURE_SYMPTOM]))
-        assert source.rule == "slurm_failed_node_field"
+        symptom = render(NODE_FAILURE, scheduler)
+        source = next(iter(my_bad_nodes["node-b"].attributions[symptom]))
+        assert source.rule == "scheduler_failed_node_field"
+        assert self._NODE_FAILURE_SYMPTOM not in my_bad_nodes["node-b"]
 
-    def test_non_kueue_nodefail_retains_slurm_symptom_and_provenance(
-        self, event_stream, simple_job_factory
-    ):
+    def test_unknown_scheduler_nodefail_uses_unknown_symptom_and_provenance(self, event_stream, simple_job_factory):
         job_info = simple_job_factory(
             state="NODE_FAIL",
             nodes=["node-a", "node-b"],
@@ -2067,5 +2062,7 @@ class TestSingleNodeNodeFail:
 
         my_bad_nodes = self._attributed_bad_nodes(event_stream, job_info)
 
-        source = next(iter(my_bad_nodes["node-b"].attributions[self._NODE_FAILURE_SYMPTOM]))
-        assert source.rule == "slurm_failed_node_field"
+        symptom = render(NODE_FAILURE, Scheduler.UNKNOWN)
+        source = next(iter(my_bad_nodes["node-b"].attributions[symptom]))
+        assert source.rule == "scheduler_failed_node_field"
+        assert self._NODE_FAILURE_SYMPTOM not in my_bad_nodes["node-b"]

@@ -52,7 +52,7 @@ def _collect_discard_targets(
             continue
         visited.add(symptom_id)
 
-        symptom_metadata = registry.get(symptom_id)
+        symptom_metadata = registry.metadata_for(symptom_id)
         if symptom_metadata is not None:
             for discard_id in symptom_metadata.cascade_discards:
                 discard_targets.add(discard_id)

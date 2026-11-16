@@ -587,7 +587,14 @@ class TestBuildDecisionDAG:
         assert len(refiner_nodes) == 1
         assert any(e.parent_id == ext_nodes[0].node_id and e.child_id == refiner_nodes[0].node_id for e in demote_edges)
 
-    def test_graph_uses_final_reclassified_outcome(self):
+    @pytest.mark.parametrize(
+        ("root_cause", "derived_rule"),
+        [
+            ("SLURM preempted", "reclassified: slurm preempted"),
+            ("kueue preempted", "reclassified: kueue preempted"),
+        ],
+    )
+    def test_graph_uses_final_reclassified_outcome(self, root_cause, derived_rule):
         """Intermediate outcome recorder events must not override final outcome_attr."""
         src = _make_source(
             obs_source=ObservationSource.APPLOG,
@@ -595,12 +602,12 @@ class TestBuildDecisionDAG:
             datum="PermissionError",
             line_num=12,
         )
-        pass_source = src.derived(rule="reclassified: slurm preempted", datum="PREEMPTED")
+        pass_source = src.derived(rule=derived_rule, datum="PREEMPTED")
         att_res = _make_attribution_result(
             node_symptoms={},
             job_symptoms={"log permission error": [src]},
         )
-        att_res.outcome_attr = SourceSet(Mock(outcome="Pass", root_cause_symptom="SLURM preempted")).add(pass_source)
+        att_res.outcome_attr = SourceSet(Mock(outcome="Pass", root_cause_symptom=root_cause)).add(pass_source)
 
         recorder = DecisionRecorder("job-123")
         recorder.record(
@@ -615,15 +622,13 @@ class TestBuildDecisionDAG:
 
         outcome_nodes = [n for n in graph.nodes if n.node_type == NodeType.OUTCOME]
         assert len(outcome_nodes) == 1
-        assert outcome_nodes[0].symptom == "SLURM preempted"
-        assert outcome_nodes[0].reason == "SLURM preempted → Pass"
+        assert outcome_nodes[0].symptom == root_cause
+        assert outcome_nodes[0].reason == f"{root_cause} → Pass"
         assert "Incomplete Info" not in outcome_nodes[0].reason
 
-        pass_ext_nodes = [
-            n for n in graph.nodes if n.node_type == NodeType.EXTRACTION and n.symptom == "SLURM preempted"
-        ]
+        pass_ext_nodes = [n for n in graph.nodes if n.node_type == NodeType.EXTRACTION and n.symptom == root_cause]
         assert len(pass_ext_nodes) == 1
-        assert pass_ext_nodes[0].rule_name == "reclassified: slurm preempted"
+        assert pass_ext_nodes[0].rule_name == derived_rule
 
     def test_graph_dataclasses_serializable(self):
         """DecisionDAG dataclasses can be round-tripped through asdict + JSON."""
