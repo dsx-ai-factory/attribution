@@ -691,6 +691,36 @@ def test_kubernetes_stream_without_reading_response_body(reader, mocker, query_p
     ] == []
 
 
+@pytest.mark.parametrize("keyword", [False, True])
+def test_kubernetes_pod_log_without_reading_response_body(reader, mocker, keyword):
+    """Leave a pod-log response body unread.
+
+    A pod log is read as a stream so that only its tail is kept; reading the
+    body to measure it would consume the stream and return an empty log.
+
+    Args:
+        reader: Metric reader for this process.
+        mocker: Pytest mock helper.
+        keyword: Whether to pass the resource path by keyword.
+    """
+    from attribution_blueprint.kubernetes.client import _set_default_request_timeout
+
+    response = mocker.Mock()
+    type(response).data = mocker.PropertyMock(side_effect=AssertionError("Response body must not be read"))
+    client = SimpleNamespace(call_api=mocker.Mock(return_value=response))
+    _set_default_request_timeout(client, 15)
+    method = f"POD_LOG_{keyword}"
+    path = "/api/v1/namespaces/{namespace}/pods/{name}/log"
+    if keyword is True:
+        result = client.call_api(resource_path=path, method=method, query_params=[], _preload_content=False)
+    else:
+        result = client.call_api(path, method, {}, [("container", "c")], {}, _preload_content=False)
+    assert result is response
+    assert [
+        point for point in points(reader, "kubernetes", "response.size") if point.attributes["operation"] == method
+    ] == []
+
+
 def test_kubernetes_timeout_without_reading_preloaded_response(reader, mocker):
     """Retain timeouts and method forms without reading preloaded responses.
 

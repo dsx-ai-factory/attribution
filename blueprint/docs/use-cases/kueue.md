@@ -92,10 +92,13 @@ Optional evidence and output settings:
 
 | Entry | When needed | Value |
 |---|---|---|
-| `log.applog.component` | To collect Pod logs | `kubectl_logs`. |
+| `log.applog.component` | To collect Pod logs | `kubectl_logs`, or `kubernetes_logs` to read through the Kubernetes API without a `kubectl` binary. |
 | `log.applog.kubectl_logs.kubeconfig` | When the kubectl default is not suitable | The same kubeconfig file used for discovery. |
 | `log.applog.kubectl_logs.context` | When the current context is not suitable | The same kubeconfig context used for discovery. |
 | `log.applog.kubectl_logs.timestamps` | For application-provided rank prefixes | `false`, so kubectl does not insert a timestamp before the rank prefix. |
+| `log.applog.kubernetes_logs.kubeconfig` | With `kubernetes_logs`, when the client default is not suitable | The same kubeconfig file used for discovery. |
+| `log.applog.kubernetes_logs.context` | With `kubernetes_logs`, when the current context is not suitable | The same kubeconfig context used for discovery. |
+| `log.applog.kubernetes_logs.timestamps` | With `kubernetes_logs`, for application-provided rank prefixes | `false`, so the API does not insert a timestamp before the rank prefix. |
 | `log.syslog.component` | To collect node-system evidence | `loki`. |
 | `log.syslog.loki.endpoint` | When Loki is enabled | Base URL of the Loki service. |
 | `log.syslog.loki.query` | When Loki is enabled | LogQL selector for journal streams from the target cluster. |
@@ -125,16 +128,18 @@ Relative paths in the configuration are resolved from the shell's current
 working directory, not from the directory containing the TOML file.
 
 The Kueue adapter and pod-log connector do not inherit configuration from each
-other. Repeat non-default `kubeconfig` and `context` values in both sections.
-`kubectl_path` applies only to the pod-log connector; the Kueue adapter uses the
-Kubernetes Python API client.
+other. Repeat non-default `kubeconfig` and `context` values in both sections,
+whichever pod-log connector you select. `kubectl_path` applies only to the
+`kubectl_logs` connector; the Kueue adapter and the `kubernetes_logs` connector
+use the Kubernetes Python API client.
 
 The current service parser expects an APPLOG rank prefix at the start of a raw
 log line. `kubectl --timestamps=true` inserts its timestamp before that prefix,
-which prevents rank parsing and can prevent application rules from matching.
-The example therefore sets `timestamps = false`. This setting only controls
-the prefix added by `kubectl`; the application log itself must still put its
-rank prefix first.
+and so does a `kubernetes_logs` read with `timestamps = true`, which prevents
+rank parsing and can prevent application rules from matching. The example
+therefore sets `timestamps = false`. Set it to `false` for either connector.
+This setting only controls the prefix added by `kubectl` or by the API; the
+application log itself must still put its rank prefix first.
 
 ### Recover Pod placement after deletion
 

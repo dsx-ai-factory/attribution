@@ -42,10 +42,12 @@ flowchart TD
         LogVictoriaLogs[victorialogs]
         LogLocal[local_file]
         LogKubectl[kubectl_logs]
+        LogK8s[kubernetes_logs]
         Log --> LogLoki
         Log --> LogVictoriaLogs
         Log --> LogLocal
         Log --> LogKubectl
+        Log --> LogK8s
 
         Met[metrics]
         MetProm[promql]
@@ -124,7 +126,7 @@ The Blueprint's configuration model is patterned on Open MPI's Modular Component
 | Framework | Components today | Shape | Sources |
 |---|---|---|---|
 | eca (execution context adapter) | slurm, kueue, kai, static, kafka | component-selector | (none) |
-| log | loki, victorialogs, local_file, kubectl_logs | per-source component-selector | applog, syslog |
+| log | loki, victorialogs, local_file, kubectl_logs, kubernetes_logs | per-source component-selector | applog, syslog |
 | metrics | promql | per-source component-selector | node_metrics |
 | output | stdout, sqlite, kafka | per-instance component-selector | (none) |
 | attribution | (implicit HTTP client) | flat: service_url, timeout_seconds | (none) |
@@ -152,8 +154,8 @@ The Service returns a raw verdict. The Blueprint enriches it with normalized fie
 
 | Source | What it carries | Connectors that emit it |
 |---|---|---|
-| applog | Application stdout, NCCL output, framework logs from PyTorch and NeMo, anything written by the workload itself | loki, victorialogs, local_file, kubectl_logs (pod stdout) |
-| syslog | Kernel ring buffer, XID lines, dmesg, systemd, fabric manager | loki, victorialogs, local_file, kubectl_logs (with a node-agent DaemonSet) |
+| applog | Application stdout, NCCL output, framework logs from PyTorch and NeMo, anything written by the workload itself | loki, victorialogs, local_file, kubectl_logs and kubernetes_logs (pod stdout) |
+| syslog | Kernel ring buffer, XID lines, dmesg, systemd, fabric manager | loki, victorialogs, local_file, kubectl_logs and kubernetes_logs (with a node-agent DaemonSet) |
 | node_metrics | DCGM counters, NVLink PLR, host-side fabric counters, anything PromQL can query | promql |
 
 Source names are wire-format enum values the Service expects. Each log or metric connector instance produces exactly one `Source`. A backend serving multiple Sources is instantiated once per Source so failure isolation lives at the instance boundary.
