@@ -28,6 +28,7 @@ from attribution_blueprint.types import (
     Source,
     TimeseriesEntry,
     assert_aware,
+    context_run_id,
 )
 
 DEFAULT_LIMIT = 5000
@@ -177,7 +178,7 @@ class VictoriaLogsConnector:
         for index, template in enumerate(self._templates, start=1):
             try:
                 query = template.format(
-                    job_id=context.get("id", ""),
+                    job_id=context_run_id(context),
                     **query_kwargs,
                 )
             except KeyError as error:

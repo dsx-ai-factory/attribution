@@ -70,11 +70,20 @@ is a complete working copy in a single file.
 
 | Field | Type | |
 |---|---|---|
-| `id` | `str` | the workload run |
+| `id` | `str` | the workload context or processing item |
 | `nodes` | `list[str]` | node names |
 | `start_time`, `end_time` | `datetime` | must be timezone-aware |
 
 Other optional fields may be included  - see the declared fields in [`types.py`](../src/attribution_blueprint/types.py).
+
+A caller can supply `run_id` to preserve the provider run identity when `id`
+distinguishes processing items. Loki and VictoriaLogs use `context_run_id(context)`
+for the `{job_id}` selector: a non-empty string `run_id`, otherwise `id`. Batch
+results remain keyed by `id`, so attempts retain separate evidence. The caller
+sets `run_id` when preparing contexts after discovery; it is not a new Kafka
+completion-event field or Static inline configuration option. Keep `job_id` and
+`attempt_id` when passing these contexts to outputs. This does not change
+SQLite's existing job/attempt grouping or snapshot historical context metadata.
 
 ### What `_build` Receives
 
