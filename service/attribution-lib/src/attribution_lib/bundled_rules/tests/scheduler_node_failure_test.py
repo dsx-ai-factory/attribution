@@ -45,8 +45,9 @@ def _summary(result):
     )
 
 
+@pytest.mark.parametrize("owner_execution_id", [None, "cycle-1"])
 def test_allocation_failure_owned_by_another_cycle_does_not_change_attribution(
-    failure, simple_job_factory, event_manager
+    failure, simple_job_factory, event_manager, owner_execution_id
 ):
     """A cycle that does not own the allocation failure keeps its legacy attribution.
 
@@ -54,10 +55,11 @@ def test_allocation_failure_owned_by_another_cycle_does_not_change_attribution(
         failure: Allocation NODE_FAIL evidence for node-a.
         simple_job_factory: Factory for JobInfo instances.
         event_manager: Event manager fixture.
+        owner_execution_id: Unresolved ownership, or ownership by a different cycle.
     """
     job = simple_job_factory(job_id="cycle-0", nodes=["node-a", "node-b"], state="FAILED")
     legacy = Attributor.new(event_manager.create_stream("legacy"), job).attribute()
-    other_owner = job._replace(allocation_failure=replace(failure, owner_execution_id="cycle-1"))
+    other_owner = job._replace(allocation_failure=replace(failure, owner_execution_id=owner_execution_id))
 
     supplied = Attributor.new(event_manager.create_stream("supplied"), other_owner).attribute()
 
