@@ -11,6 +11,7 @@ from attribution_blueprint import mca_registry
 from attribution_blueprint.connectors.execution_contexts.kai import KaiExecutionContextAdapter
 from attribution_blueprint.connectors.execution_contexts.kai.attempts import (
     attempt_id_for,
+    snapshots_from_live_resources,
 )
 from attribution_blueprint.connectors.execution_contexts.kai.connector import _resolve_owner
 from attribution_blueprint.exceptions import MCAError
@@ -247,6 +248,17 @@ def _wire_kubectl(mocker, podgroups=None, pods=None, jobs=None, jobsets=None):
 @pytest.fixture
 def warnings(mocker):
     return mocker.patch("attribution_blueprint.connectors.execution_contexts.kai.connector.logger.warning")
+
+
+@pytest.fixture
+def frozen_now(mocker):
+    now = datetime(2026, 5, 2, tzinfo=timezone.utc)
+    clock = mocker.patch(
+        "attribution_blueprint.connectors.execution_contexts.kai.connector.datetime",
+        wraps=datetime,
+    )
+    clock.now.return_value = now
+    return now
 
 
 def _logged(warning) -> str:
@@ -688,14 +700,13 @@ def test_malformed_podgroups_are_skipped(mocker):
     assert [c["id"] for c in contexts] == ["uid-c"]
 
 
-def test_active_job_window_ends_now_without_a_warning(mocker, warnings):
+def test_active_job_window_ends_now_without_a_warning(mocker, warnings, frozen_now):
     pod = _pod("a-0", controller=("Job", "uid-job-uid-pg-a"))
     _wire_kubectl(mocker, [_podgroup()], [pod], [_job("pg-a-job", "uid-job-uid-pg-a")])
 
-    before = datetime.now(tz=timezone.utc)
     [ctx] = KaiExecutionContextAdapter().discover_by_ids(["team-alpha/pg-a"])
 
-    assert ctx["end_time"] >= before
+    assert ctx["end_time"] == frozen_now
     warnings.assert_not_called()
 
 
@@ -740,14 +751,13 @@ def test_terminal_jobset_condition_supplies_end_time(mocker, owner, expected_end
     assert ctx["end_time"] == datetime.fromisoformat(expected_end)
 
 
-def test_active_jobset_window_ends_now(mocker):
+def test_active_jobset_window_ends_now(mocker, frozen_now):
     pg = _podgroup(owner_kind="JobSet")
     _wire_kubectl(mocker, [pg], [])
 
-    before = datetime.now(tz=timezone.utc)
     [ctx] = KaiExecutionContextAdapter().discover_by_ids(["team-alpha/pg-a"])
 
-    assert ctx["end_time"] >= before
+    assert ctx["end_time"] == frozen_now
 
 
 def test_jobset_joins_only_pods_from_current_child_jobs(mocker):
@@ -786,7 +796,7 @@ def test_member_without_a_node_contributes_no_node(mocker):
     assert ctx["nodes"] == ["node001"]
 
 
-def test_surviving_terminal_pods_do_not_prove_completion(mocker):
+def test_surviving_terminal_pods_do_not_prove_completion(mocker, frozen_now):
     pod = _pod(
         "a-0",
         phase="Succeeded",
@@ -797,7 +807,7 @@ def test_surviving_terminal_pods_do_not_prove_completion(mocker):
 
     [ctx] = KaiExecutionContextAdapter().discover_by_ids(["team-alpha/pg-a"])
 
-    assert ctx["end_time"] > datetime(2026, 5, 2, tzinfo=timezone.utc)
+    assert ctx["end_time"] == frozen_now
 
 
 def _non_batch_job_podgroup():
@@ -1047,7 +1057,7 @@ def test_started_live_and_retained_resources_share_canonical_attempt(mocker):
     podgroup["metadata"]["annotations"][
         "kai.scheduler/last-start-timestamp"
     ] = started
-    owner = _job("pg-a-job", "uid-job-uid-pg-a")
+    live_owner = _job("pg-a-job", "uid-job-uid-pg-a")
     live_pod = _pod(
         "live-pod",
         node="node-b",
@@ -1055,79 +1065,30 @@ def test_started_live_and_retained_resources_share_canonical_attempt(mocker):
     )
     live_pod["metadata"]["uid"] = "live-pod-uid"
     live_pod["status"]["startTime"] = "2026-05-01T12:02:00Z"
-    _wire_kubectl(
-        mocker,
-        [podgroup],
-        [live_pod],
-        [owner],
-    )
-    [live_context] = KaiExecutionContextAdapter().discover_by_ids(
-        ["team-alpha/pg-a"]
-    )
-    assert live_context["attempt_id"] == attempt_id_for(
-        "uid-pg-a",
-        started,
-        "0",
-    )
-    assert live_context["nodes"] == ["node-b"]
+    _wire_kubectl(mocker, [podgroup], [live_pod], [live_owner])
 
+    retained_owner = _job(
+        "pg-a-job",
+        "uid-job-uid-pg-a",
+        failed_at="2026-05-01T13:00:00Z",
+    )
+    retained_pod = _pod(
+        "retained-pod",
+        node="node-a",
+        controller=("Job", "uid-job-uid-pg-a"),
+    )
+    retained_pod["metadata"]["uid"] = "retained-pod-uid"
+    retained_pod["status"]["startTime"] = "2026-05-01T12:01:00Z"
     history_reader = mocker.Mock()
     history_reader.find_histories.return_value = [
         {
-            "observations": [
-                {
-                    "kind": "PodGroup",
-                    "metadata": {
-                        "namespace": "team-alpha",
-                        "name": "pg-a",
-                        "uid": "uid-pg-a",
-                    },
-                    "selectedMetadata": {
-                        "annotations": podgroup["metadata"][
-                            "annotations"
-                        ]
-                    },
-                    "observedAt": started,
-                    "status": {},
-                },
-                {
-                    "kind": "Pod",
-                    "metadata": {
-                        "name": "retained-pod",
-                        "uid": "retained-pod-uid",
-                        "ownerReferences": [{"kind": "Job", "uid": "uid-job-uid-pg-a", "controller": True}],
-                    },
-                    "selectedMetadata": {
-                        "annotations": {
-                            "pod-group-name": "pg-a"
-                        }
-                    },
-                    "observedAt": "2026-05-01T12:01:00Z",
-                    "spec": {"nodeName": "node-a"},
-                    "status": {
-                        "startTime": "2026-05-01T12:01:00Z"
-                    },
-                },
-                {
-                    "kind": "Job",
-                    "metadata": {
-                        "name": "pg-a-job",
-                        "uid": "uid-job-uid-pg-a",
-                    },
-                    "observedAt": "2026-05-01T13:00:00Z",
-                    "status": {
-                        "conditions": [
-                            {
-                                "type": "Failed",
-                                "status": "True",
-                                "lastTransitionTime": (
-                                    "2026-05-01T13:00:00Z"
-                                ),
-                            }
-                        ]
-                    },
-                },
-            ],
+            "observations": snapshots_from_live_resources(
+                podgroup,
+                [retained_pod],
+                [retained_owner],
+                retained_owner,
+                now=datetime(2026, 5, 1, 13, tzinfo=timezone.utc),
+            ),
             "coverage": {},
         }
     ]
