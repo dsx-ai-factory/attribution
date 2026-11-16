@@ -312,6 +312,21 @@ _shared_lookup_tmpdir: Optional[str] = None
 _shared_lookup_counter = 0
 
 
+def _remove_temp_dir(path: str) -> None:
+    """Remove a temporary directory, and log a failure other than a missing directory.
+
+    Args:
+        path: Directory to remove.
+    """
+    try:
+        shutil.rmtree(path)
+    except FileNotFoundError:
+        pass
+    except OSError:
+        # A finalizer has no caller to raise to, so log the files that remain.
+        logger.exception("Failed to remove temporary directory {}", path)
+
+
 def _mkdtemp_removed_at_exit(
     prefix: str, *, root: str | None = None, owner: object | None = None
 ) -> tuple[str, Finalize]:
@@ -329,7 +344,7 @@ def _mkdtemp_removed_at_exit(
     """
     # abspath: before Python 3.12, mkdtemp returns a relative path for a relative root.
     path = os.path.abspath(tempfile.mkdtemp(prefix=prefix, dir=root))
-    return path, Finalize(owner, shutil.rmtree, args=(path,), kwargs={"ignore_errors": True}, exitpriority=-100)
+    return path, Finalize(owner, _remove_temp_dir, args=(path,), exitpriority=-100)
 
 
 def _get_shared_lookup_tmpdir() -> str:

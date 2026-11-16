@@ -82,3 +82,35 @@ def test_spill_directories_of_unclosed_managers_are_removed_after_exit(tmp_path_
         assert path.parent == tmp_path
         assert not path.exists()
     assert list(tmp_path.glob("attribution_lib_spill_*")) == []
+
+
+def test_finalizer_logs_a_directory_it_cannot_remove(tmp_path, monkeypatch):
+    """A removal failure in the exit finalizer is logged with the directory path, not raised.
+
+    Args:
+        tmp_path: Isolated temporary directory.
+        monkeypatch: Fixture that replaces `shutil.rmtree`.
+    """
+    from loguru import logger
+
+    from attribution_lib import events
+
+    def fail_rmtree(path):
+        """Fail as a non-writable spill root does.
+
+        Args:
+            path: Directory to remove.
+        """
+        raise PermissionError(13, "Permission denied", path)
+
+    path, finalizer = events._mkdtemp_removed_at_exit("probe_", root=str(tmp_path))
+    monkeypatch.setattr(events.shutil, "rmtree", fail_rmtree)
+    messages = []
+    sink = logger.add(messages.append, level="ERROR")
+    try:
+        finalizer()
+    finally:
+        logger.remove(sink)
+    assert len(messages) == 1
+    assert path in messages[0]
+    assert "PermissionError" in messages[0]
