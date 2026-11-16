@@ -1216,6 +1216,47 @@ Kubernetes watch and log-follow calls record no response size, because their bod
 The Kafka input consumer is not measured.
 The `kubernetes-daemon` watch process is not measured because its watch streams are long-lived.
 
+### Query Result Metrics
+
+The Loki, VictoriaLogs, and PromQL connectors also record what each query
+returned. These metrics have the same `connector` and `operation` labels as the
+request metrics. A query is one template for one execution context, including
+all of its pages.
+
+| Metric | Type | Unit | Meaning |
+| --- | --- | --- | --- |
+| `attribution.connector.query.entries` | Histogram | `{entry}` | Log entries returned by one Loki or VictoriaLogs query, across its pages and before deduplication |
+| `attribution.connector.query.pages` | Histogram | `{page}` | Requests issued by one Loki or VictoriaLogs query, including a final empty page |
+| `attribution.connector.query.truncations` | Counter | `{query}` | Loki or VictoriaLogs queries that may have left entries unread, counted once per reason |
+| `attribution.connector.query.series` | Histogram | `{series}` | Series returned by one successful PromQL query |
+
+The truncation counter has a `reason` label. A query that matches several
+reasons is counted once under each of them.
+
+- `page_limit`: the query fetched its page budget of full pages (20 by default;
+  VictoriaLogs reads it from `max_pages`). With the default `limit` of 5000, this
+  is 100,000 entries. Entries older than the last page are missing from the
+  observation. To avoid it, narrow the template query so that it matches fewer
+  entries. For VictoriaLogs, you can also raise `limit` if your backend accepts
+  larger responses, or raise `max_pages`.
+- `missing_timestamp`: a full VictoriaLogs page had no parseable `_time` field,
+  or held only malformed records, so the connector cannot request the next page.
+- `timestamp_tie`: a full VictoriaLogs page held only entries with the newest
+  timestamp the request could return. The connector cannot page within one
+  timestamp, so it skips past it, and entries with that timestamp that did not
+  fit on the page are missing. Raising `limit` above the number of entries per
+  timestamp avoids it.
+- `window_start`: a full Loki or VictoriaLogs page reached the start of the time
+  window.
+  Entries at the start boundary may be missing.
+- `request_error`: a VictoriaLogs request failed after earlier pages had
+  succeeded. The query keeps the entries it has, and the request metrics record
+  the error. If the first request fails, the query records nothing.
+
+The same conditions are also reported as collection issues or warnings. A PromQL query whose API
+status is not `success` records no series count; its request metrics record
+the call. A scalar or string result also records no series count.
+
 ### Built-in Scrape Endpoint
 
 Install the `metrics` extra. The container image already includes it.
@@ -1233,8 +1274,9 @@ The endpoint is off when the variable is unset or empty.
 A short-lived run exits after its last job. A scraper sees its metrics only
 while that run is active.
 
-The scraper sees these names. Labels are `connector`, `operation`, and
-`error_type` for failures. Histogram buckets also have the `le` label.
+The scraper sees these names. Request labels are `connector`, `operation`, and
+`error_type` for failures. A label name with a dot, such as `error.type`, uses
+an underscore. Histogram buckets also have the `le` label.
 The Prometheus exporter also adds `otel_scope_name`, `otel_scope_version`, and
 `otel_scope_schema_url` labels to every series.
 
@@ -1245,6 +1287,10 @@ The Prometheus exporter also adds `otel_scope_name`, `otel_scope_version`, and
 | `attribution.connector.errors` | `attribution_connector_errors_total` |
 | `attribution.connector.response.size` | `attribution_connector_response_size_bytes_total` |
 | `attribution.connector.request.duration` | `attribution_connector_request_duration_seconds_bucket`, `attribution_connector_request_duration_seconds_sum`, `attribution_connector_request_duration_seconds_count` |
+| `attribution.connector.query.entries` | `attribution_connector_query_entries_bucket`, `attribution_connector_query_entries_sum`, `attribution_connector_query_entries_count` |
+| `attribution.connector.query.pages` | `attribution_connector_query_pages_bucket`, `attribution_connector_query_pages_sum`, `attribution_connector_query_pages_count` |
+| `attribution.connector.query.truncations` | `attribution_connector_query_truncations_total` |
+| `attribution.connector.query.series` | `attribution_connector_query_series_bucket`, `attribution_connector_query_series_sum`, `attribution_connector_query_series_count` |
 
 ### Other OpenTelemetry Exporters
 
