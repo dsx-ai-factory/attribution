@@ -67,6 +67,12 @@ class PodGroupAttempt:
 
     @property
     def attempt_id(self) -> str:
+        """Return the deterministic identity shared by every replay.
+
+        Returns:
+            A KAI attempt ID derived from the PodGroup incarnation,
+            allocation boundary, and restart generation.
+        """
         return attempt_id_for(
             self.pod_group_uid,
             self.start_key,
@@ -108,6 +114,18 @@ def snapshots_from_live_resources(
     )
 
     def snapshot(resource: dict, kind: str) -> dict:
+        """Project one live resource into the retained snapshot contract.
+
+        Mirroring the daemon's reduced shape lets live and retained evidence
+        follow one reconstruction path without inventing absent fields.
+
+        Args:
+            resource: Kubernetes resource returned by the live API.
+            kind: Kubernetes kind to record for the resource.
+
+        Returns:
+            A snapshot with explicit metadata and status containers.
+        """
         resource_metadata = resource.get("metadata") or {}
         selected_metadata = {
             field: dict(values)
@@ -172,24 +190,53 @@ def _normalize_snapshot(snapshot: dict) -> dict:
 
     Preserve spec presence: retained snapshots omit it, while live snapshots
     include it. Unknown generations and timestamps remain absent or null.
+
+    Args:
+        snapshot: Raw retained or live snapshot.
+
+    Returns:
+        A detached snapshot whose optional containers and their commonly read
+        fields are safe to index.
     """
-    metadata = snapshot.get("metadata") or {}
-    selected = snapshot.get("selectedMetadata") or {}
-    status = snapshot.get("status") or {}
+    metadata = dict(snapshot.get("metadata") or {})
+    selected = dict(snapshot.get("selectedMetadata") or {})
+    status = dict(snapshot.get("status") or {})
+    conditions = [
+        {
+            **condition,
+            "type": condition.get("type"),
+            "status": condition.get("status"),
+            "lastTransitionTime": condition.get("lastTransitionTime"),
+            "reason": condition.get("reason"),
+        }
+        for condition in status.get("conditions") or []
+        if isinstance(condition, dict)
+    ]
     return {
         **snapshot,
+        "kind": snapshot.get("kind") or "",
+        "eventType": snapshot.get("eventType") or "",
+        "observedAt": snapshot.get("observedAt"),
         "metadata": {
             **metadata,
+            "namespace": metadata.get("namespace") or "",
+            "name": metadata.get("name") or "",
+            "uid": metadata.get("uid"),
             "ownerReferences": metadata.get("ownerReferences") or [],
         },
         "selectedMetadata": {
             **selected,
             "labels": selected.get("labels") or {},
             "annotations": selected.get("annotations") or {},
+            "deletionTimestamp": selected.get("deletionTimestamp"),
         },
         "status": {
             **status,
-            "conditions": status.get("conditions") or [],
+            "startTime": status.get("startTime"),
+            "completionTime": status.get("completionTime"),
+            "phase": status.get("phase"),
+            "restarts": status.get("restarts"),
+            "conditions": conditions,
         },
     }
 
@@ -214,8 +261,8 @@ def attempts_from_podgroup_history(
     podgroups = observations_by_uid(
         item
         for item in snapshots
-        if item.get("kind") == "PodGroup"
-        and item["metadata"].get("name") == pod_group_name
+        if item["kind"] == "PodGroup"
+        and item["metadata"]["name"] == pod_group_name
     )
     terminals = resolved.terminals
     pod_events = resolved.pods
@@ -271,7 +318,7 @@ def attempts_from_podgroup_history(
             starts = _coalesce_initial_allocation(
                 starts,
                 [snapshot for snapshot in snapshots
-                 if snapshot.get("kind") == "Pod"
+                 if snapshot["kind"] == "Pod"
                  and _pod_owned_by(snapshot, owner, job_events)],
                 terminals,
                 pod_group_name,
@@ -285,6 +332,8 @@ def attempts_from_podgroup_history(
             owner_outcome_end=boundary.owner_outcome_end,
         )
         for index, start in enumerate(starts):
+            # Pre-boundary restart evidence can belong only to the first
+            # interval carrying that generation, not later reallocations.
             first_attempt_for_restart = not any(
                 previous["restart_attempt"] == start["restart_attempt"]
                 for previous in starts[:index]
@@ -313,6 +362,8 @@ def attempts_from_podgroup_history(
                 boundary.terminal_resolvable
                 and terminal is not None
             )
+            # A Pod timestamp before a recreated PodGroup's first allocation
+            # cannot distinguish the old and new same-name incarnations.
             ambiguous_predated_pod = recreated and any(
                 _pod_matches_attempt(
                     pod,
@@ -327,7 +378,7 @@ def attempts_from_podgroup_history(
             attempts.append(
                 PodGroupAttempt(
                     pod_group_uid=pod_group_uid,
-                    namespace=metadata.get("namespace") or "",
+                    namespace=metadata["namespace"],
                     pod_group_name=pod_group_name,
                     owner_kind=owner["kind"],
                     owner_name=owner["name"],
@@ -406,6 +457,22 @@ def attempts_from_podgroup_history(
 
 @dataclass(frozen=True)
 class _PodGroupBoundary:
+    """Describe how confidently one PodGroup incarnation can be closed.
+
+    Attributes:
+        end: Exact deletion or replacement timestamp that bounds membership.
+        observed_end: Collection timestamp used only to bound an unresolved
+            retired attempt.
+        owner_outcome_end: Replacement start after which an owner terminal
+            cannot belong to this incarnation.
+        retired: Whether deletion or a successor proves the incarnation ended.
+        resolved: Whether evidence provides an exact membership boundary.
+        terminal_resolvable: Whether an exact-owner terminal can close the last
+            scheduled incarnation despite an unscheduled successor.
+        accept_prior_restart: Whether child evidence before allocation may
+            establish the restart active at the first boundary.
+    """
+
     end: str | None
     observed_end: str | None
     owner_outcome_end: str | None
@@ -442,15 +509,13 @@ def _podgroup_boundaries(
         deletion_observations = [
             snapshot
             for snapshot in timeline
-            if snapshot.get("eventType") == "DELETED"
+            if snapshot["eventType"] == "DELETED"
         ]
         deletion = min(
             (
-                selected_metadata["deletionTimestamp"]
+                snapshot["selectedMetadata"]["deletionTimestamp"]
                 for snapshot in deletion_observations
-                if (
-                    selected_metadata := snapshot["selectedMetadata"]
-                ).get("deletionTimestamp")
+                if snapshot["selectedMetadata"]["deletionTimestamp"]
             ),
             key=parse_time,
             default=None,
@@ -539,6 +604,17 @@ def _podgroup_owner(metadata: dict) -> dict | None:
 
 
 def _podgroup_starts(timeline: list[dict]) -> list[dict]:
+    """Return distinct KAI allocation boundaries in chronological order.
+
+    Repeated watch events can carry the same start timestamp. The timestamp is
+    both identity and execution time, so duplicates collapse here.
+
+    Args:
+        timeline: Normalized snapshots for one PodGroup UID.
+
+    Returns:
+        Dictionaries containing the stable boundary key and timestamp.
+    """
     starts = {}
     for snapshot in timeline:
         timestamp = kai_podgroup_start_timestamp(snapshot)
@@ -599,7 +675,7 @@ def _job_owned_by(job: dict, owner: dict) -> bool:
     """Match the exact Job or JobSet UID to isolate recreated workloads."""
     metadata = job["metadata"]
     if owner["kind"] == "Job":
-        return metadata.get("uid") == owner["uid"]
+        return metadata["uid"] == owner["uid"]
     controller = controller_owner(metadata)
     return bool(
         controller
@@ -639,7 +715,7 @@ def _scoped_restart_starts(
     scoped: dict[str, str] = {}
     prior = []
     for snapshot, generation, timestamp in candidates:
-        kind = snapshot.get("kind")
+        kind = snapshot["kind"]
         if kind == "Pod":
             annotations = snapshot["selectedMetadata"]["annotations"]
             matches = (
@@ -784,7 +860,7 @@ def _coalesce_initial_allocation(
         pending, allocated, earlier = False, False, False
         for snapshot in snapshots:
             if (
-                snapshot.get("kind") != "Pod"
+                snapshot["kind"] != "Pod"
                 or restart_attempt(snapshot) != start["restart_attempt"]
                 or not _pod_matches_attempt(
                     snapshot,
@@ -795,18 +871,18 @@ def _coalesce_initial_allocation(
             ):
                 continue
             status = snapshot["status"]
-            execution_start = status.get("startTime")
+            execution_start = status["startTime"]
             earlier |= bool(execution_start and parse_time(execution_start) < end)
             pending |= (
-                status.get("phase") == "Pending"
+                status["phase"] == "Pending"
                 and not execution_start
                 and begin <= parse_time(snapshot["observedAt"]) < end
             )
             for condition in status["conditions"]:
                 if (
-                    condition.get("type") == "PodScheduled"
-                    and condition.get("status") == "True"
-                    and condition.get("lastTransitionTime")
+                    condition["type"] == "PodScheduled"
+                    and condition["status"] == "True"
+                    and condition["lastTransitionTime"]
                 ):
                     scheduled = parse_time(condition["lastTransitionTime"])
                     earlier |= scheduled < end
@@ -818,7 +894,7 @@ def _coalesce_initial_allocation(
             and not any(
                 begin <= parse_time(event["time"]) <= end
                 and event["type"] in {"Failed", "Complete", "Completed"}
-                and event.get("restart_attempt") in {None, start["restart_attempt"]}
+                and event["restart_attempt"] in {None, start["restart_attempt"]}
                 for event in terminal_events
             )
         ):
@@ -830,7 +906,7 @@ def _infer_job_restarts(snapshots: list[dict]) -> dict[str, str]:
     """Infer a Job generation only when its explicitly labeled Pods agree."""
     pod_generations_by_job: dict[str, set[str]] = {}
     for snapshot in snapshots:
-        if snapshot.get("kind") != "Pod":
+        if snapshot["kind"] != "Pod":
             continue
         generation = restart_attempt(snapshot)
         controller = controller_owner(
@@ -856,10 +932,22 @@ def _job_restart(
     snapshot: dict,
     inferred_job_restarts: dict[str, str],
 ) -> str | None:
+    """Return a Job's explicit or uniquely inferred restart generation.
+
+    KAI does not always copy the restart label to a child Job. Inference is
+    accepted only when every owned Pod agrees, avoiding cross-retry matches.
+
+    Args:
+        snapshot: Normalized Job snapshot.
+        inferred_job_restarts: Pod-proven generations keyed by Job UID.
+
+    Returns:
+        The restart generation, or None when evidence is absent or conflicts.
+    """
     generation = restart_attempt(snapshot)
     if generation is not None:
         return generation
-    job_uid = snapshot["metadata"].get("uid")
+    job_uid = snapshot["metadata"]["uid"]
     return inferred_job_restarts.get(job_uid)
 
 
@@ -870,28 +958,26 @@ def _terminal_events(
     """Extract and deduplicate Job/JobSet outcomes, including restart failures."""
     events = []
     for snapshot in snapshots:
-        kind = snapshot.get("kind")
+        kind = snapshot["kind"]
         if kind not in {"Job", "JobSet"}:
             continue
         status = snapshot["status"]
         conditions = status["conditions"]
         has_job_terminal = any(
-            condition.get("status") == "True"
-            and condition.get("type") in {"Failed", "Complete"}
-            and condition.get("lastTransitionTime")
+            condition["status"] == "True"
+            and condition["type"] in {"Failed", "Complete"}
+            and condition["lastTransitionTime"]
             for condition in conditions
         )
         if (
             kind == "Job"
             and not has_job_terminal
-            and status.get("completionTime")
+            and status["completionTime"]
         ):
             events.append(
                 {
                     "kind": "Job",
-                    "uid": snapshot["metadata"].get(
-                        "uid"
-                    ),
+                    "uid": snapshot["metadata"]["uid"],
                     "type": "Complete",
                     "reason": None,
                     "time": status["completionTime"],
@@ -902,8 +988,8 @@ def _terminal_events(
                 }
             )
         for condition in conditions:
-            condition_type = condition.get("type")
-            transition = condition.get("lastTransitionTime")
+            condition_type = condition["type"]
+            transition = condition["lastTransitionTime"]
             supported = (
                 kind == "Job"
                 and condition_type in {"Failed", "Complete"}
@@ -914,14 +1000,14 @@ def _terminal_events(
                     "Failed",
                 }
             )
-            if condition.get("status") != "True" or not transition or not supported:
+            if condition["status"] != "True" or not transition or not supported:
                 continue
             events.append(
                 {
                     "kind": kind,
-                    "uid": snapshot["metadata"].get("uid"),
+                    "uid": snapshot["metadata"]["uid"],
                     "type": condition_type,
-                    "reason": condition.get("reason"),
+                    "reason": condition["reason"],
                     "time": transition,
                     "restart_attempt": (
                         _job_restart(
@@ -929,7 +1015,7 @@ def _terminal_events(
                             inferred_job_restarts,
                         )
                         if kind == "Job"
-                        else str(max(int(status.get("restarts") or 0) - 1, 0))
+                        else str(max(int(status["restarts"] or 0) - 1, 0))
                         if condition_type == "RestartingJobSet"
                         else None
                     ),
@@ -963,7 +1049,7 @@ def _resolve_evidence(snapshots: list[dict]) -> _ResolvedEvidence:
             for uid, timeline in observations_by_uid(
                 snapshot
                 for snapshot in snapshots
-                if snapshot.get("kind") == "Job"
+                if snapshot["kind"] == "Job"
             ).items()
         },
         job_restarts=job_restarts,
@@ -1069,9 +1155,7 @@ def _resource_in_attempt(
         and observed_restart != expected_restart
     ):
         return False
-    timestamp = snapshot["status"].get(
-        "startTime"
-    ) or snapshot.get("observedAt")
+    timestamp = snapshot["status"]["startTime"] or snapshot["observedAt"]
     if timestamp is None:
         return False
     if end is not None and parse_time(timestamp) >= parse_time(end):
@@ -1086,6 +1170,20 @@ def _pod_matches_attempt(
     *,
     allow_unannotated: bool,
 ) -> bool:
+    """Return whether Pod identity labels are compatible with an attempt.
+
+    Timing is checked separately by `_pod_in_attempt`; this helper verifies
+    only PodGroup and restart identity.
+
+    Args:
+        snapshot: Normalized Pod snapshot.
+        pod_group_name: PodGroup name required by the attempt.
+        expected_restart: Restart generation required by the attempt.
+        allow_unannotated: Whether a missing PodGroup annotation is admissible.
+
+    Returns:
+        True when available identity labels do not contradict the attempt.
+    """
     annotations = snapshot["selectedMetadata"]["annotations"]
     observed_group = annotations.get(POD_GROUP_ANNOTATION)
     if observed_group != pod_group_name and not (
@@ -1102,11 +1200,9 @@ def _pod_timestamp(snapshot: dict) -> str | None:
     """Use scheduling evidence for allocation membership before kubelet start."""
     scheduled = [condition["lastTransitionTime"]
                  for condition in snapshot["status"]["conditions"]
-                 if condition.get("type") == "PodScheduled"
-                 and condition.get("status") == "True"
-                 and condition.get("lastTransitionTime")]
+                 if condition["type"] == "PodScheduled"
+                 and condition["status"] == "True"
+                 and condition["lastTransitionTime"]]
     if scheduled:
         return min(scheduled, key=parse_time)
-    return snapshot["status"].get(
-        "startTime"
-    ) or snapshot.get("observedAt")
+    return snapshot["status"]["startTime"] or snapshot["observedAt"]

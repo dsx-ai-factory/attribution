@@ -151,6 +151,18 @@ class _WorkloadEvidence:
 
 
 class _PodEvidence(NamedTuple):
+    """Summarize scheduler evidence from verified member Pods.
+
+    Attributes:
+        nodes: Distinct assigned node names.
+        pod_names: Distinct member Pod names.
+        pod_nodes: Current Pod-name-to-node mapping.
+        placements: Live Pod placements with provenance.
+        node_loss_nodes: Assigned nodes whose Pods report node loss.
+        has_node_failure: Whether any member reports node failure, including a
+            Pod with no assigned node.
+    """
+
     nodes: list[str]
     pod_names: list[str]
     pod_nodes: dict[str, str]
@@ -315,6 +327,17 @@ def _jobset_child_jobs(owner: dict, jobs: list[dict]) -> list[dict]:
 
 
 def _non_negative_int(value: object) -> int | None:
+    """Return an integer only when a Kubernetes field is non-negative.
+
+    Booleans are excluded even though `bool` subclasses `int`; accepting them
+    would turn malformed JSON into a valid count.
+
+    Args:
+        value: Decoded Kubernetes field value.
+
+    Returns:
+        The non-negative integer, or None for every other value.
+    """
     if isinstance(value, bool) or not isinstance(value, int) or value < 0:
         return None
     return value
@@ -333,6 +356,18 @@ def _job_end_time(job: dict) -> datetime | None:
 
 
 def _owner_group(owner: dict) -> str | None:
+    """Return the API group used to decide whether an owner is supported.
+
+    KAI's annotation may provide `group` directly, while Kubernetes owner
+    references provide only `apiVersion`.
+
+    Args:
+        owner: Resolved KAI owner or Kubernetes owner reference.
+
+    Returns:
+        The explicit or API-version-derived group, or None for a legacy Job
+        reference with neither value.
+    """
     group = owner.get("group")
     api_version = owner.get("apiVersion")
     if group is None and isinstance(api_version, str) and "/" in api_version:
@@ -341,6 +376,14 @@ def _owner_group(owner: dict) -> str | None:
 
 
 def _owner_resource(owner: dict) -> str | None:
+    """Map a supported KAI owner to the Kubernetes resource name to query.
+
+    Args:
+        owner: Resolved owner containing its kind and API identity.
+
+    Returns:
+        `Job` or `JobSet` for supported owner APIs, otherwise None.
+    """
     group = _owner_group(owner)
     if owner["kind"] == "Job" and group in (None, "batch"):
         return _JOB_RESOURCE
@@ -371,12 +414,33 @@ def _jobset_end_time(jobset: dict) -> datetime | None:
 
 
 def _owner_end_time(owner: dict, owner_object: dict) -> datetime | None:
+    """Return the terminal timestamp using semantics for the owner's kind.
+
+    Args:
+        owner: Resolved owner identity.
+        owner_object: Live Job or JobSet resource with the matching UID.
+
+    Returns:
+        The completion/failure transition, or None while the owner is active.
+    """
     if owner["kind"] == "Job":
         return _job_end_time(owner_object)
     return _jobset_end_time(owner_object)
 
 
 def _condition(owner_object: dict, condition_type: str) -> dict | None:
+    """Return the first true owner condition of the requested type.
+
+    Kubernetes retains false and historical conditions alongside the active
+    one, so condition type alone is insufficient evidence.
+
+    Args:
+        owner_object: Live Job or JobSet resource.
+        condition_type: Kubernetes condition type to select.
+
+    Returns:
+        The matching true condition, or None when it is absent.
+    """
     for condition in (owner_object.get("status") or {}).get("conditions") or []:
         if (condition or {}).get("type") == condition_type and condition.get("status") == "True":
             return condition
@@ -763,6 +827,21 @@ class KaiExecutionContextAdapter:
         placement_reader: PlacementReader | None = None,
         history_reader=None,
     ):
+        """Configure live discovery and optional durable evidence readers.
+
+        Args:
+            kubeconfig: Path passed to the Kubernetes API client.
+            context: Kubeconfig context passed to the Kubernetes API client.
+            namespace: Default namespace for bare IDs and time-range scope.
+            timeout_seconds: Timeout for each Kubernetes API request.
+            placement_records_enabled: Whether to read durable placements.
+            placement_reader: Reader for durable placement lookups.
+            history_reader: Reader for retained Kubernetes snapshots,
+                independent of placement enablement.
+
+        Raises:
+            ValueError: If `placement_records_enabled` is not a boolean.
+        """
         self.namespace = namespace or ""
         self.timeout_seconds = timeout_seconds
         if not isinstance(placement_records_enabled, bool):
@@ -928,6 +1007,8 @@ class KaiExecutionContextAdapter:
                         live_owners[pod_group_uid] = item.owner_object
 
             for attempt in attempts:
+                # A Job owner is itself the attempt resource. A JobSet owner
+                # contributes only child Jobs already proven by UID.
                 allowed_job_uids = attempt.job_uids | (
                     {attempt.owner_uid}
                     if attempt.owner_kind == "Job"
@@ -1257,6 +1338,18 @@ class KaiExecutionContextAdapter:
         ]
 
     def _fetch_placement_records(self, context: KaiExecutionContext) -> list[PlacementRecord]:
+        """Read durable placements associated with one PodGroup incarnation.
+
+        Args:
+            context: Context containing the namespace and PodGroup UID used by
+                the daemon association index.
+
+        Returns:
+            Placement records when enabled, otherwise an empty list.
+
+        Raises:
+            RuntimeError: If placement reads lack a reader or lookup fails.
+        """
         if not self.placement_records_enabled:
             return []
         if self.placement_reader is None:
@@ -1270,6 +1363,16 @@ class KaiExecutionContextAdapter:
             raise RuntimeError(f"KubernetesDaemon placement lookup failed: {error}") from error
 
     def _merge_placement_records(self, context: KaiExecutionContext) -> None:
+        """Enrich an unscheduled live context with durable placements.
+
+        Reconstructed attempts filter by proven Pod UIDs. This legacy live
+        path instead relies on the daemon's PodGroup association because no
+        attempt-specific UID set exists yet.
+
+        Args:
+            context: Context to update in place with placements, nodes, and a
+                node-failure outcome when supported by retained evidence.
+        """
         records = self._fetch_placement_records(context)
         node_loss_nodes = _merge_placement_evidence(
             context,
