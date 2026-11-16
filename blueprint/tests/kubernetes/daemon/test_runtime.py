@@ -11,7 +11,7 @@ import pytest
 from attribution_blueprint.kubernetes.daemon.models import (
     PlacementRecord,
     ResourceIdentity,
-    ResourceObservation,
+    ResourceSnapshot,
 )
 from attribution_blueprint.kubernetes.daemon.resolvers import ResolutionPending
 from attribution_blueprint.kubernetes.daemon.runtime import (
@@ -284,11 +284,11 @@ class _FailCreateOnceStore:
         self.delegate = delegate
         self.failed = False
 
-    def capture_observation(self, observation, **kwargs):
+    def capture_snapshot(self, snapshot, **kwargs):
         if not self.failed:
             self.failed = True
             raise OSError("synthetic placement write failure")
-        return self.delegate.capture_observation(observation, **kwargs)
+        return self.delegate.capture_snapshot(snapshot, **kwargs)
 
     def __getattr__(self, name):
         return getattr(self.delegate, name)
@@ -401,17 +401,17 @@ class _AbsentJobSetWatchSource(_PodWatchSource):
         raise ApiException(status=404, reason="the server could not find the requested resource")
 
 
-class _FailObservationOnceStore:
+class _FailSnapshotOnceStore:
     def __init__(self, delegate, resource_version):
         self.delegate = delegate
         self.resource_version = resource_version
         self.failed = False
 
-    def capture_observation(self, observation, **kwargs):
-        if observation.resource_version == self.resource_version and not self.failed:
+    def capture_snapshot(self, snapshot, **kwargs):
+        if snapshot.resource_version == self.resource_version and not self.failed:
             self.failed = True
             raise OSError("synthetic journal failure")
-        return self.delegate.capture_observation(observation, **kwargs)
+        return self.delegate.capture_snapshot(snapshot, **kwargs)
 
     def create(self, record):
         return self.delegate.create(record)
@@ -427,11 +427,11 @@ class _FailPlacementOnceStore:
         self.delegate = delegate
         self.capture_calls = 0
 
-    def capture_observation(self, observation, **kwargs):
+    def capture_snapshot(self, snapshot, **kwargs):
         self.capture_calls += 1
         if self.capture_calls == 1 and kwargs.get("placement") is not None:
             raise OSError("synthetic placement storage failure")
-        return self.delegate.capture_observation(observation, **kwargs)
+        return self.delegate.capture_snapshot(snapshot, **kwargs)
 
     def get_by_pod_uid(self, pod_uid):
         return self.delegate.get_by_pod_uid(pod_uid)
@@ -861,7 +861,7 @@ def test_failed_capture_preserves_earlier_queued_generation(tmp_path, mocker):
     queued_generation = daemon._latest_generation["pod-uid-1"]
     capture = mocker.patch.object(
         store,
-        "capture_observation",
+        "capture_snapshot",
         side_effect=OSError("synthetic storage failure"),
     )
 
@@ -1018,7 +1018,7 @@ def test_projection_expansion_survives_expired_watch_relist(tmp_path, mocker):
         workers=1,
     )
     assert daemon._capture(_PodWatchSource(), pod, "SNAPSHOT") is True
-    [old_observation] = store.list_observations_for_uid(
+    [old_snapshot] = store.list_snapshots_for_uid(
         "default",
         "team-a",
         "pod-uid-1",
@@ -1050,12 +1050,12 @@ def test_projection_expansion_survives_expired_watch_relist(tmp_path, mocker):
     assert observed_resource_versions == ["10", "10"]
     assert daemon.health.initial_list_complete is True
     assert daemon.health.persistence_failed is False
-    [stored] = store.list_observations_for_uid(
+    [stored] = store.list_snapshots_for_uid(
         "default",
         "team-a",
         "pod-uid-1",
     )
-    assert stored.observed_at == old_observation.observed_at
+    assert stored.observed_at == old_snapshot.observed_at
     assert stored.selected_metadata == selected_metadata(pod)
 
 
@@ -1391,10 +1391,10 @@ def test_capture_journals_unbound_pod_without_placement(tmp_path):
 
     daemon._capture(_PodWatchSource(), pod, "SNAPSHOT")
 
-    observations = store.list_observations_for_uid("cluster-a", "team-a", "pod-uid-1")
-    assert len(observations) == 1
-    assert observations[0].event_type == "SNAPSHOT"
-    assert observations[0].status == {
+    snapshots = store.list_snapshots_for_uid("cluster-a", "team-a", "pod-uid-1")
+    assert len(snapshots) == 1
+    assert snapshots[0].event_type == "SNAPSHOT"
+    assert snapshots[0].status == {
         "containerStatuses": [{"name": "trainer", "restartCount": 0}],
         "phase": "Pending",
     }
@@ -1412,9 +1412,9 @@ def test_capture_journals_deletion_before_enqueuing_bound_pod(tmp_path):
 
     daemon._capture(_PodWatchSource(), pod, "DELETED")
 
-    observation = store.list_observations_for_uid("cluster-a", "team-a", "pod-uid-1")[0]
-    assert observation.event_type == "DELETED"
-    assert observation.source_timestamp == "2026-10-14T10:00:00Z"
+    snapshot = store.list_snapshots_for_uid("cluster-a", "team-a", "pod-uid-1")[0]
+    assert snapshot.event_type == "DELETED"
+    assert snapshot.source_timestamp == "2026-10-14T10:00:00Z"
     # Placement is captured synchronously, before enrichment is queued, so it
     # is retained even though this bound Pod is already being deleted.
     record = store.get_by_pod_uid("pod-uid-1")
@@ -1430,7 +1430,7 @@ def test_capture_journals_deletion_before_enqueuing_bound_pod(tmp_path):
 
 def test_failed_deleted_capture_leaves_no_partial_retention_marker(tmp_path, mocker):
     """A failed atomic capture must not leave a deletion marker behind: the
-    observation, placement, and marker are one transaction, so a failure
+    snapshot, placement, and marker are one transaction, so a failure
     rolls all of them back together instead of partially persisting. The
     watch loop retries the whole capture from the last persisted checkpoint."""
     path = tmp_path / "placements.db"
@@ -1441,7 +1441,7 @@ def test_failed_deleted_capture_leaves_no_partial_retention_marker(tmp_path, moc
     store.create(PlacementRecord.for_pod(pod))
     mocker.patch.object(
         store,
-        "capture_observation",
+        "capture_snapshot",
         side_effect=OSError("synthetic storage failure"),
     )
 
@@ -1474,8 +1474,8 @@ def test_saturated_placement_queue_does_not_block_journal_capture(tmp_path):
 
     daemon._capture(_PodWatchSource(), pod, "MODIFIED")
 
-    observations = store.list_observations_for_uid("cluster-a", "team-a", "pod-uid-1")
-    assert len(observations) == 1
+    snapshots = store.list_snapshots_for_uid("cluster-a", "team-a", "pod-uid-1")
+    assert len(snapshots) == 1
     assert "pod-uid-1" not in daemon._pending
     # The enrichment queue being full only defers owner/scheduler
     # association; base placement must still be captured synchronously.
@@ -1491,13 +1491,13 @@ def test_placement_persistence_failure_is_reported_and_blocks_advancement(tmp_pa
     pod = _pod()
     pod["metadata"]["resourceVersion"] = "20"
 
-    # Observation, placement, and checkpoint form one capture transaction.
+    # Snapshot, placement, and checkpoint form one capture transaction.
     # A placement failure therefore reports the whole resource version as
     # uncaptured so the watch loop retries it.
     assert daemon._capture(_PodWatchSource(), pod, "ADDED") is False
     assert daemon.health.persistence_failed is True
     assert store.get_by_pod_uid("pod-uid-1") is None
-    assert store.list_observations_for_uid("cluster-a", "team-a", "pod-uid-1") == []
+    assert store.list_snapshots_for_uid("cluster-a", "team-a", "pod-uid-1") == []
 
 
 def test_watch_records_snapshots_updates_and_deletions(tmp_path):
@@ -1535,8 +1535,8 @@ def test_watch_records_snapshots_updates_and_deletions(tmp_path):
 
     daemon._watch_source(source)
 
-    observations = store.list_observations_for_uid("cluster-a", "team-a", "pod-uid-1")
-    assert [observation.event_type for observation in observations] == [
+    snapshots = store.list_snapshots_for_uid("cluster-a", "team-a", "pod-uid-1")
+    assert [snapshot.event_type for snapshot in snapshots] == [
         "SNAPSHOT",
         "MODIFIED",
         "DELETED",
@@ -1549,7 +1549,7 @@ def test_watch_records_snapshots_updates_and_deletions(tmp_path):
 
 def test_complete_watch_relist_marks_missing_resource_absent(tmp_path):
     store = SQLitePlacementStore(str(tmp_path / "placements.db"))
-    retained = ResourceObservation(
+    retained = ResourceSnapshot(
         cluster_id="cluster-a",
         api_version="kueue.x-k8s.io/v1beta1",
         kind="Workload",
@@ -1561,7 +1561,7 @@ def test_complete_watch_relist_marks_missing_resource_absent(tmp_path):
         observed_at="2026-10-14T00:00:00Z",
         status={"conditions": [{"type": "Admitted", "status": "True"}]},
     )
-    store.capture_observation(
+    store.capture_snapshot(
         retained,
         source_name="workloads",
         placement=None,
@@ -1582,12 +1582,12 @@ def test_complete_watch_relist_marks_missing_resource_absent(tmp_path):
 
     daemon._watch_source(source)
 
-    history = store.list_observations_for_uid(
+    history = store.list_snapshots_for_uid(
         "cluster-a",
         "team-a",
         retained.uid,
     )
-    assert [observation.event_type for observation in history] == [
+    assert [snapshot.event_type for snapshot in history] == [
         "MODIFIED",
         "DELETED",
     ]
@@ -1596,7 +1596,7 @@ def test_complete_watch_relist_marks_missing_resource_absent(tmp_path):
 
 def test_watch_replays_failed_write_from_last_persisted_resource_version(tmp_path):
     journal = SQLitePlacementStore(str(tmp_path / "placements.db"))
-    store = _FailObservationOnceStore(journal, "11")
+    store = _FailSnapshotOnceStore(journal, "11")
     pod = _pod()
     pod["spec"] = {}
     snapshot = {**pod, "metadata": {**pod["metadata"], "resourceVersion": "10"}}
@@ -1621,15 +1621,15 @@ def test_watch_replays_failed_write_from_last_persisted_resource_version(tmp_pat
 
     daemon._watch_source(source)
 
-    observations = journal.list_observations_for_uid("cluster-a", "team-a", "pod-uid-1")
-    assert [observation.resource_version for observation in observations] == ["10", "11"]
+    snapshots = journal.list_snapshots_for_uid("cluster-a", "team-a", "pod-uid-1")
+    assert [snapshot.resource_version for snapshot in snapshots] == ["10", "11"]
     assert source.stream_resource_versions == ["10", "10"]
     assert daemon.health.persistence_failed is False
 
 
 def test_initial_list_is_retried_before_watch_position_advances(tmp_path):
     journal = SQLitePlacementStore(str(tmp_path / "placements.db"))
-    store = _FailObservationOnceStore(journal, "10")
+    store = _FailSnapshotOnceStore(journal, "10")
     pod = _pod()
     pod["spec"] = {}
     snapshot = {**pod, "metadata": {**pod["metadata"], "resourceVersion": "10"}}
@@ -1646,8 +1646,8 @@ def test_initial_list_is_retried_before_watch_position_advances(tmp_path):
 
     daemon._watch_source(source)
 
-    observations = journal.list_observations_for_uid("cluster-a", "team-a", "pod-uid-1")
-    assert [observation.resource_version for observation in observations] == ["10"]
+    snapshots = journal.list_snapshots_for_uid("cluster-a", "team-a", "pod-uid-1")
+    assert [snapshot.resource_version for snapshot in snapshots] == ["10"]
     assert source.list_calls == 2
     assert daemon.health.initial_list_complete is True
     assert daemon.health.persistence_failed is False
