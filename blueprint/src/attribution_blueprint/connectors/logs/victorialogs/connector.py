@@ -283,6 +283,8 @@ class VictoriaLogsConnector:
             if skipped:
                 issues.append(f"skipped {skipped} invalid NDJSON record(s)")
             if not page:
+                if skipped >= self._limit:
+                    truncations.add(QueryTruncation.MISSING_TIMESTAMP)
                 break
             rows.extend(page)
             if len(page) + skipped < self._limit:

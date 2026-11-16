@@ -205,6 +205,7 @@ class LokiConnector:
                 break
             oldest_ns = min(int(ts) for s in streams for ts, _ in (s.get("values", []) or []))
             if oldest_ns <= start_ns:
+                truncations.add(QueryTruncation.WINDOW_START)
                 break
             cur_end = oldest_ns - 1
         else:

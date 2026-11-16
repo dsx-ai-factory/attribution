@@ -1240,13 +1240,14 @@ reasons is counted once under each of them.
   entries. For VictoriaLogs, you can also raise `limit` if your backend accepts
   larger responses, or raise `max_pages`.
 - `missing_timestamp`: a full VictoriaLogs page had no parseable `_time` field,
-  so the connector cannot request the next page.
+  or held only malformed records, so the connector cannot request the next page.
 - `timestamp_tie`: a full VictoriaLogs page held only entries with the newest
   timestamp the request could return. The connector cannot page within one
   timestamp, so it skips past it, and entries with that timestamp that did not
   fit on the page are missing. Raising `limit` above the number of entries per
   timestamp avoids it.
-- `window_start`: a full VictoriaLogs page reached the start of the time window.
+- `window_start`: a full Loki or VictoriaLogs page reached the start of the time
+  window.
   Entries at the start boundary may be missing.
 - `request_error`: a VictoriaLogs request failed after earlier pages had
   succeeded. The query keeps the entries it has, and the request metrics record
@@ -1254,7 +1255,7 @@ reasons is counted once under each of them.
 
 The same conditions are also reported as collection issues or warnings. A PromQL query whose API
 status is not `success` records no series count; its request metrics record
-the call.
+the call. A scalar or string result also records no series count.
 
 ### Built-in Scrape Endpoint
 

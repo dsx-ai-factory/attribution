@@ -810,6 +810,11 @@ def victorialogs_page(*rows):
             [victorialogs_page(("2026-01-15T00:00:05Z", "one"), ("2026-01-15T00:00:00Z", "two"))],
             {"queries": 1, "entries": 2, "pages": 1, "window_start": 1},
         ),
+        ([SimpleNamespace(text="", raise_for_status=lambda: None)], {"queries": 1, "pages": 1}),
+        (
+            [SimpleNamespace(text="not-json\n[]", raise_for_status=lambda: None)],
+            {"queries": 1, "pages": 1, "missing_timestamp": 1},
+        ),
         (
             [
                 victorialogs_page(("2026-01-15T05:00:20Z", "one"), ("2026-01-15T05:00:10Z", "two")),
@@ -818,7 +823,16 @@ def victorialogs_page(*rows):
             {"queries": 1, "entries": 2, "pages": 2, "request_error": 1},
         ),
     ],
-    ids=["unsaturated", "page-limit", "no-timestamp", "timestamp-tie", "window-start", "request-error"],
+    ids=[
+        "unsaturated",
+        "page-limit",
+        "no-timestamp",
+        "timestamp-tie",
+        "window-start",
+        "empty",
+        "malformed-only",
+        "request-error",
+    ],
 )
 def test_victorialogs_query_records_entries_pages_and_truncation(reader, mocker, responses, expected):
     """Count a truncated VictoriaLogs query by each reason it may have left entries unread.
@@ -857,13 +871,23 @@ def test_victorialogs_query_records_entries_pages_and_truncation(reader, mocker,
     assert query_delta(reader, "victorialogs", collect) == expected
 
 
-def test_loki_query_at_page_limit_records_truncation(reader, mocker, monkeypatch):
-    """Count a Loki query that stops at MAX_PAGES with older entries unread.
+@pytest.mark.parametrize(
+    "offsets, expected",
+    [
+        ([(20, 10), (9, 8)], {"queries": 1, "entries": 4, "pages": 2, "page_limit": 1}),
+        ([(1, 0)], {"queries": 1, "entries": 2, "pages": 1, "window_start": 1}),
+    ],
+    ids=["page-limit", "window-start"],
+)
+def test_loki_query_records_truncation(reader, mocker, monkeypatch, offsets, expected):
+    """Count a Loki query whose full pages may have left entries unread.
 
     Args:
         reader: Metric reader for this process.
         mocker: Pytest mock helper.
         monkeypatch: Pytest patch helper.
+        offsets: Entry offsets from the window start in each page, newest first.
+        expected: Increases in the query totals.
     """
     from datetime import UTC, datetime
 
@@ -875,8 +899,8 @@ def test_loki_query_at_page_limit_records_truncation(reader, mocker, monkeypatch
     start_ns = 1_777_636_800_000_000_000
     page = mocker.Mock()
     page.json.side_effect = [
-        {"data": {"result": [{"stream": {}, "values": [[str(start_ns + 20), "a"], [str(start_ns + 10), "b"]]}]}},
-        {"data": {"result": [{"stream": {}, "values": [[str(start_ns + 9), "c"], [str(start_ns + 8), "d"]]}]}},
+        {"data": {"result": [{"stream": {}, "values": [[str(start_ns + offset), "line"] for offset in pair]}]}}
+        for pair in offsets
     ]
     mocker.patch("requests.Session.post", return_value=page)
     source = LokiConnector(
@@ -892,12 +916,7 @@ def test_loki_query_at_page_limit_records_truncation(reader, mocker, monkeypatch
         "start_time": datetime(2026, 5, 1, 12, 0, tzinfo=UTC),
         "end_time": datetime(2026, 5, 1, 12, 30, tzinfo=UTC),
     }
-    assert query_delta(reader, "loki", lambda: source.collect(context)) == {
-        "queries": 1,
-        "entries": 4,
-        "pages": 2,
-        "page_limit": 1,
-    }
+    assert query_delta(reader, "loki", lambda: source.collect(context)) == expected
 
 
 def promql_series(reader):
@@ -918,15 +937,33 @@ def promql_series(reader):
 @pytest.mark.parametrize(
     "payload, expected",
     [
-        ({"status": "success", "data": {"result": [{"metric": {}}, {"metric": {}}, {"metric": {}}]}}, (1, 3)),
-        ({"status": "success", "data": {"result": []}}, (1, 0)),
+        (
+            {
+                "status": "success",
+                "data": {"resultType": "vector", "result": [{"metric": {}}, {"metric": {}}, {"metric": {}}]},
+            },
+            (1, 3),
+        ),
+        ({"status": "success", "data": {"resultType": "vector", "result": []}}, (1, 0)),
+        ({"status": "success", "data": {"resultType": "scalar", "result": [0, "1"]}}, (0, 0)),
+        ({"status": "success", "data": {"resultType": "string", "result": [0, "up"]}}, (0, 0)),
         ({"status": "error", "error": "query timeout"}, (0, 0)),
         ({"status": "success", "data": {"result": {}}}, (0, 0)),
         ({"status": "success", "data": {"result": ""}}, (0, 0)),
         ({"status": "success", "data": {"result": None}}, (0, 0)),
         ({"status": "success", "data": {}}, (0, 0)),
     ],
-    ids=["three-series", "empty", "api-error", "object-result", "string-result", "null-result", "missing-result"],
+    ids=[
+        "three-series",
+        "empty",
+        "scalar-type",
+        "string-type",
+        "api-error",
+        "object-result",
+        "string-result",
+        "null-result",
+        "missing-result",
+    ],
 )
 def test_promql_query_records_series_only_for_successful_results(reader, mocker, payload, expected):
     """Record the series count of each successful PromQL query.

@@ -103,5 +103,7 @@ class PrometheusClient:
         if not isinstance(result, list):
             logger.warning(f"promql query {name!r} returned a non-list result")
             return []
-        record_series("promql", path, len(result))
+        # Scalar and string results are a single [timestamp, value] pair, not series.
+        if (payload.get("data") or {}).get("resultType") in ("vector", "matrix"):
+            record_series("promql", path, len(result))
         return result
