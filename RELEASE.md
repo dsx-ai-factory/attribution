@@ -179,8 +179,8 @@ branch. The default branch therefore carries only released version literals.
    commit. The check on this pull request is the light check described under
    [Release checks](#release-checks). A maintainer squash-merges it.
 
-If the release is abandoned before the merge in step 3, close its pull request; the
-default branch never saw the new version.
+If the release is abandoned before the merge in step 3, close its pull request;
+the default branch never saw the new version.
 
 ### Release candidates and patches
 

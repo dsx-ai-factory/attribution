@@ -262,7 +262,8 @@ Pull requests are squash-merged, so the PR title becomes the commit subject on `
 ## Backport a fix to a release branch
 
 A release branch takes fixes, not features, as cherry-picks of commits already
-on `main`; the release commit is the one exception. For the branch model and which fixes qualify, refer to
+on `main`; the release commit is the one exception. For the branch model and
+which fixes qualify, refer to
 [Merge and branch policy](RELEASE.md#merge-and-branch-policy).
 
 1. Merge the fix to `main` in its own pull request.
