@@ -114,8 +114,9 @@ when a release starts, and from then on the branch takes only fixes, not
 features. A fix merges to the default branch first. It reaches a release branch
 as a `git cherry-pick -x` of that commit, in its own pull request (see
 [Backport a fix to a release branch](CONTRIBUTING.md#backport-a-fix-to-a-release-branch)).
-The release commit follows the same rule; it has no exemption. Tags exist only
-on release branches, never on the default branch.
+The release commit is the exception: it goes into the release branch first
+(see [Release the branch](#release-the-branch)). Tags exist only on release
+branches, never on the default branch.
 
 A release branch takes security and P0 patches only after its release ships, and
 only the latest release branch takes them. Once the next release ships, the
@@ -130,8 +131,7 @@ branch.
 ### Cut the release branch
 
 Cut the release branch about a week to ten days before the target date, from a
-default-branch commit, and give QA the commit SHA. Cut it before you merge any
-release pull request into the default branch:
+default-branch commit, and give QA the commit SHA:
 
 ```bash
 git fetch origin
@@ -153,8 +153,8 @@ change one in any other pick.
 ### Release the branch
 
 A release takes two pull requests, in this order: the release commit into the
-default branch, then its cherry-pick into the release branch. The default branch
-therefore always carries the released version literals.
+release branch, then a sync-back pull request that carries it into the default
+branch. The default branch therefore carries only released version literals.
 
 1. On a local branch from `origin/release/YYYY.N`, create the release commit,
    so the changelogs and generated files describe what the branch releases, not
@@ -164,26 +164,23 @@ therefore always carries the released version literals.
    component that changed, as the [cascade](#release-bundles) requires. Include
    the regenerated client files that the
    [pre-commit hook](CONTRIBUTING.md#install-the-pre-commit-hook) asks you to
-   stage. Run `bash .ci/run-tests.sh all`, then make one commit. Do not open a
-   pull request from this branch.
-2. Run `git switch -c <branch> origin/main` and
-   `git cherry-pick <release commit>`, then open a pull request into the
-   default branch that carries only that commit. A maintainer squash-merges it.
-   The check on this pull request is the light check described under
-   [Release checks](#release-checks).
-3. Run `git switch -c <branch> origin/release/YYYY.N` and
-   `git cherry-pick -x <squashed commit on main>`, then open a pull request
-   into the release branch. The full release checks and the cherry-pick check
-   run on it.
-4. QA approves the pull request from step 3. That approval is the sign-off: a
+   stage. Run `bash .ci/run-tests.sh all`, then make one commit.
+2. Push the branch and open a pull request into the release branch. The full
+   release checks and the cherry-pick check run on it.
+3. QA approves the pull request from step 2. That approval is the sign-off: a
    maintainer does not merge the pull request without it, and no automated check
    enforces it. A maintainer squash-merges it.
-5. CI detects the changed version literals and creates one tag per releasing
+4. CI detects the changed version literals and creates one tag per releasing
    component on the merge commit on the release branch. Components whose
    version literals did not change receive no new tag.
+5. Run `git switch -c <branch> origin/main` and
+   `git cherry-pick <squashed commit on the release branch>`, then open a
+   sync-back pull request into the default branch that carries only that
+   commit. The check on this pull request is the light check described under
+   [Release checks](#release-checks). A maintainer squash-merges it.
 
-If the release is abandoned after step 2, the default branch already shows the
-new version; fix forward with the next version number.
+If the release is abandoned before the merge in step 3, close its pull request; the
+default branch never saw the new version.
 
 ### Release candidates and patches
 
@@ -251,13 +248,15 @@ A pull request into a release branch gets the full check:
 - Every other component at a distance above 0 from its latest tag releases in
   the same pull request.
 
-A pull request into the default branch that changes a literal is the first pull
-request of a release. The default branch holds later content and the tag does
-not exist yet, so only the first two rules apply.
+A pull request into the default branch that changes a literal is the sync-back
+pull request of a release. The default branch holds later content and the tag
+already exists, so only the first two rules apply.
 
 A pull request into a release branch also runs the cherry-pick check. A commit
 passes when its `(cherry picked from commit <sha>)` trailer names a commit
-reachable from `main`, or when a patch-identical commit exists on `main`. A merge
+reachable from `main`, or when a patch-identical commit exists on `main`. A
+non-merge commit that changes only version literal lines, `CHANGELOG.md` files
+and generated client files, such as the release commit, also passes. A merge
 commit fails, and so does any other commit that has no patch-identical commit on
 `main` and whose trailer is missing or names a commit not on `main`; use `-x`
 anyway so the trailer is there. Maintainers merge a pull request into a release branch only
