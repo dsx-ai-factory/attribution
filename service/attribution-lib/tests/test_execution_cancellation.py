@@ -82,9 +82,9 @@ def test_cancellation_preserves_kueue_node_failure_without_a_named_node(simple_j
     job = job._replace(execution_cancellation=cancellation(job))
     result = Attributor.new(event_manager.create_stream(job.id), job).attribute()
     assert result.outcome_attr.value().outcome == "Fail InfraSW"
-    assert "Node failure reported by slurm" in result.symptoms
-    assert {source.rule for source in result.symptoms["Node failure reported by slurm"].all_sources()} == {
-        "slurm state"
+    assert "Node failure reported by kueue" in result.symptoms
+    assert {source.rule for source in result.symptoms["Node failure reported by kueue"].all_sources()} == {
+        "kueue state"
     }
     assert job.execution_cancellation.source in result.symptoms["Cancelled by user"].all_sources()
 
@@ -157,4 +157,4 @@ def test_kueue_node_failure_after_root_cancellation_is_unchanged_without_cancell
     result = Attributor.new(event_manager.create_stream(job.id), job).attribute()
 
     assert "Cancelled by root" in result.symptoms
-    assert "Node failure reported by slurm" not in result.symptoms
+    assert "Node failure reported by kueue" not in result.symptoms

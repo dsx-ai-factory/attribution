@@ -45,9 +45,8 @@ class Scheduler(StrEnum):
 
     Unlike `JobInfo.type`, which is a free-form legacy wire token, every
     `JobInfo.scheduler` value is one of these members. `UNKNOWN` means "no
-    recognized scheduler identity": callers must not use it to build a
-    rendered ID and should fall back to generic wording. Existing Slurm
-    symptom strings are unchanged.
+    recognized scheduler identity"; scheduler-aware wording renders it as
+    "unknown".
     """
 
     UNKNOWN = ""
