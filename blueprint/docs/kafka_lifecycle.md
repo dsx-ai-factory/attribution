@@ -1,6 +1,6 @@
 # Kafka consumption and acknowledgements
 
-The Kafka input supports two lifecycles through the same registered component
+The Kafka input supports bounded discovery and long-lived consumption through the same registered component
 and [connection configuration](CONFIGURATION.md#ecakafka):
 
 - `discover()` reads a bounded batch, commits, closes, and returns contexts. The
@@ -9,14 +9,51 @@ and [connection configuration](CONFIGURATION.md#ecakafka):
   configuration. Its `poll(max_records, timeout_seconds)` returns a list of
   `KafkaReceipt` records without committing offsets. An empty list can mean an
   idle poll, EOF, a pause, or intentional skips; keep polling.
+- `open_raw_consumer()` opens an independent long-lived consumer whose
+  `poll_raw(max_records, timeout_seconds)` returns `KafkaRawReceipt` records.
+  This opt-in path delivers the original payload without CloudEvent decoding,
+  execution-context mapping, or event-type filtering. Existing `discover()` and
+  `poll()` behavior remains unchanged.
 
 The shared `AcknowledgingExecutionContextSource` and
 `AcknowledgingExecutionContextAdapter` protocols describe this optional lifecycle.
 The shared delivery contract exposes only `context` and provider `event` data;
 its lifecycle methods describe handling deliveries without assuming a transport.
 Kafka-specific provenance stays on `KafkaReceipt`, outside `ExecutionContext`.
+Raw receipts do not implement the execution-context delivery protocol because
+their callers have not yet constructed execution contexts.
 Other ECAs need not implement this lifecycle. A consumer uses the lifecycle
-selected by its first read; mixing `discover()` and `poll()` on one instance raises an error.
+selected by its factory or first read. Mixing `discover()`, `poll()`, and
+`poll_raw()` on one instance raises an error. Pause and resume do not select
+whether a directly constructed adapter decodes its payloads.
+
+## Raw records
+
+Use `source.open_raw_consumer()` followed by `consumer.poll_raw()` when your
+application must validate, retain, or correlate records before it can construct
+execution contexts. The returned consumer uses the same `ack()`, `pause()`,
+`resume()`, and `close()` methods as decoded consumption, on one owner thread.
+It requires the same configured native consumer factory as `open_consumer()`.
+You can also call `poll_raw()` on a directly constructed adapter.
+
+Each `KafkaRawReceipt` contains `topic`, `partition`, `offset`, `assignment_id`,
+`key`, `value`, and `headers`. Keys and values retain their original bytes.
+An absent key or a tombstone value remains `None`; empty bytes remain empty.
+Headers retain order, duplicate names, and null values. A missing header list
+remains `None`, and a present list is copied when the record is delivered.
+CloudEvent envelopes remain intact in the original bytes.
+
+Every raw record receives a receipt, including invalid JSON, unsupported event
+types, tombstones, and duplicate events. The caller owns validation, filtering,
+recovery, and the acknowledgement boundary. Raw polling never commits a record
+or skips it because of its payload. Handle or durably retain rejected records
+before acknowledging them; a later receipt cannot advance past an unacknowledged
+raw record. Decoding or correlation does not happen in the connector.
+
+Raw delivery increments `consumed`, `accepted`, and `returned`. Here, `accepted`
+counts raw deliveries, not validated execution contexts. The existing Kafka
+metrics report raw delivery backlog, acknowledgements, commits, and ownership
+changes through the same lifecycle.
 
 ## Processing handoff
 

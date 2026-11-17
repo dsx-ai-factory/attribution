@@ -37,6 +37,19 @@ class KafkaReceipt(_Receipt):
     event: dict
 
 
+@dataclass(frozen=True)
+class KafkaRawReceipt(_Receipt):
+    """One undecoded Kafka record with the current partition ownership token.
+
+    Values and keys retain their bytes, including empty bytes and None for
+    tombstones or missing keys. Headers retain order, duplicates and null values.
+    """
+
+    key: bytes | None
+    value: bytes | None
+    headers: list[tuple[str, bytes | None]] | None
+
+
 class Backlog(NamedTuple):
     """Delivered receipts in one partition that the caller has not acknowledged."""
 
