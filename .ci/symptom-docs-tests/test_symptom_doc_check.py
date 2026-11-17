@@ -571,14 +571,15 @@ def test_adding_live_catalog_alias_is_not_a_regression(committed_repo, tmp_path)
     assert report["status"] == "success" and report["new_gaps"] == []
 
 
-def test_error_details_are_actionable_and_stay_on_one_line(
-    tmp_path, monkeypatch, capsys
+@pytest.mark.parametrize("exception_type", [ValueError, KeyError])
+def test_error_retains_traceback_without_workflow_command_injection(
+    tmp_path, monkeypatch, capsys, exception_type
 ):
     monkeypatch.delenv("GITHUB_ACTIONS", raising=False)
     message = "duplicate documentation id: 'example-id'\n::error::injected"
 
     def invalid_catalog(_root):
-        raise ValueError(message)
+        raise exception_type(message)
 
     monkeypatch.setattr(check, "collect", invalid_catalog)
     assert (
@@ -594,9 +595,13 @@ def test_error_details_are_actionable_and_stay_on_one_line(
         == 2
     )
     lines = capsys.readouterr().err.splitlines()
-    assert len(lines) == 1
-    assert "ValueError" in lines[0] and "example-id" in lines[0]
-    assert lines[0].endswith(json.dumps(message))
+    diagnostic = "\n".join(lines)
+    assert "Traceback (most recent call last)" in diagnostic
+    assert "in invalid_catalog" in diagnostic
+    assert exception_type.__name__ in diagnostic and "example-id" in diagnostic
+    assert diagnostic.count("Traceback (most recent call last)") == 1
+    assert "::" not in diagnostic
+    assert r"\u003a\u003aerror\u003a\u003ainjected" in diagnostic
 
 
 def test_advisory_missing_then_corrected_real_catalog(
@@ -764,3 +769,25 @@ def test_interruption_cannot_leave_previous_success(tmp_path, monkeypatch):
             ]
         )
     assert not (tmp_path / "result.json").exists()
+
+
+def test_gap_records_preserve_named_fields_and_json_contract():
+    """Named records retain existing tuple equality and JSON array serialization."""
+    gap = next(iter(check.gaps(snapshot(documented=False))))
+    assert isinstance(gap, check.DocumentationGap)
+    assert gap.kind == "missing-document"
+    assert gap.symptom == "Example failure"
+    assert gap.document == "example-failure"
+    assert gap.outcome == "Fail InfraSW"
+    assert json.loads(json.dumps([gap])) == [list(gap)]
+
+
+def test_snapshot_process_uses_named_timeout(tmp_path, monkeypatch):
+    """Bound producer execution while selecting the checkout's library."""
+    run = Mock()
+    monkeypatch.setattr(check.subprocess, "run", run)
+    check.snapshot_process(tmp_path, tmp_path / "snapshot.json")
+    assert run.call_args.kwargs["timeout"] == check.SNAPSHOT_TIMEOUT_SECONDS
+    assert run.call_args.kwargs["env"]["PYTHONPATH"] == str(
+        tmp_path / "service/attribution-lib/src"
+    )

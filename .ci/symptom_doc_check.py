@@ -12,12 +12,14 @@ from __future__ import annotations
 import argparse
 import html
 import json
+import logging
 import os
 from pathlib import Path
 import re
 import subprocess
 import sys
 import tempfile
+from typing import NamedTuple
 
 import yaml
 
@@ -34,15 +36,40 @@ SHA = re.compile(r"[0-9a-f]{40}")
 # Bound each local Git operation within the 15-minute CI job budget, allowing
 # filesystem work to finish while leaving time to report an unavailable check.
 GIT_TIMEOUT_SECONDS = 120
+# Allow registry initialization and catalog validation within the CI job budget.
+SNAPSHOT_TIMEOUT_SECONDS = 180
+
+
+class DocumentationGap(NamedTuple):
+    """Identify a coverage gap without changing JSON array serialization."""
+
+    kind: str
+    symptom: str
+    document: str
+    outcome: str
+
+
+class _WorkflowSafeFormatter(logging.Formatter):
+    """Keep tracebacks readable without emitting embedded Actions commands."""
+
+    def format(self, record: logging.LogRecord) -> str:
+        """Escape command delimiters in exception messages and source lines."""
+        return super().format(record).replace("::", r"\u003a\u003a")
 
 
 def git(root: Path, *args: str) -> str:
+    """Return stripped Git output; propagate command failures and bounded timeouts."""
     return subprocess.check_output(
         ["git", "-C", str(root), *args], text=True, timeout=GIT_TIMEOUT_SECONDS
     ).strip()
 
 
 def collect(root: Path) -> dict:
+    """Load rules from the active Python environment and catalog metadata from root.
+
+    Return public identifiers bound to root's HEAD, without guidance or rule code.
+    The caller must select root's library in PYTHONPATH when isolating a checkout.
+    """
     # Only the credential-free producer imports and executes candidate rules.
     import attribution_lib
     from attribution_lib.core import setup_rules
@@ -84,7 +111,7 @@ def collect(root: Path) -> dict:
     }
 
 
-def gaps(snapshot: dict) -> set[tuple[str, str, str, str]]:
+def gaps(snapshot: dict) -> set[DocumentationGap]:
     """Identify exact gaps, including outcome so changed guidance is rechecked."""
     declarations = [SymptomDeclaration(**row) for row in snapshot["declarations"]]
     index = build_doc_name_index(snapshot["documents"])
@@ -100,15 +127,22 @@ def gaps(snapshot: dict) -> set[tuple[str, str, str, str]]:
         ("missing-name", find_undeclared_symptom_names(declarations, index)),
     ):
         for row in rows:
-            result.add((kind, row.prefix, row.doc or "", row.outcome or ""))
+            result.add(
+                DocumentationGap(kind, row.prefix, row.doc or "", row.outcome or "")
+            )
     return result
 
 
-def compare(base: dict, head: dict) -> list[tuple[str, str, str, str]]:
+def compare(base: dict, head: dict) -> list[DocumentationGap]:
+    """Return sorted head gaps absent from base, leaving historical gaps unchanged."""
     return sorted(gaps(head) - gaps(base))
 
 
 def snapshot_process(root: Path, destination: Path) -> None:
+    """Write a checkout's snapshot in an isolated, time-bounded Python subprocess.
+
+    Select the checkout's library via PYTHONPATH; propagate failures and timeouts.
+    """
     environment = os.environ.copy()
     environment["PYTHONPATH"] = str(root / "service/attribution-lib/src")
     subprocess.run(
@@ -124,7 +158,7 @@ def snapshot_process(root: Path, destination: Path) -> None:
         env=environment,
         cwd=root,
         check=True,
-        timeout=180,
+        timeout=SNAPSHOT_TIMEOUT_SECONDS,
     )
 
 
@@ -203,6 +237,11 @@ def report_to_github(report: dict) -> None:
 
 
 def check(root: Path, base_sha: str, output: Path, *, advisory: bool = False) -> int:
+    """Compare base and head coverage and write commit-bound reports.
+
+    Return 1 for new gaps unless advisory mode is selected, otherwise return 0.
+    Propagate operational errors after cleaning up the temporary base worktree.
+    """
     output.mkdir(parents=True, exist_ok=True)
     # These are this command's outputs, not inputs. Clear every previous run's
     # artifact before doing work so an interrupted/failed run cannot reuse it.
@@ -251,6 +290,7 @@ def check(root: Path, base_sha: str, output: Path, *, advisory: bool = False) ->
 
 
 def main(argv: list[str] | None = None) -> int:
+    """Run the CLI, returning 2 with diagnostics for handled operational failures."""
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
     snapshot = sub.add_parser("snapshot")
@@ -287,7 +327,7 @@ def main(argv: list[str] | None = None) -> int:
         RecursionError,
         subprocess.SubprocessError,
         yaml.YAMLError,
-    ) as exc:
+    ):
         if args.command == "check":
             # Never leave a previous successful result behind after a failed run.
             try:
@@ -297,11 +337,13 @@ def main(argv: list[str] | None = None) -> int:
                 )
             except OSError:
                 pass  # The nonzero exit still prevents a successful CI result.
-        print(
-            f"Symptom documentation check could not complete: {type(exc).__name__}: "
-            f"{json.dumps(str(exc))}",
-            file=sys.stderr,
-        )
+        # A local logger avoids changing rule logging or accumulating handlers
+        # when this entry point is called repeatedly by tests or consumers.
+        logger = logging.Logger(__name__)
+        handler = logging.StreamHandler(sys.stderr)
+        handler.setFormatter(_WorkflowSafeFormatter("%(levelname)s: %(message)s"))
+        logger.addHandler(handler)
+        logger.exception("Symptom documentation check could not complete")
         if args.command == "check":
             try:
                 report_to_github({"status": "error"})
