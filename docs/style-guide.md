@@ -7,6 +7,8 @@ Rules come in two groups.
 1. **Standard rules** are backed by a PEP, the Python typing docs, an established style guide, or a linter rule. Each one links its source.
 2. **Team conventions** are choices we made where no external standard decides. Each one gives its reasoning and an example.
 
+These rules are encouraged in tests but not enforced there, unless a rule says otherwise. [S13](#s13-test-every-behavior-change), [S14](#s14-name-tests-for-the-behavior-they-check) and [S15](#s15-keep-complex-logic-out-of-tests) are about tests and always apply.
+
 ## Standard rules
 
 ### S1. Catch narrowly and fail loudly

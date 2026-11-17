@@ -7,6 +7,8 @@ from pathlib import Path
 
 import pytest
 import requests
+from pytest_mock import MockerFixture
+
 from attribution_blueprint.connectors.auth import MTLSAuth, TokenAuth
 from attribution_blueprint.connectors.logs.victorialogs import (
     VictoriaLogsConnector,
@@ -92,6 +94,18 @@ def test_renders_templates_and_sends_inclusive_window_as_exclusive_end(mocker):
         "limit": 37,
     }
     assert kwargs["timeout"] == 60.0
+
+
+def test_processing_id_preserves_provider_job_query(mocker: MockerFixture) -> None:
+    """Changing a processing identity does not change the provider's log selector."""
+    post = mocker.patch("requests.Session.post", return_value=_response("", mocker))
+    conn = VictoriaLogsConnector(
+        endpoint="http://victorialogs.example", source=Source.APPLOG, templates={Source.APPLOG: ['job:="{job_id}"']}
+    )
+    conn.collect({**_context(), "id": "processing-1", "run_id": "provider-run"})
+
+    assert '(job:="provider-run")' in post.call_args.kwargs["data"]["query"]
+    assert "processing-1" not in post.call_args.kwargs["data"]["query"]
 
 
 def test_missing_template_kwarg_warns_and_skips(mocker):

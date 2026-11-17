@@ -306,33 +306,51 @@ _shared_lookup_cache: "weakref.WeakKeyDictionary[RuleEngine, tuple[Path, _Lookup
     weakref.WeakKeyDictionary()
 )
 _shared_lookup_tmpdir: Optional[str] = None
-# PID of the process that created `_shared_lookup_tmpdir`. A `os.fork()`'d
-# child (e.g. a pre-fork server's worker process) inherits both this global
-# and the `Finalize` registration below, but must not delete the directory on
-# its own exit: it didn't create it, and the parent or sibling workers may
-# still have EventManagers ATTACHed to files inside it. Only the owning PID
-# performs cleanup; a forked child's exit is a no-op here.
-_shared_lookup_tmpdir_owner_pid: Optional[int] = None
 # Monotonically increasing; NOT len(_shared_lookup_cache), which can shrink
 # as entries are garbage-collected and would then produce a reused filename
 # for an unrelated rules_engine, colliding with that file's existing schema.
 _shared_lookup_counter = 0
 
 
-def _cleanup_shared_lookup_tmpdir() -> None:
-    """Remove the shared lookup directory only in the process that created it."""
-    if _shared_lookup_tmpdir is not None and os.getpid() == _shared_lookup_tmpdir_owner_pid:
-        shutil.rmtree(_shared_lookup_tmpdir, ignore_errors=True)
+def _remove_temp_dir(path: str) -> None:
+    """Remove a temporary directory, and log a failure other than a missing directory.
+
+    Args:
+        path: Directory to remove.
+    """
+    try:
+        shutil.rmtree(path)
+    except FileNotFoundError:
+        pass
+    except OSError:
+        # A finalizer has no caller to raise to, so log the files that remain.
+        logger.exception("Failed to remove temporary directory {}", path)
+
+
+def _mkdtemp_removed_at_exit(
+    prefix: str, *, root: str | None = None, owner: object | None = None
+) -> tuple[str, Finalize]:
+    """Create a temporary directory that this process removes when it exits.
+
+    Args:
+        prefix: Name prefix of the directory.
+        root: Directory to create it in. None uses the system temp directory.
+        owner: Object that uses the directory. When it is garbage-collected,
+            the directory is removed at once instead of at exit.
+
+    Returns:
+        The absolute directory path, and the finalizer that removes it. Call
+        `cancel()` on the finalizer after removing the directory yourself.
+    """
+    # abspath: before Python 3.12, mkdtemp returns a relative path for a relative root.
+    path = os.path.abspath(tempfile.mkdtemp(prefix=prefix, dir=root))
+    return path, Finalize(owner, _remove_temp_dir, args=(path,), exitpriority=-100)
 
 
 def _get_shared_lookup_tmpdir() -> str:
-    global _shared_lookup_tmpdir, _shared_lookup_tmpdir_owner_pid
+    global _shared_lookup_tmpdir
     if _shared_lookup_tmpdir is None:
-        _shared_lookup_tmpdir = tempfile.mkdtemp(prefix="attribution_lib_shared_lookup_")
-        _shared_lookup_tmpdir_owner_pid = os.getpid()
-        # Pool workers run these finalizers before os._exit(), which skips atexit.
-        # A negative priority defers cleanup until multiprocessing children exit.
-        Finalize(None, _cleanup_shared_lookup_tmpdir, exitpriority=-100)
+        _shared_lookup_tmpdir, _ = _mkdtemp_removed_at_exit("attribution_lib_shared_lookup_")
     return _shared_lookup_tmpdir
 
 
@@ -842,6 +860,7 @@ class EventManager:
         self._streams: dict[str, EventStream] = {}
         self._closed = True
         self._spill_dir: Optional[str] = None
+        self._spill_finalizer: Finalize | None = None
         self._owned_lookup_path: Optional[Path] = None
         self._lookup_detached = True
 
@@ -918,12 +937,13 @@ class EventManager:
             )
 
             # Last, so a setup failure above leaves no spill directory behind.
-            # abspath: before Python 3.12, mkdtemp returns a relative path for a relative temp_root.
-            self._spill_dir = (
-                os.path.abspath(tempfile.mkdtemp(prefix="attribution_lib_spill_", dir=temp_root))
-                if allow_disk_spill
-                else None
-            )
+            if allow_disk_spill:
+                # A manager and its streams reference each other, so an unclosed
+                # manager is freed only by a garbage collection pass. The exit
+                # finalizer covers a process that exits before that pass.
+                self._spill_dir, self._spill_finalizer = _mkdtemp_removed_at_exit(
+                    "attribution_lib_spill_", root=temp_root, owner=self
+                )
             self._conn.execute("SET temp_directory = ?", [self._spill_dir or ""])
             if allow_disk_spill and max_temp_directory_size is not None:
                 self._set_size("max_temp_directory_size", max_temp_directory_size)
@@ -1244,5 +1264,8 @@ class EventManager:
             with contextlib.suppress(FileNotFoundError):
                 shutil.rmtree(self._spill_dir)
             self._spill_dir = None
+        if self._spill_finalizer is not None:
+            self._spill_finalizer.cancel()
+            self._spill_finalizer = None
 
         self._closed = True
