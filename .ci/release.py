@@ -24,10 +24,11 @@ Needs a full clone with tags. Four subcommands:
             - no literal decreases
             `--light` is for the PR that syncs a release back into the default
             branch; see `check_release_pr` for the rules it keeps.
-    tag     runs on main after a merge. Re-runs `check_release` on the
-            merged commit, then creates and pushes one `<component>-vX.Y.Z`
-            tag per component that is releasing. Exit 1 on any FAIL.
-            `--before SHA` is the push event's previous tip.
+    tag     runs on a release branch after a merge. Re-runs `check_release`
+            on the merged commit, then creates and pushes one
+            `<component>-vX.Y.Z` tag per component that is releasing. Any
+            violation blocks every tag. Exit 1 on any FAIL. `--before SHA` is
+            the push event's previous tip; a branch-creation push tags nothing.
     shortlog  print a CHANGELOG.md skeleton for one component: the heading for
             its literal, the section headings and one line per commit since
             its latest tag.
@@ -237,7 +238,8 @@ def main(argv: Optional[list[str]] = None) -> int:
             )
 
     tag = subparsers.add_parser(
-        "tag", help="tag and push released components; main only, exit 1 on any FAIL"
+        "tag",
+        help="tag and push released components; release branches only, exit 1 on any FAIL",
     )
     tag.add_argument("--repo", type=Path, default=None, help="repository root")
 
