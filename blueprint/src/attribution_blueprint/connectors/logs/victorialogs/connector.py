@@ -19,7 +19,7 @@ from attribution_blueprint.connectors.logs import log_observation
 from attribution_blueprint.connectors.logs.envelope import extract_body_and_node
 from attribution_blueprint.connectors.logs.victorialogs.templates import TEMPLATES
 from attribution_blueprint.exceptions import PartialCollectionError
-from attribution_blueprint.telemetry import MeteredSession
+from attribution_blueprint.telemetry import MeteredSession, QueryTruncation, record_paginated_query
 from attribution_blueprint.types import (
     ExecutionContext,
     NodeResource,
@@ -269,39 +269,51 @@ class VictoriaLogsConnector:
         """
         rows: list[dict] = []
         issues: list[str] = []
+        truncations: set[QueryTruncation] = set()
         cur_end = end_ns_excl
-        for _ in range(self._max_pages):
+        for pages in range(1, self._max_pages + 1):
             try:
                 page, skipped = self._read_page(query, start_ns, cur_end)
             except RequestException as error:
                 if rows == []:
                     raise
                 issues.append(_request_failure_reason(error))
-                return rows, issues
+                truncations.add(QueryTruncation.REQUEST_ERROR)
+                break
             if skipped:
                 issues.append(f"skipped {skipped} invalid NDJSON record(s)")
             if not page:
-                return rows, issues
+                if skipped >= self._limit:
+                    truncations.add(QueryTruncation.MISSING_TIMESTAMP)
+                break
             rows.extend(page)
             if len(page) + skipped < self._limit:
-                return rows, issues
+                break
             timestamps = [timestamp for row in page if (timestamp := _timestamp_ns(row.get("_time"))) is not None]
             if not timestamps:
                 issues.append("saturated page has no parseable _time; stopping pagination")
                 logger.warning(f"victorialogs: {issues[-1]}")
-                return rows, issues
+                truncations.add(QueryTruncation.MISSING_TIMESTAMP)
+                break
             oldest = min(timestamps)
             if oldest <= start_ns:
                 issues.append("saturated page reaches window start; boundary records may be truncated")
-                return rows, issues
+                truncations.add(QueryTruncation.WINDOW_START)
+                break
             next_end = oldest + 1
             if next_end >= cur_end:
                 issues.append(f"possible truncation at {_format_timestamp_ns(oldest)}")
                 logger.warning(f"victorialogs: {issues[-1]}")
+                truncations.add(QueryTruncation.TIMESTAMP_TIE)
                 next_end = oldest
             cur_end = next_end
-        issues.append(f"page limit of {self._max_pages} reached; older entries before ts={cur_end} may be truncated")
-        logger.warning(f"victorialogs: {issues[-1]}")
+        else:
+            issues.append(
+                f"page limit of {self._max_pages} reached; older entries before ts={cur_end} may be truncated"
+            )
+            logger.warning(f"victorialogs: {issues[-1]}")
+            truncations.add(QueryTruncation.PAGE_LIMIT)
+        record_paginated_query("victorialogs", QUERY_PATH, entries=len(rows), pages=pages, truncations=truncations)
         return rows, issues
 
     def _inject_node_filter(self, query: str, nodes: list[str]) -> str:

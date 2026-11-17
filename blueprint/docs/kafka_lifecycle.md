@@ -88,6 +88,11 @@ in the application. Kafka can replay unfinished work only while records remain
 within topic retention; offset commits do not delete records. `max_messages`
 bounds `discover()`, not the long-lived consumer's lifetime.
 
+To monitor a long-lived consumer, use the
+[Kafka input consumer metrics](CONFIGURATION.md#kafka-input-consumer-metrics).
+They report consumer lag, unacknowledged deliveries, and the age of the oldest
+unacknowledged delivery for each owned partition.
+
 Streaming statistics accumulate across polls. `accepted` counts decoded contexts,
 not completed work. Streaming does not compute batch `redeliveries` or `superseded`
 counts. It logs the first mismatch for each event type and retains at most 100

@@ -59,6 +59,7 @@ def _build(spec: dict, ctx: dict) -> KafkaExecutionContextAdapter:
             consumer_error=KafkaException,
             topic=str(spec["topic"]),
             topic_partition=TopicPartition,
+            group_id=str(spec["group_id"]),
             event_types=event_types,
             scheduler=str(spec.get("scheduler") or "kafka"),
             workload_type=str(spec.get("workload_type", "")),
