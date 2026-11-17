@@ -11,6 +11,7 @@ from attribution_blueprint.connectors.execution_contexts.kai.attempts import (
     PodGroupAttempt,
     _normalize_snapshot,
     attempts_from_podgroup_history,
+    snapshots_from_live_resources,
 )
 from attribution_blueprint.connectors.execution_contexts.kai.connector import (
     KaiExecutionContextAdapter,
@@ -595,7 +596,7 @@ def test_deleted_podgroup_retains_later_owner_terminal_and_pods(
                 _ts(900),
                 eventType="DELETED",
                 selectedMetadata=(
-                    {"deletionTimestamp": deletion_timestamp} if deletion_timestamp else None
+                    {"deletionTimestamp": deletion_timestamp} if deletion_timestamp else {}
                 ),
             ),
             _snapshot(
@@ -1078,12 +1079,7 @@ def test_live_spec_survives_equal_version_history(retained_version):
 
 
 def test_snapshot_normalization_preserves_unknown_evidence_and_input():
-    original = {
-        "sourceTimestamp": None,
-        "metadata": None,
-        "selectedMetadata": None,
-        "status": None,
-    }
+    original = {"sourceTimestamp": None}
     before = copy.deepcopy(original)
     normalized = _normalize_snapshot(original)
 
@@ -1113,25 +1109,37 @@ def test_snapshot_normalization_preserves_unknown_evidence_and_input():
     assert original == before
 
 
-def test_retry_reconstruction_accepts_null_optional_containers():
-    history = _retry_history()
-    expected = _retry_attempts(history)
-    replay = copy.deepcopy(history["observations"])
-    for snapshot in replay:
-        for container, fields in (
-            ("metadata", ("ownerReferences",)),
-            ("selectedMetadata", ("labels", "annotations")),
-            ("status", ("conditions",)),
-        ):
-            mapping = snapshot.get(container) or {}
-            for field in fields:
-                if not mapping.get(field):
-                    mapping[field] = None
-            if not mapping:
-                snapshot[container] = None
-    before = copy.deepcopy(replay)
-    assert _retry_attempts({**history, "observations": replay}) == expected
-    assert replay == before
+@pytest.mark.parametrize(
+    "container",
+    ["metadata", "selectedMetadata", "status"],
+)
+def test_snapshot_normalization_rejects_null_containers(container):
+    with pytest.raises(TypeError):
+        _normalize_snapshot({container: None})
+
+
+def test_snapshot_conditions_contract():
+    with pytest.raises(TypeError):
+        _normalize_snapshot({"status": {"conditions": None}})
+
+    owner = _owner("Job", "trainer", "job-uid")
+    snapshots = snapshots_from_live_resources(
+        _podgroup(owner, _ts(0)),
+        [{
+            "kind": "Pod",
+            "metadata": {"uid": "pod-uid"},
+            "status": {"conditions": None},
+        }],
+        [],
+        {
+            "kind": "Job",
+            "metadata": {"uid": "job-uid", "name": "trainer"},
+            "status": {},
+        },
+        now=_dt(60),
+    )
+    pod = next(snapshot for snapshot in snapshots if snapshot["kind"] == "Pod")
+    assert pod["status"]["conditions"] == []
 
 
 @pytest.mark.parametrize("retirement", ["deleted", "unscheduled-successor"])

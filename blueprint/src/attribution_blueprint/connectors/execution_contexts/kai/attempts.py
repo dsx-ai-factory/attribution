@@ -99,7 +99,9 @@ def snapshots_from_live_resources(
     now: datetime,
 ) -> list[dict]:
     """Project live resources into the daemon snapshot schema, retaining live spec."""
-    metadata = podgroup.get("metadata") or {}
+    # Raw live resources must provide typed containers when present; defaults
+    # below handle omission only, not explicit null or malformed values.
+    metadata = podgroup.get("metadata", {})
     pod_group_name = metadata.get("name")
     if not pod_group_name or not metadata.get("uid"):
         return []
@@ -126,17 +128,21 @@ def snapshots_from_live_resources(
         Returns:
             A snapshot with explicit metadata and status containers.
         """
-        resource_metadata = resource.get("metadata") or {}
+        resource_metadata = resource.get("metadata", {})
         selected_metadata = {
             field: dict(values)
             for field in ("annotations", "labels")
-            if (values := resource_metadata.get(field) or {})
+            if (values := resource_metadata.get(field))
         }
         if resource_metadata.get("deletionTimestamp"):
             selected_metadata["deletionTimestamp"] = resource_metadata[
                 "deletionTimestamp"
             ]
-        status = resource.get("status") or {}
+        status = resource.get("status", {})
+        conditions = status.get("conditions")
+        if conditions is None:
+            conditions = []
+        status = {**status, "conditions": conditions}
         if kind == "PodGroup" and (
             last_start := kai_podgroup_start_timestamp(resource)
         ):
@@ -145,17 +151,17 @@ def snapshots_from_live_resources(
                 "lastStartTimestamp": last_start,
             }
         return {
-            "apiVersion": resource.get("apiVersion") or "",
+            "apiVersion": resource.get("apiVersion", ""),
             "kind": kind,
             "metadata": {
-                "namespace": resource_metadata.get("namespace") or "",
-                "name": resource_metadata.get("name") or "",
+                "namespace": resource_metadata.get("namespace", ""),
+                "name": resource_metadata.get("name", ""),
                 "uid": resource_metadata.get("uid"),
                 "resourceVersion": resource_metadata.get(
                     "resourceVersion"
                 ),
-                "ownerReferences": (
-                    resource_metadata.get("ownerReferences") or []
+                "ownerReferences": resource_metadata.get(
+                    "ownerReferences", []
                 ),
             },
             "eventType": "MODIFIED",
@@ -164,8 +170,8 @@ def snapshots_from_live_resources(
                 or resource_metadata.get("creationTimestamp")
                 or fallback
             ),
-            "selectedMetadata": selected_metadata or None,
-            "spec": resource.get("spec") or {},
+            "selectedMetadata": selected_metadata,
+            "spec": resource.get("spec", {}),
             "status": status,
         }
 
@@ -175,7 +181,7 @@ def snapshots_from_live_resources(
         *((job, "Job") for job in owner_jobs),
         *((pod, "Pod") for pod in pods),
     ):
-        uid = (resource.get("metadata") or {}).get("uid")
+        uid = resource.get("metadata", {}).get("uid")
         if kind and uid:
             resources[(kind, uid)] = snapshot(resource, kind)
 
@@ -198,9 +204,11 @@ def _normalize_snapshot(snapshot: dict) -> dict:
         A detached snapshot whose optional containers and their commonly read
         fields are safe to index.
     """
-    metadata = dict(snapshot.get("metadata") or {})
-    selected = dict(snapshot.get("selectedMetadata") or {})
-    status = dict(snapshot.get("status") or {})
+    # Snapshot containers are dictionaries when present. Retained snapshots
+    # may omit optional containers.
+    metadata = dict(snapshot.get("metadata", {}))
+    selected = dict(snapshot.get("selectedMetadata", {}))
+    status = dict(snapshot.get("status", {}))
     conditions = [
         {
             **condition,
@@ -209,25 +217,25 @@ def _normalize_snapshot(snapshot: dict) -> dict:
             "lastTransitionTime": condition.get("lastTransitionTime"),
             "reason": condition.get("reason"),
         }
-        for condition in status.get("conditions") or []
+        for condition in status.get("conditions", [])
         if isinstance(condition, dict)
     ]
     return {
         **snapshot,
-        "kind": snapshot.get("kind") or "",
-        "eventType": snapshot.get("eventType") or "",
+        "kind": snapshot.get("kind", ""),
+        "eventType": snapshot.get("eventType", ""),
         "observedAt": snapshot.get("observedAt"),
         "metadata": {
             **metadata,
-            "namespace": metadata.get("namespace") or "",
-            "name": metadata.get("name") or "",
+            "namespace": metadata.get("namespace", ""),
+            "name": metadata.get("name", ""),
             "uid": metadata.get("uid"),
-            "ownerReferences": metadata.get("ownerReferences") or [],
+            "ownerReferences": metadata.get("ownerReferences", []),
         },
         "selectedMetadata": {
             **selected,
-            "labels": selected.get("labels") or {},
-            "annotations": selected.get("annotations") or {},
+            "labels": selected.get("labels", {}),
+            "annotations": selected.get("annotations", {}),
             "deletionTimestamp": selected.get("deletionTimestamp"),
         },
         "status": {
@@ -255,7 +263,7 @@ def attempts_from_podgroup_history(
     """
     snapshots = [
         _normalize_snapshot(snapshot)
-        for snapshot in history.get("observations") or []
+        for snapshot in history.get("observations", [])
     ]
     resolved = _resolve_evidence(snapshots)
     podgroups = observations_by_uid(
@@ -322,7 +330,7 @@ def attempts_from_podgroup_history(
                  and _pod_owned_by(snapshot, owner, job_events)],
                 terminals,
                 pod_group_name,
-                [history.get("coverage") or {}, *(history.get("coverages") or [])],
+                [history.get("coverage", {}), *history.get("coverages", [])],
                 lifetime_start,
             )
         assigned_terminals = _assign_terminals(

@@ -10,6 +10,12 @@ from datetime import datetime, timezone
 RESTART_LABEL = "jobset.sigs.k8s.io/restart-attempt"
 
 
+def _selected_metadata(observation: dict) -> dict:
+    """Normalize Kueue live snapshots that intentionally emit explicit null."""
+    selected = observation.get("selectedMetadata")
+    return {} if selected is None else selected
+
+
 def restart_starts(
     observations: list[dict],
     inferred_job_restarts: dict[str, str] | None = None,
@@ -45,11 +51,11 @@ def restart_start_candidates(
             and inferred_job_restarts
         ):
             restart = inferred_job_restarts.get(
-                (observation.get("metadata") or {}).get("uid")
+                observation.get("metadata", {}).get("uid")
             )
         if restart is None:
             continue
-        status = observation.get("status") or {}
+        status = observation.get("status", {})
         timestamp = (
             status.get("startTime")
             or observation.get("sourceTimestamp")
@@ -61,7 +67,7 @@ def restart_start_candidates(
 
 
 def restart_attempt(observation: dict) -> str | None:
-    labels = (observation.get("selectedMetadata") or {}).get("labels") or {}
+    labels = _selected_metadata(observation).get("labels", {})
     value = labels.get(RESTART_LABEL)
     return str(value) if value is not None else None
 
@@ -69,7 +75,7 @@ def restart_attempt(observation: dict) -> str | None:
 def observations_by_uid(observations) -> dict[str, list[dict]]:
     grouped = {}
     for observation in observations:
-        uid = (observation.get("metadata") or {}).get("uid")
+        uid = observation.get("metadata", {}).get("uid")
         if uid:
             grouped.setdefault(uid, []).append(observation)
     for timeline in grouped.values():
@@ -91,7 +97,7 @@ def latest_pod_observations(observations: list[dict]) -> dict[str, dict]:
 def controller_owner(metadata: dict) -> dict | None:
     controllers = [
         owner
-        for owner in metadata.get("ownerReferences") or []
+        for owner in metadata.get("ownerReferences", [])
         if owner.get("controller") is True
         and owner.get("uid")
         and owner.get("kind")
@@ -127,32 +133,32 @@ def parse_time(value: str) -> datetime:
 
 def resource_from_observation(observation: dict) -> dict:
     """Restore the Kubernetes fields selected into a retained observation."""
-    metadata = dict(observation.get("metadata") or {})
-    selected = observation.get("selectedMetadata") or {}
+    metadata = dict(observation.get("metadata", {}))
+    selected = _selected_metadata(observation)
     for field in ("labels", "annotations", "deletionTimestamp"):
         if selected.get(field):
             metadata[field] = selected[field]
     return {
-        "apiVersion": observation.get("apiVersion") or "",
-        "kind": observation.get("kind") or "",
+        "apiVersion": observation.get("apiVersion", ""),
+        "kind": observation.get("kind", ""),
         "metadata": metadata,
-        "spec": observation.get("spec") or {},
-        "status": observation.get("status") or {},
+        "spec": observation.get("spec", {}),
+        "status": observation.get("status", {}),
     }
 
 
 def kai_podgroup_start_timestamp(resource: dict) -> str | None:
     """Read KAI's PodGroup start from projected status or source metadata."""
-    status_value = (resource.get("status") or {}).get(
+    status_value = resource.get("status", {}).get(
         "lastStartTimestamp"
     )
     if status_value:
         return str(status_value)
     metadata_annotations = (
-        (resource.get("metadata") or {}).get("annotations") or {}
+        resource.get("metadata", {}).get("annotations", {})
     )
     retained_annotations = (
-        (resource.get("selectedMetadata") or {}).get("annotations") or {}
+        _selected_metadata(resource).get("annotations", {})
     )
     value = metadata_annotations.get(
         "kai.scheduler/last-start-timestamp",
@@ -169,10 +175,10 @@ def retained_history_covers_window(
     end: datetime,
 ) -> bool:
     """Return whether retained watches continuously cover a time window."""
-    disabled = coverage.get("disabledWatches") or {}
+    disabled = coverage.get("disabledWatches", {})
     sources = {
         item.get("sourceName"): item
-        for item in coverage.get("sources") or []
+        for item in coverage.get("sources", [])
     }
     for source_name in required_sources:
         if source_name in disabled:
@@ -188,7 +194,7 @@ def retained_history_covers_window(
         if coverage_start > start or checkpoint < end:
             return False
 
-    for gap in coverage.get("gaps") or []:
+    for gap in coverage.get("gaps", []):
         if gap.get("sourceName") not in required_sources:
             continue
         try:

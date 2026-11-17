@@ -196,14 +196,15 @@ def _latest_resources_by_uid(
     selected: dict[str, tuple[tuple, dict]] = {}
     full: dict[str, tuple[tuple, dict]] = {}
     for observation in observations:
-        metadata = observation.get("metadata") or {}
+        metadata = observation.get("metadata", {})
         uid = metadata.get("uid")
         observed_at = _parse_dt(observation.get("observedAt"))
         if not uid or observed_at is None:
             continue
-        resource_version = str(
-            metadata.get("resourceVersion") or ""
-        )
+        resource_version = metadata.get("resourceVersion")
+        if resource_version is None:
+            resource_version = ""
+        resource_version = str(resource_version)
         key = (
             bool(resource_version),
             (
@@ -244,9 +245,11 @@ def _index_pods_by_pod_group(pods: list[dict]) -> dict[tuple[str, str], list[dic
     `pod-group-name` annotation or no namespace."""
     index: dict[tuple[str, str], list[dict]] = {}
     for pod in pods:
-        meta = pod.get("metadata") or {}
+        meta = pod.get("metadata", {})
         namespace = meta.get("namespace")
-        pod_group_name = (meta.get("annotations") or {}).get(_POD_GROUP_ANNOTATION)
+        pod_group_name = meta.get("annotations", {}).get(
+            _POD_GROUP_ANNOTATION
+        )
         if namespace and pod_group_name:
             index.setdefault((namespace, pod_group_name), []).append(pod)
     return index
@@ -261,10 +264,10 @@ def _collect_pod_evidence(pods: list[dict]) -> _PodEvidence:
     node_loss_nodes: set[str] = set()
     has_node_failure = False
     for pod in pods:
-        metadata = pod.get("metadata") or {}
+        metadata = pod.get("metadata", {})
         pod_uid = metadata.get("uid")
         pod_name = metadata.get("name")
-        node_name = (pod.get("spec") or {}).get("nodeName")
+        node_name = pod.get("spec", {}).get("nodeName")
         if pod_name:
             pod_names.add(pod_name)
         if node_name:
@@ -308,7 +311,7 @@ def _member_pods(owner_job_uids: set[str], pods: list[dict]) -> list[dict]:
     return [
         pod
         for pod in pods
-        if (controller := _controller_owner(pod.get("metadata") or {})) is not None
+        if (controller := _controller_owner(pod.get("metadata", {}))) is not None
         and controller["kind"] == "Job"
         and controller["uid"] in owner_job_uids
     ]
@@ -319,10 +322,10 @@ def _jobset_child_jobs(owner: dict, jobs: list[dict]) -> list[dict]:
     return [
         job
         for job in jobs
-        if (controller := _controller_owner(job.get("metadata") or {})) is not None
+        if (controller := _controller_owner(job.get("metadata", {}))) is not None
         and controller["kind"] == "JobSet"
         and controller["uid"] == owner["uid"]
-        and (job.get("metadata") or {}).get("uid")
+        and job.get("metadata", {}).get("uid")
     ]
 
 
@@ -345,12 +348,12 @@ def _non_negative_int(value: object) -> int | None:
 
 def _job_end_time(job: dict) -> datetime | None:
     """Completion time of a finished Job, or None while it is still active."""
-    status = job.get("status") or {}
+    status = job.get("status", {})
     completed = _parse_dt(status.get("completionTime"))
     if completed is not None:
         return completed
-    for condition in status.get("conditions") or []:
-        if (condition or {}).get("type") == "Failed" and (condition or {}).get("status") == "True":
+    for condition in status.get("conditions", []):
+        if condition.get("type") == "Failed" and condition.get("status") == "True":
             return _parse_dt(condition.get("lastTransitionTime"))
     return None
 
@@ -394,13 +397,13 @@ def _owner_resource(owner: dict) -> str | None:
 
 def _jobset_terminal(jobset: dict) -> tuple[datetime, str] | None:
     """Terminal transition time and condition type of a JobSet, or None while active."""
-    status = jobset.get("status") or {}
+    status = jobset.get("status", {})
     terminal_state = status.get("terminalState")
     condition_types = {terminal_state} if terminal_state in {"Completed", "Failed"} else {"Completed", "Failed"}
     terminals = [
         (transition, condition["type"])
-        for condition in status.get("conditions") or []
-        if (condition or {}).get("type") in condition_types
+        for condition in status.get("conditions", [])
+        if condition.get("type") in condition_types
         and condition.get("status") == "True"
         and (transition := _parse_dt(condition.get("lastTransitionTime"))) is not None
     ]
@@ -441,8 +444,9 @@ def _condition(owner_object: dict, condition_type: str) -> dict | None:
     Returns:
         The matching true condition, or None when it is absent.
     """
-    for condition in (owner_object.get("status") or {}).get("conditions") or []:
-        if (condition or {}).get("type") == condition_type and condition.get("status") == "True":
+    status = owner_object.get("status", {})
+    for condition in status.get("conditions", []):
+        if condition.get("type") == condition_type and condition.get("status") == "True":
             return condition
     return None
 
@@ -458,7 +462,9 @@ def _owner_state(owner: dict, owner_object: dict, owner_jobs: list[dict]) -> tup
         return "RUNNING", "Suspended" if _condition(owner_object, "Suspended") else "Active"
 
     if owner["kind"] == "Job":
-        completed = _parse_dt((owner_object.get("status") or {}).get("completionTime")) is not None
+        completed = _parse_dt(
+            owner_object.get("status", {}).get("completionTime")
+        ) is not None
         failed = None if completed else _condition(owner_object, "Failed")
     else:
         terminal = _jobset_terminal(owner_object)
@@ -466,7 +472,10 @@ def _owner_state(owner: dict, owner_object: dict, owner_jobs: list[dict]) -> tup
     if failed is None:
         return "COMPLETED", "Complete" if owner["kind"] == "Job" else "Completed"
 
-    owner_reason = (failed.get("reason") or "").strip()
+    owner_reason = failed.get("reason")
+    if owner_reason is None:
+        owner_reason = ""
+    owner_reason = owner_reason.strip()
     native = f"Failed:{owner_reason}" if owner_reason else "Failed"
     failure_reason = earliest_job_failure_reason(owner_jobs) or owner_reason
     return ("TIMEOUT" if failure_reason == "DeadlineExceeded" else "FAILED"), native
@@ -476,7 +485,7 @@ def _skip_reason(owner: dict, owner_object: dict | None) -> str | None:
     """Why the owner cannot supply a window, or None when it can."""
     if owner_object is None:
         return f"owner {owner['kind']} not found"
-    if (owner_object.get("metadata") or {}).get("uid") != owner["uid"]:
+    if owner_object.get("metadata", {}).get("uid") != owner["uid"]:
         return f"owner {owner['kind']} uid mismatch"
     return None
 
@@ -495,7 +504,7 @@ def _base_context(
     podgroup: dict,
 ) -> KaiExecutionContext:
     """Build fields shared by scheduled and unscheduled KAI contexts."""
-    spec = podgroup.get("spec") or {}
+    spec = podgroup.get("spec", {})
     context: KaiExecutionContext = {
         "id": context_id,
         "attempt_id": context_id,
@@ -520,7 +529,7 @@ def _base_context(
         context["queue_name"] = queue_name
     if (min_member := _non_negative_int(spec.get("minMember"))) is not None:
         context["min_member"] = min_member
-    status = podgroup.get("status") or {}
+    status = podgroup.get("status", {})
     conditions = status.get("schedulingConditions")
     if isinstance(conditions, list):
         context["scheduling_conditions"] = conditions
@@ -538,7 +547,7 @@ def _merge_placement_evidence(
     """Merge daemon placements and return accepted node-loss nodes."""
     placements = {
         placement["pod_uid"]: placement
-        for placement in context.get("pod_placements") or []
+        for placement in context.get("pod_placements", [])
         if placement.get("pod_uid")
     }
     node_loss_nodes: set[str] = set()
@@ -577,13 +586,13 @@ def _merge_placement_evidence(
         }
     )
     context["pod_names"] = sorted(
-        set(context.get("pod_names") or [])
+        set(context.get("pod_names", []))
         | {
             placement["pod_name"]
             for placement in placements.values()
         }
     )
-    pod_nodes = dict(context.get("pod_nodes") or {})
+    pod_nodes = dict(context.get("pod_nodes", {}))
     for placement in placements.values():
         pod_nodes.setdefault(
             placement["pod_name"],
@@ -610,7 +619,7 @@ def _parse_pod_group(
     parseable creationTimestamp (without a start the orchestrator cannot build
     a valid attributor window), or when the owner cannot supply an end.
     """
-    meta = podgroup.get("metadata") or {}
+    meta = podgroup.get("metadata", {})
     uid = meta.get("uid")
     name = meta.get("name")
     namespace = meta.get("namespace")
@@ -623,12 +632,22 @@ def _parse_pod_group(
         logger.warning(f"podgroup {namespace}/{name} has no creationTimestamp; skipping")
         return None
 
-    owner_job_uids = {job_uid for job in owner_jobs if (job_uid := (job.get("metadata") or {}).get("uid")) is not None}
+    owner_job_uids = {
+        job_uid
+        for job in owner_jobs
+        if (
+            job_uid := job.get("metadata", {}).get("uid")
+        ) is not None
+    }
     members = _member_pods(owner_job_uids, pods)
     member_starts = [
         created
         for pod in members
-        if (created := _parse_dt((pod.get("metadata") or {}).get("creationTimestamp"))) is not None
+        if (
+            created := _parse_dt(
+                pod.get("metadata", {}).get("creationTimestamp")
+            )
+        ) is not None
     ]
     if member_starts:
         start_time = min(start_time, *member_starts)
@@ -995,9 +1014,7 @@ class KaiExecutionContextAdapter:
                 placements.update(item.placements)
                 retained_coverage.extend(item.retained_coverage)
                 pod_group_uid = (
-                    (item.podgroup.get("metadata") or {}).get(
-                        "uid"
-                    )
+                    item.podgroup.get("metadata", {}).get("uid")
                     if item.podgroup is not None
                     else None
                 )
@@ -1069,9 +1086,9 @@ class KaiExecutionContextAdapter:
                     ),
                     metadata["name"],
                 )
-                for observation in history.get("observations") or []
+                for observation in history.get("observations", [])
                 if observation.get("kind") == "PodGroup"
-                and (metadata := observation.get("metadata") or {}).get(
+                and (metadata := observation.get("metadata", {})).get(
                     "uid"
                 )
                 and metadata.get("name")
@@ -1081,7 +1098,7 @@ class KaiExecutionContextAdapter:
                 )
             }
             placements: dict[str, PlacementRecord] = {}
-            for resource in history.get("placements") or []:
+            for resource in history.get("placements", []):
                 placement = PlacementRecord.from_resource(resource)
                 placements[placement.pod_uid] = placement
             for namespace, retained_name in sorted(podgroups):
@@ -1092,10 +1109,10 @@ class KaiExecutionContextAdapter:
                         observed_until=now,
                         placements=dict(placements),
                         retained_coverage=[
-                            history.get("coverage") or {}
+                            history.get("coverage", {})
                         ],
                         observations=list(
-                            history.get("observations") or []
+                            history.get("observations", [])
                         ),
                     )
                 )
@@ -1179,7 +1196,7 @@ class KaiExecutionContextAdapter:
         # fetching Pods or owners.
         owned: list[tuple[dict, dict, str]] = []
         for podgroup in podgroups:
-            meta = podgroup.get("metadata") or {}
+            meta = podgroup.get("metadata", {})
             owner = _resolve_owner(meta)
             owner_resource = _owner_resource(owner) if owner is not None else None
             if owner is None or owner_resource is None:
@@ -1197,7 +1214,7 @@ class KaiExecutionContextAdapter:
         evidence_items: list[_WorkloadEvidence] = []
         pending_contexts: list[KaiExecutionContext] = []
         for podgroup, owner, owner_resource in owned:
-            meta = podgroup.get("metadata") or {}
+            meta = podgroup.get("metadata", {})
             namespace = meta.get("namespace") or ""
             owner_options = (
                 {"api_version": _JOB_API_VERSION}
@@ -1232,7 +1249,7 @@ class KaiExecutionContextAdapter:
                     uid
                     for job in owner_jobs
                     if (
-                        uid := (job.get("metadata") or {}).get("uid")
+                        uid := job.get("metadata", {}).get("uid")
                     )
                 },
                 pods_by_key.get(
@@ -1390,7 +1407,15 @@ class KaiExecutionContextAdapter:
         and label selectors cannot select on, so the join is done client-side
         after a namespace-scoped list.
         """
-        namespaces = sorted({ns for pg in podgroups if (ns := (pg.get("metadata") or {}).get("namespace"))})
+        namespaces = sorted({
+            namespace
+            for podgroup in podgroups
+            if (
+                namespace := podgroup.get(
+                    "metadata", {}
+                ).get("namespace")
+            )
+        })
         pods: list[dict] = []
         for ns in namespaces:
             pods.extend(self._kubernetes.list("Pod", namespace=ns, api_version="v1"))
