@@ -32,6 +32,14 @@ from attribution_lib.outcome import OutcomeAttribution, calculate_outcome
 from attribution_lib.resources import AllJobResources, Node, ResourceSet
 from attribution_lib.rule_types.definitions import RefinerContext
 from attribution_lib.rules_engine import RuleLoader
+from attribution_lib.bundled_rules.common.scheduler_formatting import (
+    LAST_RESORT_SOURCE,
+    NODE_FAILURE,
+    NODE_FAILURE_IDS,
+    PREEMPTED_ROOT_CAUSE,
+    TIMEOUT_ROOT_CAUSE,
+    render,
+)
 from attribution_lib.sources import Source, SourceSet, SymptomSet
 from attribution_lib.symptoms.symptom_enums import RegisteredSymptoms
 
@@ -592,16 +600,19 @@ class TestScrubBadNodes:
         assert "bad kernel stack frame pointer" in bad_nodes["node01"]
         assert "Node failure reported by slurm" in bad_nodes["node01"]
 
-    def test_system_service_oom_kill_discards_not_responding_and_node_failure(self, stream, obs_ctx, job_info):
+    @pytest.mark.parametrize("node_failure", NODE_FAILURE_IDS)
+    def test_system_service_oom_kill_discards_not_responding_and_node_failure(
+        self, stream, obs_ctx, job_info, node_failure
+    ):
         """OOM kill of a system service is the root cause for downstream node-silent symptoms."""
         bad_nodes = _make_bad_nodes(
             obs_ctx,
-            {"node01": ["OOM kill of system service", "Node not responding", "Node failure reported by slurm"]},
+            {"node01": ["OOM kill of system service", "Node not responding", node_failure]},
         )
         _run_scrub(stream, job_info, bad_nodes)
         assert "OOM kill of system service" in bad_nodes["node01"]
         assert "Node not responding" not in bad_nodes["node01"]
-        assert "Node failure reported by slurm" not in bad_nodes["node01"]
+        assert node_failure not in bad_nodes["node01"]
 
     def test_system_service_oom_kill_preserves_node_rebooted(self, stream, obs_ctx, job_info):
         """A reboot is independent evidence - OOM of a system service does not imply it."""
@@ -613,29 +624,31 @@ class TestScrubBadNodes:
         assert "OOM kill of system service" in bad_nodes["node01"]
         assert "Node unexpectedly rebooted" in bad_nodes["node01"]
 
-    def test_same_node_failure_discards_dataloader_exception(self, stream, obs_ctx, job_info):
+    @pytest.mark.parametrize("node_failure", NODE_FAILURE_IDS)
+    def test_same_node_failure_discards_dataloader_exception(self, stream, obs_ctx, job_info, node_failure):
         """Node failure is the root cause; DataLoader workers crashing is downstream."""
         bad_nodes = _make_bad_nodes(
             obs_ctx,
-            {"node01": ["Node failure reported by slurm", "DataLoader Exception"]},
+            {"node01": [node_failure, "DataLoader Exception"]},
         )
         _run_scrub(stream, job_info, bad_nodes)
-        assert "Node failure reported by slurm" in bad_nodes["node01"]
+        assert node_failure in bad_nodes["node01"]
         assert "DataLoader Exception" not in bad_nodes["node01"]
 
-    def test_cross_node_failure_discards_dataloader_exception(self, stream, obs_ctx, job_info):
+    @pytest.mark.parametrize("node_failure", NODE_FAILURE_IDS)
+    def test_cross_node_failure_discards_dataloader_exception(self, stream, obs_ctx, job_info, node_failure):
         """In distributed training, the DataLoader usually crashes on a peer of
         the node that failed, not on the failing node itself. The scrub must
         be job-wide, not per-node."""
         bad_nodes = _make_bad_nodes(
             obs_ctx,
             {
-                "node01": ["Node failure reported by slurm"],
+                "node01": [node_failure],
                 "node02": ["DataLoader Exception"],
             },
         )
         _run_scrub(stream, job_info, bad_nodes)
-        assert "Node failure reported by slurm" in bad_nodes["node01"]
+        assert node_failure in bad_nodes["node01"]
         assert "node02" not in bad_nodes or "DataLoader Exception" not in bad_nodes["node02"]
 
     def test_dataloader_exception_preserved_without_node_failure(self, stream, obs_ctx, job_info):
@@ -1500,7 +1513,7 @@ class TestSlurmStateSymptoms:
 
         _run(stream, ji, symptoms)
 
-        assert "Node failure reported by slurm" in symptoms
+        assert render(NODE_FAILURE, scheduler) in symptoms
         assert calculate_outcome(symptoms).value().outcome == "Fail InfraSW"
 
     def test_non_kueue_node_fail_without_specific_node_retains_legacy_fallback(
@@ -3844,13 +3857,13 @@ class TestNodeFailureNfsCleanup:
 
 
 class TestLastResortSymptoms:
-    @pytest.mark.parametrize("scheduler", [Scheduler.KUEUE, Scheduler.KAI])
+    @pytest.mark.parametrize("scheduler", list(Scheduler))
     def test_empty_symptoms_completed_job(self, stream, obs_ctx, scheduler):
         ji = _job_info_with(state="COMPLETED", scheduler=scheduler)
         symptoms = _make_symptoms(obs_ctx)
         _run(stream, ji, symptoms)
         assert "the process completes" in symptoms
-        assert symptoms["the process completes"].one_source().rule == "last resort; slurm status"
+        assert symptoms["the process completes"].one_source().rule == render(LAST_RESORT_SOURCE, scheduler)
 
     def test_empty_symptoms_cancelled_job(self, stream, obs_ctx):
         ji = _job_info_with(state="CANCELLED", exit_code_signal=None)
@@ -3867,13 +3880,13 @@ class TestLastResortSymptoms:
         assert "Cancelled by user" not in symptoms
         assert "job failed" not in symptoms
 
-    @pytest.mark.parametrize("scheduler", [Scheduler.KUEUE, Scheduler.KAI])
+    @pytest.mark.parametrize("scheduler", list(Scheduler))
     def test_empty_symptoms_unknown_state(self, stream, obs_ctx, scheduler):
         ji = _job_info_with(state="OUT_OF_MEMORY", scheduler=scheduler)
         symptoms = _make_symptoms(obs_ctx)
         _run(stream, ji, symptoms)
         assert "job failed" in symptoms
-        assert symptoms["job failed"].one_source().rule == "last resort; slurm status"
+        assert symptoms["job failed"].one_source().rule == render(LAST_RESORT_SOURCE, scheduler)
 
     @pytest.mark.parametrize("scheduler", [Scheduler.KUEUE, Scheduler.KAI])
     def test_empty_symptoms_unknown_kubernetes_attempt_stays_empty(
@@ -4859,7 +4872,7 @@ class TestOutcomeReclassification:
             ("log unrecognized", "Incomplete Info"),
         ],
     )
-    @pytest.mark.parametrize("scheduler", [Scheduler.SLURM, Scheduler.KUEUE, Scheduler.KAI])
+    @pytest.mark.parametrize("scheduler", list(Scheduler))
     def test_preempted_reclassified_to_pass(self, stream, obs_ctx, scheduler, symptom, outcome):
         ji = _job_info_with(state="PREEMPTED", scheduler=scheduler)
         bad_nodes_result = CalcBadNodesAttributionResult()
@@ -4870,7 +4883,7 @@ class TestOutcomeReclassification:
         result.symptoms.update(symptoms)
         _run_post_outcome(stream, ji, symptoms, outcome=result.outcome_attr, attribution_result=result)
         assert result.outcome_attr.value().outcome == "Pass"
-        assert result.outcome_attr.value().root_cause_symptom == "SLURM preempted"
+        assert result.outcome_attr.value().root_cause_symptom == render(PREEMPTED_ROOT_CAUSE, scheduler)
         assert "Job preempted" in result.symptoms
         if symptom == "job failed":
             assert "job failed" not in result.symptoms
@@ -4889,7 +4902,7 @@ class TestOutcomeReclassification:
 
         _run_post_outcome(stream, ji, symptoms, outcome=result.outcome_attr, attribution_result=result)
 
-        assert result.outcome_attr.value().root_cause_symptom == "SLURM preempted"
+        assert result.outcome_attr.value().root_cause_symptom == render(PREEMPTED_ROOT_CAUSE, Scheduler.UNKNOWN)
         assert set(result.symptoms.symptoms()) == {"Job preempted"}
 
     def test_preempted_with_only_ignored_metric_left_reclassified_to_pass(self, stream, obs_ctx):
@@ -4903,7 +4916,7 @@ class TestOutcomeReclassification:
 
         _run_post_outcome(stream, ji, symptoms, outcome=result.outcome_attr, attribution_result=result)
 
-        assert result.outcome_attr.value().root_cause_symptom == "SLURM preempted"
+        assert result.outcome_attr.value().root_cause_symptom == render(PREEMPTED_ROOT_CAUSE, Scheduler.UNKNOWN)
 
     def test_preempted_failure_restored_after_cancel_symptom_removed(self, stream, obs_ctx):
         # "Cancelled by user" and the sigkill_handler failure share a tier, so the
@@ -4934,7 +4947,7 @@ class TestOutcomeReclassification:
         assert result.outcome_attr.value().outcome == "Fail User"
         assert "Job preempted" not in result.symptoms
 
-    @pytest.mark.parametrize("scheduler", [Scheduler.SLURM, Scheduler.KUEUE, Scheduler.KAI])
+    @pytest.mark.parametrize("scheduler", list(Scheduler))
     def test_preempted_does_not_override_failure_evidence(self, stream, obs_ctx, scheduler):
         ji = _job_info_with(state="PREEMPTED", scheduler=scheduler)
         result = AttributionResult(event_stream=stream, bad_nodes_attr=CalcBadNodesAttributionResult())
@@ -4946,7 +4959,7 @@ class TestOutcomeReclassification:
 
         assert result.outcome_attr.value().outcome == "Fail InfraHW"
 
-    @pytest.mark.parametrize("scheduler", [Scheduler.KUEUE, Scheduler.KAI])
+    @pytest.mark.parametrize("scheduler", list(Scheduler))
     def test_timeout_only_reclassified_to_pass(self, stream, obs_ctx, scheduler):
         ji = _job_info_with(
             state="TIMEOUT",
@@ -4963,7 +4976,7 @@ class TestOutcomeReclassification:
 
         _run_post_outcome(stream, ji, symptoms, outcome=result.outcome_attr, attribution_result=result)
         assert result.outcome_attr.value().outcome == "Pass"
-        assert "SLURM timeout" in result.outcome_attr.value().root_cause_symptom
+        assert result.outcome_attr.value().root_cause_symptom == render(TIMEOUT_ROOT_CAUSE, scheduler)
 
     # ---- NVRx ft_launcher exit-code reclassification (Regression case) ----
 

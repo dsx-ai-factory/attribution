@@ -21,12 +21,12 @@ class SymptomFactory:
     ) -> BaseSymptom:
         """Create a symptom from a registered symptom enum.
 
-        If the enum id is not present in the metadata registry, we still
-        construct a BaseSymptom with no cascade_discards.
+        If the enum id does not resolve to metadata, we still construct a
+        BaseSymptom with no cascade_discards.
         """
         registry = attribution_lib.get_symptom_registry()
         symptom_id = symptom_enum.value
-        symptom_metadata = registry.get(symptom_id)
+        symptom_metadata = registry.metadata_for(symptom_id)
         return BaseSymptom(
             symptom_id=symptom_id,
             sources=sources,
@@ -44,13 +44,14 @@ class SymptomFactory:
         """Create a symptom from a string (for backward compatibility with legacy code).
 
         Raises:
-            ValueError: if the provided symptom_id is not registered in the metadata registry.
+            ValueError: If the symptom ID does not resolve to registered metadata.
         """
         registry = attribution_lib.get_symptom_registry()
-        # Enforce that free-form strings are only allowed if present in registry
-        if not registry.has_metadata(symptom_id):
+        symptom_metadata = registry.metadata_for(symptom_id)
+        # Enforce that free-form strings are only allowed if declared exactly
+        # or covered by an explicit fallback prefix.
+        if symptom_metadata is None:
             raise ValueError(f"Unregistered symptom id: '{symptom_id}'")
-        symptom_metadata = registry.get(symptom_id)
         return BaseSymptom(
             symptom_id=symptom_id,
             sources=sources,
