@@ -1213,8 +1213,50 @@ It includes the body of an error response.
 Command calls measure encoded stdout. Streamed HTTP responses omit size.
 Kafka output records no response size.
 Kubernetes watch and log-follow calls record no response size, because their bodies are streams that the metrics must not read.
-The Kafka input consumer is not measured.
+The Kafka input consumer has its own metrics, described in
+[Kafka Input Consumer Metrics](#kafka-input-consumer-metrics).
 The `kubernetes-daemon` watch process is not measured because its watch streams are long-lived.
+
+### Query Result Metrics
+
+The Loki, VictoriaLogs, and PromQL connectors also record what each query
+returned. These metrics have the same `connector` and `operation` labels as the
+request metrics. A query is one template for one execution context, including
+all of its pages.
+
+| Metric | Type | Unit | Meaning |
+| --- | --- | --- | --- |
+| `attribution.connector.query.entries` | Histogram | `{entry}` | Log entries returned by one Loki or VictoriaLogs query, across its pages and before deduplication |
+| `attribution.connector.query.pages` | Histogram | `{page}` | Requests issued by one Loki or VictoriaLogs query, including a final empty page |
+| `attribution.connector.query.truncations` | Counter | `{query}` | Loki or VictoriaLogs queries that may have left entries unread, counted once per reason |
+| `attribution.connector.query.series` | Histogram | `{series}` | Series returned by one successful PromQL query |
+
+The truncation counter has a `reason` label. A query that matches several
+reasons is counted once under each of them.
+
+- `page_limit`: the query fetched its page budget of full pages (20 by default;
+  VictoriaLogs reads it from `max_pages`). With the default `limit` of 5000, this
+  is 100,000 entries. Entries older than the last page are missing from the
+  observation. To avoid it, narrow the template query so that it matches fewer
+  entries. For VictoriaLogs, you can also raise `limit` if your backend accepts
+  larger responses, or raise `max_pages`.
+- `missing_timestamp`: a full VictoriaLogs page had no parseable `_time` field,
+  or held only malformed records, so the connector cannot request the next page.
+- `timestamp_tie`: a full VictoriaLogs page held only entries with the newest
+  timestamp the request could return. The connector cannot page within one
+  timestamp, so it skips past it, and entries with that timestamp that did not
+  fit on the page are missing. Raising `limit` above the number of entries per
+  timestamp avoids it.
+- `window_start`: a full Loki or VictoriaLogs page reached the start of the time
+  window.
+  Entries at the start boundary may be missing.
+- `request_error`: a VictoriaLogs request failed after earlier pages had
+  succeeded. The query keeps the entries it has, and the request metrics record
+  the error. If the first request fails, the query records nothing.
+
+The same conditions are also reported as collection issues or warnings. A PromQL query whose API
+status is not `success` records no series count; its request metrics record
+the call. A scalar or string result also records no series count.
 
 ### Built-in Scrape Endpoint
 
@@ -1233,8 +1275,9 @@ The endpoint is off when the variable is unset or empty.
 A short-lived run exits after its last job. A scraper sees its metrics only
 while that run is active.
 
-The scraper sees these names. Labels are `connector`, `operation`, and
-`error_type` for failures. Histogram buckets also have the `le` label.
+The scraper sees these names. Request labels are `connector`, `operation`, and
+`error_type` for failures. A label name with a dot, such as `error.type`, uses
+an underscore. Histogram buckets also have the `le` label.
 The Prometheus exporter also adds `otel_scope_name`, `otel_scope_version`, and
 `otel_scope_schema_url` labels to every series.
 
@@ -1245,6 +1288,10 @@ The Prometheus exporter also adds `otel_scope_name`, `otel_scope_version`, and
 | `attribution.connector.errors` | `attribution_connector_errors_total` |
 | `attribution.connector.response.size` | `attribution_connector_response_size_bytes_total` |
 | `attribution.connector.request.duration` | `attribution_connector_request_duration_seconds_bucket`, `attribution_connector_request_duration_seconds_sum`, `attribution_connector_request_duration_seconds_count` |
+| `attribution.connector.query.entries` | `attribution_connector_query_entries_bucket`, `attribution_connector_query_entries_sum`, `attribution_connector_query_entries_count` |
+| `attribution.connector.query.pages` | `attribution_connector_query_pages_bucket`, `attribution_connector_query_pages_sum`, `attribution_connector_query_pages_count` |
+| `attribution.connector.query.truncations` | `attribution_connector_query_truncations_total` |
+| `attribution.connector.query.series` | `attribution_connector_query_series_bucket`, `attribution_connector_query_series_sum`, `attribution_connector_query_series_count` |
 
 ### Other OpenTelemetry Exporters
 
@@ -1259,6 +1306,78 @@ OTEL_SERVICE_NAME=attribution-blueprint \
 OTEL_METRICS_EXPORTER=otlp \
 OTEL_EXPORTER_OTLP_ENDPOINT=http://127.0.0.1:4317 \
   opentelemetry-instrument nvidia-attribution-blueprint --config ./attribution-blueprint.toml
+```
+
+### Kafka Input Consumer Metrics
+
+The `eca.kafka` consumer records these metrics for both `discover()` and the
+long-lived `open_consumer()` lifecycle described in
+[Kafka consumption and acknowledgements](kafka_lifecycle.md). The `lag` and
+`position.lag` gauges are reported only by `open_consumer()`. A `discover()`
+run reads to the end of its partitions and closes, so it has no ongoing lag.
+
+| Metric | Type | Unit | Labels | Meaning |
+| --- | --- | --- | --- | --- |
+| `attribution.kafka.consumer.consumed` | Counter | `{record}` | `topic`, `partition`, `consumer_group` | Records read from the broker |
+| `attribution.kafka.consumer.accepted` | Counter | `{record}` | `topic`, `partition`, `consumer_group` | Valid records returned by `poll()` or added to a `discover()` batch |
+| `attribution.kafka.consumer.skipped` | Counter | `{record}` | `topic`, `partition`, `consumer_group`, `reason` | Records skipped as `filtered` or `malformed` |
+| `attribution.kafka.consumer.acknowledged` | Counter | `{record}` | `topic`, `partition`, `consumer_group` | Receipts acknowledged for the first time |
+| `attribution.kafka.consumer.commits` | Counter | `{commit}` | `topic`, `partition`, `consumer_group` | Offset commits that the broker confirmed |
+| `attribution.kafka.consumer.commit.errors` | Counter | `{commit}` | `topic`, `partition`, `consumer_group`, `error.type` | Offset commits that failed or have an uncertain outcome |
+| `attribution.kafka.consumer.errors` | Counter | `{error}` | `topic`, `consumer_group`, `error.type` | Errors returned by a poll, other than end of partition |
+| `attribution.kafka.consumer.rebalances` | Counter | `{partition}` | `topic`, `partition`, `consumer_group`, `change` | Partitions `assigned`, `revoked`, or `lost` in rebalance callbacks |
+| `attribution.kafka.consumer.lag` | Gauge | `{record}` | `topic`, `partition`, `consumer_group` | High watermark minus the committed offset |
+| `attribution.kafka.consumer.position.lag` | Gauge | `{record}` | `topic`, `partition`, `consumer_group` | High watermark minus the consumer's fetch position |
+| `attribution.kafka.consumer.unacknowledged` | Gauge | `{record}` | `topic`, `partition`, `consumer_group` | Records returned by `poll()` that the caller has not acknowledged |
+| `attribution.kafka.consumer.oldest_unacknowledged.age` | Gauge | `s` | `topic`, `partition`, `consumer_group` | Time since the earliest unacknowledged record was returned by `poll()`, or 0 |
+
+`consumer_group` is the configured `group_id`. For a commit error, `error.type`
+is the exception class name. For a poll error, it is the Kafka error name, such
+as `_TRANSPORT`.
+
+Gauges report only the partitions that the consumer currently owns, and stop
+when the consumer closes. The connector computes them from state that the
+polling thread publishes, and never contacts the broker when the metrics are
+read:
+
+- The high watermark is the client's cached value from its latest fetch. The
+  fetch position is the client's local position. The connector refreshes both
+  while the owner thread polls, at most once every 5 seconds.
+- The committed offset starts at the group's committed offset, which the
+  polling thread reads from the broker once after it receives the partition.
+  After the consumer commits, it is the offset of that commit. If the group has
+  no committed offset for the partition, `lag` is omitted until the consumer
+  commits. If the broker lookup fails, the next refresh retries it.
+
+The connector commits only the acknowledged prefix of each partition, so one
+slow record holds back every later commit in its partition. When
+`oldest_unacknowledged.age` keeps growing while `lag` grows and `position.lag`
+stays low, the consumer is reading records but a delivered record is still
+waiting for its acknowledgement. If the consumer restarts, Kafka replays every
+record after the committed offset.
+
+The built-in scrape endpoint renders these names:
+
+| OpenTelemetry metric | Prometheus name |
+| --- | --- |
+| `attribution.kafka.consumer.consumed` | `attribution_kafka_consumer_consumed_total` |
+| `attribution.kafka.consumer.accepted` | `attribution_kafka_consumer_accepted_total` |
+| `attribution.kafka.consumer.skipped` | `attribution_kafka_consumer_skipped_total` |
+| `attribution.kafka.consumer.acknowledged` | `attribution_kafka_consumer_acknowledged_total` |
+| `attribution.kafka.consumer.commits` | `attribution_kafka_consumer_commits_total` |
+| `attribution.kafka.consumer.commit.errors` | `attribution_kafka_consumer_commit_errors_total` |
+| `attribution.kafka.consumer.errors` | `attribution_kafka_consumer_errors_total` |
+| `attribution.kafka.consumer.rebalances` | `attribution_kafka_consumer_rebalances_total` |
+| `attribution.kafka.consumer.lag` | `attribution_kafka_consumer_lag` |
+| `attribution.kafka.consumer.position.lag` | `attribution_kafka_consumer_position_lag` |
+| `attribution.kafka.consumer.unacknowledged` | `attribution_kafka_consumer_unacknowledged` |
+| `attribution.kafka.consumer.oldest_unacknowledged.age` | `attribution_kafka_consumer_oldest_unacknowledged_age_seconds` |
+
+For example, this PromQL expression finds partitions in which a delivered
+record has waited for its acknowledgement for more than one hour:
+
+```promql
+max by (topic, partition, consumer_group) (attribution_kafka_consumer_oldest_unacknowledged_age_seconds) > 3600
 ```
 
 ## Environment Variables

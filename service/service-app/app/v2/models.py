@@ -1,6 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
+import dataclasses
 from collections import defaultdict
 from collections.abc import Mapping
 from datetime import datetime
@@ -472,6 +473,25 @@ _LIB_TYPES_ENCODER: dict[type, Any] = {
 }
 
 
+def _unpack_dataclasses(digest: object) -> object:
+    """Replace each dataclass in a collector digest with a dict of its fields, one level at a time.
+
+    ``jsonable_encoder`` converts a dataclass with ``dataclasses.asdict``, which recurses into
+    named tuples. A lib ``Source`` nested in the dataclass is rebuilt with its observation
+    context as a plain dict, and the ``Source`` encoder then fails on ``source_context.id``.
+    Unpacking the dataclasses first hands every ``Source`` to that encoder unchanged.
+    """
+    if isinstance(digest, LibSource):
+        return digest
+    if dataclasses.is_dataclass(digest) and not isinstance(digest, type):
+        return {f.name: _unpack_dataclasses(getattr(digest, f.name)) for f in dataclasses.fields(digest)}
+    if isinstance(digest, Mapping):
+        return {key: _unpack_dataclasses(value) for key, value in digest.items()}
+    if isinstance(digest, (list, tuple, set, frozenset)):
+        return [_unpack_dataclasses(item) for item in digest]
+    return digest
+
+
 class AttributionResponseV2(ResponseModel):
     """V2 response to GET /v2/attributor/{att_id}/attribution."""
 
@@ -494,7 +514,7 @@ class AttributionResponseV2(ResponseModel):
             verdict=cls._build_verdict(result, decision_graph, decision_graph_requested),
             symptoms=cls._build_symptoms(result, include_interesting),
             observation_context=sorted(ingested_observations),
-            collectors=jsonable_encoder(result.collectors, custom_encoder=_LIB_TYPES_ENCODER),
+            collectors=jsonable_encoder(_unpack_dataclasses(result.collectors), custom_encoder=_LIB_TYPES_ENCODER),
         )
 
     @staticmethod
