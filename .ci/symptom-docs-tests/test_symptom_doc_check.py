@@ -8,6 +8,8 @@ import os
 from pathlib import Path
 import shutil
 import subprocess
+from types import SimpleNamespace
+from unittest.mock import Mock
 
 import pytest
 import yaml
@@ -372,10 +374,32 @@ def test_saved_contract_has_only_synthetic_document_metadata():
     assert check.gaps(fixture) == set()
 
 
+def test_saved_contract_matches_controlled_producer(change_repo, monkeypatch):
+    """Preserve producer contract coverage without depending on bundled rules."""
+    import attribution_lib
+    import attribution_lib.core
+
+    root, base = change_repo
+    fixture = json.loads(
+        (Path(__file__).parent / "fixtures/public-symptom-contract.json").read_text()
+    )
+    catalog = root / check.CATALOG
+    catalog.parent.mkdir(parents=True)
+    catalog.write_text(yaml.safe_dump({"failures": fixture["documents"]}))
+    engine = SimpleNamespace(
+        symptom_declarations=[
+            check.SymptomDeclaration(**row) for row in fixture["declarations"]
+        ]
+    )
+    setup = Mock()
+    monkeypatch.setattr(attribution_lib.core, "setup_rules", setup)
+    monkeypatch.setattr(attribution_lib, "get_rules_engine", lambda: engine)
+    assert check.collect(root) == {**fixture, "commit_sha": base}
+    setup.assert_called_once_with(force=True)
+
+
 def test_producer_supports_an_independent_rule_set(tmp_path, monkeypatch):
     """Coverage must not depend on any particular bundled symptom or registry lookup."""
-    from types import SimpleNamespace
-
     import attribution_lib
     import attribution_lib.core
     from attribution_lib.symptoms.declarations import SymptomDeclaration
@@ -524,6 +548,55 @@ def test_real_commit_comparison_and_worktree_cleanup(
     report = json.loads((output / "result.json").read_text())
     assert report["status"] == "success" and report["new_gaps"] == []
     assert report["head_sha"] == fixed_head
+
+
+def test_adding_live_catalog_alias_is_not_a_regression(committed_repo, tmp_path):
+    root, base = committed_repo
+    catalog = root / check.CATALOG
+    payload = yaml.safe_load(catalog.read_text())
+    entry = next(
+        row for row in payload["failures"] if row["id"] == "ci-example-failure"
+    )
+    entry.setdefault("aliases", []).append("Additional example failure spelling")
+    catalog.write_text(yaml.safe_dump(payload, sort_keys=False))
+    commit(root, "Add a public documentation alias")
+    output = tmp_path / "output"
+    assert (
+        check.main(
+            ["check", "--root", str(root), "--base", base, "--output", str(output)]
+        )
+        == 0
+    )
+    report = json.loads((output / "result.json").read_text())
+    assert report["status"] == "success" and report["new_gaps"] == []
+
+
+def test_error_details_are_actionable_and_stay_on_one_line(
+    tmp_path, monkeypatch, capsys
+):
+    monkeypatch.delenv("GITHUB_ACTIONS", raising=False)
+    message = "duplicate documentation id: 'example-id'\n::error::injected"
+
+    def invalid_catalog(_root):
+        raise ValueError(message)
+
+    monkeypatch.setattr(check, "collect", invalid_catalog)
+    assert (
+        check.main(
+            [
+                "snapshot",
+                "--root",
+                str(ROOT),
+                "--output",
+                str(tmp_path / "snapshot.json"),
+            ]
+        )
+        == 2
+    )
+    lines = capsys.readouterr().err.splitlines()
+    assert len(lines) == 1
+    assert "ValueError" in lines[0] and "example-id" in lines[0]
+    assert lines[0].endswith(json.dumps(message))
 
 
 def test_advisory_missing_then_corrected_real_catalog(

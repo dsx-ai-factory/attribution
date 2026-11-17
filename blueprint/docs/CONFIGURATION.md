@@ -162,9 +162,13 @@ the Service.
 
 ### `[eca.kueue]`
 
-Use the Kueue adapter for Kubernetes batch workloads managed by Kueue. It shells
-out to `kubectl`, reads Kueue Workload objects, follows owner references to Job
-or JobSet pods, and normalizes the result into execution contexts.
+Use the Kueue adapter for Kubernetes batch workloads managed by Kueue. It uses
+the Kubernetes Python API client, reads Kueue Workload objects, follows owner
+references to Job or JobSet pods, and normalizes the result into execution
+contexts.
+
+Kueue no longer accepts `kubectl_path`. Remove that key from existing
+`[eca.kueue]` configuration; it remains valid only for `kubectl_logs`.
 
 Example:
 
@@ -173,7 +177,6 @@ Example:
 component = "kueue"
 
 [eca.kueue]
-kubectl_path = "kubectl"
 kubeconfig = "/path/to/kubeconfig"
 context = "prod-batch"
 namespace = "team-a"
@@ -200,11 +203,11 @@ uv run --project blueprint --frozen nvidia-attribution-blueprint --config ./attr
 | `start_time`             | Per run  | none            | ISO-8601 time for time-range mode.                                                                                |
 | `end_time`               | Per run  | none            | ISO-8601 time for time-range mode. Required with `start_time`.                                                    |
 | `nodelist`               | Per run  | none            | Optional comma-separated Kubernetes node names for time-range mode.                                               |
-| `kubectl_path`           | No       | `kubectl`       | Path to the `kubectl` binary.                                                                                     |
-| `kubeconfig`             | No       | kubectl default | Optional kubeconfig path.                                                                                         |
+| `kubeconfig`             | No       | client default  | Optional kubeconfig path. Without an explicit `kubeconfig` or `context`, uses `KUBECONFIG` or `~/.kube/config`, otherwise falls back to in-cluster credentials. |
 | `context`                | No       | current context | Optional kubeconfig context name.                                                                                 |
 | `namespace`              | No       | all namespaces  | Optional namespace scope. Also allows bare workload names in `ids` mode. Required when `placement_records_enabled` is set. |
-| `timeout_seconds`        | No       | `60`            | Timeout for each `kubectl` command.                                                                               |
+| `timeout_seconds`        | No       | `60`            | Timeout for each Kubernetes API request.                                                                          |
+| `workload_api_version`   | No       | `kueue.x-k8s.io/v1beta1` | Kueue Workload CRD `<group>/<version>` to read. Set this if the cluster serves a different Workload API version. |
 | `placement_records_enabled` | No    | `false`         | Reads retained placement from the configured recorder; discovery fails if the recorder cannot be read. Requires `namespace`, matching the one namespace the recorder watches. |
 
 
@@ -806,8 +809,9 @@ for local file log collection.
 
 The Kueue adapter and `kubectl_logs` connector are configured independently.
 Settings under `[eca.kueue]` are not inherited by
-`[log.<source>.kubectl_logs]`. Repeat `kubectl_path`, `kubeconfig`, and
-`context` when both components must use the same non-default values.
+`[log.<source>.kubectl_logs]`. Repeat `kubeconfig` and `context` when both
+components must use the same non-default values; `kubectl_path` applies only to
+the log connector.
 
 Omitting `max_bytes_per_pod` keeps the default 16 MiB cap. It does not disable
 truncation. The current TOML configuration surface supports changing the cap,

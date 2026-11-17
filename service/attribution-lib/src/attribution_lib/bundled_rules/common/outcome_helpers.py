@@ -14,6 +14,9 @@ from attribution_lib.sources import SourceSet
 if TYPE_CHECKING:
     from attribution_lib.core import AttributionResult
 
+# Kubernetes queue schedulers that share rule semantics.
+KUBERNETES_SCHEDULER_TYPES = frozenset({Scheduler.KUEUE, Scheduler.KAI})
+
 
 def apply_user_cancellation_reclassification(
     attribution_result: "AttributionResult",
@@ -63,15 +66,15 @@ def apply_outcome_reclassification_rules(
 ) -> None:
     """Apply post-processing outcome reclassification rules."""
 
-    kueue_has_only_preemption_fallback = all(
+    has_only_preemption_fallback = all(
         symptom == "job failed" for symptom in attribution_result.symptoms.symptoms()
     )
 
-    # Kueue preemption must not mask evidence-backed failures. Other scheduler
-    # types retain their historical PREEMPTED reclassification behavior.
+    # Kubernetes scheduler preemption must not mask evidence-backed
+    # failures. Other scheduler types retain their original behavior.
     if (
         job_info.attributed_cancellation is None
-        and (job_info.scheduler is not Scheduler.KUEUE or kueue_has_only_preemption_fallback)
+        and (job_info.scheduler not in KUBERNETES_SCHEDULER_TYPES or has_only_preemption_fallback)
         and job_info.state is not None
         and job_info.state.upper() == "PREEMPTED"
     ):

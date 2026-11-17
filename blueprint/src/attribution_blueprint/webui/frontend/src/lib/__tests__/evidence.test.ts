@@ -58,7 +58,7 @@ describe('buildVerdictMarkdown', () => {
     expect(`${nodeMd}${quiet}`).not.toMatch(/window|impacted|recurring/)
   })
 
-  it('includes tenant and operator guidance when personas are present', () => {
+  it('includes tenant evidence and ignores legacy operator guidance', () => {
     const run = {
       ...base,
       diagnose: {
@@ -67,7 +67,7 @@ describe('buildVerdictMarkdown', () => {
         summary: 'cascade',
         impact: 'rank exits',
         action: 'Resubmit on healthy allocation',
-        supportDetails: ['tenant-only'],
+        supportDetails: ['Include the NVIDIA Attribution diagnosis (verdict, symptom chain); send available logs.'],
       },
       operatorDiagnose: {
         hasPersona: true,
@@ -79,14 +79,52 @@ describe('buildVerdictMarkdown', () => {
       },
     }
     const md = buildVerdictMarkdown(run, 'https://x/')
-    expect(md).toContain('**Summary:** fabric issue')
+    expect(md).toContain('**Summary:** cascade')
     expect(md).not.toContain('**Summary:** GPU off bus')
     expect(md).toContain('## Tenant SRE guidance')
-    expect(md).toContain('**Recommended action:** Resubmit on healthy allocation')
-    expect(md).toContain('## Cloud operator guidance')
-    expect(md).toContain('**Recommended action:** Drain node and inspect fabric')
-    expect(md).toContain('**Include on escalation:** dmesg, fabricmanager.log')
-    expect(md).not.toContain('tenant-only')
+    expect(md).toContain('**Recommended action:**\n\nResubmit on healthy allocation')
+    expect(md).toContain('**Include on escalation:**\n\nInclude the NVIDIA Attribution diagnosis (verdict, symptom chain); send available logs.')
+    for (const privateText of ['Cloud operator guidance', 'fabric issue', 'node needs drain', 'Drain node', 'dmesg', 'fabricmanager.log']) {
+      expect(md).not.toContain(privateText)
+    }
+  })
+
+  it('preserves numbered actions and support instructions as Markdown blocks', () => {
+    const action = '1. Check your workload.\n2. Retry only if safe.\n3. Confirm the failed operation completes.'
+    const evidence = 'Include the diagnosis (verdict, symptom chain), job ID and logs; ask for help even with incomplete evidence.'
+    const md = buildVerdictMarkdown({
+      ...base,
+      diagnose: { hasPersona: true, title: 'Test', summary: '', impact: '', action, supportDetails: [evidence, 'Record the retry result.'] },
+    }, 'https://x/')
+    expect(md).toContain(`**Recommended action:**\n\n${action}\n`)
+    expect(md).toContain(`**Include on escalation:**\n\n${evidence}\n\nRecord the retry result.`)
+    expect(md).toContain('**Summary:** GPU off bus')
+  })
+
+  it.each([undefined, { hasPersona: false, title: '', summary: 'Do not display', impact: '', action: 'Do not display', supportDetails: ['Do not display'] }])(
+    'does not fall back to operator guidance when tenant guidance is unavailable', (diagnose) => {
+      const md = buildVerdictMarkdown({
+        ...base,
+        diagnose,
+        operatorDiagnose: { hasPersona: true, title: 'Private', summary: 'PRIVATE_SUMMARY', impact: 'PRIVATE_IMPACT', action: 'PRIVATE_ACTION', supportDetails: ['PRIVATE_EVIDENCE'] },
+      }, 'https://x/')
+      expect(md).toContain('**Summary:** GPU off bus')
+      expect(md).not.toContain('PRIVATE_')
+      expect(md).not.toContain('Do not display')
+      expect(md).not.toContain('## Tenant SRE guidance')
+      expect(md).not.toContain('## Cloud operator guidance')
+    },
+  )
+
+  it('omits empty tenant guidance fields without importing operator evidence', () => {
+    const md = buildVerdictMarkdown({
+      ...base,
+      diagnose: { hasPersona: true, title: 'Test', summary: '', impact: '', action: '', supportDetails: [] },
+      operatorDiagnose: { hasPersona: true, title: 'Private', summary: 'PRIVATE_SUMMARY', impact: '', action: '', supportDetails: ['PRIVATE_EVIDENCE'] },
+    }, 'https://x/')
+    expect(md).not.toContain('**Recommended action:**')
+    expect(md).not.toContain('**Include on escalation:**')
+    expect(md).not.toContain('PRIVATE_')
   })
 
   it('falls back to raw fields without diagnose', () => {

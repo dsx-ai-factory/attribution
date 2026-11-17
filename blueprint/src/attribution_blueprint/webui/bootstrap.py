@@ -14,7 +14,7 @@ from typing import Any
 
 from attribution_blueprint.taxonomy import taxonomy_for_service_value
 from attribution_blueprint.webui.attribution_detail import attribution_detail, decision_graph_section
-from attribution_blueprint.webui.diagnose import diagnose_card, operator_diagnose_card
+from attribution_blueprint.webui.diagnose import diagnose_card
 
 # Raw lib outcome string -> React OutcomeKey. Unmapped values fall through to
 # "multi" (the gray MultiCategory/other bucket present in the React palette).
@@ -372,7 +372,6 @@ def _run_summary_fields(run) -> dict[str, Any]:
 
     symptoms = [{"name": name, "sites": count} for name, count in symptom_summary(run)]
     diagnose = diagnose_card(run)
-    operator_diagnose = operator_diagnose_card(run)
     return {
         "id": run.run_id,
         "jobId": job,
@@ -409,7 +408,6 @@ def _run_summary_fields(run) -> dict[str, Any]:
         "evidenceStatus": evidence_status if isinstance(evidence_status, str) else None,
         "ingestionReports": ingestion_reports,
         "diagnose": _diagnose_camel(diagnose),
-        "operatorDiagnose": _diagnose_camel(operator_diagnose),
     }
 
 

@@ -176,7 +176,7 @@ def test_generic_teardown_does_not_become_configuration_failure(attribute_cycle,
 
     assert _SYMPTOM not in result.symptoms
     assert not any(node.rule_name == "BatchSizeAssertion" for node in graph.nodes)
-    assert result.outcome_attr.value().outcome == "Fail Undetermined"
+    assert result.outcome_attr.value().outcome == "Fail MultiCategory"
 
 
 @pytest.mark.parametrize("nvrx_line", [None, _NVRX, _NO_PROGRESS, _STEP_TIMEOUT])
@@ -216,7 +216,7 @@ def test_other_application_errors_keep_existing_nvrx_priority(attribute_cycle, l
     result, _ = attribute_cycle(line_entries([line, _NVRX]))
 
     assert _SYMPTOM not in result.symptoms
-    assert result.outcome_attr.value().outcome == "Fail Undetermined"
+    assert result.outcome_attr.value().outcome == "Fail MultiCategory"
     assert result.outcome_attr.value().root_cause_symptom == "NVRx detected failure"
 
 
@@ -224,7 +224,7 @@ def test_other_application_errors_keep_existing_nvrx_priority(attribute_cycle, l
 @pytest.mark.parametrize(
     "nvrx_line, fallback_symptom, fallback_outcome",
     [
-        (_NVRX, "NVRx detected failure", "Fail Undetermined"),
+        (_NVRX, "NVRx detected failure", "Fail MultiCategory"),
         (_NO_PROGRESS, "NVRx no progress across restarts", "Fail MultiCategory"),
         (_STEP_TIMEOUT, "NVRx step section timeout", "Fail MultiCategory"),
     ],
@@ -270,11 +270,11 @@ def test_batch_sizes_share_a_label_and_preserve_each_source(attribute_cycle):
         ([], {"exit_code_signal": 15}),
     ],
 )
-def test_generic_nvrx_failure_remains_undetermined(attribute_cycle, lines, job_options):
+def test_generic_nvrx_failure_is_multicategory(attribute_cycle, lines, job_options):
     """Report an unavailable reason explicitly without inventing a cause."""
     result, _ = attribute_cycle(line_entries([*lines, _NVRX]), **job_options)
 
-    assert result.outcome_attr.value().outcome == "Fail Undetermined"
+    assert result.outcome_attr.value().outcome == "Fail MultiCategory"
     assert result.outcome_attr.value().root_cause_symptom == "NVRx detected failure"
     assert result.outcome_attr.value().hw_cause == _UNAVAILABLE_REASON
     assert "NVRx detected failure" in result.symptoms

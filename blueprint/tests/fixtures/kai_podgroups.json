@@ -1,0 +1,41 @@
+{
+  "apiVersion": "v1",
+  "kind": "List",
+  "items": [
+    {
+      "apiVersion": "scheduling.run.ai/v2alpha2",
+      "kind": "PodGroup",
+      "metadata": {
+        "name": "pg-train-mnist-1a2b3c4d",
+        "namespace": "team-alpha",
+        "uid": "uid-pg-1001",
+        "creationTimestamp": "2026-05-01T12:00:00Z",
+        "annotations": {
+          "kai.scheduler/top-owner-metadata": "name: train-mnist\nuid: uid-job-1001\ngroup: batch\nversion: v1\nkind: Job\n"
+        },
+        "ownerReferences": [
+          {
+            "apiVersion": "batch/v1",
+            "kind": "Job",
+            "name": "train-mnist",
+            "uid": "uid-job-1001",
+            "controller": true,
+            "blockOwnerDeletion": true
+          }
+        ]
+      },
+      "spec": {"queue": "research-queue", "minMember": 2},
+      "status": {
+        "schedulingConditions": [
+          {
+            "type": "Unschedulable",
+            "status": "True",
+            "reason": "Unschedulable",
+            "lastTransitionTime": "2026-05-01T12:00:05Z"
+          }
+        ],
+        "resourcesStatus": {"allocated": {"nvidia.com/gpu": "2"}}
+      }
+    }
+  ]
+}

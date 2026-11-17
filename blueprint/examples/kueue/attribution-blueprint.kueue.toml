@@ -19,7 +19,6 @@ gpus_per_node = 8
 component = "kueue"
 
 [eca.kueue]
-kubectl_path = "kubectl"
 kubeconfig = "/CHANGE_ME_PATH/kubeconfig"
 context = "CHANGE_ME_KUBECTL_CONTEXT"
 namespace = "CHANGE_ME_NAMESPACE"

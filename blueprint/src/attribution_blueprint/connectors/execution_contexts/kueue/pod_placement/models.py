@@ -65,7 +65,7 @@ class PlacementRecord:
     # None means no such evidence was present *yet* — the recorder updates an
     # existing record in place when a later watch event reports one, since
     # this is the one field expected to change over a Pod's lifetime. See
-    # `helpers.pod_node_failure_reason` / `pod_container_exit_reason`.
+    # `kubernetes_helpers.pod_node_failure_reason` / `helpers.pod_container_exit_reason`.
     node_failure_reason: str | None = None
 
     @property

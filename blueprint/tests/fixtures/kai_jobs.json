@@ -1,0 +1,24 @@
+{
+  "apiVersion": "v1",
+  "kind": "List",
+  "items": [
+    {
+      "apiVersion": "batch/v1",
+      "kind": "Job",
+      "metadata": {
+        "name": "train-mnist",
+        "namespace": "team-alpha",
+        "uid": "uid-job-1001",
+        "creationTimestamp": "2026-05-01T12:00:00Z"
+      },
+      "status": {
+        "succeeded": 2,
+        "startTime": "2026-05-01T12:00:05Z",
+        "completionTime": "2026-05-01T12:32:00Z",
+        "conditions": [
+          {"type": "Complete", "status": "True", "lastTransitionTime": "2026-05-01T12:32:00Z"}
+        ]
+      }
+    }
+  ]
+}

@@ -21,7 +21,8 @@ Before running it:
    child Job objects for JobSets.
 
 The Kueue adapter and `kubectl_logs` connector do not share settings. Keep
-`kubectl_path`, `kubeconfig`, and `context` consistent in both sections.
+`kubeconfig` and `context` consistent in both sections. `kubectl_path` applies
+only to the log connector because Kueue discovery uses the Kubernetes API.
 The example sets `timestamps = false` so a pod log line beginning with a rank
 prefix still begins with that prefix when it reaches the service.
 

@@ -255,7 +255,9 @@ def test_pyxis_mount_signals_distinguish_paths(
     assert bool(re.search(user_pattern, line)) is user_match
     assert bool(re.search(system_pattern, line)) is system_match
     assert entry["likely_owner"] == "ambiguous"
-    assert "Do not change system directories" in entry["personas"]["tenant_sre"]["action"]
+    action = entry["personas"]["tenant_sre"]["action"]
+    assert "Do not change host permissions, runtime services or shared storage settings" in action
+    assert "assigned compute node as the workload user, where permitted" in action
 
 
 @pytest.mark.parametrize("entry_id", ["broken-pipe", "connection-timed-out"])

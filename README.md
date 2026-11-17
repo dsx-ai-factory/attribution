@@ -173,6 +173,8 @@ Without `--db`, the helper seeds and serves a demo database. Run it with `--help
 * Writing rules: [Add a New Extractor Rule](service/attribution-lib/docs/adding-a-rule.md)
 * Runnable release-bundle quickstart: [docs/quickstart.md](blueprint/docs/quickstart.md)
 * Blueprint configuration reference: [docs/CONFIGURATION.md](blueprint/docs/CONFIGURATION.md)
+* Bringing your own logs, the observation format every source accepts: [Observation Format](service/service-app/docs/api/observation-format.md)
+* Attributing from syslogs you collected yourself: [Manually Collected Syslogs](blueprint/docs/use-cases/manually-collected-syslogs.md)
 * Kueue example: [examples/kueue](blueprint/examples/kueue)
 * Attribution Service v2 REST walkthrough: [docs/rest-api.md](blueprint/docs/rest-api.md)
 * Static sample configs used by the quickstart: [examples/static/configs](blueprint/examples/static/configs)

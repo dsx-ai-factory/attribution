@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import type { RunDetail } from '@/interfaces/attribution'
+import type { PersonaDiagnose, RunDetail } from '@/interfaces/attribution'
 import {
   logToText,
   nodeExportData,
@@ -11,6 +11,7 @@ import {
   slug,
   toYaml,
   utcDateStamp,
+  verdictExportData,
 } from '@/lib/export'
 
 function run(overrides: Partial<RunDetail> = {}): RunDetail {
@@ -84,6 +85,105 @@ describe('toYaml', () => {
 })
 
 describe('run exports', () => {
+  const tenant: PersonaDiagnose = {
+    hasPersona: true,
+    title: 'Application failure',
+    summary: 'The application could not complete its operation.',
+    impact: 'The attempt stopped.',
+    action: '1. Check the application settings.\n2. Retry your workload.\n3. Confirm the failed operation completes.',
+    supportDetails: [
+      'Include the NVIDIA Attribution diagnosis, job ID and available logs; incomplete evidence is OK.',
+      'Include the application version.\nDescribe any changes and their results.',
+    ],
+  }
+  const operator: PersonaDiagnose = {
+    ...tenant,
+    summary: 'PRIVATE_OPERATOR_SUMMARY',
+    impact: 'PRIVATE_OPERATOR_IMPACT',
+    action: 'PRIVATE_OPERATOR_ACTION',
+    supportDetails: ['PRIVATE_OPERATOR_SUPPORT'],
+  }
+
+  it('includes only tenant guidance in JSON and YAML without changing existing fields', () => {
+    const input = run({
+      diagnose: Object.assign({}, tenant, { internal_notes: 'PRIVATE_CATALOG_NOTE' }),
+      operatorDiagnose: operator,
+    })
+    const output = verdictExportData(input)
+    const { tenant_guidance: guidance, ...existingFields } = output
+    const { tenant_guidance: unavailable, ...withoutGuidance } = verdictExportData(run())
+    expect(unavailable).toBeNull()
+    expect(existingFields).toEqual(withoutGuidance)
+    expect(guidance).toEqual({
+      summary: tenant.summary,
+      impact: tenant.impact,
+      action: tenant.action,
+      support_details: tenant.supportDetails,
+    })
+    expect(guidance!.support_details).not.toBe(tenant.supportDetails)
+
+    const json = JSON.stringify(output, null, 2)
+    const yaml = toYaml(output)
+    expect(JSON.parse(json).tenant_guidance).toEqual(guidance)
+    expect(yaml).toContain([
+      'tenant_guidance:',
+      `  summary: ${tenant.summary}`,
+      `  impact: ${tenant.impact}`,
+      `  action: ${JSON.stringify(tenant.action)}`,
+      '  support_details:',
+      `    - ${JSON.stringify(tenant.supportDetails[0])}`,
+      `    - ${JSON.stringify(tenant.supportDetails[1])}`,
+    ].join('\n'))
+    for (const serialized of [json, yaml]) {
+      expect(serialized).not.toContain('PRIVATE_')
+      expect(serialized).not.toContain('operatorDiagnose')
+      expect(serialized).not.toContain('internal_notes')
+    }
+  })
+
+  it.each([undefined, { ...tenant, hasPersona: false }])(
+    'exports null without falling back to operator guidance when tenant guidance is unavailable', (diagnose) => {
+      const output = verdictExportData(run({ diagnose, operatorDiagnose: operator }))
+      expect(JSON.parse(JSON.stringify(output)).tenant_guidance).toBeNull()
+      expect(toYaml(output)).toContain('tenant_guidance: null')
+      expect(toYaml(output)).not.toContain(tenant.action)
+      expect(JSON.stringify(output)).not.toContain('PRIVATE_')
+      expect(toYaml(output)).not.toContain('PRIVATE_')
+    },
+  )
+
+  it('keeps empty tenant fields empty instead of substituting operator guidance', () => {
+    const output = verdictExportData(run({
+      diagnose: { ...tenant, summary: '', impact: '', action: '', supportDetails: [] },
+      operatorDiagnose: operator,
+    }))
+    expect(JSON.parse(JSON.stringify(output)).tenant_guidance).toEqual({
+      summary: '', impact: '', action: '', support_details: [],
+    })
+    expect(toYaml(output)).toContain('tenant_guidance:\n  summary: ""\n  impact: ""\n  action: ""\n  support_details: []')
+  })
+
+  it('includes each run\'s own tenant guidance in bulk JSON and YAML exports', () => {
+    const secondTenant = { ...tenant, action: 'No action is needed.', supportDetails: [] }
+    const output = runsExportData([
+      run({ attemptUid: 'a1', diagnose: tenant, operatorDiagnose: operator }),
+      run({ attemptUid: 'a2', diagnose: secondTenant, operatorDiagnose: operator }),
+      run({ attemptUid: 'a3', operatorDiagnose: operator }),
+    ])
+    expect(JSON.parse(JSON.stringify(output)).map((item: { tenant_guidance: unknown }) => item.tenant_guidance)).toEqual([
+      { summary: tenant.summary, impact: tenant.impact, action: tenant.action, support_details: tenant.supportDetails },
+      { summary: secondTenant.summary, impact: secondTenant.impact, action: secondTenant.action, support_details: [] },
+      null,
+    ])
+    const yaml = toYaml(output)
+    expect(yaml.match(/tenant_guidance:/g)).toHaveLength(3)
+    expect(yaml).toContain(`    action: ${JSON.stringify(tenant.action)}`)
+    expect(yaml).toContain(`    action: ${secondTenant.action}`)
+    expect(yaml).toContain('  tenant_guidance: null')
+    expect(yaml).not.toContain('PRIVATE_')
+    expect(JSON.stringify(output)).not.toContain('PRIVATE_')
+  })
+
   it('quotes CSV delimiters and removes the workload placeholder', () => {
     const csv = runsToCSV([
       run({ jobId: 'team,"blue"\njob', workload: '—', user: 'last, first' }),

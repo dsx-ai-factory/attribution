@@ -9,3 +9,5 @@ workflows.
   Kueue, collects pod logs with `kubectl`, and queries node syslogs from Loki.
   It includes a [commented configuration](../../examples/kueue/README.md) and
   [representative healthy and unhealthy output](./kueue-sample-output.md).
+- [KAI PodGroups](./kai.md) discovers supported Job- and JobSet-owned KAI
+  workloads and documents the current lifecycle and retention scope.

@@ -125,8 +125,9 @@ Relative paths in the configuration are resolved from the shell's current
 working directory, not from the directory containing the TOML file.
 
 The Kueue adapter and pod-log connector do not inherit configuration from each
-other. Repeat non-default `kubectl_path`, `kubeconfig`, and `context` values in
-both sections.
+other. Repeat non-default `kubeconfig` and `context` values in both sections.
+`kubectl_path` applies only to the pod-log connector; the Kueue adapter uses the
+Kubernetes Python API client.
 
 The current service parser expects an APPLOG rank prefix at the start of a raw
 log line. `kubectl --timestamps=true` inserts its timestamp before that prefix,
