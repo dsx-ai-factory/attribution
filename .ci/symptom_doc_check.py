@@ -34,15 +34,6 @@ SHA = re.compile(r"[0-9a-f]{40}")
 # Bound each local Git operation within the 15-minute CI job budget, allowing
 # filesystem work to finish while leaving time to report an unavailable check.
 GIT_TIMEOUT_SECONDS = 120
-DYNAMIC_CASES = {
-    "NV_ERR_RESET_REQUIRED kernel_channel.c": "gpu-reset-required",
-    "NV_ERR_NO_MEMORY mem_multicast_fabric.c": "nv-err-no-memory",
-    "NV_ERR_INVALID_STATE nv_gpu_ops.c": "nv-err-invalid-state",
-    "NV_ERR_INSUFFICIENT_RESOURCES mem_multicast_fabric.c": "nv-err-insufficient-resources",
-    "exit code signal 15": "exit-code-signal",
-    "IB Error-12 (IBV_WC_RETRY_EXC_ERR)": "ib-error-12",
-    "IB Error-12 Vendor-129 (IBV_WC_RETRY_EXC_ERR)": "ib-error-12-vendor-129",
-}
 
 
 def git(root: Path, *args: str) -> str:
@@ -82,24 +73,14 @@ def collect(root: Path) -> dict:
             {k: row[k] for k in ("id", "title", "aliases", "redirect_ids") if k in row}
         )
     build_doc_name_index(documents)
-    dynamic = []
-    registry = attribution_lib.get_symptom_registry()
-    for name, expected in DYNAMIC_CASES.items():
-        match = registry.outcome_for([name])
-        dynamic.append(
-            {
-                "name": name,
-                "expected_doc": expected,
-                "doc": match.doc if match else None,
-                "prefix": match.matched_prefix if match else None,
-            }
-        )
     return {
         "schema_version": 1,
         "commit_sha": git(root, "rev-parse", "HEAD"),
         "declarations": declarations,
         "documents": documents,
-        "dynamic": dynamic,
+        # Retained empty for schema-v1 consumers. Rule-specific runtime examples
+        # belong to attribution-lib tests, not the repository coverage producer.
+        "dynamic": [],
     }
 
 
@@ -120,15 +101,6 @@ def gaps(snapshot: dict) -> set[tuple[str, str, str, str]]:
     ):
         for row in rows:
             result.add((kind, row.prefix, row.doc or "", row.outcome or ""))
-    for row in snapshot["dynamic"]:
-        if row["doc"] != row["expected_doc"] or row["prefix"] is None:
-            result.add(
-                ("dynamic-target", row["name"], row["doc"] or "", row["expected_doc"])
-            )
-        elif row["doc"] not in index:
-            result.add(("dynamic-document", row["name"], row["doc"], row["prefix"]))
-        elif row["prefix"] not in index[row["doc"]]:
-            result.add(("dynamic-name", row["name"], row["doc"], row["prefix"]))
     return result
 
 

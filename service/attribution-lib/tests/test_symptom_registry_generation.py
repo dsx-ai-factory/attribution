@@ -1097,6 +1097,8 @@ def test_bad_nic_state_outcome_metadata():
     assert match is not None
     assert match.doc == "detected-bad-nic-state"
     assert match.hw_cause == "NIC firmware initialization failure"
+
+
 @pytest.mark.parametrize("symptom", ["NV_ERR_RESET_REQUIRED", "NV_ERR_RESET_REQUIRED kernel_channel.c"])
 def test_gpu_reset_outcome_retains_documentation(symptom: str) -> None:
     """Check that GPU-reset variants retain their declared documentation.
@@ -1110,3 +1112,23 @@ def test_gpu_reset_outcome_retains_documentation(symptom: str) -> None:
     assert isinstance(match, GeneratedOutcomeMatch)
     assert match.matched_prefix == "NV_ERR_RESET_REQUIRED"
     assert match.doc == "gpu-reset-required"
+
+
+@pytest.mark.parametrize(
+    ("symptom", "expected_doc"),
+    [
+        ("NV_ERR_RESET_REQUIRED kernel_channel.c", "gpu-reset-required"),
+        ("NV_ERR_NO_MEMORY mem_multicast_fabric.c", "nv-err-no-memory"),
+        ("NV_ERR_INVALID_STATE nv_gpu_ops.c", "nv-err-invalid-state"),
+        ("NV_ERR_INSUFFICIENT_RESOURCES mem_multicast_fabric.c", "nv-err-insufficient-resources"),
+        ("exit code signal 15", "exit-code-signal"),
+        ("IB Error-12 (IBV_WC_RETRY_EXC_ERR)", "ib-error-12"),
+        ("IB Error-12 Vendor-129 (IBV_WC_RETRY_EXC_ERR)", "ib-error-12-vendor-129"),
+    ],
+)
+def test_bundled_runtime_variants_resolve_to_expected_document(symptom, expected_doc):
+    """Keep specific bundled-rule mapping examples within the library suite."""
+    match = _load_committed_registry().outcome_for([symptom])
+
+    assert match is not None
+    assert match.doc == expected_doc

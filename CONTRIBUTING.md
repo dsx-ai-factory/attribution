@@ -175,8 +175,9 @@ which you could not run in the pull request.
 
 Run `bash .ci/run-tests.sh symptom-docs` when changing symptoms or the public failure
 catalog. The check loads the real registry and verifies public document IDs, exact
-names/aliases and representative dynamic mappings. It compares against the
-merge base with `origin/main`, so existing unrelated gaps do not block a change.
+names/aliases for all documentable declarations in the loaded rules. It compares
+against the merge base with `origin/main`, so existing unrelated gaps do not block
+a change.
 Set `SYMPTOM_DOC_BASE` to a full commit SHA to select another baseline. Removing
 a document or alias that previously resolved is a regression too.
 Rule documentation mappings must use canonical catalog IDs. A documentation-site
@@ -184,9 +185,10 @@ redirect alone does not resolve a verdict's catalog ID in the public UI.
 
 Changing a symptom's outcome, name or document mapping rechecks its coverage,
 even if the previous declaration had a grandfathered gap. The baseline is
-evaluated with the same checker and dynamic examples as the candidate. A newly
-added example that fails on both commits is therefore an existing gap: review
-its result explicitly, rather than treating a green comparison as full coverage.
+evaluated with the same checker as the candidate. Specific runtime mapping
+examples belong in attribution-lib tests, so the coverage checker does not
+require particular rules to be loaded. A green comparison means no new coverage
+gaps; it does not mean the baseline has complete documentation.
 
 CI shows `Tests / Documentation coverage` on repository branch pushes. It runs validation
 when the library, public catalog, checker, or its CI configuration changes.

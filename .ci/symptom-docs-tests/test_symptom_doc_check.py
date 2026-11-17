@@ -95,63 +95,6 @@ def test_redirect_does_not_replace_a_canonical_catalog_id():
     assert check.compare(base, head) == []
 
 
-def test_dynamic_redirect_is_not_a_resolving_public_catalog_id():
-    data = snapshot(doc="canonical-id")
-    data["documents"][0]["redirect_ids"] = ["old-id"]
-    data["dynamic"] = [
-        {
-            "name": "Example failure suffix",
-            "expected_doc": "old-id",
-            "doc": "old-id",
-            "prefix": "Example failure",
-        }
-    ]
-    assert check.gaps(data) == {
-        ("dynamic-document", "Example failure suffix", "old-id", "Example failure")
-    }
-
-
-@pytest.mark.parametrize(
-    "field,value,kind",
-    [
-        ("doc", "unrelated", "dynamic-target"),
-        ("prefix", None, "dynamic-target"),
-        ("prefix", "Wrong name", "dynamic-name"),
-    ],
-)
-def test_dynamic_mapping_regressions(field, value, kind):
-    base = snapshot()
-    base["dynamic"] = [
-        {
-            "name": "Example failure suffix",
-            "expected_doc": "example-failure",
-            "doc": "example-failure",
-            "prefix": "Example failure",
-        }
-    ]
-    head = copy.deepcopy(base)
-    head["dynamic"][0][field] = value
-    assert check.compare(base, head)[0][0] == kind
-
-
-def test_dynamic_document_removal_is_detected():
-    base = snapshot()
-    base["dynamic"] = [
-        {
-            "name": "Example failure suffix",
-            "expected_doc": "example-failure",
-            "doc": "example-failure",
-            "prefix": "Example failure",
-        }
-    ]
-    head = copy.deepcopy(base)
-    head["documents"] = []
-    assert {x[0] for x in check.compare(base, head)} == {
-        "missing-document",
-        "dynamic-document",
-    }
-
-
 def test_invalid_catalog_does_not_pass():
     head = snapshot()
     head["documents"] *= 2
@@ -408,7 +351,7 @@ def test_missing_comparison_commit_is_an_error_not_a_skip(change_repo, tmp_path)
 def test_real_snapshot_contains_only_document_metadata(tmp_path):
     result = check.collect(ROOT)
     assert result["declarations"]
-    assert len(result["dynamic"]) == len(check.DYNAMIC_CASES)
+    assert result["dynamic"] == []
     assert all(
         set(row) <= {"id", "title", "aliases", "redirect_ids"}
         for row in result["documents"]
@@ -421,20 +364,68 @@ def test_real_snapshot_contains_only_document_metadata(tmp_path):
     assert check.compare(result, result) == []
 
 
-def test_saved_contract_matches_real_producer():
+def test_saved_contract_has_only_synthetic_document_metadata():
     fixture = json.loads(
         (Path(__file__).parent / "fixtures/public-symptom-contract.json").read_text()
     )
-    actual = check.collect(ROOT)
-    assert actual.keys() == fixture.keys()
-    assert actual["schema_version"] == fixture["schema_version"]
-    prefixes = {r["prefix"] for r in fixture["declarations"]}
-    ids = {r["id"] for r in fixture["documents"]}
-    assert [r for r in actual["declarations"] if r["prefix"] in prefixes] == fixture[
-        "declarations"
+    assert fixture == snapshot()
+    assert check.gaps(fixture) == set()
+
+
+def test_producer_supports_an_independent_rule_set(tmp_path, monkeypatch):
+    """Coverage must not depend on any particular bundled symptom or registry lookup."""
+    from types import SimpleNamespace
+
+    import attribution_lib
+    import attribution_lib.core
+    from attribution_lib.symptoms.declarations import SymptomDeclaration
+
+    declarations = [
+        SymptomDeclaration(
+            prefix="Independent failure", doc="independent-failure", outcome="Fail User"
+        )
     ]
-    assert [r for r in actual["documents"] if r["id"] in ids] == fixture["documents"]
-    assert actual["dynamic"] == fixture["dynamic"]
+    monkeypatch.setattr(attribution_lib.core, "setup_rules", lambda **kwargs: None)
+    monkeypatch.setattr(
+        attribution_lib,
+        "_rules_engine",
+        SimpleNamespace(symptom_declarations=declarations),
+    )
+
+    def unexpected_registry_lookup():
+        pytest.fail(
+            "the coverage producer must not probe rule-specific runtime variants"
+        )
+
+    monkeypatch.setattr(
+        attribution_lib, "get_symptom_registry", unexpected_registry_lookup
+    )
+    catalog = tmp_path / check.CATALOG
+    catalog.parent.mkdir(parents=True)
+    catalog.write_text(
+        yaml.safe_dump(
+            {
+                "failures": [
+                    {"id": "independent-failure", "title": "Independent failure"}
+                ]
+            }
+        )
+    )
+    monkeypatch.setattr(check, "git", lambda *args: "a" * 40)
+    result = check.collect(tmp_path)
+    assert result["declarations"] == [
+        {
+            "prefix": "Independent failure",
+            "doc": "independent-failure",
+            "outcome": "Fail User",
+        }
+    ]
+    assert result["dynamic"] == []
+    assert check.gaps(result) == set()
+    catalog.write_text(yaml.safe_dump({"failures": []}))
+    assert check.gaps(check.collect(tmp_path)) == {
+        ("missing-document", "Independent failure", "independent-failure", "Fail User")
+    }
 
 
 def commit(root, message):
@@ -455,7 +446,7 @@ def commit(root, message):
 
 @pytest.fixture
 def committed_repo(tmp_path):
-    """A real disposable repository containing the real registry and catalog."""
+    """A disposable registry/catalog with a synthetic rule owned by this test."""
     root = tmp_path / "repo"
     root.mkdir()
     check.git(root, "init", "--template=", "--initial-branch=main")
@@ -470,7 +461,23 @@ def committed_repo(tmp_path):
         root / "service/attribution-lib/LICENSE",
     )
     (root / check.CATALOG).parent.mkdir(parents=True)
-    shutil.copyfile(ROOT / check.CATALOG, root / check.CATALOG)
+    payload = yaml.safe_load((ROOT / check.CATALOG).read_text())
+    payload["failures"].append(
+        {"id": "ci-example-failure", "title": "CI example failure"}
+    )
+    (root / check.CATALOG).write_text(yaml.safe_dump(payload, sort_keys=False))
+    rule = (
+        root
+        / "service/attribution-lib/src/attribution_lib/bundled_rules/doc_check_fixture.py"
+    )
+    notices = (ROOT / ".ci/symptom_doc_check.py").read_text().split('"""', 1)[0]
+    rule.write_text(
+        notices
+        + "from attribution_lib.rules import outcome_symptom\n"
+        + "from attribution_lib.symptoms.declarations import OutcomePriority\n"
+        + "outcome_symptom('CI example failure', outcome='Fail InfraSW', "
+        + "priority=OutcomePriority.MEDIUM, doc='ci-example-failure')\n"
+    )
     shutil.copyfile(ROOT / "blueprint/LICENSE", root / "blueprint/LICENSE")
     (root / ".gitignore").write_text("__pycache__/\n*.pyc\n")
     return root, commit(root, "Initial test registry and catalog")
@@ -486,14 +493,12 @@ def test_real_commit_comparison_and_worktree_cleanup(
     payload = yaml.safe_load(original)
     if operation == "remove":
         payload["failures"] = [
-            r for r in payload["failures"] if r["id"] != "detected-bad-nic-state"
+            r for r in payload["failures"] if r["id"] != "ci-example-failure"
         ]
     else:
-        entry = next(
-            r for r in payload["failures"] if r["id"] == "detected-bad-nic-state"
-        )
-        entry["id"] = "renamed-nic-state"
-        entry["redirect_ids"] = ["detected-bad-nic-state"]
+        entry = next(r for r in payload["failures"] if r["id"] == "ci-example-failure")
+        entry["id"] = "renamed-example-failure"
+        entry["redirect_ids"] = ["ci-example-failure"]
     catalog.write_text(yaml.safe_dump(payload, sort_keys=False))
     head = commit(root, "Remove a required documentation entry")
     output = tmp_path / "output"
@@ -505,8 +510,8 @@ def test_real_commit_comparison_and_worktree_cleanup(
     assert report["new_gaps"] == [
         [
             "missing-document",
-            "detected bad NIC state",
-            "detected-bad-nic-state",
+            "CI example failure",
+            "ci-example-failure",
             "Fail InfraSW",
         ]
     ]
@@ -529,7 +534,7 @@ def test_advisory_missing_then_corrected_real_catalog(
     original = catalog.read_text()
     payload = yaml.safe_load(original)
     payload["failures"] = [
-        r for r in payload["failures"] if r["id"] != "detected-bad-nic-state"
+        r for r in payload["failures"] if r["id"] != "ci-example-failure"
     ]
     catalog.write_text(yaml.safe_dump(payload, sort_keys=False))
     head = commit(root, "Remove required documentation for advisory test")
@@ -553,7 +558,7 @@ def test_advisory_missing_then_corrected_real_catalog(
     assert report["head_sha"] == head
     assert "::warning file=" in capsys.readouterr().out
     text = summary.read_text()
-    assert "detected-bad-nic-state" in text
+    assert "ci-example-failure" in text
     assert "ask a maintainer" in text.lower()
     assert "does not block merging" in text
     catalog.write_text(original)
