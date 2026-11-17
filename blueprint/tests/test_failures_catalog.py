@@ -388,6 +388,19 @@ def test_scheduler_gpu_loss_is_not_a_hardware_diagnosis(catalog_by_id: dict[str,
     assert "cloud provider" in entry["personas"]["tenant_sre"]["action"]
 
 
+def test_scheduler_node_failure_guidance_is_shared_with_explicit_slurm_examples(
+    catalog_by_id: dict[str, Any],
+) -> None:
+    entry = catalog_by_id["node-failure-reported-by-slurm"]
+    guidance = entry["personas"]["tenant_sre"]
+
+    assert entry["title"] == "Node failure reported by scheduler"
+    assert "Node failure reported by" in entry["aliases"]
+    assert "scheduler name and version" in guidance["support_details"]
+    assert "installed Slurm version" in guidance["support_details"]
+    assert all(signal["note"].startswith("Slurm-only example:") for signal in entry["signals"])
+
+
 @pytest.mark.parametrize(
     "entry_id",
     [

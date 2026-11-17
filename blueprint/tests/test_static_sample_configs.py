@@ -195,8 +195,8 @@ def test_static_quickstart_samples_include_manifest_evidence():
         assert str(job["evidence_marker"]) in text
 
 
-def test_static_quickstart_prioritizes_slurm_node_failures_over_xid31():
-    """Slurm node failures should remain the root cause when XID-31 is also present."""
+def test_static_quickstart_prioritizes_scheduler_node_failures_over_xid31():
+    """Scheduler node failures remain the root cause when XID-31 is also present."""
     jobs_by_id = {str(job["id"]): job for job in _sample_manifest_jobs()}
 
     for workload in PRIORITIZED_NODE_FAILURE_WORKLOADS:

@@ -101,6 +101,29 @@ def test_factory_from_string_accepts_registered():
     assert s.symptom_id == known_id
 
 
+@pytest.mark.parametrize(
+    "factory",
+    (
+        lambda: SymptomFactory.from_enum(
+            RegisteredSymptoms.NODE_FAILURE_REPORTED_BY_SLURM,
+            sources=None,
+            attributes=None,
+        ),
+        lambda: SymptomFactory.from_string(
+            RegisteredSymptoms.NODE_FAILURE_REPORTED_BY_SLURM.value,
+            sources=None,
+            attributes=None,
+        ),
+    ),
+)
+def test_factory_resolves_fallback_prefix_metadata(factory):
+    """Preserve metadata when a legacy symptom resolves through a fallback prefix."""
+    symptom = factory()
+
+    assert symptom.symptom_id == "Node failure reported by slurm"
+    assert "Stopping nvidia-imex.service" in symptom.cascade_discards
+
+
 def _one_source_set(context: Context, value: str) -> SourceSet[str]:
     src = Source(context, None, None, datetime.now(ZoneInfo("UTC")), AllJobResources, None)
     return SourceSet.new_one(value, src)
@@ -224,6 +247,21 @@ def test_cascade_prune_handles_downstream_cycle(mock_registry_with_cycle, dummy_
     assert "OTHER" in remaining
     assert "CYCLE_A" not in remaining
     assert "CYCLE_B" not in remaining
+
+
+def test_cascade_prune_resolves_primary_fallback_prefix(dummy_ctx):
+    """Apply cascade metadata declared on a fallback prefix."""
+    node_failure = "Node failure reported by slurm"
+    imex_shutdown = "Stopping nvidia-imex.service"
+    symptoms = SymptomSet[str]()
+    symptoms.add(_one_source_set(dummy_ctx, node_failure))
+    symptoms.add(_one_source_set(dummy_ctx, imex_shutdown))
+
+    op.cascade_prune(symptoms, node_failure)
+
+    remaining = set(symptoms.symptoms())
+    assert node_failure in remaining
+    assert imex_shutdown not in remaining
 
 
 def test_conditional_discard_traverses_child_subtrees(mock_registry_conditional_chain, dummy_ctx):
