@@ -24,12 +24,8 @@ Emits one workload-level context per PodGroup, with these KAI specifics:
                        a completed one stays COMPLETED without one.
 
 Member Pods are joined on the `pod-group-name` annotation plus namespace,
-then validated against the exact owning Job UID; JobSet members must belong
-to current child Jobs. Kubernetes exposes no reliable per-annotation
-assignment timestamp (`managedFields` records a field manager's last write to
-*any* owned field, and a Pod's own `creationTimestamp` can predate its
-PodGroup by design), so membership intentionally does not use time as a
-discriminator; see `_member_pods` for the resulting known limitation.
+then validated against the exact owning Job UID — see `_member_pods` for
+why membership intentionally does not use timestamps as a discriminator.
 
 The owner comes from the `kai.scheduler/top-owner-metadata` annotation, or
 else the PodGroup's controller ownerReference. Only PodGroups owned by a
@@ -44,14 +40,21 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import NotRequired, TypedDict
 
-import yaml
 from loguru import logger
 
-from attribution_blueprint.connectors.execution_contexts.kubernetes_client import (
+from attribution_blueprint.connectors.execution_contexts.kai.helpers import (
+    POD_GROUP_ANNOTATION as _POD_GROUP_ANNOTATION,
+    controller_owner as _controller_owner,
+    resolve_owner as _resolve_owner,
+)
+from attribution_blueprint.kubernetes.client import (
     KubernetesClient,
     KubernetesClientError,
 )
-from attribution_blueprint.connectors.execution_contexts.kubernetes_helpers import (
+from attribution_blueprint.kubernetes.daemon.models import PlacementRecord, PodPlacement
+from attribution_blueprint.kubernetes.daemon.store import PlacementReader
+from attribution_blueprint.kubernetes.helpers import (
+    NODE_LOSS_DISRUPTION_REASONS,
     earliest_job_failure_reason,
     job_time_limit_minutes,
     pod_node_failure_reason,
@@ -64,8 +67,6 @@ _JOB_RESOURCE = "Job"
 _JOB_API_VERSION = "batch/v1"
 _JOBSET_RESOURCE = "JobSet"
 _JOBSET_GROUP = "jobset.x-k8s.io"
-_POD_GROUP_ANNOTATION = "pod-group-name"
-_TOP_OWNER_ANNOTATION = "kai.scheduler/top-owner-metadata"
 _JOBSET_NAME_LABEL = "jobset.sigs.k8s.io/jobset-name"
 
 _SHAPE_OWNED = "owned"
@@ -98,9 +99,7 @@ class KaiExecutionContext(TypedDict):
     owner_kind: str
     owner_name: str
     owner_uid: str
-    # The owner's own state, e.g. "Complete", "Failed:BackoffLimitExceeded",
-    # "Suspended" or "Active".
-    owner_state: str
+    owner_state: str  # native owner wording; see `_owner_state`
     failed_node: NotRequired[str]
     time_limit: NotRequired[int]
 
@@ -112,6 +111,7 @@ class KaiExecutionContext(TypedDict):
     pod_names: NotRequired[list[str]]
     # Pod name -> `.spec.nodeName`.
     pod_nodes: NotRequired[dict[str, str]]
+    pod_placements: NotRequired[list[PodPlacement]]
 
 
 def _parse_dt(value: str | None) -> datetime | None:
@@ -175,33 +175,6 @@ def _jobset_child_jobs(owner: dict, jobs: list[dict]) -> list[dict]:
         and controller["uid"] == owner["uid"]
         and (job.get("metadata") or {}).get("uid")
     ]
-
-
-def _top_owner(meta: dict) -> dict | None:
-    raw = (meta.get("annotations") or {}).get(_TOP_OWNER_ANNOTATION)
-    if not raw:
-        return None
-    try:
-        owner = yaml.safe_load(raw)
-    except yaml.YAMLError:
-        return None
-    if not isinstance(owner, dict):
-        return None
-    if not all(owner.get(field) for field in ("kind", "name", "uid")):
-        return None
-    return owner
-
-
-def _controller_owner(meta: dict) -> dict | None:
-    refs = [ref for ref in meta.get("ownerReferences") or [] if isinstance(ref, dict)]
-    for ref in refs:
-        if ref.get("controller") and ref.get("kind") and ref.get("name") and ref.get("uid"):
-            return ref
-    return None
-
-
-def _resolve_owner(meta: dict) -> dict | None:
-    return _top_owner(meta) or _controller_owner(meta)
 
 
 def _podgroup_shape(spec: dict) -> str:
@@ -278,13 +251,11 @@ def _condition(owner_object: dict, condition_type: str) -> dict | None:
 
 
 def _owner_state(owner: dict, owner_object: dict, owner_jobs: list[dict]) -> tuple[str, str]:
-    """Return the service-facing state and the native owner state.
+    """Return (service-facing state, native owner state).
 
-    The service state is COMPLETED, FAILED, TIMEOUT or RUNNING. It is derived
-    from the same terminal signal as the end time, so an owner without one is
-    RUNNING, including while suspended. A Job whose Failed condition reports
-    DeadlineExceeded is TIMEOUT. The native state keeps the owner's own
-    wording, including the failure reason.
+    Service state is COMPLETED, FAILED, TIMEOUT, or RUNNING (including while
+    suspended), derived from the same terminal signal as the end time. Native
+    state keeps the owner's own wording, e.g. "Failed:BackoffLimitExceeded".
     """
     if _owner_end_time(owner, owner_object) is None:
         return "RUNNING", "Suspended" if _condition(owner_object, "Suspended") else "Active"
@@ -443,9 +414,15 @@ class KaiExecutionContextAdapter:
         context: str | None = None,
         namespace: str | None = None,
         timeout_seconds: int = 60,
+        placement_records_enabled: bool = False,
+        placement_reader: PlacementReader | None = None,
     ):
         self.namespace = namespace or ""
         self.timeout_seconds = timeout_seconds
+        if not isinstance(placement_records_enabled, bool):
+            raise ValueError("placement_records_enabled must be a bool")
+        self.placement_records_enabled = placement_records_enabled
+        self.placement_reader = placement_reader
         self._kubernetes = KubernetesClient(
             kubeconfig=kubeconfig,
             context=context,
@@ -476,6 +453,11 @@ class KaiExecutionContextAdapter:
                         f"use `<namespace>/<name>` or configure eca.kai.namespace"
                     )
                 ns, name = self.namespace, ref
+            if self.placement_records_enabled and self.namespace and ns != self.namespace:
+                raise ValueError(
+                    f"kai ECA --ids: {ref!r} is outside configured namespace "
+                    f"{self.namespace!r}"
+                )
             try:
                 podgroups.append(
                     self._kubernetes.get_one(
@@ -513,7 +495,7 @@ class KaiExecutionContextAdapter:
             namespace=self.namespace,
             group=_PODGROUP_GROUP,
         )
-        contexts = [c for c in self._finalize(listing) if c["start_time"] <= end and c["end_time"] >= start]
+        contexts = self._finalize(listing, time_range=(start, end))
         if not nodelist:
             return contexts
         wanted: set[str] = set()
@@ -525,7 +507,12 @@ class KaiExecutionContextAdapter:
 
     # --- internals ---------------------------------------------------------
 
-    def _finalize(self, podgroups: list[dict]) -> list[KaiExecutionContext]:
+    def _finalize(
+        self,
+        podgroups: list[dict],
+        *,
+        time_range: tuple[datetime, datetime] | None = None,
+    ) -> list[KaiExecutionContext]:
         # Unsupported owners cannot supply an end time, so drop them before
         # fetching Pods or owners.
         owned: list[tuple[dict, dict, str]] = []
@@ -584,9 +571,69 @@ class KaiExecutionContextAdapter:
                 owner_object,
                 now,
             )
-            if ctx is not None:
-                contexts.append(ctx)
+            if ctx is None:
+                continue
+            if time_range is not None:
+                start, end = time_range
+                if ctx["start_time"] > end or ctx["end_time"] < start:
+                    continue
+            self._merge_placement_records(ctx)
+            contexts.append(ctx)
         return contexts
+
+    def _fetch_placement_records(self, context: KaiExecutionContext) -> list[PlacementRecord]:
+        if not self.placement_records_enabled:
+            return []
+        if self.placement_reader is None:
+            raise RuntimeError("placement records are enabled but no KubernetesDaemon client is configured")
+        try:
+            return self.placement_reader.list_for_resource(
+                context["namespace"],
+                context["pod_group_uid"],
+            )
+        except Exception as error:
+            raise RuntimeError(f"KubernetesDaemon placement lookup failed: {error}") from error
+
+    def _merge_placement_records(self, context: KaiExecutionContext) -> None:
+        records = self._fetch_placement_records(context)
+        if not records:
+            return
+        placements: list[PodPlacement] = [
+            {
+                "pod_uid": record.pod_uid,
+                "pod_name": record.pod_name,
+                "node_name": record.node_name,
+                "source": "kubernetes_daemon",
+            }
+            for record in records
+        ]
+        existing = {
+            placement["pod_uid"]: placement
+            for placement in context.get("pod_placements") or []
+            if placement.get("pod_uid")
+        }
+        for placement in placements:
+            existing.setdefault(placement["pod_uid"], placement)
+        merged = sorted(existing.values(), key=lambda placement: placement["pod_uid"])
+        context["pod_placements"] = merged
+        context["nodes"] = sorted(set(context["nodes"]) | {placement["node_name"] for placement in merged})
+        context["pod_names"] = sorted(
+            set(context.get("pod_names") or []) | {placement["pod_name"] for placement in merged}
+        )
+        pod_nodes = dict(context.get("pod_nodes") or {})
+        for placement in placements:
+            pod_nodes.setdefault(placement["pod_name"], placement["node_name"])
+        context["pod_nodes"] = pod_nodes
+
+        node_loss_nodes = {
+            record.node_name
+            for record in records
+            if record.node_failure_reason == "NodeLost"
+            or record.node_failure_reason in NODE_LOSS_DISRUPTION_REASONS
+        }
+        if node_loss_nodes and context["state"] != "COMPLETED":
+            context["state"] = "NODE_FAIL"
+            context["failed_node"] = min(node_loss_nodes)
 
     def _fetch_pods(self, podgroups: list[dict]) -> list[dict]:
         """List Pods once per distinct namespace.

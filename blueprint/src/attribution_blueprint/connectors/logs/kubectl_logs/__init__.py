@@ -32,6 +32,7 @@ from loguru import logger
 from attribution_blueprint.connectors.logs import entries_from_text, log_observation
 from attribution_blueprint.connectors.logs.syslog import syslog_entries_from_text
 from attribution_blueprint.exceptions import MCAError
+from attribution_blueprint.telemetry import track
 from attribution_blueprint.types import (
     ExecutionContext,
     Observation,
@@ -188,13 +189,15 @@ class KubectlLogsConnector:
     def _read_pod_logs(self, pod: str, namespace: str, context: ExecutionContext) -> str:
         argv = self._build_argv(pod, namespace, context)
         try:
-            result = subprocess.run(
-                argv,
-                check=True,
-                text=True,
-                capture_output=True,
-                timeout=self._timeout_seconds,
-            )
+            with track("kubectl_logs", "logs") as call:
+                result = subprocess.run(
+                    argv,
+                    check=True,
+                    text=True,
+                    capture_output=True,
+                    timeout=self._timeout_seconds,
+                )
+                call.response_bytes = len(result.stdout.encode())
         except subprocess.CalledProcessError as e:
             logger.warning(
                 f"kubectl_logs: `kubectl logs {pod} -n {namespace}` exited {e.returncode}: "

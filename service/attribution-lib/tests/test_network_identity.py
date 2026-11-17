@@ -52,3 +52,36 @@ def test_explicit_nccl_hostname_does_not_require_a_gid_or_allocation():
     assert identity.hostname == "outside"
     assert identity.local_ip is None
     assert identity.mapped_hostname is None
+
+
+@pytest.mark.parametrize("spelling", ["localGid", "local GID"])
+def test_local_gid_spellings_share_identity_rules(spelling):
+    with hostname_mapping({"192.0.2.1": "node-a"}):
+        identity = network_source_identity(f"Last error: {spelling} ::ffff:192.0.2.1, remote GID N/A")
+    assert identity.hostname == "node-a"
+
+
+def test_rank_does_not_identify_network_emitter():
+    identity = network_source_identity("[1] NCCL WARN Call to ibv_query_qp failed", prefix_hostname="node-b")
+    assert identity.hostname is None
+
+
+@pytest.mark.parametrize("index", [3, -1])
+@pytest.mark.parametrize("mapped", [False, True])
+def test_modify_qp_local_gid_skips_index_field(index, mapped):
+    line = (
+        "Last error: Call to ibv_modify_qp failed with 22 Invalid argument, "
+        f"on dev mlx5_4:1, local GID index {index}, "
+        "local GID ::ffff:192.0.2.1, remote GID ::ffff:192.0.2.2"
+    )
+    with hostname_mapping({"192.0.2.1": "node-a"} if mapped else {}):
+        identity = network_source_identity(line)
+    assert identity.local_ip == "192.0.2.1"
+    assert identity.hostname == ("node-a" if mapped else None)
+
+
+def test_local_gid_index_does_not_become_an_address_or_use_remote_gid():
+    with hostname_mapping({"192.0.2.2": "node-b"}):
+        identity = network_source_identity("local GID index 3, remote GID ::ffff:192.0.2.2")
+    assert identity.local_ip is None
+    assert identity.hostname is None

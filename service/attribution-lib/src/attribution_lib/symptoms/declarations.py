@@ -37,6 +37,7 @@ class OutcomePriority(IntEnum):
     LOW_NETWORK = 1200
     LOW_USER = 1300
     INCOMPLETE = 1400
+    LOW_FALLBACK = 1450
     FALLBACK = 1500
 
 

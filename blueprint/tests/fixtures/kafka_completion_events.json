@@ -1,0 +1,55 @@
+[
+  {
+    "specversion": "1.0",
+    "id": "0b7e5a52-1c1e-4b7e-9f51-6a7d0c2b9e01",
+    "source": "/example/scheduler",
+    "type": "com.example.job.completed.v1",
+    "subject": "jobs/job-a1",
+    "time": "2026-10-21T17:42:09.512Z",
+    "datacontenttype": "application/json",
+    "data": {
+      "id": "job-a1",
+      "job_id": "job-a1",
+      "attempt_id": "2",
+      "scheduler": "example",
+      "workload_framework": "pytorch",
+      "name": "sample-sft-run",
+      "user_name": "example-user",
+      "state": "FAILED",
+      "start_time": "2026-10-21T14:05:31Z",
+      "end_time": "2026-10-21T17:41:58Z",
+      "timezone": "America/Los_Angeles",
+      "time_limit": 480,
+      "nodes": ["example-node-001", "example-node-002"],
+      "gpu_count": 16,
+      "failed_nodes": ["example-node-002"],
+      "cancelled_by": "",
+      "namespace": "example-team",
+      "pod_names": ["job-a1-worker-0", "job-a1-worker-1"],
+      "pod_nodes": {
+        "job-a1-worker-0": "example-node-001",
+        "job-a1-worker-1": "example-node-002"
+      }
+    }
+  },
+  {
+    "specversion": "1.0",
+    "id": "5d2f9c1a-7e44-4f0b-8a93-3c6e1b8d2f02",
+    "source": "/example/scheduler",
+    "type": "com.example.job.completed.v1",
+    "subject": "jobs/job-b7",
+    "time": "2026-10-21T18:10:00Z",
+    "datacontenttype": "application/json",
+    "data": {
+      "id": "job-b7",
+      "job_id": "job-b7",
+      "attempt_id": "1",
+      "scheduler": "example",
+      "state": "COMPLETED",
+      "start_time": "2026-10-21T16:00:00+00:00",
+      "end_time": "2026-10-21T18:09:41+00:00",
+      "nodes": ["example-node-003"],
+      "gpu_count": 8
+    }
+  }
+]

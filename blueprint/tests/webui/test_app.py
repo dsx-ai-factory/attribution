@@ -180,12 +180,26 @@ def test_deep_link_returns_spa_shell(populated_db):
 
 
 @pytest.mark.parametrize("private_guidance", [False, True])
-def test_tenant_guidance_survives_catalog_to_http_payload(tmp_path, monkeypatch, private_guidance):
+@pytest.mark.parametrize(
+    "catalog_id",
+    [
+        "xid-79",
+        "cancelled-due-to-task-failure",
+        "ib-device-settings-mismatch",
+        "kernel-oops",
+        "nvrx-ft-launcher-exit-0",
+        "oom-kill-of-user-task",
+        "xid-69",
+        "nv-err-invalid-object",
+        "nv-err-no-memory",
+    ],
+)
+def test_tenant_guidance_survives_catalog_to_http_payload(tmp_path, monkeypatch, private_guidance, catalog_id):
     """Expose tenant actions and handoff evidence, never private catalog fields."""
     from attribution_blueprint.webui import diagnose
 
     catalog = deepcopy(diagnose._load_catalog())
-    entry = catalog["xid-79"]
+    entry = catalog[catalog_id]
     tenant = entry["personas"]["tenant_sre"]
     assert tenant["action"] != ""
     assert tenant["support_details"] != ""
@@ -199,7 +213,7 @@ def test_tenant_guidance_survives_catalog_to_http_payload(tmp_path, monkeypatch,
     path = tmp_path / "tenant.db"
     out = SQLiteOutput(str(path))
     result = _attr("Fail InfraHW")
-    result["verdict"]["root_symptom"]["catalog_id"] = "xid-79"
+    result["verdict"]["root_symptom"]["catalog_id"] = catalog_id
     out.write(_ctx("tenant-job", "tenant-attempt"), result)
     out.close()
     with TestClient(create_app(str(path))) as client:
@@ -213,6 +227,8 @@ def test_tenant_guidance_survives_catalog_to_http_payload(tmp_path, monkeypatch,
     for payload in (summary, detail):
         card = payload["diagnose"]
         assert card["hasPersona"] is True
+        assert card["catalogId"] == catalog_id
+        assert card["severity"] == entry["severity"]
         assert card["action"] == tenant["action"]
         assert card["supportDetails"] == [tenant["support_details"]]
         assert "operatorDiagnose" not in payload
@@ -481,6 +497,73 @@ def test_date_bounds_span_runs_the_rollup_table_left_behind(tmp_path):
     assert payload["meta"]["dateBounds"] == {"min": "2026-05-01", "max": "2026-06-09"}
     # Window metrics still come off the rollup; only the database-wide fields bypass it.
     assert payload["metrics"]["windowedRuns"] == 1
+
+
+def test_runs_search_matches_allocated_node_and_attempt_uid(tmp_path):
+    """Free-text search covers allocated nodes and the attempt UID, as the search box promises."""
+    p = tmp_path / "search.db"
+    out = SQLiteOutput(str(p))
+    out.write(_ctx("100", "attempt-uid-7", nodes=("alloc-node-7", "node-a")), _attr("Fail InfraHW"))
+    out.write(_ctx("101", "sluid-B"), _attr("Fail InfraHW"))
+    out.close()
+    client = TestClient(create_app(str(p)))
+
+    for query in ("alloc-node-7", "attempt-uid-7"):
+        payload = client.get("/api/v1/runs", params={"q": query}).json()
+        assert payload["total"] == 1, query
+        assert payload["runs"][0]["jobId"] == "100", query
+
+
+def test_rollup_date_window_normalizes_end_time_offsets_to_utc(populated_db: str) -> None:
+    """The rollup path buckets runs by UTC day like the normalized path, ignoring a source-local end_day (#210)."""
+    # 2026-08-07T17:30-07:00 is 2026-08-08T00:30 UTC; end_day keeps the source-local day on purpose.
+    _seed_rollup(
+        populated_db,
+        [
+            ("rollup-utc", "2026-08-08T00:30:00+00:00", "2026-08-08", "utc", "Fail InfraHW", 10, 8, "XID-79"),
+            ("rollup-offset", "2026-08-07T17:30:00-07:00", "2026-08-07", "offset", "Fail InfraHW", 10, 8, "XID-79"),
+        ],
+    )
+
+    aug8 = db.dashboard_data(populated_db, since="2026-08-08", until="2026-08-08")
+    aug7 = db.dashboard_data(populated_db, since="2026-08-07", until="2026-08-07")
+
+    assert aug8["metrics"]["windowedRuns"] == 2
+    assert [(d["date"], d["hw"]) for d in aug8["daily"]] == [("2026-08-08", 2)]
+    assert aug8["hwBreakdown"]["series"] == [{"symptom": "XID-79", "data": [2], "total": 2}]
+    assert aug8["ledgers"]["symptom"][0]["count"] == 2
+    assert aug7["metrics"]["windowedRuns"] == 0
+    assert aug7["hwBreakdown"]["total"] == 0
+
+
+def test_rollup_unfiltered_spine_uses_utc_days(populated_db: str) -> None:
+    """Without a window, the rollup chart spine starts and ends on the UTC day of offset runs."""
+    # Both rows share the source-local end_day 2026-08-07, but 23:30-07:00 is 2026-08-08T06:30 UTC.
+    _seed_rollup(
+        populated_db,
+        [
+            ("rollup-utc", "2026-08-07T00:30:00+00:00", "2026-08-07", "utc", "Fail InfraHW", 10, 8, "XID-79"),
+            ("rollup-offset", "2026-08-07T23:30:00-07:00", "2026-08-07", "offset", "Fail InfraHW", 10, 8, "XID-79"),
+        ],
+    )
+
+    data = db.dashboard_data(populated_db)
+
+    assert [(d["date"], d["hw"]) for d in data["daily"]] == [("2026-08-07", 1), ("2026-08-08", 1)]
+    assert data["hwBreakdown"]["series"] == [{"symptom": "XID-79", "data": [1, 1], "total": 2}]
+    assert data["hwBreakdown"]["total"] == 2
+
+
+def test_rollup_date_window_seeks_end_time_index(populated_db: str) -> None:
+    """The rollup UTC window keeps an indexed end_time range so narrow windows do not scan the table."""
+    _seed_rollup(populated_db, [])
+    clauses, params = db._rollup_clauses(since="2026-08-08", until="2026-08-08")
+    sql = "EXPLAIN QUERY PLAN SELECT COUNT(*) FROM webui_run_fact WHERE " + " AND ".join(clauses)
+    with sqlite3.connect(populated_db) as conn:
+        conn.execute("CREATE INDEX idx_webui_run_fact_end_time ON webui_run_fact(end_time)")
+        plan = " ".join(row[-1] for row in conn.execute(sql, params).fetchall())
+    # A julianday()-only filter still names the index, but as a full SCAN; require a range SEARCH.
+    assert "SEARCH webui_run_fact USING COVERING INDEX idx_webui_run_fact_end_time" in plan
 
 
 def test_dashboard_rejects_malformed_dates(tmp_path):

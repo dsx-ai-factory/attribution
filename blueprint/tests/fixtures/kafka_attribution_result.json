@@ -1,0 +1,88 @@
+{
+  "specversion": "1.0",
+  "id": "b2e47d10-8c3f-4f9a-a6d2-5e1c0f93a7b4",
+  "source": "/attribution/blueprint",
+  "type": "com.nvidia.attribution.job.attributed.v1",
+  "subject": "jobs/rj-8f3a2c71",
+  "time": "2026-10-21T17:46:31.204Z",
+  "datacontenttype": "application/json",
+  "data": {
+    "job_id": "rj-8f3a2c71",
+    "attempt_id": "2",
+    "cluster": "nvl72-dfw-01",
+    "scheduler": "slurm",
+    "trigger_event_id": "6f1c2a9e-3b7d-4c55-9a0e-1d2f8e7b4c10",
+    "terminal_state": "fail",
+    "sub_domain": "hardware",
+    "tenant_sre_action": "RESTART_JOB",
+    "cloud_operator_sre_action": "DRAIN_NODE",
+    "result": {
+      "verdict": {
+        "attribution_outcome": "Fail InfraHW",
+        "detail": "Known HW Cause - Node",
+        "terminal_states": [
+          "Fail"
+        ],
+        "failure_domains": [
+          "InfraHW"
+        ],
+        "cancellation_actors": [],
+        "uncertainty_type": null,
+        "root_symptom": {
+          "symptom": "XID-79-GPU_HAS_FALLEN_OFF_THE_BUS",
+          "catalog_id": "xid-79",
+          "source": {
+            "source": "syslog",
+            "line": "NVRM: Xid (PCI:0000:9a:00): 79, GPU has fallen off the bus.",
+            "rule": "xid_79",
+            "time": "2026-10-21T17:38:12Z"
+          }
+        }
+      },
+      "symptoms": {
+        "XID-79-GPU_HAS_FALLEN_OFF_THE_BUS": [
+          {
+            "type": "NodeSource",
+            "node": "gpu-h100-a12-n09",
+            "status": "bad",
+            "source": {
+              "source": "syslog",
+              "line": "NVRM: Xid (PCI:0000:9a:00): 79, GPU has fallen off the bus.",
+              "rule": "xid_79",
+              "time": "2026-10-21T17:38:12Z"
+            }
+          }
+        ],
+        "PyTorch NCCL watchdog": [
+          {
+            "type": "NodeSource",
+            "node": "gpu-h100-a12-n07",
+            "status": "interesting",
+            "source": {
+              "source": "applog",
+              "line": "Watchdog caught collective operation timeout",
+              "rule": "pytorch_nccl_watchdog",
+              "time": "2026-10-21T17:41:40Z"
+            }
+          }
+        ]
+      }
+    },
+    "connector_reports": [
+      {
+        "connector": "LokiLogConnector",
+        "source": "syslog",
+        "status": "ok",
+        "reason": "",
+        "observation_count": 4
+      },
+      {
+        "connector": "PromQLMetricsConnector",
+        "source": "node_metrics",
+        "status": "error",
+        "reason": "query timeout after 30s",
+        "observation_count": 0
+      }
+    ]
+  }
+}

@@ -1,15 +1,13 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-import json
-import re
-
-import requests
 from loguru import logger
 
 from attribution_blueprint.connectors.auth import Auth
 from attribution_blueprint.connectors.logs import log_observation
+from attribution_blueprint.connectors.logs.envelope import extract_body_and_node as _extract_body_and_node
 from attribution_blueprint.connectors.logs.loki.templates import TEMPLATES
+from attribution_blueprint.telemetry import MeteredSession, QueryTruncation, record_paginated_query
 from attribution_blueprint.types import (
     ExecutionContext,
     NodeResource,
@@ -18,10 +16,12 @@ from attribution_blueprint.types import (
     Source,
     TimeseriesEntry,
     assert_aware,
+    context_run_id,
 )
 
 DEFAULT_LIMIT = 5000
 DEFAULT_NODE_LABEL = "host_name"
+QUERY_PATH = "/loki/api/v1/query_range"
 
 # RE2 metacharacters (https://github.com/google/re2/wiki/Syntax). Unlike
 # Python re, RE2 rejects unrecognized escape sequences (e.g. `\-`), so
@@ -36,39 +36,6 @@ def _re2_escape(s: str) -> str:
 # Hard cap on paginated requests per template so a pathologically chatty query
 # can't run forever; at DEFAULT_LIMIT=5000 this is up to 100k entries.
 MAX_PAGES = 20
-
-
-def _as_str(value: object) -> str:
-    """Envelope fields come from arbitrary JSON, so only a str is usable downstream."""
-    return value if isinstance(value, str) else ""
-
-
-def _extract_body_and_node(payload: str, node: str | None) -> tuple[str, str | None]:
-    """Pull the log line, and a hostname when the stream had none, out of a JSON-encoded Loki value.
-
-    Handles OTel (`body` + `attributes.hostname`), `message`, and CloudEvents
-    (`data.message` + `data.hostname`) envelopes; anything else is returned verbatim.
-    """
-    try:
-        parsed = json.loads(payload)
-    except json.JSONDecodeError:
-        return payload, node
-    if not isinstance(parsed, dict):
-        return payload, node
-
-    attributes = parsed.get("attributes")
-    if node is None and isinstance(attributes, dict):
-        node = _as_str(attributes.get("hostname")) or None
-    body = _as_str(parsed.get("body")) or _as_str(parsed.get("message"))
-    if body == "":
-        data = parsed.get("data")
-        if isinstance(data, dict):
-            body = _as_str(data.get("message"))
-            if node is None:
-                node = _as_str(data.get("hostname")) or None
-    if body == "":
-        body = payload
-    return body, node
 
 
 class LokiConnector:
@@ -114,7 +81,7 @@ class LokiConnector:
         # cluster-wide queries.
         self._node_label = node_label
 
-        self._session = requests.Session()
+        self._session = MeteredSession("loki", (QUERY_PATH,))
         kwargs = auth.request_kwargs()
         if "headers" in kwargs:
             self._session.headers.update(kwargs["headers"])
@@ -140,7 +107,7 @@ class LokiConnector:
         for tmpl in self._templates:
             try:
                 query = tmpl.format(
-                    job_id=context.get("id", ""),
+                    job_id=context_run_id(context),
                     **self._query_kwargs,
                 )
             except KeyError as e:
@@ -219,9 +186,11 @@ class LokiConnector:
         """
         out: list[dict] = []
         cur_end = end_ns
-        for page in range(MAX_PAGES):
+        entries = 0
+        truncations: set[QueryTruncation] = set()
+        for pages in range(1, MAX_PAGES + 1):
             response = self._session.post(
-                f"{self._endpoint}/loki/api/v1/query_range",
+                f"{self._endpoint}{QUERY_PATH}",
                 data={"query": query, "start": start_ns, "end": cur_end, "limit": self._limit},
                 timeout=self._timeout,
             )
@@ -231,10 +200,12 @@ class LokiConnector:
             if entry_count == 0:
                 break
             out.extend(streams)
+            entries += entry_count
             if entry_count < self._limit:
                 break
             oldest_ns = min(int(ts) for s in streams for ts, _ in (s.get("values", []) or []))
             if oldest_ns <= start_ns:
+                truncations.add(QueryTruncation.WINDOW_START)
                 break
             cur_end = oldest_ns - 1
         else:
@@ -242,6 +213,8 @@ class LokiConnector:
                 f"loki: hit MAX_PAGES={MAX_PAGES} for query={query[:80]!r}; "
                 f"older entries before ts={cur_end} may be truncated"
             )
+            truncations.add(QueryTruncation.PAGE_LIMIT)
+        record_paginated_query("loki", QUERY_PATH, entries=entries, pages=pages, truncations=truncations)
         return out
 
     def _inject_node_filter(self, query: str, nodes: list[str]) -> str:

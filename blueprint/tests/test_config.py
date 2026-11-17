@@ -8,7 +8,10 @@ import pytest
 
 from attribution_blueprint.config import load_config
 from attribution_blueprint.connectors.attribution import AttributionConnector
+from attribution_blueprint.kubernetes.daemon.config import build_kubernetes_daemon_client
+from attribution_blueprint.connectors.execution_contexts.kueue import _build_prometheus_metrics
 from attribution_blueprint.connectors.execution_contexts.slurm import SlurmExecutionContextAdapter
+from attribution_blueprint.connectors.logs.victorialogs import VictoriaLogsConnector
 from attribution_blueprint.connectors.outputs.sqlite import SQLiteOutput
 from attribution_blueprint.connectors.outputs.stdout import StdoutOutput
 from attribution_blueprint.exceptions import MCAError
@@ -273,8 +276,28 @@ def test_loki_unknown_auth_type_raises(tmp_path):
         '[log.syslog.loki]\nendpoint = "https://loki.example"\n'
         '[log.syslog.loki.auth]\ntype = "smoke-signal"\n'
     )
-    with pytest.raises(MCAError, match="auth type"):
+    with pytest.raises(MCAError, match=r"unknown loki\.auth type: 'smoke-signal'"):
         load_config(p)
+
+
+@pytest.mark.parametrize("config_path", ["eca.kueue.kubernetes_daemon", "eca.kueue.prometheus_metrics"])
+@pytest.mark.parametrize(
+    ("auth", "message"),
+    [
+        ({"type": "token"}, "{config_path}.auth type=token requires token_env"),
+        ({"type": "mtls"}, "{config_path}.auth type=mtls requires cert_path and key_path"),
+        ({"type": "smoke-signal"}, "unknown {config_path}.auth type: 'smoke-signal'"),
+        ({}, "unknown {config_path}.auth type: None"),
+    ],
+)
+def test_eca_auth_errors_include_config_path(config_path, auth, message):
+    spec = {"endpoint": "http://example.invalid", "auth": auth}
+    with pytest.raises(MCAError) as error:
+        if config_path.endswith("kubernetes_daemon"):
+            build_kubernetes_daemon_client(spec, config_path=config_path)
+        else:
+            _build_prometheus_metrics(spec)
+    assert str(error.value) == message.format(config_path=config_path)
 
 
 def test_sqlite_output(tmp_path):
@@ -412,6 +435,173 @@ def test_loki_node_label_from_toml(monkeypatch, tmp_path):
     cfg = load_config(p)
     assert len(cfg.log_connectors) == 1
     assert cfg.log_connectors[0]._node_label == "hostname"
+
+
+def _victorialogs_config(log_sections: str) -> str:
+    return (
+        '[attribution]\nservice_url = "http://x"\n'
+        '[eca]\ncomponent = "static"\n'
+        '[eca.static]\nid = "1000001"\n'
+        'start_time = "2026-01-15T00:00:00Z"\n'
+        'end_time = "2026-01-15T10:00:00Z"\n'
+        'nodes = ["node-11"]\n'
+        '[output.console]\ncomponent = "stdout"\n'
+        f"{log_sections}"
+    )
+
+
+def test_victorialogs_syslog_and_applog_build_without_auth(tmp_path):
+    p = tmp_path / "c.toml"
+    p.write_text(
+        _victorialogs_config(
+            '[log.syslog]\ncomponent = "victorialogs"\n'
+            '[log.syslog.victorialogs]\nendpoint = "http://127.0.0.1:9428"\n'
+            'query_kwargs = { service_name = "example-cluster" }\n'
+            '[log.applog]\ncomponent = "victorialogs"\n'
+            '[log.applog.victorialogs]\nendpoint = "http://127.0.0.1:9428"\n'
+            'query_kwargs = { service_name = "example-cluster", app = "example-training" }\n'
+        )
+    )
+
+    cfg = load_config(p)
+    assert len(cfg.log_connectors) == 2
+    assert all(isinstance(connector, VictoriaLogsConnector) for connector in cfg.log_connectors)
+    assert {connector.source.value for connector in cfg.log_connectors} == {"applog", "syslog"}
+    assert all(connector._auth is None for connector in cfg.log_connectors)
+
+
+def test_victorialogs_token_auth_from_toml(monkeypatch, tmp_path):
+    monkeypatch.setenv("ATTRIBUTION_TEST_VICTORIALOGS_TOKEN", "x")
+    p = tmp_path / "c.toml"
+    p.write_text(
+        _victorialogs_config(
+            '[log.syslog]\ncomponent = "victorialogs"\n'
+            '[log.syslog.victorialogs]\nendpoint = "http://127.0.0.1:9428"\n'
+            '[log.syslog.victorialogs.auth]\ntype = "token"\n'
+            'token_env = "ATTRIBUTION_TEST_VICTORIALOGS_TOKEN"\n'
+        )
+    )
+
+    cfg = load_config(p)
+    assert cfg.log_connectors[0]._session.headers["Authorization"] == "Bearer x"
+
+
+@pytest.mark.parametrize(
+    ("settings", "message"),
+    [
+        ("[log.syslog.victorialogs]\n", "endpoint"),
+        (
+            '[log.syslog.victorialogs]\nendpoint = "http://127.0.0.1:9428"\n'
+            '[log.syslog.victorialogs.auth]\ntype = "unknown"\n',
+            r"unknown (victorialogs\.)?auth type",
+        ),
+        (
+            '[log.syslog.victorialogs]\nendpoint = "http://127.0.0.1:9428"\nlimit = 0\n',
+            "limit",
+        ),
+    ],
+)
+def test_victorialogs_invalid_configuration_raises(settings, message, tmp_path):
+    p = tmp_path / "c.toml"
+    p.write_text(_victorialogs_config(f'[log.syslog]\ncomponent = "victorialogs"\n{settings}'))
+
+    with pytest.raises(MCAError, match=message):
+        load_config(p)
+
+
+def test_victorialogs_empty_node_field_disables_node_filter(tmp_path):
+    p = tmp_path / "c.toml"
+    p.write_text(
+        _victorialogs_config(
+            '[log.syslog]\ncomponent = "victorialogs"\n'
+            '[log.syslog.victorialogs]\nendpoint = "http://127.0.0.1:9428"\n'
+            'node_field = ""\n'
+        )
+    )
+
+    cfg = load_config(p)
+    assert cfg.log_connectors[0]._node_field is None
+
+
+def test_victorialogs_example_config_loads():
+    example = (
+        Path(__file__).resolve().parents[1] / "examples" / "victorialogs" / ("attribution-blueprint.victorialogs.toml")
+    )
+    cfg = load_config(example)
+
+    assert len(cfg.log_connectors) == 2
+    assert all(isinstance(connector, VictoriaLogsConnector) for connector in cfg.log_connectors)
+
+
+_CLUSTER_FROM_CONTEXT_SECTIONS = {
+    "log": (
+        '[log.syslog]\ncomponent = "victorialogs"\n'
+        '[log.syslog.victorialogs]\nendpoint = "http://127.0.0.1:9428"\n'
+        'query_kwargs = { cluster = "cluster-a" }\n',
+        "NVAB_LOG_SYSLOG_VICTORIALOGS_CLUSTER_FROM_CONTEXT",
+        ["log", "syslog", "victorialogs", "cluster_from_context"],
+    ),
+    "metrics": (
+        '[metrics.node_metrics]\ncomponent = "promql"\n'
+        '[metrics.node_metrics.promql]\nendpoint = "http://127.0.0.1:8428"\n'
+        'cluster = "cluster-a"\n',
+        "NVAB_METRICS_NODE_METRICS_PROMQL_CLUSTER_FROM_CONTEXT",
+        ["metrics", "node_metrics", "promql", "cluster_from_context"],
+    ),
+}
+
+
+def _cluster_from_context_connector(framework, tmp_path, *, toml_value=None, environ=None, cli_value=None):
+    from attribution_blueprint.mca import build_config, load_settings
+
+    section, _env, _cli = _CLUSTER_FROM_CONTEXT_SECTIONS[framework]
+    if toml_value is not None:
+        section += f"cluster_from_context = {toml_value}\n"
+    p = tmp_path / "c.toml"
+    p.write_text(_victorialogs_config(section))
+    cli = [[*_cli, cli_value]] if cli_value is not None else None
+    cfg = build_config(load_settings(p, cli_invocations=cli, environ=environ or {}))
+    connectors = cfg.log_connectors if framework == "log" else cfg.metrics_connectors
+    assert len(connectors) == 1
+    return connectors[0]
+
+
+@pytest.mark.parametrize("framework", ["log", "metrics"])
+def test_cluster_from_context_defaults_to_false(framework, tmp_path):
+    assert _cluster_from_context_connector(framework, tmp_path)._cluster_from_context is False
+
+
+@pytest.mark.parametrize("framework", ["log", "metrics"])
+@pytest.mark.parametrize(("toml_value", "expected"), [("true", True), ("false", False), ('"yes"', True)])
+def test_cluster_from_context_from_toml(framework, toml_value, expected, tmp_path):
+    connector = _cluster_from_context_connector(framework, tmp_path, toml_value=toml_value)
+    assert connector._cluster_from_context is expected
+
+
+@pytest.mark.parametrize("framework", ["log", "metrics"])
+@pytest.mark.parametrize(("value", "expected"), [("true", True), ("1", True), ("false", False), ("0", False)])
+def test_cluster_from_context_from_env(framework, value, expected, tmp_path):
+    env_name = _CLUSTER_FROM_CONTEXT_SECTIONS[framework][1]
+    connector = _cluster_from_context_connector(framework, tmp_path, toml_value="false", environ={env_name: value})
+    assert connector._cluster_from_context is expected
+
+
+@pytest.mark.parametrize("framework", ["log", "metrics"])
+def test_cluster_from_context_from_cli(framework, tmp_path):
+    connector = _cluster_from_context_connector(framework, tmp_path, cli_value="true")
+    assert connector._cluster_from_context is True
+
+
+@pytest.mark.parametrize(
+    ("framework", "field"),
+    [
+        ("log", r"log\.syslog\.victorialogs\.cluster_from_context"),
+        ("metrics", r"metrics\.node_metrics\.promql\.cluster_from_context"),
+    ],
+)
+def test_cluster_from_context_rejects_non_bool(framework, field, tmp_path):
+    with pytest.raises(MCAError, match=rf"{field}='maybe' must be a bool"):
+        _cluster_from_context_connector(framework, tmp_path, toml_value='"maybe"')
 
 
 def test_slurm_cluster_tz_from_toml(tmp_path):

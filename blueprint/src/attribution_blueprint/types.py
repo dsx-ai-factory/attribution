@@ -16,6 +16,9 @@ class ExecutionContext(TypedDict):
     """
 
     id: str
+    # Caller-supplied provider run identity when id is a distinct processing key.
+    # Log selectors and Kafka result keys use this value, falling back to id.
+    run_id: NotRequired[str]
     nodes: list[str]
     start_time: datetime
     end_time: datetime
@@ -30,11 +33,9 @@ class ExecutionContext(TypedDict):
     # The orchestrator forwards only supported scheduler identities as V2
     # `workload.scheduler`; connector-only values such as "static" stay local.
     scheduler: NotRequired[str]
-    # Per-attempt key, scheduler-agnostic. Slurm sets it = sluid; Kueue sets
-    # it = the Workload's metadata.uid (a new Workload is created per
-    # requeue). The sqlite output reads this as the `attempt_id` column and
-    # uses it in the (job_id, attempt_id, scheduler_type) unique key, so the
-    # value must be deterministic across re-runs of the same logical attempt.
+    # Deterministic per-attempt key. Slurm uses SLUID; Kueue derives a
+    # `kueue:v1:...` ID from Workload UID, admission, and restart generation.
+    # SQLite uses it in the (job_id, attempt_id, scheduler_type) unique key.
     attempt_id: NotRequired[str]
 
     # Fields adapters write into the context dict in addition to the spine.
@@ -53,6 +54,9 @@ class ExecutionContext(TypedDict):
     # Per-Pod scheduler placement with source provenance. Kueue populates
     # this from live Pods and durable PlacementRecords when available.
     pod_placements: NotRequired[list[dict]]
+    # True only when every scheduler-required Kubernetes watch continuously
+    # covered this reconstructed attempt's full time interval.
+    history_complete: NotRequired[bool]
 
 
 # Wire-format enums. Values mirror the service observation API contract.
@@ -112,6 +116,19 @@ class Observation(TypedDict):
     body: str
 
 
+def context_run_id(context: ExecutionContext) -> str:
+    """Return the provider run identity independently of a processing key.
+
+    Args:
+        context: Execution context, optionally carrying its original run ID.
+
+    Returns:
+        A non-empty string run_id, or id when run_id is absent or unusable.
+    """
+    run_id = context.get("run_id")
+    return run_id if isinstance(run_id, str) and run_id != "" else context["id"]
+
+
 def assert_aware(dt: datetime, field: str) -> datetime:
     """Reject naive datetimes at the boundary into the attribution service.
 
@@ -134,4 +151,5 @@ __all__ = [
     "TimeInterval",
     "TimeseriesEntry",
     "assert_aware",
+    "context_run_id",
 ]

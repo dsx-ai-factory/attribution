@@ -9,7 +9,7 @@ from pathlib import Path
 
 from loguru import logger
 
-from attribution_blueprint import mca_registry
+from attribution_blueprint import mca_registry, telemetry
 from attribution_blueprint.exceptions import MCAError
 from attribution_blueprint.mca import (
     ENV_PREFIX,
@@ -297,6 +297,11 @@ def _run_config(
     if aggregate_runs is not None:
         aggregate_runs.append((stats, summaries))
     _write_run_summary(stats, summaries)
+    # Kafka can return committed contexts despite a later commit/close failure.
+    # Process those contexts, then surface the incomplete discovery.
+    if any(getattr(adapter, "discovery_incomplete", False) is True for adapter in config.execution_context_adapters):
+        logger.error("attribution run incomplete: execution-context discovery did not complete cleanly")
+        return 1
     if attempted > 0 and succeeded == 0:
         logger.error(f"attribution run failed: 0/{attempted} contexts succeeded")
         return 1
@@ -356,12 +361,26 @@ def _write_run_summary(stats: dict[str, int], summaries: list[dict[str, str]]) -
             f"{incomplete} of {len(verdicts)} verdicts were issued with incomplete evidence; "
             "see connector_reports and ingestion_reports in the saved result."
         )
+    incomplete_history = sum(
+        1
+        for summary in verdicts
+        if summary.get("history_complete") == "false"
+    )
+    if incomplete_history > 0:
+        logger.warning(
+            f"{incomplete_history} of {len(verdicts)} verdicts may have incomplete "
+            "scheduler history."
+        )
 
 
 def main(argv: list[str] | None = None) -> int:
     _configure_logging()
     parser = _build_parser()
     args = parser.parse_args(argv)
+    try:
+        telemetry.enable_prometheus_endpoint_from_env(os.environ)
+    except (ValueError, RuntimeError) as e:
+        parser.error(str(e))
 
     for tokens in args.connector or []:
         if is_help_request(tokens):

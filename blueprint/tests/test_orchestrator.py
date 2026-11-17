@@ -2,16 +2,17 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import json
+import pickle
 from datetime import datetime, timedelta, timezone
 from unittest.mock import MagicMock, call
 from zoneinfo import ZoneInfo
 
 import pytest
-from nvidia_attribution_client import ApiException, AttributorInfoV2, IngestSummaryV2, ObservationResponseV2
-
 from attribution_blueprint.connectors.attribution import AttributorConflictError, ObservationConflictError
+from attribution_blueprint.exceptions import PartialCollectionError
 from attribution_blueprint.orchestrator import AttributionOrchestrator
 from attribution_blueprint.types import Source
+from nvidia_attribution_client import ApiException, AttributorInfoV2, IngestSummaryV2, ObservationResponseV2
 
 
 def _wire(info: AttributorInfoV2) -> dict:
@@ -144,6 +145,18 @@ def test_analyze_records_run_summaries():
             "evidence_status": "none",
         }
     ]
+
+
+def test_analyze_summary_preserves_incomplete_scheduler_history():
+    ctx = _make_ctx("history-gap")
+    ctx["history_complete"] = False
+    eca = MagicMock()
+    eca.discover_by_ids.return_value = [ctx]
+    pipeline = _make_pipeline(eca, [])
+
+    pipeline.analyze(ids=["history-gap"])
+
+    assert pipeline.last_run_summaries[0]["history_complete"] == "false"
 
 
 # Required keys per the generated client's AttributorWorkloadInfoV2 (workload)
@@ -505,6 +518,18 @@ def test_wire_carries_slurm_scheduler():
     assert info["workload"]["scheduler"] == "slurm"
 
 
+def test_wire_carries_runapi_scheduler():
+    """`runapi` is a recognized service scheduler identity, so it is forwarded
+    on the wire instead of being dropped."""
+    ctx = _make_ctx("ctx-7")
+    ctx["scheduler"] = "runapi"
+    pipeline = _make_pipeline(MagicMock(), [])
+
+    info = _wire(pipeline._build_attributor_info(ctx))
+
+    assert info["workload"]["scheduler"] == "runapi"
+
+
 def test_wire_omits_connector_only_scheduler_identity():
     """The static adapter uses `scheduler="static"` for local provenance, not
     as a service scheduler, so it is omitted from the wire."""
@@ -595,6 +620,31 @@ def test_outputs_preserve_scheduler_gpu_count():
     output_ctx = output.entries[0][0]
     assert output_ctx["gpus_per_node"] == 8
     assert output_ctx["gpu_count"] == 6
+
+
+@pytest.mark.parametrize("observations", [[], [_make_obs()]])
+def test_partial_collection_preserves_available_evidence_and_reason(observations):
+    """A partial collection reports its reason even when no usable observations were fetched."""
+    collector = MagicMock(source=Source.SYSLOG)
+    original = PartialCollectionError("query budget reached", observations)
+    collector.collect.side_effect = pickle.loads(pickle.dumps(original))
+    attribution = _make_attribution_mock()
+    output = _ListOutput()
+    pipeline = _make_pipeline(MagicMock(), [collector], attribution=attribution, output=output)
+
+    result, succeeded = pipeline._process_one(_make_ctx("partial"), [collector])
+
+    assert succeeded is True
+    assert attribution.ingest_observation.call_count == len(observations)
+    assert result["connector_reports"][0] == {
+        "connector": "MagicMock",
+        "source": "syslog",
+        "status": "partial",
+        "reason": "query budget reached",
+        "observation_count": len(observations),
+    }
+    assert result["evidence_status"] == ("partial" if observations != [] else "none")
+    assert output.entries[0][1] == result
 
 
 def test_failing_ingest_is_recorded_and_does_not_block_other_observations():

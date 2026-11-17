@@ -583,8 +583,8 @@ class TestApplogRules:
             [
                 "0: Call to ibv_modify_qp failed with 22 Connection timed out, on dev mlx5_4:1, curr state INIT, next state RTR, local GID index 3, local GID ::ffff:192.168.26.95, remote GID ::ffff:127.0.0.1",
             ],
-            "bad_peers",
-            [0, "localhost"],
+            "bad",
+            [0],
             "Call to ibv_modify_qp failed: eno 22 invalid argument",
             "Call to ibv_modify_qp failed",
         )

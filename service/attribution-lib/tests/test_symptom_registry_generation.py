@@ -425,7 +425,23 @@ def test_nvrx_detected_failure_maps_to_fail_multicategory():
 
     assert match is not None
     assert match.outcome == "Fail MultiCategory"
-    assert match.tier_index == OUTCOME_PRIORITIES.index(OutcomePriority.LOW_GENERIC)
+    assert match.tier_index == OUTCOME_PRIORITIES.index(OutcomePriority.LOW_FALLBACK)
+
+
+@pytest.mark.parametrize("symptom", ["Python Exception", "No such file or directory", "error: pyxis"])
+def test_user_failure_outranks_generic_nvrx_failure(symptom):
+    """Select a co-occurring user failure over the generic NVRx detected failure.
+
+    Args:
+        symptom: Fail User symptom reported with the NVRx failure.
+    """
+    registry = _load_committed_registry()
+
+    match = registry.outcome_for(["NVRx detected failure", symptom])
+
+    assert match is not None
+    assert match.symptom == symptom
+    assert match.outcome == "Fail User"
 
 
 def test_nvrx_unhealthy_node_maps_to_fail_multicategory():
@@ -656,6 +672,7 @@ def test_generated_registry_resolves_all_declared_fallback_families():
         "EFA Error-7 something": "EFA Error-",
         "bad kernel stack frame pointer in some_dynamic_tool": "bad kernel stack frame pointer",
         "Call to ibv_modify_qp failed: eno 9999": "Call to ibv_modify_qp failed",
+        "Local HCA command failure (ibv_query_qp eno 110)": "Local HCA command failure",
         "NVRx node health check failed: example_gpu_check": "NVRx node health check failed",
         "NVRx GPU recovery action: Requires a node reboot to recover": "NVRx GPU recovery action",
     }
@@ -726,9 +743,19 @@ def test_csp_category_is_generated_from_committed_declarations():
     assert "running without error" not in csp_symptoms
 
 
-def test_batch_size_assertion_is_registered_above_generic_nvrx_failure():
+@pytest.mark.parametrize(
+    "symptom",
+    [
+        "Python Exception: AssertionError: batch size not divisible",
+        "Python Exception: argparse unrecognized arguments",
+        "Python Exception: ValueError: module grids do not cover every rank",
+        "Python Exception: ValueError: num-experts not divisible",
+        "Python Exception: RuntimeError: pinned activation buffer budget exceeded",
+        "Python Exception: FileNotFoundError: checkpoint iteration not found",
+    ],
+)
+def test_application_error_is_registered_above_generic_nvrx_failure(symptom):
     registry = _load_committed_registry()
-    symptom = "Python Exception: AssertionError: batch size not divisible"
 
     assert registry.resolve_symptom(symptom) == symptom
     match = registry.outcome_for(["NVRx detected failure", "Python Exception", symptom])
@@ -1109,6 +1136,37 @@ def test_bad_nic_state_outcome_metadata():
     assert match is not None
     assert match.doc == "detected-bad-nic-state"
     assert match.hw_cause == "NIC firmware initialization failure"
+
+
+@pytest.mark.parametrize(
+    "independent",
+    ["Node unexpectedly rebooted", "Page Retirement", "RDMA fabric flap"],
+)
+def test_corroborated_hca_preserves_independent_outcomes(independent):
+    """A NIC compound must retain existing independent root-cause precedence."""
+    registry = _load_committed_registry()
+    baseline = registry.outcome_for([independent])
+    symptoms = [independent, "Corroborated local HCA command failure"]
+    for ordered in (symptoms, list(reversed(symptoms))):
+        assert registry.outcome_for(ordered) == baseline
+
+
+@pytest.mark.parametrize(
+    "secondary",
+    [
+        "Local HCA command failure (ibv_modify_qp eno 11)",
+        "Local HCA command failure (ibv_modify_qp eno 110)",
+        "Call to ibv_modify_qp failed: eno 110 timeout",
+        "Call to ibv_modify_qp failed: eno 22 invalid argument",
+        "ibv_open_device failed",
+    ],
+)
+def test_corroborated_hca_does_not_suppress_unscoped_outcomes(secondary):
+    """Flat symptom IDs cannot establish that command evidence belongs to a compound."""
+    registry = _load_committed_registry()
+    compound = "Corroborated local HCA command failure"
+    for ordered in ([secondary, compound], [compound, secondary]):
+        assert registry.outcome_for(ordered) == registry.outcome_for([secondary])
 
 
 @pytest.mark.parametrize("symptom", ["NV_ERR_RESET_REQUIRED", "NV_ERR_RESET_REQUIRED kernel_channel.c"])

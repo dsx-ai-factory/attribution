@@ -24,6 +24,72 @@ request that links the issue. Include the test commands and results in the
 pull request description. A maintainer reviews the pull request and must
 approve it before it can merge.
 
+## Documentation review
+
+Apply these standards when writing or reviewing guides, reference pages,
+examples, API documentation, and failure-catalog prose. Include reviewed
+documentation with each newly public rule in the same release.
+
+### Scope and wording
+
+- Describe the documented behavior, observable symptom, or task, its impact
+  where applicable, and the supported next step.
+  Distinguish evidence from an inferred cause. A failure classification alone
+  does not establish that hardware must be replaced or returned.
+- Use active voice, present tense, and second person when addressing the
+  reader. Avoid contractions, spell out uncommon abbreviations on first use,
+  and prefer "refer to" over "see."
+- State uncertainty when the evidence cannot distinguish application and
+  infrastructure causes. Keep normal or informational observations distinct
+  from failures; state when no corrective action is required.
+
+### Actions and evidence
+
+- State prerequisites, required permissions, and relevant software-version or
+  deployment assumptions. A publicly documented command is not necessarily
+  available to a tenant. Use numbered steps when their order matters.
+- Give supported actions within the reader's access. Explain how to confirm
+  recovery and when to stop troubleshooting or retrying. Do not invent an
+  infrastructure recovery sequence for an application error.
+- Direct application changes outside the tenant's control to the person or
+  team responsible for the application. Direct restricted host, network, or
+  driver investigation to the tenant's cluster administrator or cloud provider.
+  Hardware replacement decisions belong to the provider and hardware vendor;
+  do not prescribe vendor return procedures or make service commitments.
+- Explain what evidence to provide: the NVIDIA Attribution diagnosis (verdict,
+  symptom chain, and source logs), relevant identifiers, timestamps, and
+  symptom-specific records when available. Identify evidence the provider
+  must collect. Missing diagnostics or restricted logs must not delay asking
+  for help.
+
+### References and publication safety
+
+- Confirm that a rule is approved for public release before publishing its
+  details. Keep private rules and their documentation out of public branches.
+- Cite publicly accessible documentation, specifications, or maintained public
+  source repositories that support the actual instruction. Check links and
+  anchors. For provider health or lifecycle events, verify that the event type
+  and schema are documented in the provider's public reference; this check is
+  not applicable to other entries.
+- Review all fields, URLs, filenames, and examples for secrets, private
+  infrastructure or paths, customer data, confidential product information,
+  unpublished configuration, and private procedures or references. Use
+  synthetic examples and preserve required third-party attribution.
+- If public eligibility or technical support for an instruction is uncertain,
+  ask a maintainer before publishing it, including on a public PR branch.
+  Do not paste private evidence into a public discussion. Automated checks
+  support human review; they do not grant publication approval.
+
+### Failure-catalog entries
+
+Keep tenant actions in `personas.tenant_sre.action` and handoff evidence in
+`personas.tenant_sre.support_details`. Keep private notes and provider-only
+procedures out of the public catalog, rendered pages, and exports. Use
+publicly observable log strings or error codes in signal patterns, and explain
+the conditions under which each pattern applies. Confirm that related entry
+IDs and reference anchors exist in the public documentation. Review the
+resulting UI guidance and exports when a change affects those surfaces.
+
 ## Signing Your Work
 
 Sign each commit with the Developer Certificate of Origin (DCO):

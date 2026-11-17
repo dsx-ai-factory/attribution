@@ -14,13 +14,20 @@ requires-python = ">=3.11"
 dependencies = [
     "nvidia-attribution-client",
     "requests>=2.31",
+    "opentelemetry-api>=1.30,<2",  # No-op unless an SDK is configured.
     "loguru>=0.7",
     "kubernetes>36.0.0",  # 36.0.0 drops the Authorization header for token-based auth
     "pyyaml>=6.0",  # KAI adapter parses the kai.scheduler/top-owner-metadata annotation
 ]
 
 [project.optional-dependencies]
+metrics = [
+    "opentelemetry-sdk>=1.30,<2",
+    "opentelemetry-exporter-prometheus>=0.51b0",
+]
 dev = [
+    "opentelemetry-sdk>=1.30,<2",
+    "opentelemetry-exporter-prometheus>=0.51b0",
     "pytest>=8.0",
     "pytest-cov>=6.0.0",
     "pytest-mock>=3.12",
@@ -32,12 +39,19 @@ web = [
     "uvicorn>=0.27",
     "pyyaml>=6.0",
 ]
-pod-placement-recorder = []
+kubernetes-daemon = []
+kafka = [
+    "confluent-kafka>=2.6",
+]
+kafka-aws = [
+    "confluent-kafka>=2.6",
+    "aws-msk-iam-sasl-signer-python>=1.0.1",
+]
 
 [project.scripts]
 nvidia-attribution-blueprint = "attribution_blueprint.cli:main"
 nvidia-attribution-blueprint-web = "attribution_blueprint.webui.cli:main"
-pod-placement-recorder = "attribution_blueprint.connectors.execution_contexts.kueue.pod_placement.recorder.cli:main"
+kubernetes-daemon = "attribution_blueprint.kubernetes.daemon.cli:main"
 
 [tool.uv.sources]
 nvidia-attribution-client = { path = "../service/service-app/nvidia_attribution_client", editable = false }

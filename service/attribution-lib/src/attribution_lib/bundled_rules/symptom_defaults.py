@@ -1450,6 +1450,43 @@ outcome_symptom(
     doc="python-exception",
 )
 
+# Concrete application configuration and runtime errors also outrank generic
+# NVRx failure context. Keep arguments, paths, and values in source evidence.
+outcome_symptom(
+    "Python Exception: argparse unrecognized arguments",
+    outcome="Fail User",
+    priority=OutcomePriority.LOW,
+    doc="python-exception",
+)
+
+outcome_symptom(
+    "Python Exception: ValueError: module grids do not cover every rank",
+    outcome="Fail User",
+    priority=OutcomePriority.LOW,
+    doc="python-exception",
+)
+
+outcome_symptom(
+    "Python Exception: ValueError: num-experts not divisible",
+    outcome="Fail User",
+    priority=OutcomePriority.LOW,
+    doc="python-exception",
+)
+
+outcome_symptom(
+    "Python Exception: RuntimeError: pinned activation buffer budget exceeded",
+    outcome="Fail User",
+    priority=OutcomePriority.LOW,
+    doc="python-exception",
+)
+
+outcome_symptom(
+    "Python Exception: FileNotFoundError: checkpoint iteration not found",
+    outcome="Fail User",
+    priority=OutcomePriority.LOW,
+    doc="python-exception",
+)
+
 # The compiler failure is specific evidence, but does not establish whether
 # application code, the toolchain, or node-local files caused it.
 # Prefer it over a peer closure attributed to the same node.
@@ -1736,10 +1773,12 @@ outcome_symptom(
     doc="nccl-late-arrival",
 )
 
+# NVRx detected failure carries no cause. Rank it below every user failure so
+# a concrete user error sets the outcome, but above the last-resort fallbacks.
 outcome_symptom(
     "NVRx detected failure",
     outcome="Fail MultiCategory",
-    priority=OutcomePriority.LOW_GENERIC,
+    priority=OutcomePriority.LOW_FALLBACK,
     doc="nvrx-detected-failure",
     hw_cause="Underlying failure reason unavailable from the collected evidence.",
 )
@@ -1991,6 +2030,37 @@ outcome_symptom(
     priority=OutcomePriority.LOW_USER,
     doc="bad-token",
     hw_cause="Bad input tokens causing numerical instability",
+)
+
+# MegatronRerunVerdict refiner discards "Bad Token" on a node with a verdict.
+# Verdicts that say the result was not reproducible are informational only.
+known_symptom("Unexpected value not reproduced on same GPU")
+
+known_symptom("Transient error reported by Megatron")
+
+known_symptom("Unexpected value not reproduced on other GPU")
+
+known_symptom("Persistent error reported by Megatron")
+
+outcome_symptom(
+    "Unexpected value reproduced on same GPU",
+    outcome="Fail Undetermined",
+    priority=OutcomePriority.LOW_USER,
+    doc="unexpected-value-reproduced-on-same-gpu",
+)
+
+outcome_symptom(
+    "Unexpected value reproduced on other GPU",
+    outcome="Fail User",
+    priority=OutcomePriority.LOW_USER,
+    doc="unexpected-value-reproduced-on-other-gpu",
+)
+
+outcome_symptom(
+    "Application error reported by Megatron",
+    outcome="Fail User",
+    priority=OutcomePriority.LOW_USER,
+    doc="application-error-reported-by-megatron",
 )
 
 outcome_symptom(
@@ -2246,6 +2316,22 @@ outcome_symptom(
 )
 
 outcome_symptom(
+    "DataLoader worker bus error",
+    outcome="Fail MultiCategory",
+    priority=OutcomePriority.LOW_USER,
+    doc="bus-error",
+)
+
+# LOW, like cudaError out of memory, so it outranks LOW_GENERIC peer errors
+# such as Connection reset by peer from ranks that lose the failed rank.
+outcome_symptom(
+    "Shared memory exhausted",
+    outcome="Fail User",
+    priority=OutcomePriority.LOW,
+    doc="file-write-failed",
+)
+
+outcome_symptom(
     "Cancelled by Timeout",
     outcome="Fail User",
     priority=OutcomePriority.LOW_USER,
@@ -2475,6 +2561,14 @@ outcome_symptom(
     outcome="Incomplete Info",
     priority=OutcomePriority.FALLBACK,
     doc="job-requeued",
+)
+
+# Added after the outcome is set, when preemption explains the job end.
+outcome_symptom(
+    "Job preempted",
+    outcome="Pass",
+    priority=OutcomePriority.FALLBACK,
+    doc="slurm-preempted",
 )
 
 outcome_symptom(
@@ -2859,4 +2953,47 @@ outcome_symptom(
     priority=OutcomePriority.LOW,
     doc="irisc-not-responding",
     hw_cause="irisc not responding",
+)
+
+# A local verbs command failure identifies the reporting node, but does not
+# establish a physical NIC defect. Existing specific syslog diagnoses retain
+# their current classifications.
+outcome_symptom(
+    "Local HCA command failure",
+    outcome="Fail InfraHW",
+    priority=OutcomePriority.LOW,
+    doc="local-hca-command-failure",
+    hw_cause="Unknown HW Cause",
+    fallback_prefix=True,
+)
+
+# Keep unresolved QP EAGAIN at its existing priority tier while applying the
+# local-command hardware classification.
+outcome_symptom(
+    "Local HCA command failure (ibv_modify_qp eno 11)",
+    outcome="Fail InfraHW",
+    priority=OutcomePriority.MEDIUM_SW,
+    doc="local-hca-command-failure",
+    hw_cause="Unknown HW Cause",
+)
+
+# Preserve the existing QP timeout tier when an unresolved peer takes the
+# local-command path.
+outcome_symptom(
+    "Local HCA command failure (ibv_modify_qp eno 110)",
+    outcome="Fail InfraHW",
+    priority=OutcomePriority.MEDIUM_SW,
+    doc="local-hca-command-failure",
+    hw_cause="Unknown HW Cause",
+)
+
+# Only a local command failure plus independent corroboration establishes the
+# stronger NIC diagnosis. Independent causes retain precedence; the refiner
+# demotes only the command and syslog sources used by this diagnosis.
+outcome_symptom(
+    "Corroborated local HCA command failure",
+    outcome="Fail InfraHW",
+    priority=OutcomePriority.LOW,
+    doc="local-hca-command-failure",
+    hw_cause="Known HW Cause - Node (NIC)",
 )

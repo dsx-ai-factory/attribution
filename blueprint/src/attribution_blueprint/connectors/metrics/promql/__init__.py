@@ -1,12 +1,13 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-import os
 from typing import Any
 
 from attribution_blueprint import mca_registry as _registry
-from attribution_blueprint.connectors.auth import Auth, MTLSAuth, TokenAuth
+from attribution_blueprint.connectors.auth import Auth, build_auth
 from attribution_blueprint.connectors.metrics.promql.connector import (
+    DEFAULT_CLUSTER_LABEL,
+    DEFAULT_NODE_LABEL,
     PromQLMetricsConnector,
 )
 from attribution_blueprint.connectors.metrics.promql.templates import TEMPLATES
@@ -16,31 +17,11 @@ from attribution_blueprint.types import Source
 
 
 def _build_auth(spec: dict) -> Auth:
-    atype = spec.get("type")
-    if atype == "token":
-        env_name = spec.get("token_env")
-        if not env_name:
-            raise MCAError("promql.auth type=token requires token_env")
-        if env_name not in os.environ:
-            # Surface as MCAError so the CLI's parser.error path produces a
-            # clean usage message and exit code 2, rather than a Python
-            # traceback from an uncaught KeyError. Mirrors loki/_build_auth.
-            raise MCAError(f"auth.token_env references unset environment variable: {env_name}")
-        return TokenAuth(token=os.environ[env_name], org_id=spec.get("org_id"))
-    if atype == "mtls":
-        if not spec.get("cert_path") or not spec.get("key_path"):
-            raise MCAError("promql.auth type=mtls requires cert_path and key_path")
-        return MTLSAuth(
-            cert_path=spec["cert_path"],
-            key_path=spec["key_path"],
-            ca_cert_path=spec.get("ca_cert_path"),
-            org_id=spec.get("org_id"),
-        )
-    raise MCAError(f"unknown auth type: {atype!r}")
+    return build_auth(spec, "promql")
 
 
 def _build(spec: dict, ctx: dict) -> PromQLMetricsConnector:
-    from attribution_blueprint.mca import _coerce_float, _coerce_int
+    from attribution_blueprint.mca import _coerce_bool, _coerce_float, _coerce_int
 
     source: Source = ctx["source"]
     endpoint = spec.get("endpoint")
@@ -49,6 +30,10 @@ def _build(spec: dict, ctx: dict) -> PromQLMetricsConnector:
     cluster = spec.get("cluster")
     if not cluster:
         raise MCAError(f"metrics.{source.name.lower()}.promql requires cluster")
+    cluster_from_context = _coerce_bool(
+        spec.get("cluster_from_context", False),
+        f"metrics.{source.name.lower()}.promql.cluster_from_context",
+    )
     auth_spec = spec.get("auth")
     auth = _build_auth(auth_spec) if auth_spec is not None else None
     timeout = _coerce_float(spec.get("timeout_seconds", 60.0), "timeout_seconds")
@@ -62,6 +47,9 @@ def _build(spec: dict, ctx: dict) -> PromQLMetricsConnector:
         endpoint=endpoint,
         auth=auth,
         cluster=cluster,
+        cluster_from_context=cluster_from_context,
+        node_label=spec.get("node_label", DEFAULT_NODE_LABEL),
+        cluster_label=spec.get("cluster_label", DEFAULT_CLUSTER_LABEL),
         source=source,
         templates=templates,
         timeout_seconds=timeout,
@@ -76,6 +64,9 @@ _registry.register_component(
     schema={
         "endpoint": _PARAM,
         "cluster": _PARAM,
+        "cluster_from_context": _PARAM,
+        "node_label": _PARAM,
+        "cluster_label": _PARAM,
         "timeout_seconds": _PARAM,
         "step_seconds": _PARAM,
         "auth": {

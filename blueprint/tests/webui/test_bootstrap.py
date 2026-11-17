@@ -3,6 +3,7 @@
 
 import json
 import os
+from dataclasses import replace
 from datetime import datetime, timezone
 
 import pytest
@@ -25,6 +26,7 @@ def _seed_one(
     line="Xid 79",
     detail="GPU off bus",
     source_time="2026-05-01T00:30:00+00:00",
+    attempt_ordinal=None,
 ):
     p = tmp_path / "m.db"
     out = SQLiteOutput(str(p))
@@ -53,6 +55,8 @@ def _seed_one(
         ctx["gpu_count"] = gpu_count
     if alloc_tres is not None:
         ctx["alloc_tres"] = alloc_tres
+    if attempt_ordinal is not None:
+        ctx["attempt_ordinal"] = attempt_ordinal
     out.write(
         ctx,
         {
@@ -106,6 +110,58 @@ def test_run_to_react_includes_bad_pairs(tmp_path):
     r = bootstrap.run_to_react(run)
 
     assert r["errorPairs"] == bad_pairs
+
+
+@pytest.mark.parametrize(
+    "symptom,catalog_id",
+    [
+        ("XID-69-GR_CLASS_ERROR", "xid-69"),
+        ("NVRx ft_launcher exit 0", "nvrx-ft-launcher-exit-0"),
+    ],
+)
+def test_run_to_react_resolves_exact_catalog_fallbacks(tmp_path, symptom, catalog_id):
+    """Show guidance for known verdicts that arrive without catalog IDs."""
+    run = _seed_one(tmp_path, symptom=symptom, rule="unmapped-rule")
+    card = bootstrap.run_to_react(run)["diagnose"]
+    assert card["hasPersona"] is True
+    assert card["catalogId"] == catalog_id
+    assert card["action"] != ""
+    assert card["supportDetails"] != []
+    assert card["severity"] is not None
+    if catalog_id == "nvrx-ft-launcher-exit-0":
+        run = replace(run, outcome="Pass")
+        run.raw_result["verdict"]["attribution_outcome"] = "Pass"
+        payload = bootstrap.run_to_react(run)
+        assert payload["outcome"] == "pass"
+        assert "No corrective action is required" in payload["diagnose"]["action"]
+
+    run.raw_result["verdict"]["root_symptom"]["catalog_id"] = "python-exception"
+    assert bootstrap.run_to_react(run)["diagnose"]["catalogId"] == "python-exception"
+
+
+@pytest.mark.parametrize("symptom", ["XID-690-OTHER", "NVRx ft_launcher exit 0 unexpected suffix"])
+def test_run_to_react_catalog_fallbacks_do_not_match_other_verdicts(tmp_path, symptom):
+    """Avoid assigning the new guidance to similarly named verdicts."""
+    run = _seed_one(tmp_path, symptom=symptom, rule="unmapped-rule")
+    assert bootstrap.run_to_react(run)["diagnose"]["hasPersona"] is False
+
+
+def test_run_to_react_shows_jit_compilation_tenant_guidance(tmp_path):
+    """Expose compiler recovery actions and support evidence for the catalog ID."""
+    run = _seed_one(
+        tmp_path,
+        catalog_id="jit-c-compilation-failure",
+        symptom="Triton/Inductor JIT C-compilation failure",
+        rule="JitCCompilationFailure",
+        line="InductorError: subprocess.CalledProcessError: Command 'gcc' returned non-zero exit status 1.",
+        detail="Underlying cause of JIT C-compilation failure is undetermined.",
+    )
+    result = bootstrap.run_to_react(run)["diagnose"]
+    assert result["hasPersona"] is True
+    assert result["catalogId"] == "jit-c-compilation-failure"
+    assert result["title"] == "JIT C compilation failed"
+    assert "compilation and execution both complete" in result["action"]
+    assert any("NVIDIA Attribution diagnosis" in detail for detail in result["supportDetails"])
 
 
 @pytest.mark.parametrize("collectors", [None, {}, {"bad_pairs": None}, {"bad_pairs": ""}, {"bad_pairs": 0}])
@@ -316,6 +372,13 @@ def test_run_to_react_treats_cpu_only_slurm_alloc_tres_as_zero_gpus(tmp_path):
     run = _seed_one(tmp_path, gpus_per_node=8, alloc_tres="cpu=24,mem=96G")
     r = bootstrap.run_to_react(run)
     assert r["gpuCount"] == 0
+
+
+@pytest.mark.parametrize(("attempt_ordinal", "expected"), [(None, 1), (0, 1), (1, 2), (2, 3), ("2", 3), ("²", 1), ("", 1), (-1, 1)])
+def test_run_to_react_displays_one_based_attempt_ordinal(tmp_path, attempt_ordinal, expected):
+    """Show the zero-based Slurm attempt ordinal as a one-based attempt number."""
+    run = _seed_one(tmp_path, attempt_ordinal=attempt_ordinal)
+    assert bootstrap.run_to_react(run)["attempt"] == expected
 
 
 def test_log_keeps_distinct_time_sites_with_same_text(tmp_path):

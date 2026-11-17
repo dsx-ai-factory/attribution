@@ -10,7 +10,7 @@ COPY blueprint/src/attribution_blueprint/webui/frontend/ ./
 RUN corepack enable && pnpm install --frozen-lockfile && pnpm exec tsc -b && pnpm exec vite build --outDir dist
 
 # Stage 2: python app
-FROM python:3.14.6-slim-trixie
+FROM python:3.14-slim-trixie
 LABEL com.nvidia.attribution.project.license="Apache-2.0"
 COPY --from=ghcr.io/astral-sh/uv:0.10.12 /uv /uvx /bin/
 COPY LICENSE /licenses/LICENSE
@@ -28,7 +28,7 @@ COPY blueprint/src/ ./src/
 # built SPA -> the package's static dir, BEFORE uv sync packages it
 COPY --from=web-build /repo/blueprint/src/attribution_blueprint/webui/frontend/dist ./src/attribution_blueprint/webui/static/
 COPY service/service-app/nvidia_attribution_client/ /opt/service/service-app/nvidia_attribution_client/
-RUN uv sync --extra web --no-dev --no-editable --frozen
+RUN uv sync --extra web --extra kafka --extra kafka-aws --extra metrics --no-dev --no-editable --frozen
 
 WORKDIR /opt/attribution-service
 # attribution-lib is bundled at service/attribution-lib and the service

@@ -1,5 +1,10 @@
 # NVIDIA Attribution
 
+[![blueprint release](https://img.shields.io/badge/dynamic/regex?url=https%3A%2F%2Fapi.github.com%2Frepos%2Fdsx-ai-factory%2Fattribution%2Freleases&search=%22tag_name%22%3A+%3F%22blueprint-v%28%5B%5E%22%5D%2B%29%22&replace=v%241&label=blueprint)](https://github.com/dsx-ai-factory/attribution/releases?q=blueprint&expanded=true)
+[![service-app release](https://img.shields.io/badge/dynamic/regex?url=https%3A%2F%2Fapi.github.com%2Frepos%2Fdsx-ai-factory%2Fattribution%2Freleases&search=%22tag_name%22%3A+%3F%22service-app-v%28%5B%5E%22%5D%2B%29%22&replace=v%241&label=service-app)](https://github.com/dsx-ai-factory/attribution/releases?q=service-app&expanded=true)
+[![attribution-lib release](https://img.shields.io/badge/dynamic/regex?url=https%3A%2F%2Fapi.github.com%2Frepos%2Fdsx-ai-factory%2Fattribution%2Freleases&search=%22tag_name%22%3A+%3F%22attribution-lib-v%28%5B%5E%22%5D%2B%29%22&replace=v%241&label=attribution-lib)](https://github.com/dsx-ai-factory/attribution/releases?q=attribution-lib&expanded=true)
+[![Tests](https://github.com/dsx-ai-factory/attribution/actions/workflows/tests.yml/badge.svg?branch=main)](https://github.com/dsx-ai-factory/attribution/actions/workflows/tests.yml)
+
 **Open source · pre-1.0**
 
 NVIDIA Attribution is a service-plus-orchestrator that turns the raw symptoms of a failed GPU workload into one structured diagnosis with the symptom chain that produced it.
@@ -76,8 +81,8 @@ Three cases the rules engine handles in production:
 
 * **Python.** `>=3.14.6,<3.15` on the host running the Attribution Service. 3.11+ on the host running the Blueprint orchestrator. The two can run on the same host or different hosts.
 * **uv package manager.** Install with `curl -LsSf https://astral.sh/uv/install.sh | sh`. Every `uv run` command resolves and installs dependencies on first invocation, no separate install step.
-* **Scheduler.** Slurm 25.11+ (SLUID required), or Kueue v0.6+ with JobSet v0.5+ for JobSet-shaped distributed training. NVIDIA KAI Scheduler support is pending: the Service API accepts `kai` as a scheduler value, but attribution for it is not implemented yet.
-* **Telemetry backends (any subset of):** Loki for application or system logs, a PromQL-compatible Prometheus or Mimir instance for node metrics, `kubectl` access for Kueue pod log collection, or local files for sacct-resolved StdOut/StdErr paths.
+* **Scheduler.** Slurm 25.11+ (SLUID required), Kueue v0.6+ with JobSet v0.5+, or NVIDIA KAI Scheduler for supported Job- and JobSet-owned PodGroups. See the [KAI scope](blueprint/docs/use-cases/kai.md).
+* **Telemetry backends (any subset of):** Loki or VictoriaLogs for application or system logs, a PromQL-compatible Prometheus or Mimir instance for node metrics, `kubectl` access for Kueue pod log collection, or local files for sacct-resolved StdOut/StdErr paths.
 * **Network reach.** The Blueprint must reach the Attribution Service over HTTP. The Service does not need outbound network access.
 * **Supported GPU architectures.** A100, H100, L40S, B200, GB200, GB300. GB200 and GB300 rule coverage continues to mature as coverage expands.
 
@@ -123,10 +128,10 @@ mkdir -p "$(dirname "$ATTRIBUTION_DB")"
 
 docker run -d --rm \
   --name "$ATTRIBUTION_CONTAINER" \
-  -e ATTRIBUTION_DB=/data/attributions.db \
+  -e ATTRIBUTION_DB="/data/$(basename "$ATTRIBUTION_DB")" \
   -p "127.0.0.1:$ATTRIBUTION_SERVICE_PORT:8000" \
   -p "127.0.0.1:$ATTRIBUTION_WEB_PORT:8080" \
-  -v "$PWD/$(dirname "$ATTRIBUTION_DB"):/data" \
+  -v "$(CDPATH= cd "$(dirname "$ATTRIBUTION_DB")" && pwd):/data" \
   "$ATTRIBUTION_IMAGE"
 ```
 

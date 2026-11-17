@@ -216,8 +216,8 @@ class SQLiteOutput:
 
         ctx = dict(context)
         job_id = ctx.get("job_id") or ctx.get("id", "")
-        # `attempt_id` is connector-supplied (Slurm sets it = sluid, Kueue
-        # sets it = the Workload's uid).
+        # Connector-supplied: Slurm uses SLUID; Kueue uses its canonical
+        # Workload/admission/restart-derived ID.
         attempt_id = ctx.get("attempt_id", "")
         # `scheduler_type` is the BP-internal connector identity. Prefer the
         # connector-owned `scheduler` value, then use the service wire

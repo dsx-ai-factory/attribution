@@ -97,7 +97,7 @@ def compute_data_fingerprint(
         extraction_context: Context that controls parsing, filtering, and
             attribution provenance. Omit for a data-only fingerprint.
         body_fallbacks: What `entry_timeseries` bodies may be parsed for; its
-            `year_fallback` is hashed when it decides how year-less timestamps resolve.
+            `job_span` is hashed when it decides how year-less timestamps resolve.
 
     Returns:
         A context-bound fingerprint, or ``None`` when entries is empty.
@@ -117,15 +117,15 @@ def compute_data_fingerprint(
             "time_start": time_start.isoformat() if time_start is not None else None,
             "timezone": extraction_context.timezone.key,
         }
-        # Only `entry_timeseries` reads the year off `year_fallback`; every other format reads it off
+        # Only `entry_timeseries` reads the year off `job_span`; every other format reads it off
         # `time_end`, hashed above. Keyed only here so their fingerprints stay byte-identical.
         if (
             extraction_context.format == ObservationFormat.ENTRY_TIMESERIES
             and body_fallbacks is not None
             and body_fallbacks.parse_timestamp
         ):
-            year_fallback = body_fallbacks.year_fallback
-            context_fields["year_fallback"] = year_fallback.isoformat() if year_fallback is not None else None
+            job_span = body_fallbacks.job_span
+            context_fields["job_span"] = [t.isoformat() for t in job_span] if job_span is not None else None
         context_hash = _hash_entry(context_fields)
         sample_hashes = tuple(
             _hash_entry({"context_hash": context_hash, "entry_hash": sample_hash}) for sample_hash in sample_hashes

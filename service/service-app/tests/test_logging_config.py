@@ -85,3 +85,13 @@ def test_no_warn_when_protocol_unset(monkeypatch):
 def test_no_warn_when_protocol_grpc(monkeypatch, protocol):
     monkeypatch.setenv(otlp_protocol_key, protocol)
     assert not _collect_warnings(monkeypatch)
+
+
+def test_invalid_log_level_warns_on_configured_sink(monkeypatch, capsys):
+    monkeypatch.setenv("LOG_LEVEL", "nonsense")
+    monkeypatch.delenv(otlp_endpoint_key, raising=False)
+
+    logcfg.setup_logging()
+
+    out = capsys.readouterr().out
+    assert "WARNING" in out and "LOG_LEVEL='NONSENSE'" in out and "using INFO" in out

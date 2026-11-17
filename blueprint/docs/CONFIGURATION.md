@@ -107,7 +107,7 @@ timeout_seconds = 60
 
 | Field             | Required             | Default                     | Meaning                                                                                                             |
 | ----------------- | -------------------- | --------------------------- | ------------------------------------------------------------------------------------------------------------------- |
-| `[eca].component` | No                   | `slurm`                     | Selects the execution context adapter: `slurm`, `kueue`, or `static`. Defaults to `slurm` when unset.               |
+| `[eca].component` | No                   | `slurm`                     | Selects the execution context adapter: `slurm`, `kueue`, `kai`, `static`, or `kafka`. Defaults to `slurm` when unset.|
 | `sacct_path`      | No                   | `sacct`                     | Path to the `sacct` binary. Use an absolute path if `sacct` is not on `PATH`.                                       |
 | `cluster_tz`      | Strongly recommended | blueprint host fixed offset | IANA timezone for the SLURM controller, used to anchor naive `sacct` timestamps and preserve regional/DST identity. |
 | `ids`             | Per run              | none                        | Comma-separated job IDs. Usually pass this by CLI, not TOML.                                                        |
@@ -139,7 +139,7 @@ uv run --project blueprint --frozen nvidia-attribution-blueprint --config ./attr
   --connector eca slurm nodelist "node[001-004]"
 ```
 
-Runtime selector rules, validated on the merged configuration before the run starts, for `slurm` and `kueue`:
+Runtime selector rules, validated before the run for `slurm`, `kueue`, and `kai`:
 
 - `ids` and `start_time` are mutually exclusive.
 - `start_time` and `end_time` must be set together.
@@ -208,85 +208,46 @@ uv run --project blueprint --frozen nvidia-attribution-blueprint --config ./attr
 | `namespace`              | No       | all namespaces  | Optional namespace scope. Also allows bare workload names in `ids` mode. Required when `placement_records_enabled` is set. |
 | `timeout_seconds`        | No       | `60`            | Timeout for each Kubernetes API request.                                                                          |
 | `workload_api_version`   | No       | `kueue.x-k8s.io/v1beta1` | Kueue Workload CRD `<group>/<version>` to read. Set this if the cluster serves a different Workload API version. |
-| `placement_records_enabled` | No    | `false`         | Reads retained placement from the configured recorder; discovery fails if the recorder cannot be read. Requires `namespace`, matching the one namespace the recorder watches. |
+| `placement_records_enabled` | No    | `false`         | Reads retained placement from the configured `kubernetes-daemon`; discovery fails if it cannot be read. Requires `namespace`, matching the one namespace the daemon watches. |
 
 
-The baseline Kueue adapter does not require the placement recorder or Prometheus. It
+The baseline Kueue adapter does not require `kubernetes-daemon` or Prometheus. It
 uses live Pods and a best-effort Kubernetes Events fallback. If Pods and their
 Events are cleaned up before attribution, the execution context can have
 missing `nodes` or `pod_names`; downstream node-scoped metrics and deleted Pod
 logs will then be incomplete.
 
-#### Pod placement recorder setup
+#### Kubernetes daemon
 
-Install the recorder before the workloads whose placement must be retained. A
-single-replica StatefulSet writes PlacementRecord JSON to SQLite on a
-`ReadWriteOnce` PVC and serves it through a ClusterIP Service.
-See the
-[recorder architecture, usage, and troubleshooting reference](../src/attribution_blueprint/connectors/execution_contexts/kueue/pod_placement/recorder/docs/README.md).
+`kubernetes-daemon` retains Pod-to-node placement after Kubernetes deletes
+the Pods. The same daemon installation, with the corresponding integration
+enabled, serves both the Kueue and KAI adapters. See
+[Attribute Kueue Workloads](./use-cases/kueue.md#recover-pod-placement-after-deletion)
+and [Attribute KAI PodGroups](./use-cases/kai.md#recover-pod-placement-after-deletion)
+for build, install, and verification steps, and the
+[kubernetes-daemon reference](../src/attribution_blueprint/kubernetes/daemon/docs/README.md)
+for architecture, enabling both integrations from one installation, and
+troubleshooting.
 
-Build the image, then install the SQLite backend:
-
-```bash
-kubectl config current-context
-docker build \
-  -f blueprint/docker/pod-placement-recorder.Dockerfile \
-  -t registry.example/pod-placement-recorder:VERSION .
-docker push registry.example/pod-placement-recorder:VERSION
-
-YES=1 RELEASE_NAME=attribution \
-  ./blueprint/scripts/install-pod-placement-recorder.sh team-a \
-  --set image.repository=registry.example/pod-placement-recorder \
-  --set image.tag=VERSION \
-  --set image.pullPolicy=IfNotPresent
-```
-
-For kind, load the locally built image with
-`kind load docker-image pod-placement-recorder:local --name CLUSTER` and keep
-the chart's default image values. Place the recorder on a system node pool
-outside the failure domain it observes. The chart accepts `nodeSelector` and
-`tolerations` values for that purpose; a recorder that fails with the workload
-cannot retain the workload's final Pod update. SQLite PVC settings are
-`storage.sqlite.size`, `storage.sqlite.storageClassName`, and
-`storage.sqlite.accessModes`. Records are removed automatically after
-`retentionDays`, which defaults to `30`.
-
-After installation, wait for the StatefulSet and verify its read API:
-
-```bash
-kubectl -n team-a rollout status statefulset/attribution-pod-placement-recorder
-kubectl -n team-a port-forward service/attribution-pod-placement-recorder 18080:8080
-curl -fsS \
-  'http://127.0.0.1:18080/v1/placements?namespace=team-a&workload_uid=WORKLOAD_UID'
-```
-
-Point an in-cluster Blueprint at the Service:
+Point the Kueue adapter at the Service:
 
 ```toml
 [eca.kueue]
 placement_records_enabled = true
 
-[eca.kueue.placement_recorder]
-endpoint = "http://attribution-pod-placement-recorder.team-a.svc:8080"
+[eca.kueue.kubernetes_daemon]
+endpoint = "http://attribution-kubernetes-daemon.team-a.svc:8080"
 timeout_seconds = 10
 ```
 
 `endpoint` is required when this section is present; `timeout_seconds`
-defaults to `10`. Optional `auth` supports `token` (`token_env`, optional
-`org_id`) or `mtls` (`cert_path`, `key_path`, optional `ca_cert_path` and
-`org_id`).
+defaults to `10`. The daemon chart serves plain HTTP without authentication.
+Optional `auth` configures requests to a terminating proxy; `mtls` requires an
+HTTPS proxy endpoint.
 
-When enabled, recorder lookup is fail-closed. After deleting a completed Pod,
-a validation run should retain the
-same Pod UID and node with `pod_placements[].source = "placement_record"`.
-For node-loss validation, `nodeFailureReason` must be present before the
-Pod disappears; post-hoc attribution should then return `NODE_FAIL` and the
-recorded `failed_node`. If Blueprint runs outside the cluster, use an
-authenticated proxy or port-forward and set the endpoint to that reachable
-URL. Optional `placement_recorder.auth` supports the same `token` and `mtls`
-fields as the Prometheus source. The recorder itself does not terminate
-authentication, so keep its Service private or place an authenticated proxy
-in front of it.
+When enabled, daemon lookup is fail-closed. See the
+[daemon reference](../src/attribution_blueprint/kubernetes/daemon/docs/README.md)
+for transport, retention, and recovery limits.
 
 To recover Job and JobSet placement from retained kube-state-metrics, configure a
 Prometheus-compatible endpoint under the Kueue adapter:
@@ -362,7 +323,7 @@ kube_pod_labels{
 }
 ```
 
-To prove the fallback rather than live-Pod or recorder recovery, leave
+To prove the fallback rather than live-Pod or daemon recovery, leave
 `placement_records_enabled = false`, delete the Pod after the series has been
 scraped, and run attribution while the Workload remains available. The
 result must contain the original Pod UID and node with
@@ -371,7 +332,7 @@ child Job objects so the adapter can resolve their exact UIDs.
 
 Kueue time-range filtering is client-side because the Workload API does not
 provide server-side time filtering. The adapter reads pod and node names from
-live owned pods and recorder records, then always merges in configured
+live owned pods and daemon records, then always merges in configured
 Prometheus placement data for Workloads with an owner Job (already-known Pod
 UIDs take precedence). If nodes or pod names are still missing afterward, it
 falls back to querying Kubernetes Events for UID-matched Pod scheduling
@@ -384,19 +345,11 @@ attribution time so their UIDs can be resolved without a name-based metrics
 join. If both a JobSet's Pods and child Jobs have been deleted, this UID-safe
 Prometheus route returns no placement even when the old metrics remain.
 
-For durable pod-to-node placement, install one pod-placement-recorder release per namespace:
-
-```bash
-YES=1 blueprint/scripts/install-pod-placement-recorder.sh team-a
-```
-
-The preview supports Job and JobSet owners and stores node names without
-reading Node objects; JobSet support does not require its API on Jobs-only
-clusters. Recorder `queueSize` and `workers` must be positive. Runtime API
-defaults are Kueue Workload `v1beta1` and JobSet `v1alpha2`; override
-`workloadVersion` or `jobsetVersion` to match the installed controllers.
-SQLite records older than `retentionDays` are removed automatically; the
-default is 30 days.
+For durable pod-to-node placement, see
+[Kubernetes daemon](#kubernetes-daemon) above. Its `queueSize` and `workers`
+must be positive. Runtime API defaults are Kueue Workload `v1beta1` and
+JobSet `v1alpha2`; override `integrations.kueue.workloadVersion` or
+`jobsetVersion` to match the installed controllers.
 
 The adapter derives `kueue_state` from Kueue conditions, using finished
 conditions before evicted, preempted, admitted, quota-reserved, and pending
@@ -431,6 +384,67 @@ across Kubernetes response orderings.
 
 For a complete runnable configuration, see
 [examples/kueue](../examples/kueue/README.md).
+
+### `[eca.kai]`
+
+Use the KAI adapter for Kubernetes batch workloads scheduled by the KAI
+scheduler. It reads KAI `PodGroup` objects, follows owner references to Job
+or JobSet pods, and normalizes the result into execution contexts. See
+[Attribute KAI PodGroups](./use-cases/kai.md) for the full use case.
+
+Example:
+
+```toml
+[eca]
+component = "kai"
+
+[eca.kai]
+kubeconfig = "/path/to/kubeconfig"
+context = "prod-batch"
+namespace = "team-a"
+timeout_seconds = 60
+placement_records_enabled = false
+```
+
+| Field                        | Required | Default         | Meaning                                                                                                                      |
+| ----------------------------- | -------- | --------------- | ------------------------------------------------------------------------------------------------------------------------------ |
+| `ids`                         | Per run  | none            | Comma-separated PodGroup refs. Use `<namespace>/<name>` unless `namespace` is configured.                                    |
+| `start_time`                  | Per run  | none            | ISO-8601 time for time-range mode.                                                                                           |
+| `end_time`                    | Per run  | none            | ISO-8601 time for time-range mode. Required with `start_time`.                                                               |
+| `nodelist`                    | Per run  | none            | Optional comma-separated Kubernetes node names for time-range mode.                                                          |
+| `kubeconfig`                  | No       | client default  | Optional kubeconfig path. Falls back to `KUBECONFIG` or `~/.kube/config`, then in-cluster credentials.                       |
+| `context`                     | No       | current context | Optional kubeconfig context name.                                                                                            |
+| `namespace`                   | No       | all namespaces  | Optional namespace scope. Also allows bare PodGroup names in `ids` mode. Required when `placement_records_enabled` is set.   |
+| `timeout_seconds`             | No       | `60`            | Timeout for each Kubernetes API request.                                                                                     |
+| `placement_records_enabled`   | No       | `false`         | Reads retained placement from the configured `kubernetes-daemon`; discovery fails if it cannot be read. Requires `namespace`, matching the one namespace the daemon watches. |
+
+The baseline KAI adapter does not require `kubernetes-daemon`. It uses live
+Pods only. If Pods are cleaned up before attribution, the execution context
+can have missing `nodes` or `pod_names`.
+
+#### `[eca.kai.kubernetes_daemon]`
+
+The KAI adapter reads from the same `kubernetes-daemon` installation used for
+Kueue (see [Kubernetes daemon](#kubernetes-daemon) above), scoped by KAI
+PodGroup UID instead of Kueue Workload UID; enable the KAI integration on
+that installation. Point the adapter at the Service:
+
+```toml
+[eca.kai]
+namespace = "team-a"
+placement_records_enabled = true
+
+[eca.kai.kubernetes_daemon]
+endpoint = "http://attribution-kubernetes-daemon.team-a.svc:8080"
+timeout_seconds = 10
+```
+
+`endpoint` is required when this section is present; `timeout_seconds`
+defaults to `10`. `auth` has the same proxy-only behavior as the Kueue daemon
+client; it does not enable authentication or TLS on the daemon.
+
+When enabled, daemon lookup is fail-closed. See the daemon reference above for
+transport, retention, and recovery limits.
 
 ### `[eca.static]`
 
@@ -498,8 +512,141 @@ preselect the desired attribution outcome.
 `workload_type` is the legacy free-form workload token sent as `workload.type`.
 Scheduler identity comes from the execution context's `scheduler` value, which
 Blueprint sends as `workload.scheduler` when it is a supported scheduler
-(`slurm` or `kueue`). Other values, such as `static`, are omitted and the service
-treats the scheduler as unknown.
+(`slurm`, `kueue`, or `kai`). Other values, such as `static`, are omitted and
+the service treats the scheduler as unknown.
+
+### `[eca.kafka]`
+
+Reads job-completion CloudEvents from a Kafka topic. Install the `kafka` extra
+(`confluent-kafka`). Each `discover()` reads at most `max_messages`, and the complete
+read (assignment and fetching included) is bounded by `discovery_timeout_seconds`.
+An empty poll ends discovery only when all assigned partitions have reached
+broker end offsets. `poll_timeout_seconds` controls individual polls.
+
+Consumer auto-commit is disabled. Each group resumes its committed offsets;
+a new group starts at `earliest`. `latest` is rejected: replaying an unfinished
+batch across a rebalance would require extra assignment checkpointing.
+Revoked/lost partitions' uncommitted contexts are dropped and replayed by the
+next owner. Rebalance callbacks never commit offsets.
+
+Kafka handles connection retries internally. The adapter does not retry reported
+consumer errors, seek partitions, or repair a failed consumer. A read/timeout
+failure closes the consumer and raises. Create a new adapter to retry from
+Kafka's committed offsets. Every discovery closes its consumer before returning,
+so attribution runs without holding group membership. Create a new adapter for
+each batch; calling discovery again on a closed adapter raises.
+
+Each partition commits independently, because a mixed-partition commit can
+partially succeed before raising. At the first commit failure the adapter
+closes the consumer and returns only contexts whose commits already succeeded,
+with `discovery_incomplete = true`; if there are none it raises. A failed
+commit's broker outcome can be uncertain, so replay is not guaranteed.
+
+Delivery is best effort: commits happen before attribution. A later attribution
+or output failure does not automatically replay the event. Reset group offsets
+with Kafka tooling to replay. Long-lived callers can instead use the
+[explicit acknowledgement API](kafka_lifecycle.md) to control when offsets advance.
+
+Malformed, filtered, and within-batch duplicate events are intentional skips
+and their offsets commit too. Each call logs counts in `last_discovery_stats`
+(`consumed`, `accepted`, `filtered`, `malformed`, `redeliveries`, `superseded`, `returned`,
+`commit_failed_partitions`, `dropped_partitions`). Filtered event types and their
+counts appear in `last_unmatched_event_types`. A filtered-only batch succeeds
+with zero contexts. The CLI exits 1 on operational or commit failure, including
+when it processes a committed subset. A close failure is logged and marks the
+batch incomplete without discarding committed contexts or hiding a read error.
+Unexpected exceptions propagate; they are not classified as invalid events.
+
+The event `data` object uses ExecutionContext field names: `id`, `start_time`,
+`end_time` (with UTC offset) and a non-empty `nodes` list are required;
+`job_id`, `attempt_id`, `scheduler`, `state`, `name`, `user_name`,
+`workload_framework`, `timezone`, `time_limit`, `gpu_count`, `cancelled_by`,
+`failed_nodes`, `failed_node`, `std_out`, `std_err`, `namespace`, `pod_names`,
+`pod_nodes`, and `cluster` are optional. `failed_node` is used when `failed_nodes`
+is absent or empty; otherwise, the lexicographically first entry in
+`failed_nodes` supplies `failed_node`. A `time_limit` of 0 means no limit, and
+the context omits it.
+CloudEvent `subject`, when it is a non-empty string, is retained as
+`event_subject`; any other value is ignored without skipping the event. `cluster`
+is retained unchanged; the VictoriaLogs and PromQL connectors query it when
+`cluster_from_context` is enabled (see
+[Cluster From The Execution Context](#cluster-from-the-execution-context)). `pod_nodes` must be an object whose pod names and node
+names are non-empty strings; values are not coerced to strings. See
+`tests/fixtures/kafka_completion_events.json`. Send `timezone` as an IANA key
+whenever the timestamps' UTC offset is not a whole hour or the job crosses a
+DST change; events the service could not place in a timezone are skipped.
+Within one run, an exact redelivery (same CloudEvent `source` and `id`) is
+dropped, and for repeated events of the same `(scheduler, job_id, attempt_id)`
+only the latest
+is attributed. Events in earlier runs are not deduplicated. The input preserves
+the winning CloudEvent ID and source as `event_id` and `event_source` for
+correlation by the output connector. CloudEvent `source` is required and must
+be a non-empty string without whitespace.
+
+Deduplication runs after offset commits, on the successfully committed contexts.
+Within a partition, latest means highest offset. Across partitions, the last
+context in commit order wins and a warning asks operators to check the producer's
+message key; Kafka provides no ordering across partitions. Output order follows
+when each attempt was first seen in commit order. `redeliveries` counts repeated
+CloudEvent `(source, id)` pairs; `superseded` counts different events replaced
+for the same attempt.
+Kafka output publishes `event_id` as `trigger_event_id`; see
+[Kafka result events](output_schema.md#kafka-result-events).
+The SQLite output records a later run as another run of the same attempt.
+`ids` and time-range selectors are not supported.
+
+```toml
+[eca]
+component = "kafka"
+
+[eca.kafka]
+bootstrap_servers = "broker-1:9092,broker-2:9092"
+topic = "job-completions"
+group_id = "attribution"
+event_types = ["com.example.job.completed.v1"]
+security_protocol = "SASL_SSL"
+sasl_mechanism = "SCRAM-SHA-512"
+sasl_username_env = "KAFKA_USERNAME"
+sasl_password_env = "KAFKA_PASSWORD"
+```
+
+| Field                        | Required          | Default     | Meaning                                                                                  |
+| ---------------------------- | ----------------- | ----------- | ---------------------------------------------------------------------------------------- |
+| `bootstrap_servers`          | Yes               | none        | Comma-separated `host:port` list.                                                        |
+| `topic`                      | Yes               | none        | Topic carrying the completion events.                                                    |
+| `group_id`                   | Yes               | none        | Consumer group. Offsets are tracked per group.                                           |
+| `auto_offset_reset`          | No                | `earliest`  | Only `earliest` is supported. |
+| `event_types`                | No                | all types   | CloudEvent `type` values to accept.                                                      |
+| `scheduler`                  | No                | `kafka`     | Scheduler identity for events whose data has no `scheduler`.                             |
+| `workload_type`              | No                | empty       | Workload type sent to the service.                                                       |
+| `max_messages`               | No                | `500`       | Maximum messages read per run.                                                           |
+| `poll_timeout_seconds`       | No                | `5`         | Timeout for an individual poll; end offsets determine whether the batch is drained.      |
+| `discovery_timeout_seconds` | No | `60` | Maximum time for the complete discovery read, including assignment and fetching. |
+| `security_protocol`          | No                | `PLAINTEXT` | `PLAINTEXT`, `SSL`, `SASL_PLAINTEXT`, or `SASL_SSL`.                                     |
+| `sasl_mechanism`             | With `SASL_*`     | none        | `PLAIN`, `SCRAM-SHA-256`, `SCRAM-SHA-512`, or `AWS_MSK_IAM`.                             |
+| `sasl_username_env`          | With `PLAIN` / `SCRAM-*` | none | Environment variable holding the SASL username.                                          |
+| `sasl_password_env`          | With `PLAIN` / `SCRAM-*` | none | Environment variable holding the SASL password.                                          |
+| `ssl_ca_location`            | No                | system CAs  | CA bundle for `SSL` / `SASL_SSL`.                                                        |
+| `aws_region`                 | With `AWS_MSK_IAM` | none       | AWS region of the MSK cluster.                                                           |
+
+`AWS_MSK_IAM` requires `security_protocol = "SASL_SSL"`, `aws_region`, and the
+`kafka-aws` extra (`nvidia-attribution-blueprint[kafka-aws]`). Use the cluster's
+[IAM listener](https://docs.aws.amazon.com/msk/latest/developerguide/port-info.html)
+bootstrap addresses. Credentials come from the standard AWS credential chain:
+environment variables, a shared credentials file, or a container or instance
+role. A sidecar can rotate a shared credentials file without restarting the
+client; changing another process's environment does not update this client.
+Images built from the Blueprint Dockerfile include the `kafka-aws` extra.
+
+```toml
+[eca.kafka]
+bootstrap_servers = "b-1.example.kafka.us-east-2.amazonaws.com:9098"
+topic = "job-completions"
+group_id = "attribution"
+security_protocol = "SASL_SSL"
+sasl_mechanism = "AWS_MSK_IAM"
+aws_region = "us-east-2"
+```
 
 ### `[workload]`
 
@@ -568,7 +715,40 @@ component = "sqlite"
 path = "./attributions.db"
 ```
 
+Kafka output (requires `nvidia-attribution-blueprint[kafka]`; included in the
+standard Blueprint Docker image):
 
+```toml
+[output.events]
+component = "kafka"
+
+[output.events.kafka]
+bootstrap_servers = "localhost:9092"
+topic = "mfn.attribution.run-results"
+# For MSK SCRAM, enable these and provide credentials through the environment:
+# security_protocol = "SASL_SSL"
+# sasl_mechanism = "SCRAM-SHA-512"
+# sasl_username_env = "ATTRIBUTION_KAFKA_USERNAME"
+# sasl_password_env = "ATTRIBUTION_KAFKA_PASSWORD"
+```
+
+| Field | Default | Meaning |
+| --- | --- | --- |
+| `bootstrap_servers` | Required | Comma-separated Kafka broker addresses. |
+| `topic` | Required | Existing result topic; provision it before running. |
+| `event_type` | `com.nvidia.attribution.job.attributed.v1` | Result CloudEvent type. |
+| `source` | `/attribution/blueprint` | Result CloudEvent source URI-reference. |
+| `cluster` | Unset | Fallback when the execution context has no cluster. |
+| `max_message_bytes` | `65536` (64 KiB) | Encoded event size limit in 1..1000000000 bytes. Increase for larger results; oversized events fail without truncation. |
+| `delivery_timeout_seconds` | `30` | Delivery wait and client retry budget; must be finite and in (0, 2147483.647] seconds. |
+
+Use the same [security settings as Kafka input](#ecakafka), including environment
+variable references for SASL credentials, `ssl_ca_location` for a CA file, and
+`AWS_MSK_IAM` for Amazon MSK. Record overhead and broker/topic size limits
+also apply.
+
+For payload fields and delivery guarantees, see
+[Kafka result events](output_schema.md#kafka-result-events).
 
 ## Log Collection
 
@@ -591,6 +771,7 @@ The supported log components are:
 
 - `local_file`, read files visible on the blueprint host
 - `loki`, query Loki over HTTP
+- `victorialogs`, query VictoriaLogs over HTTP using LogsQL
 - `kubectl_logs`, collect Kubernetes pod logs for Kueue workloads
 
 Prefer [pre-shaped entries](#pre-shaped-entries) for `local_file`: a path ending in `.jsonl` is read as observation entries, one JSON object per line, each carrying its own timestamp and node. Raw log files are also accepted, as the per-source sections below describe.
@@ -754,7 +935,86 @@ Fields:
 
 The bundled Loki templates are examples. If your labels are not `service_name`, `app`, or `host_name`, set `query`, `queries`, `query_kwargs`, and `node_label` for your environment.
 
-Custom templates may use `{job_id}` (the execution context ID) and any `{key}` supplied in `query_kwargs`. Literal `{` and `}` in LogQL label selectors must be doubled (`{{`, `}}`).
+Custom templates may use `{job_id}` (the provider `run_id`, falling back to the execution context `id`) and any `{key}` supplied in `query_kwargs`. Literal `{` and `}` in LogQL label selectors must be doubled (`{{`, `}}`).
+
+### VictoriaLogs SYSLOG Or APPLOG
+
+Use VictoriaLogs to collect system or application logs with LogsQL. Authentication
+is optional when the endpoint does not require it.
+
+```toml
+[log.syslog]
+component = "victorialogs"
+
+[log.syslog.victorialogs]
+endpoint = "http://127.0.0.1:9428"
+query_kwargs = { service_name = "example-cluster" }
+limit = 5000
+node_field = "host_name"
+```
+
+Configure APPLOG independently when it uses the same endpoint:
+
+```toml
+[log.applog]
+component = "victorialogs"
+
+[log.applog.victorialogs]
+endpoint = "http://127.0.0.1:9428"
+query_kwargs = { service_name = "example-cluster", app = "example-training" }
+```
+
+Fields:
+
+| Field | Required | Meaning |
+| --- | --- | --- |
+| `endpoint` | Yes | VictoriaLogs base URL. |
+| `timeout_seconds` | No | HTTP timeout. Defaults to `60.0`. |
+| `limit` | No | Maximum records per query response. Defaults to `5000`; must be positive. |
+| `max_pages` | No | Maximum responses per query. Defaults to `20`; must be a positive integer. Increase for larger collection windows, at the cost of more requests and memory. |
+| `node_field` | No | Row field used as the node name and to scope each query to context nodes. Defaults to `host_name`; set to `""` to disable node filtering and row-based node lookup. |
+| `auth.type` | No | Optional `token` or `mtls` authentication. Omit the entire `auth` block for an unauthenticated endpoint. |
+| `auth.token_env` | For token | Environment variable containing the bearer token. |
+| `auth.cert_path` | For mTLS | Client certificate path. |
+| `auth.key_path` | For mTLS | Client private key path. |
+| `auth.ca_cert_path` | No | CA bundle path for mTLS. |
+| `query_kwargs` | Usually | Values used by the bundled LogsQL templates. |
+| `cluster_from_context` | No | When `true`, a non-empty `cluster` on the execution context replaces `query_kwargs.cluster` for that context's `{cluster}` placeholder. Defaults to `false`. |
+| `query` | No | One custom LogsQL template replacing the bundled templates for this source. |
+| `queries` | No | Custom LogsQL template list replacing the bundled templates; takes precedence over `query`. |
+
+The bundled templates target `service_name`, `app`, `slurm_job_id`, and `host_name`.
+Templates may use `{job_id}` (the provider `run_id`, falling back to the execution context `id`) and any `{key}` supplied
+in `query_kwargs`. LogsQL queries are paginated backward in time when a response
+reaches `limit`; rows at a page boundary are deduplicated. The collector report is
+`partial` with a reason when a template argument is missing, invalid response
+records or rows with invalid `_time` or non-string `_msg` are skipped, the page budget is
+exhausted, a later request fails after rows have been fetched, or a saturated
+response cannot advance past one timestamp, has no parseable `_time`, or reaches
+the window start. Available entries are retained. Other configured queries still
+run after HTTP errors or timeouts. If all attempted queries fail without a
+response, the first request error propagates. A successful empty query combined
+with a failed query reports partial coverage with no observations. Refer to the
+[upgrade guide](../../docs/blueprint-upgrading.md#victorialogs-partial-collection-reporting) for caller changes.
+
+The bundled templates do not use `{cluster}`. A custom template can scope its
+query to a cluster with `{cluster}` and a `cluster` entry in `query_kwargs`.
+When one deployment receives execution contexts from several clusters, for
+example through [`[eca.kafka]`](#ecakafka) events that carry `data.cluster`, set
+`cluster_from_context = true` to query each context's own cluster:
+
+```toml
+[log.syslog.victorialogs]
+endpoint = "http://127.0.0.1:9428"
+query = 'cluster:="{cluster}" service_name:="{service_name}"'
+query_kwargs = { cluster = "cluster-a", service_name = "example-service" }
+cluster_from_context = true
+```
+
+A context with `cluster = "cluster-b"` is then queried with `cluster:="cluster-b"`.
+A context without a `cluster`, or with an empty one, uses `query_kwargs.cluster`.
+Enable the setting only when the context's `cluster` values match the values in
+your log fields; see [Cluster From The Execution Context](#cluster-from-the-execution-context).
 
 ### Kubectl Pod Logs
 
@@ -842,15 +1102,283 @@ Fields:
 | ----------------- | -------- | ----------------------------------------------------------------------------------------------------------------------- |
 | `endpoint`        | Yes      | Prometheus-compatible HTTP API base URL.                                                                                |
 | `cluster`         | Yes      | Cluster label value used by bundled PromQL templates.                                                                   |
+| `cluster_from_context` | No | When `true`, a non-empty `cluster` on the execution context replaces `cluster` for that context's queries. Defaults to `false`. |
+| `node_label`      | No       | Label containing node names, used in queries and results. Defaults to `net_host_name`.                                   |
+| `cluster_label`   | No       | Label containing the cluster name, used in queries and results. Defaults to `s_cluster`.                                |
 | `auth.type`       | No       | Optional. If present, `token` or `mtls`; same auth fields as Loki. Omit the `auth` block for unauthenticated endpoints. |
 | `step_seconds`    | No       | Query step size. Defaults to `60`.                                                                                      |
 | `timeout_seconds` | No       | HTTP timeout. Defaults to `60.0`.                                                                                       |
 | `queries`         | No       | Custom named PromQL templates. These extend the bundled templates and override bundled templates with the same name.    |
 
 
-The bundled PromQL templates expect labels such as `s_cluster` and `net_host_name`. If your metrics use different labels, override the relevant query templates.
+Both `node_label` and `cluster_label` must match `^[a-zA-Z_][a-zA-Z0-9_]*$` (unquoted PromQL label names).
 
-Each template may use `{name}` (the template's own name), `{cluster}`, and `{nodes}` (a regex alternation of the context's node names). Literal `{` and `}` in PromQL label selectors must be doubled (`{{`, `}}`).
+The bundled PromQL templates use the configured node and cluster labels. Returned
+series must retain the node label. If an aggregation drops the cluster label,
+the connector uses the queried cluster value for the observation.
+
+When one deployment receives execution contexts from several clusters, for
+example through [`[eca.kafka]`](#ecakafka) events that carry `data.cluster`, set
+`cluster_from_context = true`. A context with `cluster = "cluster-b"` is then
+queried with `{cluster_label}="cluster-b"`. A context without a `cluster`, or
+with an empty one, uses the configured `cluster`, so `cluster` stays required.
+The setting is also available as
+`--connector metrics node_metrics promql cluster_from_context true` or
+`NVAB_METRICS_NODE_METRICS_PROMQL_CLUSTER_FROM_CONTEXT=true`.
+
+Each template may use `{name}` (the template's own name), `{cluster}` (the
+queried cluster value), `{nodes}` (an RE2-escaped alternation of the context's node
+names; use a backtick raw string, or double quotes only for hostnames without regex metacharacters),
+`{node_label}`, and `{cluster_label}` (the configured label names).
+Literal `{` and `}` in PromQL label selectors must be doubled (`{{`, `}}`).
+Existing custom queries with literal label names still work; use the label
+placeholders when a query should follow the configured mapping. For example:
+
+```toml
+[metrics.node_metrics.promql.queries]
+up = 'max by ({node_label}) ({name}{{{cluster_label}="{cluster}", {node_label}=~`{nodes}`}}) == 0'
+```
+
+### Using VictoriaMetrics
+
+VictoriaMetrics exposes the same `/api/v1/query_range` API as Prometheus, so use
+the `promql` connector and the base URL of its query endpoint (for a single-node
+deployment, `http://localhost:8428`). No separate client is needed. Omit the
+`auth` block for a no-auth deployment. To map different metric labels:
+
+```toml
+[metrics.node_metrics]
+component = "promql"
+
+[metrics.node_metrics.promql]
+endpoint = "http://localhost:8428"
+cluster = "example-cluster"
+node_label = "hostname"
+cluster_label = "cluster"
+```
+
+The same mapping is available through
+`--connector metrics node_metrics promql node_label hostname` and
+`--connector metrics node_metrics promql cluster_label cluster` (or
+`NVAB_METRICS_NODE_METRICS_PROMQL_NODE_LABEL` and
+`NVAB_METRICS_NODE_METRICS_PROMQL_CLUSTER_LABEL`). See the complete
+[VictoriaMetrics example](../examples/victoriametrics.toml), which uses a static
+workload context; adjust its nodes and time window to match your data.
+
+### Cluster From The Execution Context
+
+The VictoriaLogs and PromQL connectors accept `cluster_from_context`. It is off
+by default because only some execution-context adapters set `cluster`, and the
+value must equal the field or label value in your telemetry. The Kafka adapter
+copies `data.cluster` unchanged, and a static `contexts_path` file passes
+through any `cluster` key. The Slurm, Kueue, and KAI adapters do not set it, so
+their contexts always use the configured value. A context `cluster` that
+contains a quote, backslash, or control character is rejected: the connector
+reports an error for that context instead of querying another cluster.
+
+## Connector Metrics
+
+Connector metrics use the OpenTelemetry metrics API. They are off by default.
+The API does nothing unless you configure an OpenTelemetry SDK.
+
+| Metric | Unit | Meaning |
+| --- | --- | --- |
+| `attribution.connector.requests` | `{request}` | Requests started |
+| `attribution.connector.successes` | `{request}` | Requests that succeeded |
+| `attribution.connector.errors` | `{request}` | Requests that failed |
+| `attribution.connector.response.size` | `By` | Decoded response bytes received |
+| `attribution.connector.request.duration` | `s` | Time spent on each request |
+
+Every metric has `connector` and `operation` labels. Errors and failed request
+durations also have an `error.type` label. Its value is the HTTP status code
+or the exception class name. An exception or an HTTP status of 400 or higher
+counts as an error. HTTP retries count once per client call.
+
+| Connector | Operation |
+| --- | --- |
+| `loki` | `/loki/api/v1/query_range` |
+| `victorialogs` | `/select/logsql/query` |
+| `promql` | `/api/v1/query` or `/api/v1/query_range` |
+| `kubernetes_daemon` | `/v1/placements` or `/v1/history` |
+| `kubernetes` | HTTP method, such as `GET` |
+| `slurm` | Command name `sacct` |
+| `kubectl_logs` | Command name `logs` |
+| `attribution_service` | Client method: `create_attributor`, `ingest_observation`, `get_attribution`, or `delete_attributor` |
+| `kafka` | `produce` |
+
+HTTP connectors use only the listed URL path suffixes. Other paths use the
+uppercase HTTP method, so resource IDs do not become labels.
+Response size measures the decoded body, not compressed bytes on the wire.
+It includes the body of an error response.
+Command calls measure encoded stdout. Streamed HTTP responses omit size.
+Kafka output records no response size.
+Kubernetes watch and log-follow calls record no response size, because their bodies are streams that the metrics must not read.
+The Kafka input consumer has its own metrics, described in
+[Kafka Input Consumer Metrics](#kafka-input-consumer-metrics).
+The `kubernetes-daemon` watch process is not measured because its watch streams are long-lived.
+
+### Query Result Metrics
+
+The Loki, VictoriaLogs, and PromQL connectors also record what each query
+returned. These metrics have the same `connector` and `operation` labels as the
+request metrics. A query is one template for one execution context, including
+all of its pages.
+
+| Metric | Type | Unit | Meaning |
+| --- | --- | --- | --- |
+| `attribution.connector.query.entries` | Histogram | `{entry}` | Log entries returned by one Loki or VictoriaLogs query, across its pages and before deduplication |
+| `attribution.connector.query.pages` | Histogram | `{page}` | Requests issued by one Loki or VictoriaLogs query, including a final empty page |
+| `attribution.connector.query.truncations` | Counter | `{query}` | Loki or VictoriaLogs queries that may have left entries unread, counted once per reason |
+| `attribution.connector.query.series` | Histogram | `{series}` | Series returned by one successful PromQL query |
+
+The truncation counter has a `reason` label. A query that matches several
+reasons is counted once under each of them.
+
+- `page_limit`: the query fetched its page budget of full pages (20 by default;
+  VictoriaLogs reads it from `max_pages`). With the default `limit` of 5000, this
+  is 100,000 entries. Entries older than the last page are missing from the
+  observation. To avoid it, narrow the template query so that it matches fewer
+  entries. For VictoriaLogs, you can also raise `limit` if your backend accepts
+  larger responses, or raise `max_pages`.
+- `missing_timestamp`: a full VictoriaLogs page had no parseable `_time` field,
+  or held only malformed records, so the connector cannot request the next page.
+- `timestamp_tie`: a full VictoriaLogs page held only entries with the newest
+  timestamp the request could return. The connector cannot page within one
+  timestamp, so it skips past it, and entries with that timestamp that did not
+  fit on the page are missing. Raising `limit` above the number of entries per
+  timestamp avoids it.
+- `window_start`: a full Loki or VictoriaLogs page reached the start of the time
+  window.
+  Entries at the start boundary may be missing.
+- `request_error`: a VictoriaLogs request failed after earlier pages had
+  succeeded. The query keeps the entries it has, and the request metrics record
+  the error. If the first request fails, the query records nothing.
+
+The same conditions are also reported as collection issues or warnings. A PromQL query whose API
+status is not `success` records no series count; its request metrics record
+the call. A scalar or string result also records no series count.
+
+### Built-in Scrape Endpoint
+
+Install the `metrics` extra. The container image already includes it.
+Set `ATTRIBUTION_METRICS_ADDR` to enable the endpoint in the Blueprint CLI:
+
+```bash
+uv pip install "nvidia-attribution-blueprint[metrics]"
+ATTRIBUTION_METRICS_ADDR=0.0.0.0:9464 \
+  nvidia-attribution-blueprint --config ./attribution-blueprint.toml
+```
+
+A Prometheus-compatible scraper can read `/metrics` at that address.
+The address uses `host:port` form, or `[::1]:9464` for IPv6.
+The endpoint is off when the variable is unset or empty.
+A short-lived run exits after its last job. A scraper sees its metrics only
+while that run is active.
+
+The scraper sees these names. Request labels are `connector`, `operation`, and
+`error_type` for failures. A label name with a dot, such as `error.type`, uses
+an underscore. Histogram buckets also have the `le` label.
+The Prometheus exporter also adds `otel_scope_name`, `otel_scope_version`, and
+`otel_scope_schema_url` labels to every series.
+
+| OpenTelemetry metric | Prometheus name |
+| --- | --- |
+| `attribution.connector.requests` | `attribution_connector_requests_total` |
+| `attribution.connector.successes` | `attribution_connector_successes_total` |
+| `attribution.connector.errors` | `attribution_connector_errors_total` |
+| `attribution.connector.response.size` | `attribution_connector_response_size_bytes_total` |
+| `attribution.connector.request.duration` | `attribution_connector_request_duration_seconds_bucket`, `attribution_connector_request_duration_seconds_sum`, `attribution_connector_request_duration_seconds_count` |
+| `attribution.connector.query.entries` | `attribution_connector_query_entries_bucket`, `attribution_connector_query_entries_sum`, `attribution_connector_query_entries_count` |
+| `attribution.connector.query.pages` | `attribution_connector_query_pages_bucket`, `attribution_connector_query_pages_sum`, `attribution_connector_query_pages_count` |
+| `attribution.connector.query.truncations` | `attribution_connector_query_truncations_total` |
+| `attribution.connector.query.series` | `attribution_connector_query_series_bucket`, `attribution_connector_query_series_sum`, `attribution_connector_query_series_count` |
+
+### Other OpenTelemetry Exporters
+
+Install `opentelemetry-distro` and an exporter, such as
+`opentelemetry-exporter-otlp`. Run the Blueprint command with
+`opentelemetry-instrument`. Do not combine this setup with the built-in scrape
+endpoint. Leave `ATTRIBUTION_METRICS_ADDR` unset.
+
+```bash
+uv pip install opentelemetry-distro opentelemetry-exporter-otlp
+OTEL_SERVICE_NAME=attribution-blueprint \
+OTEL_METRICS_EXPORTER=otlp \
+OTEL_EXPORTER_OTLP_ENDPOINT=http://127.0.0.1:4317 \
+  opentelemetry-instrument nvidia-attribution-blueprint --config ./attribution-blueprint.toml
+```
+
+### Kafka Input Consumer Metrics
+
+The `eca.kafka` consumer records these metrics for both `discover()` and the
+long-lived `open_consumer()` lifecycle described in
+[Kafka consumption and acknowledgements](kafka_lifecycle.md). The `lag` and
+`position.lag` gauges are reported only by `open_consumer()`. A `discover()`
+run reads to the end of its partitions and closes, so it has no ongoing lag.
+
+| Metric | Type | Unit | Labels | Meaning |
+| --- | --- | --- | --- | --- |
+| `attribution.kafka.consumer.consumed` | Counter | `{record}` | `topic`, `partition`, `consumer_group` | Records read from the broker |
+| `attribution.kafka.consumer.accepted` | Counter | `{record}` | `topic`, `partition`, `consumer_group` | Valid records returned by `poll()` or added to a `discover()` batch |
+| `attribution.kafka.consumer.skipped` | Counter | `{record}` | `topic`, `partition`, `consumer_group`, `reason` | Records skipped as `filtered` or `malformed` |
+| `attribution.kafka.consumer.acknowledged` | Counter | `{record}` | `topic`, `partition`, `consumer_group` | Receipts acknowledged for the first time |
+| `attribution.kafka.consumer.commits` | Counter | `{commit}` | `topic`, `partition`, `consumer_group` | Offset commits that the broker confirmed |
+| `attribution.kafka.consumer.commit.errors` | Counter | `{commit}` | `topic`, `partition`, `consumer_group`, `error.type` | Offset commits that failed or have an uncertain outcome |
+| `attribution.kafka.consumer.errors` | Counter | `{error}` | `topic`, `consumer_group`, `error.type` | Errors returned by a poll, other than end of partition |
+| `attribution.kafka.consumer.rebalances` | Counter | `{partition}` | `topic`, `partition`, `consumer_group`, `change` | Partitions `assigned`, `revoked`, or `lost` in rebalance callbacks |
+| `attribution.kafka.consumer.lag` | Gauge | `{record}` | `topic`, `partition`, `consumer_group` | High watermark minus the committed offset |
+| `attribution.kafka.consumer.position.lag` | Gauge | `{record}` | `topic`, `partition`, `consumer_group` | High watermark minus the consumer's fetch position |
+| `attribution.kafka.consumer.unacknowledged` | Gauge | `{record}` | `topic`, `partition`, `consumer_group` | Records returned by `poll()` that the caller has not acknowledged |
+| `attribution.kafka.consumer.oldest_unacknowledged.age` | Gauge | `s` | `topic`, `partition`, `consumer_group` | Time since the earliest unacknowledged record was returned by `poll()`, or 0 |
+
+`consumer_group` is the configured `group_id`. For a commit error, `error.type`
+is the exception class name. For a poll error, it is the Kafka error name, such
+as `_TRANSPORT`.
+
+Gauges report only the partitions that the consumer currently owns, and stop
+when the consumer closes. The connector computes them from state that the
+polling thread publishes, and never contacts the broker when the metrics are
+read:
+
+- The high watermark is the client's cached value from its latest fetch. The
+  fetch position is the client's local position. The connector refreshes both
+  while the owner thread polls, at most once every 5 seconds.
+- The committed offset starts at the group's committed offset, which the
+  polling thread reads from the broker once after it receives the partition.
+  After the consumer commits, it is the offset of that commit. If the group has
+  no committed offset for the partition, `lag` is omitted until the consumer
+  commits. If the broker lookup fails, the next refresh retries it.
+
+The connector commits only the acknowledged prefix of each partition, so one
+slow record holds back every later commit in its partition. When
+`oldest_unacknowledged.age` keeps growing while `lag` grows and `position.lag`
+stays low, the consumer is reading records but a delivered record is still
+waiting for its acknowledgement. If the consumer restarts, Kafka replays every
+record after the committed offset.
+
+The built-in scrape endpoint renders these names:
+
+| OpenTelemetry metric | Prometheus name |
+| --- | --- |
+| `attribution.kafka.consumer.consumed` | `attribution_kafka_consumer_consumed_total` |
+| `attribution.kafka.consumer.accepted` | `attribution_kafka_consumer_accepted_total` |
+| `attribution.kafka.consumer.skipped` | `attribution_kafka_consumer_skipped_total` |
+| `attribution.kafka.consumer.acknowledged` | `attribution_kafka_consumer_acknowledged_total` |
+| `attribution.kafka.consumer.commits` | `attribution_kafka_consumer_commits_total` |
+| `attribution.kafka.consumer.commit.errors` | `attribution_kafka_consumer_commit_errors_total` |
+| `attribution.kafka.consumer.errors` | `attribution_kafka_consumer_errors_total` |
+| `attribution.kafka.consumer.rebalances` | `attribution_kafka_consumer_rebalances_total` |
+| `attribution.kafka.consumer.lag` | `attribution_kafka_consumer_lag` |
+| `attribution.kafka.consumer.position.lag` | `attribution_kafka_consumer_position_lag` |
+| `attribution.kafka.consumer.unacknowledged` | `attribution_kafka_consumer_unacknowledged` |
+| `attribution.kafka.consumer.oldest_unacknowledged.age` | `attribution_kafka_consumer_oldest_unacknowledged_age_seconds` |
+
+For example, this PromQL expression finds partitions in which a delivered
+record has waited for its acknowledgement for more than one hour:
+
+```promql
+max by (topic, partition, consumer_group) (attribution_kafka_consumer_oldest_unacknowledged_age_seconds) > 3600
+```
 
 ## Environment Variables
 
@@ -871,6 +1399,8 @@ CLI values still win over environment variables.
 Unknown `NVAB_`-prefixed variables are logged as warnings and ignored, so unrelated `NVAB_` variables from other tooling do not abort a run.
 
 The stderr log level is controlled by the `ATTRIBUTION_LOG_LEVEL` environment variable (default `INFO`). This is a plain environment variable, not an `NVAB_` config key.
+
+`ATTRIBUTION_METRICS_ADDR` enables the Blueprint CLI scrape endpoint at `host:port`; unset or empty keeps it off.
 
 ## Config Checks
 

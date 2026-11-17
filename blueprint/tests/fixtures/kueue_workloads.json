@@ -12,7 +12,7 @@
         "creationTimestamp": "2026-05-01T11:59:30Z",
         "labels": {"user": "alice"},
         "ownerReferences": [
-          {"apiVersion": "batch/v1", "kind": "Job", "name": "train-mnist", "uid": "owner-1001"}
+          {"apiVersion": "batch/v1", "kind": "Job", "name": "train-mnist", "uid": "owner-1001", "controller": true}
         ]
       },
       "spec": {
@@ -41,7 +41,7 @@
         "creationTimestamp": "2026-05-01T12:59:30Z",
         "labels": {"user": "bob"},
         "ownerReferences": [
-          {"apiVersion": "batch/v1", "kind": "Job", "name": "llama-7b-pretrain", "uid": "owner-1002"}
+          {"apiVersion": "batch/v1", "kind": "Job", "name": "llama-7b-pretrain", "uid": "owner-1002", "controller": true}
         ]
       },
       "spec": {
@@ -69,7 +69,7 @@
         "creationTimestamp": "2026-05-01T13:59:30Z",
         "labels": {"user": "carol"},
         "ownerReferences": [
-          {"apiVersion": "batch/v1", "kind": "Job", "name": "hpl-bench", "uid": "owner-1003"}
+          {"apiVersion": "batch/v1", "kind": "Job", "name": "hpl-bench", "uid": "owner-1003", "controller": true}
         ]
       },
       "spec": {"queueName": "infra-queue"},
@@ -91,7 +91,7 @@
         "creationTimestamp": "2026-05-02T07:59:30Z",
         "labels": {"user": "dave"},
         "ownerReferences": [
-          {"apiVersion": "batch/v1", "kind": "Job", "name": "still-running", "uid": "owner-1004"}
+          {"apiVersion": "batch/v1", "kind": "Job", "name": "still-running", "uid": "owner-1004", "controller": true}
         ]
       },
       "spec": {"queueName": "research-queue"},

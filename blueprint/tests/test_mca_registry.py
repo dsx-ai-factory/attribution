@@ -4,7 +4,6 @@
 import sys
 
 import pytest
-
 from attribution_blueprint import mca_registry as reg
 from attribution_blueprint.exceptions import RegistryError
 
@@ -98,9 +97,11 @@ def test_output_components_registered_by_connector_packages():
     _fresh_import(
         "attribution_blueprint.connectors.outputs.stdout",
         "attribution_blueprint.connectors.outputs.sqlite",
+        "attribution_blueprint.connectors.outputs.kafka",
     )
     assert r.get_component("output", "stdout").name == "stdout"
     assert r.get_component("output", "sqlite").name == "sqlite"
+    assert r.get_component("output", "kafka").name == "kafka"
 
 
 def test_eca_components_registered_by_connector_packages():
@@ -123,9 +124,11 @@ def test_log_components_registered_by_connector_packages():
     r.register_framework(name="log", aliases=("logs",), sources=("applog", "syslog"))
     _fresh_import(
         "attribution_blueprint.connectors.logs.loki",
+        "attribution_blueprint.connectors.logs.victorialogs",
         "attribution_blueprint.connectors.logs.local_file",
     )
     assert r.get_component("log", "loki").name == "loki"
+    assert r.get_component("log", "victorialogs").name == "victorialogs"
     assert r.get_component("log", "local_file").name == "local_file"
 
 
@@ -137,7 +140,7 @@ def test_built_schema_has_expected_shape():
     schema = mca.SCHEMA
     assert "eca" in schema
     assert schema["eca"]["_aliases"] == ("execution_context",)
-    assert set(schema["eca"]["_selector"]) == {"slurm", "static", "kueue", "kai"}
+    assert set(schema["eca"]["_selector"]) == {"slurm", "static", "kueue", "kai", "kafka"}
     assert set(schema["eca"]["_selector"]["kai"]) == {
         "ids",
         "start_time",
@@ -147,6 +150,13 @@ def test_built_schema_has_expected_shape():
         "context",
         "namespace",
         "timeout_seconds",
+        "placement_records_enabled",
+        "kubernetes_daemon",
+    }
+    assert set(schema["eca"]["_selector"]["kai"]["kubernetes_daemon"]) == {
+        "endpoint",
+        "timeout_seconds",
+        "auth",
     }
     assert set(schema["eca"]["_selector"]["slurm"]) == {
         "ids",
@@ -184,11 +194,11 @@ def test_built_schema_has_expected_shape():
         "timeout_seconds",
         "workload_api_version",
         "placement_records_enabled",
-        "placement_recorder",
+        "kubernetes_daemon",
         "event_max_age_seconds",
         "prometheus_metrics",
     }
-    assert set(schema["eca"]["_selector"]["kueue"]["placement_recorder"]) == {
+    assert set(schema["eca"]["_selector"]["kueue"]["kubernetes_daemon"]) == {
         "endpoint",
         "timeout_seconds",
         "auth",
@@ -210,9 +220,30 @@ def test_built_schema_has_expected_shape():
     assert schema["log"]["_aliases"] == ("logs",)
     for src in ("applog", "syslog"):
         assert src in schema["log"]
-        assert {"loki", "local_file", "kubectl_logs"} <= set(schema["log"][src]["_selector"])
+        assert {"loki", "victorialogs", "local_file", "kubectl_logs"} <= set(schema["log"][src]["_selector"])
         assert "query_kwargs" in schema["log"][src]["_selector"]["loki"]
         assert schema["log"][src]["_selector"]["loki"]["query_kwargs"].get("_open") is True
+        victorialogs_schema = schema["log"][src]["_selector"]["victorialogs"]
+        assert set(victorialogs_schema) == {
+            "endpoint",
+            "timeout_seconds",
+            "limit",
+            "max_pages",
+            "query",
+            "queries",
+            "node_field",
+            "cluster_from_context",
+            "auth",
+            "query_kwargs",
+        }
+        assert set(victorialogs_schema["auth"]) == {
+            "type",
+            "cert_path",
+            "key_path",
+            "ca_cert_path",
+            "token_env",
+        }
+        assert victorialogs_schema["query_kwargs"].get("_open") is True
         assert set(schema["log"][src]["_selector"]["loki"]["auth"]) == {
             "type",
             "cert_path",
@@ -222,7 +253,7 @@ def test_built_schema_has_expected_shape():
             "org_id",
         }
 
-    assert set(schema["output"]["_instances"]) == {"stdout", "sqlite"}
+    assert set(schema["output"]["_instances"]) == {"stdout", "sqlite", "kafka"}
     assert set(schema["output"]["_instances"]["sqlite"]) == {"path"}
     assert set(schema["attribution"]) == {"service_url", "timeout_seconds"}
     assert set(schema["workload"]) == {"gpus_per_node"}

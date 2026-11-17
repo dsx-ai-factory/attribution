@@ -1,0 +1,253 @@
+{
+  "SPDX-FileCopyrightText": "Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.",
+  "SPDX-License-Identifier": "Apache-2.0",
+  "start": 1777636800,
+  "end": 1777636920,
+  "step": 60,
+  "series": [
+    {
+      "metric": {
+        "__name__": "node_infiniband_link_downed_total",
+        "net_host_name": "node-01",
+        "s_cluster": "example-cluster",
+        "device": "adapter-01"
+      },
+      "values": [
+        [1777636680, "0"],
+        [1777636740, "1"],
+        [1777636800, "1"],
+        [1777636860, "1"],
+        [1777636920, "1"]
+      ]
+    },
+    {
+      "metric": {
+        "__name__": "node_infiniband_link_downed_total",
+        "net_host_name": "node-02",
+        "s_cluster": "example-cluster",
+        "device": "adapter-01"
+      },
+      "values": [
+        [1777636680, "0"],
+        [1777636740, "1"],
+        [1777636800, "1"],
+        [1777636860, "1"],
+        [1777636920, "1"]
+      ]
+    },
+    {
+      "metric": {
+        "__name__": "node_network_carrier_down_changes_total",
+        "net_host_name": "node-01",
+        "s_cluster": "example-cluster",
+        "device": "adapter-01"
+      },
+      "values": [
+        [1777636680, "1"],
+        [1777636740, "2"],
+        [1777636800, "2"],
+        [1777636860, "2"],
+        [1777636920, "2"]
+      ]
+    },
+    {
+      "metric": {
+        "__name__": "node_network_carrier_down_changes_total",
+        "net_host_name": "node-02",
+        "s_cluster": "example-cluster",
+        "device": "adapter-01"
+      },
+      "values": [
+        [1777636680, "1"],
+        [1777636740, "2"],
+        [1777636800, "2"],
+        [1777636860, "2"],
+        [1777636920, "2"]
+      ]
+    },
+    {
+      "metric": {
+        "__name__": "ib_roce_adp_retrans",
+        "net_host_name": "node-01",
+        "s_cluster": "example-cluster",
+        "device": "adapter-01"
+      },
+      "values": [
+        [1777636680, "0"],
+        [1777636740, "120"],
+        [1777636800, "120"],
+        [1777636860, "120"],
+        [1777636920, "120"]
+      ]
+    },
+    {
+      "metric": {
+        "__name__": "ib_roce_adp_retrans",
+        "net_host_name": "node-02",
+        "s_cluster": "example-cluster",
+        "device": "adapter-01"
+      },
+      "values": [
+        [1777636680, "0"],
+        [1777636740, "120"],
+        [1777636800, "120"],
+        [1777636860, "120"],
+        [1777636920, "120"]
+      ]
+    },
+    {
+      "metric": {
+        "__name__": "up",
+        "net_host_name": "node-01",
+        "s_cluster": "example-cluster"
+      },
+      "values": [
+        [1777636680, "1"],
+        [1777636740, "0"],
+        [1777636800, "0"],
+        [1777636860, "0"],
+        [1777636920, "0"]
+      ]
+    },
+    {
+      "metric": {
+        "__name__": "up",
+        "net_host_name": "node-02",
+        "s_cluster": "example-cluster"
+      },
+      "values": [
+        [1777636680, "1"],
+        [1777636740, "0"],
+        [1777636800, "0"],
+        [1777636860, "0"],
+        [1777636920, "0"]
+      ]
+    }
+  ],
+  "responses": {
+    "node_infiniband_link_downed_total": {
+      "status": "success",
+      "data": {
+        "resultType": "matrix",
+        "result": [
+          {
+            "metric": {
+              "net_host_name": "node-01",
+              "s_cluster": "example-cluster",
+              "device": "adapter-01"
+            },
+            "values": [
+              [1777636800, "1"],
+              [1777636860, "1"],
+              [1777636920, "1"]
+            ]
+          },
+          {
+            "metric": {
+              "net_host_name": "node-02",
+              "s_cluster": "example-cluster",
+              "device": "adapter-01"
+            },
+            "values": [
+              [1777636800, "1"],
+              [1777636860, "1"],
+              [1777636920, "1"]
+            ]
+          }
+        ]
+      }
+    },
+    "node_network_carrier_down_changes_total": {
+      "status": "success",
+      "data": {
+        "resultType": "matrix",
+        "result": [
+          {
+            "metric": {
+              "net_host_name": "node-01",
+              "s_cluster": "example-cluster",
+              "device": "adapter-01"
+            },
+            "values": [
+              [1777636800, "1"],
+              [1777636860, "1"],
+              [1777636920, "1"]
+            ]
+          },
+          {
+            "metric": {
+              "net_host_name": "node-02",
+              "s_cluster": "example-cluster",
+              "device": "adapter-01"
+            },
+            "values": [
+              [1777636800, "1"],
+              [1777636860, "1"],
+              [1777636920, "1"]
+            ]
+          }
+        ]
+      }
+    },
+    "ib_roce_adp_retrans": {
+      "status": "success",
+      "data": {
+        "resultType": "matrix",
+        "result": [
+          {
+            "metric": {
+              "net_host_name": "node-01",
+              "s_cluster": "example-cluster",
+              "device": "adapter-01"
+            },
+            "values": [
+              [1777636800, "120"],
+              [1777636860, "120"],
+              [1777636920, "120"]
+            ]
+          },
+          {
+            "metric": {
+              "net_host_name": "node-02",
+              "s_cluster": "example-cluster",
+              "device": "adapter-01"
+            },
+            "values": [
+              [1777636800, "120"],
+              [1777636860, "120"],
+              [1777636920, "120"]
+            ]
+          }
+        ]
+      }
+    },
+    "up": {
+      "status": "success",
+      "data": {
+        "resultType": "matrix",
+        "result": [
+          {
+            "metric": {
+              "net_host_name": "node-01"
+            },
+            "values": [
+              [1777636800, "0"],
+              [1777636860, "0"],
+              [1777636920, "0"]
+            ]
+          },
+          {
+            "metric": {
+              "net_host_name": "node-02"
+            },
+            "values": [
+              [1777636800, "0"],
+              [1777636860, "0"],
+              [1777636920, "0"]
+            ]
+          }
+        ]
+      }
+    }
+  }
+}
