@@ -259,6 +259,32 @@ Pull requests are squash-merged, so the PR title becomes the commit subject on `
 - Mark a removed or incompatible public API with `!` and add a `BREAKING CHANGE:` footer to the PR body that says what callers must change.
 - The type signals the version bump for the next release of each touched component: `!` is major, `feat` is minor, `fix` is patch, and other types do not bump. A component still at `0.y.z` shifts each bump down one place: `!` is minor, and `feat` and `fix` are patch.
 
+## Backport a fix to a release branch
+
+A release branch takes fixes, not features, and only as cherry-picks of commits
+already on `main`. For the branch model and which fixes qualify, refer to
+[Merge and branch policy](RELEASE.md#merge-and-branch-policy).
+
+1. Merge the fix to `main` in its own pull request.
+2. Pick the squashed commit onto a branch from the release branch. The `-x` flag
+   adds the `(cherry picked from commit ...)` trailer that CI looks for:
+
+   ```bash
+   git fetch origin
+   git switch -c <branch> origin/release/YYYY.N
+   git cherry-pick -x <commit on main>
+   ```
+
+   After you resolve a conflict, run `git cherry-pick --continue`; the trailer
+   stays.
+3. Open a pull request into the release branch. Use one fix per pull request,
+   and write the title as described in
+   [Title commits and pull requests](#title-commits-and-pull-requests).
+
+Rebase the branch instead of merging into it.
+[Release checks](RELEASE.md#release-checks) lists everything that runs on a pull
+request into a release branch.
+
 ## Preview the published documentation
 
 The pages listed in `docs/index.yml` are published as a [Fern](https://buildwithfern.com) site. The interactive walkthrough in `docs/attribution-tour/` and `docs/github-pages.md` are not part of it.
