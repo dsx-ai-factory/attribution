@@ -7,20 +7,25 @@
 # ///
 """Release check and tag-on-merge for the components in this repository.
 
-Needs a full clone with tags. Three subcommands:
+Needs a full clone with tags. Four subcommands:
 
-    status  per component: version literal, latest tag (any / stable-only),
-            first-parent distance since that tag, PRs merged since.
+    status  per component: version literal, latest tag on any branch (any /
+            stable-only), distance since that tag, PRs merged since.
     check   validate a release PR; exit 1 unless all of these hold:
             - literal is a PEP 440 release like 2.0.0 or 2.0.0rc1
             - planned tag does not exist yet
             - every in-repo dependency is released at distance 0, with a
               stable tag when the consumer is stable
             - CHANGELOG.md has a `## [X.Y.Z]` entry
+            - every other component with distance above 0 releases in the
+              same PR
     tag     runs on main after a merge. Re-runs the `check` rules on the
             merged commit, then creates and pushes one `<component>-vX.Y.Z`
             tag per component that is releasing. Exit 1 on any FAIL.
             `--before SHA` is the push event's previous tip.
+    shortlog  print a CHANGELOG.md skeleton for one component: the heading for
+            its literal, the section headings and one line per commit since
+            its latest tag.
 
 The rules are the executable form of RELEASE.md.
 """
@@ -30,6 +35,7 @@ from __future__ import annotations
 import argparse
 import os
 import sys
+from datetime import date
 from pathlib import Path
 from typing import Optional
 
@@ -40,6 +46,7 @@ from release_git import (
     TagInfo,
     default_repo,
     git,
+    since_tag,
     tag_for,
 )
 from release_rules import (
@@ -76,8 +83,11 @@ RELEASE_PR_RULE = (
     "releasing when its own literal changed and did not decrease."
 )
 DISTANCE_RULE = (
-    "Distance counts first-parent commits since the tag over the component and "
-    "its in-repo dependencies; the shortlog covers the component's own path only."
+    "Distance is the number of commits since the tag that change the component or "
+    "its in-repo dependencies; a commit the tag already includes as a cherry-pick "
+    "does not count, and the distance is 0 when the files match the tag, ignoring "
+    "the version literal line, each CHANGELOG.md and the generated files a "
+    "release PR rewrites. The shortlog covers the component's own path only."
 )
 
 
@@ -108,9 +118,13 @@ def render_status(repo: Path, statuses: dict[str, ComponentStatus]) -> str:
             lines.append(f"{name}: planned tag {tag_for(name, s.literal)}")
     for name, s in statuses.items():
         since = s.latest.any.tag if s.latest.any is not None else None
-        rev_range = f"{since}..HEAD" if since is not None else "HEAD"
         shortlog = git(
-            repo, "shortlog", "--first-parent", rev_range, "--", COMPONENTS[name].path
+            repo,
+            "shortlog",
+            "--first-parent",
+            *since_tag(since),
+            "--",
+            COMPONENTS[name].path,
         ).rstrip()
         lines += [
             "",
@@ -163,6 +177,31 @@ def render_tag(rows: list[TagRow]) -> str:
     return "\n".join(lines)
 
 
+def render_shortlog(repo: Path, name: str) -> str:
+    status = releasing_components(repo, None)[name]
+    since = status.latest.any.tag if status.latest.any is not None else None
+    revisions = since_tag(since)
+    comp = COMPONENTS[name]
+    log = git(
+        repo, "log", "--first-parent", "--format=- %s", *revisions, "--", comp.path
+    )
+    return "\n".join(
+        [
+            f"## [{status.literal}] - {date.today().isoformat()}",
+            "",
+            "### BREAKING CHANGES",
+            "",
+            "### Features",
+            "",
+            "### Bug Fixes",
+            "",
+            f"<!-- git log --first-parent --format='- %s' {' '.join(revisions)} "
+            f"-- {comp.path} -->",
+            *log.splitlines(),
+        ]
+    )
+
+
 def _emit(text: str) -> None:
     print(text)
     summary = os.environ.get("GITHUB_STEP_SUMMARY")
@@ -197,6 +236,12 @@ def main(argv: Optional[list[str]] = None) -> int:
         required=True,
         help="push event: tag literals that moved since SHA",
     )
+    shortlog = subparsers.add_parser(
+        "shortlog", help="print a CHANGELOG.md skeleton for one component"
+    )
+    shortlog.add_argument("component", choices=list(COMPONENTS))
+    shortlog.add_argument("--repo", type=Path, default=None, help="repository root")
+
     args = parser.parse_args(argv)
 
     try:
@@ -216,6 +261,8 @@ def main(argv: Optional[list[str]] = None) -> int:
                 rows = tag_push(repo, args.before)
                 report = render_tag(rows)
                 failed = any(r.outcome == "FAIL" for r in rows)
+            case "shortlog":
+                report, failed = render_shortlog(repo, args.component), False
     except ReleaseError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2

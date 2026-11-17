@@ -19,11 +19,13 @@ from release_git import (
     RELEASABLE,
     LatestTags,
     ReleaseError,
+    TagInfo,
     closure_paths,
     git,
     latest_tags,
     parse_version,
     read_literal,
+    since_tag,
     tag_for,
 )
 
@@ -69,7 +71,7 @@ def releasing_components(repo: Path, base: Optional[str]) -> dict[str, Component
             and old_version is not None
             and new_version < old_version
         )
-        latest = latest_tags(repo, name)
+        latest = latest_tags(repo, name, new_version)
         statuses[name] = ComponentStatus(
             name=name,
             literal=literal,
@@ -118,13 +120,12 @@ def violations(results: list[RuleResult]) -> list[Violation]:
 
 def _log_since(repo: Path, name: str, tag: Optional[str]) -> str:
     """The commit log since `tag` (or HEAD if `tag` is None)."""
-    rev_range = f"{tag}..HEAD" if tag is not None else "HEAD"
     return git(
         repo,
         "log",
         "--first-parent",
         "--format=- %s",
-        rev_range,
+        *since_tag(tag),
         "--",
         *closure_paths(name),
     ).rstrip()
@@ -224,6 +225,11 @@ def _rule_dep_released(
     )
 
 
+def _since(tag: TagInfo) -> str:
+    verb = "unchanged" if tag.distance == 0 else "has moved"
+    return f"{verb} since {tag.tag} (distance {tag.distance})"
+
+
 def _rule_dep_at_distance_zero(
     repo: Path, consumer: ComponentStatus, dep: ComponentStatus, stable: bool
 ) -> RuleResult:
@@ -232,11 +238,25 @@ def _rule_dep_at_distance_zero(
     if tag is None:
         raise ReleaseError(f"{dep.name}: _rule_dep_released must run first")
     if tag.distance == 0:
-        return Pass(consumer.name, f"{dep.name} unchanged since {tag.tag} (distance 0)")
+        return Pass(consumer.name, f"{dep.name} {_since(tag)}")
     return Violation(
         consumer.name,
-        f"{dep.name} has moved since {tag.tag} (distance {tag.distance})",
+        f"{dep.name} {_since(tag)}",
         _log_since(repo, dep.name, tag.tag),
+    )
+
+
+def _rule_changed_component_releases(repo: Path, status: ComponentStatus) -> RuleResult:
+    """A component that moved since its latest tag releases in the same PR."""
+    tag = status.latest.any
+    if tag is None:
+        return Pass(status.name, "never released, so not required to release")
+    if tag.distance == 0:
+        return Pass(status.name, f"{_since(tag)}, no release needed")
+    return Violation(
+        status.name,
+        f"{_since(tag)}; release it in this PR",
+        _log_since(repo, status.name, tag.tag),
     )
 
 
@@ -260,10 +280,13 @@ def _check_dependency(
 
 
 def check_release(repo: Path, statuses: dict[str, ComponentStatus]) -> list[RuleResult]:
-    """Every rule outcome for every releasing component, in COMPONENTS order."""
+    """Every rule outcome for every component of a release, in COMPONENTS order."""
+    any_releasing = any(s.releasing for s in statuses.values())
     results: list[RuleResult] = []
     for name, status in statuses.items():
         if not status.releasing:
+            if any_releasing:
+                results.append(_rule_changed_component_releases(repo, status))
             continue
         results.append(_rule_literal_shape(status))
         if isinstance(results[-1], Violation):
