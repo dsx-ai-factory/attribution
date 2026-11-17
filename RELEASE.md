@@ -188,11 +188,12 @@ new version; fix forward with the next version number.
 ### Release candidates and patches
 
 A release candidate is a release of the same shape with an `X.Y.ZrcN` literal.
-Its pull request needs the releaser's approval and passing CI; the QA pass is
-optional. A patch is a release with a new patch number on the latest release
-branch: the fix merges to the default branch, is picked onto the release branch,
-and the release follows steps 1 to 5. A patch is for security and P0 fixes only,
-and only on the latest release branch. QA tests only the patch.
+Its pull request only needs the releaser's approval and passing CI (QA
+approval highly encouraged, but not enforced). A patch is a release with a new
+patch number on the latest release branch: the fix merges to the default
+branch, is picked onto the release branch, and the release follows steps 1
+to 5. A patch is for security and P0 fixes only, and only on the latest
+release branch. QA tests only the patch.
 
 Project maintainers review version changes and control the CI release workflow.
 Contributors propose version changes through pull requests. CI creates release
