@@ -21,6 +21,7 @@ from attribution_blueprint.connectors.logs.loki.client import (
 )
 from attribution_blueprint.connectors.logs.loki.range_cache import LokiRangeCache
 from attribution_blueprint.connectors.logs.loki.templates import TEMPLATES
+from attribution_blueprint.telemetry import MeteredSession, QueryTruncation, record_paginated_query
 from attribution_blueprint.types import (
     ExecutionContext,
     NodeResource,
@@ -34,6 +35,7 @@ from attribution_blueprint.types import (
 
 DEFAULT_LIMIT = 5000
 DEFAULT_NODE_LABEL = "host_name"
+QUERY_PATH = "/loki/api/v1/query_range"
 DEFAULT_NODE_CHUNK_SIZE = 50
 # Concurrent queries per batch; enough to overlap network latency without
 # hammering the backend.
@@ -131,6 +133,14 @@ class LokiConnector:
         # fetches scoped to that ExecutionContext's nodes, and reads each
         # entry's node from that label. Set to None for cluster-wide queries.
         self._node_label = node_label
+        self._session = MeteredSession("loki", (QUERY_PATH,)) if session is None else session
+        kwargs = auth.request_kwargs()
+        if "headers" in kwargs:
+            self._session.headers.update(kwargs["headers"])
+        if "cert" in kwargs:
+            self._session.cert = kwargs["cert"]
+        if "verify" in kwargs:
+            self._session.verify = kwargs["verify"]
         # Batch mode only: a positive value trims each context to its trailing
         # window before slicing; 0 keeps the whole context window, as
         # `collect` does.
@@ -169,8 +179,11 @@ class LokiConnector:
         end = assert_aware(context["end_time"], "end_time")
         if self._source == Source.HEALTH_CHECK:
             end = DEFAULT_TIME_INTERVAL[Source.HEALTH_CHECK](context)["end"]
-        nodes = [node for node in (context.get("nodes") or []) if node]
-        queries: list[str] = []
+        start_ns = int(start.timestamp() * 1e9)
+        end_ns = int(end.timestamp() * 1e9)
+        nodes = context.get("nodes") or []
+
+        all_streams: list[dict] = []
         for tmpl in self._templates:
             try:
                 query = tmpl.format(
@@ -180,13 +193,109 @@ class LokiConnector:
             except KeyError as e:
                 logger.warning(f"loki template missing kwarg {e}; skipping query")
                 continue
-            queries.append(self._inject_node_filter(query, nodes))
-        # Newest window first, so the page cap drops the oldest entries, not
-        # the end of the job where failures show up.
-        entries = self._query_batch(queries, start, end, newest_first=True)
-        if not entries:
+
+            query = self._inject_node_filter(query, nodes)
+            all_streams.extend(self._query_paginated(query, start_ns, end_ns))
+
+        if not all_streams:
             return []
-        return [self._observation(entries, context)]
+
+        entries = self._entries(all_streams)
+        return [log_observation(source=self._source, entries=entries, context=context)]
+
+    def _entries(self, streams: list[dict]) -> list[TimeseriesEntry]:
+        # Multi-template runs and pagination can produce duplicate streams
+        # (same labels, overlapping values). Coalesce by label set and dedup
+        # (timestamp, line) pairs before encoding so the service doesn't
+        # double-count.
+        streams = self._merge_streams(streams)
+        # One entry per stream value. Node and pod labels ride along as
+        # per-entry resources only when the stream carries them.
+        timeseries: list[TimeseriesEntry] = []
+        for stream in streams:
+            labels = stream.get("stream") or {}
+            stream_node = labels.get(self._node_label) if self._node_label else None
+            replica = labels.get("pod")
+            for ts, line in stream.get("values") or []:
+                try:
+                    timestamp = int(ts)
+                except (TypeError, ValueError):
+                    continue
+                body, node = _extract_body_and_node(line, stream_node)
+                entry: TimeseriesEntry = {"body": body, "ts": timestamp}
+                resources: list[NodeResource | ReplicaResource] = []
+                if node is not None:
+                    resources.append({"kind": "node", "hostname": node})
+                if replica is not None:
+                    resources.append({"kind": "replica", "name": replica})
+                if resources:
+                    entry["resources"] = resources
+                timeseries.append(entry)
+        return timeseries
+
+    @staticmethod
+    def _merge_streams(streams: list[dict]) -> list[dict]:
+        merged: dict[tuple, dict] = {}
+        seen: dict[tuple, set[tuple]] = {}
+        for stream in streams:
+            labels = stream.get("stream", {}) or {}
+            key = tuple(sorted(labels.items()))
+            if key not in merged:
+                merged[key] = {"stream": dict(labels), "values": []}
+                seen[key] = set()
+            for entry in stream.get("values", []) or []:
+                if len(entry) < 2:
+                    continue
+                pair = (entry[0], entry[1])
+                if pair in seen[key]:
+                    continue
+                seen[key].add(pair)
+                merged[key]["values"].append(entry)
+        return list(merged.values())
+
+    def _query_paginated(self, query: str, start_ns: int, end_ns: int) -> list[dict]:
+        """Walk Loki's query_range backward in time until the result is unsaturated.
+
+        Loki returns entries newest-first and caps at `limit` per response, so a
+        single call silently drops the tail for high-volume windows. We re-issue
+        with `end` set to the oldest returned timestamp minus 1ns, until a page
+        comes back under the cap or we hit MAX_PAGES.
+
+        POST keeps the LogQL out of the URL (Loki's GET path caps at ~8 KiB and
+        a long `host_name=~"n1|n2|..."` regex for multi-node attempts blows past it).
+        """
+        out: list[dict] = []
+        cur_end = end_ns
+        entries = 0
+        truncations: set[QueryTruncation] = set()
+        for pages in range(1, MAX_PAGES + 1):
+            response = self._session.post(
+                f"{self._endpoint}{QUERY_PATH}",
+                data={"query": query, "start": start_ns, "end": cur_end, "limit": self._limit},
+                timeout=self._timeout,
+            )
+            response.raise_for_status()
+            streams = response.json().get("data", {}).get("result", [])
+            entry_count = sum(len(s.get("values", []) or []) for s in streams)
+            if entry_count == 0:
+                break
+            out.extend(streams)
+            entries += entry_count
+            if entry_count < self._limit:
+                break
+            oldest_ns = min(int(ts) for s in streams for ts, _ in (s.get("values", []) or []))
+            if oldest_ns <= start_ns:
+                truncations.add(QueryTruncation.WINDOW_START)
+                break
+            cur_end = oldest_ns - 1
+        else:
+            logger.warning(
+                f"loki: hit MAX_PAGES={MAX_PAGES} for query={query[:80]!r}; "
+                f"older entries before ts={cur_end} may be truncated"
+            )
+            truncations.add(QueryTruncation.PAGE_LIMIT)
+        record_paginated_query("loki", QUERY_PATH, entries=entries, pages=pages, truncations=truncations)
+        return out
 
     def collect_batch(self, contexts: Sequence[ExecutionContext]) -> dict[str, list[Observation]]:
         """Fetch one window for the batch and slice it per context.

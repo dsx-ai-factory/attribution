@@ -308,11 +308,11 @@ def test_bisects_saturated_pages_forward(mocker):
         templates={Source.SYSLOG: ['{{service_name="{service_name}"}}']},
         limit=n,
     )
-    obs = conn.collect(ctx)
+    conn._client._max_pages = 500
+    entries = conn._query_range('{service_name="x"}', ctx["start_time"], ctx["end_time"])
     assert post.call_count >= 3
     assert all(call.kwargs["data"]["direction"] == "forward" for call in post.call_args_list)
-    decoded = json.loads(obs[0]["body"])
-    assert [e["body"] for e in decoded] == ["a", "b", "c"]
+    assert [e["body"] for e in entries] == ["a", "b", "c"]
 
 
 def test_substitutes_job_id_into_template(mocker):
@@ -411,8 +411,8 @@ def test_streams_merged_and_values_deduped(mocker):
     )
     obs = conn.collect(_ctx())
     body = json.loads(obs[0]["body"])
-    # Only the three unique (timestamp, body) pairs survive, in timestamp order.
-    assert [(e["ts"], e["body"]) for e in body] == [(1, "a"), (2, "b"), (3, "c")]
+    # Only the three unique (timestamp, body) pairs survive, in the order returned by Loki.
+    assert [(e["ts"], e["body"]) for e in body] == [(3, "c"), (2, "b"), (1, "a")]
 
 
 def test_string_template_accepted_for_pdf_compat():
@@ -821,7 +821,7 @@ def test_long_window_is_queried_in_thirty_minute_slices_newest_first(mocker):
     )
     ctx = _ctx()
     ctx["end_time"] = datetime(2026, 5, 1, 13, 10, 0, tzinfo=timezone.utc)
-    conn.collect(ctx)
+    conn._query_range('{service_name="x"}', ctx["start_time"], ctx["end_time"], newest_first=True)
     windows = [(c.kwargs["data"]["start"], c.kwargs["data"]["end"]) for c in post.call_args_list]
     s = int(ctx["start_time"].timestamp() * 1e9)
     half_hour = 30 * 60 * 10**9
@@ -832,6 +832,7 @@ def test_long_window_is_queried_in_thirty_minute_slices_newest_first(mocker):
 
 def test_page_cap_bounds_all_windows_of_a_long_query(mocker):
     """Every multi-instant response is saturated, so only the overall MAX_PAGES cap stops the walk."""
+    from attribution_blueprint.connectors.logs.loki.client import LokiQueryBudgetExceeded
     from attribution_blueprint.connectors.logs.loki.connector import MAX_PAGES
 
     def saturated(url, data, timeout):
@@ -852,14 +853,17 @@ def test_page_cap_bounds_all_windows_of_a_long_query(mocker):
     )
     ctx = _ctx()
     ctx["end_time"] = datetime(2026, 5, 8, 12, 0, 0, tzinfo=timezone.utc)  # 7 days = 336 windows
-    conn.collect(ctx)
-    assert post.call_count == MAX_PAGES == 500
+    with pytest.raises(LokiQueryBudgetExceeded):
+        conn._query_range('{service_name="x"}', ctx["start_time"], ctx["end_time"], newest_first=True)
+    assert post.call_count == MAX_PAGES == 20
     # The cap spent its budget on the newest entries.
     assert post.call_args_list[0].kwargs["data"]["end"] == int(ctx["end_time"].timestamp() * 1e9)
 
 
 def test_quiet_week_long_query_visits_every_window_within_budget(mocker):
-    """Empty windows cost a page each; a 7-day job (336 windows) still fits the budget."""
+    """The upstream page cap stops a quiet seven-day query after 20 windows."""
+    from attribution_blueprint.connectors.logs.loki.client import LokiQueryBudgetExceeded
+
     post = _mock_response(mocker, [])
     warning = mocker.patch("attribution_blueprint.connectors.logs.loki.connector.logger.warning")
     conn = LokiConnector(
@@ -871,9 +875,9 @@ def test_quiet_week_long_query_visits_every_window_within_budget(mocker):
     )
     ctx = _ctx()
     ctx["end_time"] = datetime(2026, 5, 8, 12, 0, 0, tzinfo=timezone.utc)
-    conn.collect(ctx)
-    assert post.call_count == 336
-    assert post.call_args_list[-1].kwargs["data"]["start"] == int(ctx["start_time"].timestamp() * 1e9)
+    with pytest.raises(LokiQueryBudgetExceeded):
+        conn._query_range('{service_name="x"}', ctx["start_time"], ctx["end_time"], newest_first=True)
+    assert post.call_count == 20
     warning.assert_not_called()
 
 
@@ -892,7 +896,7 @@ def test_page_cap_warns_only_when_windows_remain(mocker, cap, warned):
     )
     ctx = _ctx()
     ctx["end_time"] = datetime(2026, 5, 1, 13, 30, 0, tzinfo=timezone.utc)  # 90 minutes
-    conn.collect(ctx)
+    conn.collect_batch([ctx])
     assert warning.called == warned
 
 

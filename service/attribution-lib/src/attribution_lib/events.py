@@ -496,7 +496,7 @@ def _get_shared_lookup_tmpdir() -> str:
         _shared_lookup_tmpdir_lock_fd = lock_fd
         _shared_lookup_tmpdir = tmpdir
         _shared_lookup_tmpdir_owner_pid = os.getpid()
-        atexit.register(_cleanup_shared_lookup_tmpdir)
+        Finalize(None, _cleanup_shared_lookup_tmpdir, exitpriority=-100)
     return _shared_lookup_tmpdir
 
 
