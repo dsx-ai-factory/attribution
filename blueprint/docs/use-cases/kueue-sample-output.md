@@ -30,7 +30,7 @@ provides successful completion evidence when no stronger symptom exists.
 
 ```text
 Attribution complete: 1/1 execution contexts succeeded.
-- team-a/job-training-healthy-a1b2c attempt=64b4b82e-7f5d-4fd0-8ed4-1a2b3c4d5e6f terminal_state=pass sub_domain=none root_symptom=the process completes symptoms=the process completes
+- team-a/job-training-healthy-a1b2c attempt=kueue:v1:64b4b82e-7f5d-4fd0-8ed4-1a2b3c4d5e6f:3f9a1c2b7d4e6f80 terminal_state=pass sub_domain=none root_symptom=the process completes symptoms=the process completes evidence=complete
 ```
 
 ### Persisted summary
@@ -131,7 +131,7 @@ attribution rules decode the subcode.
 
 ```text
 Attribution complete: 1/1 execution contexts succeeded.
-- team-a/job-training-xid149-d4e5f attempt=91a8fb19-05c9-46a5-8591-6f7e8d9c0b1a terminal_state=fail sub_domain=hardware root_symptom=XID-149.4-NETIR_LINK_DOWN-ALIGNMENT_LOSS-0 symptoms=XID-149.4-NETIR_LINK_DOWN-ALIGNMENT_LOSS-0
+- team-a/job-training-xid149-d4e5f attempt=kueue:v1:91a8fb19-05c9-46a5-8591-6f7e8d9c0b1a:a07e5d93c1b84f26 terminal_state=fail sub_domain=hardware root_symptom=XID-149.4-NETIR_LINK_DOWN-ALIGNMENT_LOSS-0 symptoms=XID-149.4-NETIR_LINK_DOWN-ALIGNMENT_LOSS-0 evidence=complete
 ```
 
 ### Persisted summary
