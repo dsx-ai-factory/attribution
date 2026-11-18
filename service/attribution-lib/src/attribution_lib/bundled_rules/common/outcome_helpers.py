@@ -11,6 +11,16 @@ from .megatron import get_pytorch_timeout_minutes
 from attribution_lib.job_info import JobInfo, Scheduler
 from attribution_lib.outcome import OutcomeAttribution
 from attribution_lib.sources import SourceSet
+from .scheduler_formatting import (
+    CANCELLED_BY_SOURCE,
+    PREEMPTED_ROOT_CAUSE,
+    PREEMPTED_RULE,
+    SHORTER_TIMEOUT_ROOT_CAUSE,
+    SHORTER_TIMEOUT_RULE,
+    STATE_SOURCE,
+    TIMEOUT_ROOT_CAUSE,
+    render,
+)
 
 if TYPE_CHECKING:
     from attribution_lib.core import AttributionResult
@@ -88,11 +98,15 @@ def apply_preemption_pass(attribution_result: "AttributionResult", job_info: Job
 
     previous_source = attribution_result.outcome_attr.one_source()
     if previous_source is None:
-        previous_source = job_info.source(job_info.state, "slurm state")
+        previous_source = job_info.source(job_info.state, render(STATE_SOURCE, job_info.scheduler))
 
     attribution_result.outcome_attr = SourceSet(
-        OutcomeAttribution(outcome="Pass", hw_cause="Not Applicable", root_cause_symptom="SLURM preempted")
-    ).add(previous_source.derived(rule="reclassified: slurm preempted"))
+        OutcomeAttribution(
+            outcome="Pass",
+            hw_cause="Not Applicable",
+            root_cause_symptom=render(PREEMPTED_ROOT_CAUSE, job_info.scheduler),
+        )
+    ).add(previous_source.derived(rule=render(PREEMPTED_RULE, job_info.scheduler)))
     # Show the preemption as the reason for the job end.
     for symptom in _PREEMPTION_ONLY_SYMPTOMS:
         attribution_result.symptoms.discard(symptom)
@@ -126,7 +140,8 @@ def apply_user_cancellation_reclassification(
     previous_source = (
         cancellation.source
         if cancellation is not None
-        else attribution_result.outcome_attr.one_source() or job_info.source(cancelled_by, "slurmdb cancelled_by")
+        else attribution_result.outcome_attr.one_source()
+        or job_info.source(cancelled_by, render(CANCELLED_BY_SOURCE, job_info.scheduler))
     )
 
     new_outcome = OutcomeAttribution(
@@ -170,13 +185,13 @@ def apply_outcome_reclassification_rules(
             # Determine root_cause_symptom and derived rule based on pytorch timeout check
             pytorch_timeout_minutes = get_pytorch_timeout_minutes(event_stream)
             if pytorch_timeout_minutes is not None and pytorch_timeout_minutes.value() < float(job_info.time_limit):
-                root_cause_symptom = "SLURM timeout with shorter user distributed timeout"
-                derived_rule = "reclassified: pytorch timeout < slurm limit"
+                root_cause_symptom = render(SHORTER_TIMEOUT_ROOT_CAUSE, job_info.scheduler)
+                derived_rule = render(SHORTER_TIMEOUT_RULE, job_info.scheduler)
                 fallback_source = pytorch_timeout_minutes.one_source()
             else:
-                root_cause_symptom = "SLURM timeout (no other errors)"
+                root_cause_symptom = render(TIMEOUT_ROOT_CAUSE, job_info.scheduler)
                 derived_rule = "reclassified: timeout only symptom"
-                fallback_source = job_info.source(job_info.state, "slurm state")
+                fallback_source = job_info.source(job_info.state, render(STATE_SOURCE, job_info.scheduler))
 
             # Reclassify to Pass
             previous_source = attribution_result.outcome_attr.one_source()

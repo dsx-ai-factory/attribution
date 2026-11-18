@@ -354,10 +354,12 @@ class AttributionOrchestrator:
             "nodes": node_to_ranks,
         }
         # ExecutionContext.scheduler is also used for connector provenance
-        # (for example, "static"). Only actual scheduler identities belong on
-        # the service wire; omitting other values leaves the service's
-        # scheduler unset (`UNKNOWN`).
+        # (for example, "static"). Fall back to the legacy wire type only when
+        # it is itself a supported scheduler identity, preserving explicit
+        # Slurm behavior for static contexts and contexts without this field.
         scheduler = ctx.get("scheduler")
+        if scheduler is None or scheduler == "static":
+            scheduler = ctx.get("workload_type")
         if scheduler in _SUPPORTED_WORKLOAD_SCHEDULERS:
             workload["scheduler"] = scheduler
         if "failed_node" in ctx:
