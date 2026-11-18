@@ -15,9 +15,10 @@ from __future__ import annotations
 import math
 import time
 import weakref
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, Callable
+from typing import TYPE_CHECKING, Any, Literal, TypeVar
 
 from loguru import logger
 
@@ -29,6 +30,7 @@ from attribution_blueprint.connectors.execution_contexts.kafka.events import (
     _read_cloudevent,
 )
 from attribution_blueprint.connectors.execution_contexts.kafka.receipts import (
+    KafkaRawReceipt,
     KafkaReceipt,
     PartitionKey,
     _Acknowledgements,
@@ -43,6 +45,7 @@ if TYPE_CHECKING:
     from confluent_kafka import Consumer, Message
 
 CommittedContext = tuple[PartitionKey, KafkaExecutionContext]
+_Delivery = TypeVar("_Delivery", KafkaReceipt, KafkaRawReceipt)
 _MAX_POLL_TIMEOUT_SECONDS = 2_147_483.647  # Native timeouts use signed 32-bit milliseconds.
 _MAX_UNMATCHED_EVENT_TYPES = 100
 # Lag gauges read client-side state; refreshing it on every poll adds overhead without fresher data.
@@ -135,6 +138,7 @@ class KafkaExecutionContextAdapter:
         self.discovery_incomplete = False
         self._closed = False
         self._mode: str | None = None
+        self._payload_mode: Literal["decoded", "raw"] | None = None
         self._paused = False
         self._acknowledgements = _Acknowledgements()
         self._metrics = ConsumerMetrics(topic=topic, group_id=group_id, backlog=self._acknowledgements.backlog)
@@ -167,6 +171,18 @@ class KafkaExecutionContextAdapter:
 
     def open_consumer(self) -> KafkaExecutionContextAdapter:
         """Open an independent long-lived consumer for the configured topic/group."""
+        return self._open_consumer("decoded")
+
+    def open_raw_consumer(self) -> KafkaExecutionContextAdapter:
+        """Open an independent consumer for poll_raw(), with caller-owned decoding.
+
+        Event-type filters and execution-context mapping do not apply to raw
+        records. Use the existing ack(), pause(), resume() and close() lifecycle.
+        """
+        return self._open_consumer("raw")
+
+    def _open_consumer(self, payload_mode: Literal["decoded", "raw"]) -> KafkaExecutionContextAdapter:
+        """Open the configured factory through the shared streaming lifecycle."""
         if self._consumer_factory is None:
             raise KafkaConsumerError("kafka ECA: open_consumer requires a configured consumer factory")
         adapter = KafkaExecutionContextAdapter(
@@ -183,6 +199,7 @@ class KafkaExecutionContextAdapter:
             discovery_timeout_seconds=self._discovery_timeout_seconds,
         )
         adapter._require_mode("streaming")
+        adapter._require_payload_mode(payload_mode)
         adapter._consumer
         return adapter
 
@@ -218,20 +235,50 @@ class KafkaExecutionContextAdapter:
         records. Intentional skips count toward the bound. Keep polling while
         paused so assignment callbacks and group membership remain serviced.
         """
+        return self._poll_deliveries(max_records, timeout_seconds, payload_mode="decoded", delivery=self._delivery)
+
+    def poll_raw(self, max_records: int = 1, timeout_seconds: float | None = None) -> list[KafkaRawReceipt]:
+        """Return original records without decoding, filtering, or committing.
+
+        Malformed payloads, duplicate events and tombstones all receive receipts.
+        The caller owns validation, durable custody, and the acknowledgement
+        boundary. Keep polling while paused to service group membership.
+
+        Args:
+            max_records: Maximum records returned by this poll.
+            timeout_seconds: Wait for the first record; None uses the configured timeout.
+
+        Returns:
+            Records that remain unacknowledged until ack() is called.
+        """
+        return self._poll_deliveries(max_records, timeout_seconds, payload_mode="raw", delivery=self._raw_delivery)
+
+    def _poll_deliveries(
+        self,
+        max_records: int,
+        timeout_seconds: float | None,
+        *,
+        payload_mode: Literal["decoded", "raw"],
+        delivery: Callable[[Message], _Delivery | None],
+    ) -> list[_Delivery]:
+        """Apply the same polling limits, mode guards and failure cleanup to each payload format."""
         if type(max_records) is not int or max_records <= 0:
             raise ValueError("kafka ECA: max_records must be a positive integer")
         timeout = self._poll_timeout_seconds if timeout_seconds is None else timeout_seconds
         _validate_poll_timeout(timeout)
         self._require_mode("streaming")
+        self._require_payload_mode(payload_mode)
         try:
-            return self._poll_records(max_records, timeout)
+            return self._poll_records(max_records, timeout, delivery)
         except BaseException:
             # Cleanup covers cancellation too; propagate the original failure.
             self.discovery_incomplete = True
             self._close_after_discovery()
             raise
 
-    def _poll_records(self, max_records: int, timeout: float) -> list[KafkaReceipt]:
+    def _poll_records(
+        self, max_records: int, timeout: float, delivery: Callable[[Message], _Delivery | None]
+    ) -> list[_Delivery]:
         """Drain one bounded poll, including native ownership callbacks."""
         deliveries = []
         for index in range(max_records):
@@ -246,9 +293,9 @@ class KafkaExecutionContextAdapter:
                 raise KafkaConsumerError(f"kafka ECA: consumer error: {error}")
             if self._paused:
                 raise KafkaConsumerError("kafka ECA: native consumer delivered a record while paused")
-            delivery = self._delivery(message)
-            if delivery is not None:
-                deliveries.append(delivery)
+            receipt = delivery(message)
+            if receipt is not None:
+                deliveries.append(receipt)
         self._refresh_offsets()
         return deliveries
 
@@ -346,12 +393,19 @@ class KafkaExecutionContextAdapter:
             if mode == "streaming":
                 self._reset_stats()
 
+    def _require_payload_mode(self, payload_mode: Literal["decoded", "raw"]) -> None:
+        """Keep decoding policies exclusive without having pause() choose one."""
+        if self._payload_mode is not None and self._payload_mode != payload_mode:
+            raise KafkaConsumerError("kafka ECA: cannot mix poll() and poll_raw() on one adapter")
+        self._payload_mode = payload_mode
+
     def _reset_stats(self) -> None:
         """Initialize per-discovery counters, or cumulative streaming counters."""
         self.last_discovery_stats = dict.fromkeys(
             (
                 "consumed",
                 "accepted",
+                "raw_delivered",
                 "filtered",
                 "malformed",
                 "redeliveries",
@@ -374,6 +428,21 @@ class KafkaExecutionContextAdapter:
         context, event = decoded
         self.last_discovery_stats["returned"] += 1
         return KafkaReceipt(receipt.topic, receipt.partition, receipt.offset, receipt.assignment_id, context, event)
+
+    def _raw_delivery(self, message: Message) -> KafkaRawReceipt:
+        """Retain every original payload under the existing acknowledgement tracker."""
+        key, value, headers = message.key(), message.value(), message.headers()
+        receipt = self._acknowledgements.register(message.topic(), message.partition(), message.offset())
+        delivery = KafkaRawReceipt(
+            receipt.topic, receipt.partition, receipt.offset, receipt.assignment_id, key, value, headers
+        )
+        partition = (receipt.topic, receipt.partition)
+        self.last_discovery_stats["consumed"] += 1
+        self.last_discovery_stats["raw_delivered"] += 1
+        self.last_discovery_stats["returned"] += 1
+        self._metrics.consumed(partition)
+        self._metrics.raw_delivered(partition)
+        return delivery
 
     def _commit_acknowledged(self, key: PartitionKey) -> None:
         """Forget receipts only after their safe prefix was broker-confirmed."""

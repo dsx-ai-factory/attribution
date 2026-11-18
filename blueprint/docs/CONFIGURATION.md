@@ -208,7 +208,8 @@ uv run --project blueprint --frozen nvidia-attribution-blueprint --config ./attr
 | `namespace`              | No       | all namespaces  | Optional namespace scope. Also allows bare workload names in `ids` mode. Required when `placement_records_enabled` is set. |
 | `timeout_seconds`        | No       | `60`            | Timeout for each Kubernetes API request.                                                                          |
 | `workload_api_version`   | No       | `kueue.x-k8s.io/v1beta1` | Kueue Workload CRD `<group>/<version>` to read. Set this if the cluster serves a different Workload API version. |
-| `placement_records_enabled` | No    | `false`         | Reads retained placement from the configured `kubernetes-daemon`; discovery fails if it cannot be read. Requires `namespace`, matching the one namespace the daemon watches. |
+| `placement_records_enabled` | No    | `false`         | Reads retained placement and Workload history from the configured `kubernetes-daemon`; discovery fails if it cannot be read. Requires `namespace`, matching the one namespace the daemon watches. |
+| `event_max_age_seconds`  | No       | `3600`          | Skips the Kubernetes Events fallback for Workloads that ended longer ago than this many seconds. |
 
 
 The baseline Kueue adapter does not require `kubernetes-daemon` or Prometheus. It
@@ -286,13 +287,13 @@ Fields:
 
 `cluster` and `cluster_label` are optional for a single-cluster endpoint, but
 must be set together for a shared backend. The source evaluates an instant
-`last_over_time` query over the relevant Workload intervals. Following FACT's
-node-metadata collection pattern, the adapter combines owner Job UIDs from
-every Workload in the run that has one, orders unique Job UIDs by padded
-Workload interval, and queries them in namespace-scoped, bounded batches. 
-The query joins `kube_pod_labels` to `kube_pod_info` on namespace, Pod name, 
-and Pod UID. For JobSets, the adapter first resolves the current child Job UIDs 
-from Kubernetes. Configure kube-state-metrics with:
+`last_over_time` query over the relevant Workload intervals. The adapter
+combines owner Job UIDs from every Workload in the run that has one, orders
+unique Job UIDs by padded Workload interval, and queries them in
+namespace-scoped, bounded batches. The query joins `kube_pod_labels` to
+`kube_pod_info` on namespace, Pod name, and Pod UID. For JobSets, the adapter
+first resolves the current child Job UIDs from Kubernetes. Configure
+kube-state-metrics with:
 
 ```text
 --metric-labels-allowlist=pods=[batch.kubernetes.io/controller-uid]
@@ -345,11 +346,11 @@ attribution time so their UIDs can be resolved without a name-based metrics
 join. If both a JobSet's Pods and child Jobs have been deleted, this UID-safe
 Prometheus route returns no placement even when the old metrics remain.
 
-For durable pod-to-node placement, see
-[Kubernetes daemon](#kubernetes-daemon) above. Its `queueSize` and `workers`
-must be positive. Runtime API defaults are Kueue Workload `v1beta1` and
-JobSet `v1alpha2`; override `integrations.kueue.workloadVersion` or
-`jobsetVersion` to match the installed controllers.
+For durable pod-to-node placement, refer to
+[Kubernetes daemon](#kubernetes-daemon) above. Keep the daemon's
+`integrations.kueue.workloadVersion` (version only, such as `v1beta1`)
+consistent with `workload_api_version` (such as `kueue.x-k8s.io/v1beta1`);
+both must name a Workload API version that the cluster serves.
 
 The adapter derives `kueue_state` from Kueue conditions, using finished
 conditions before evicted, preempted, admitted, quota-reserved, and pending
@@ -1310,16 +1311,17 @@ OTEL_EXPORTER_OTLP_ENDPOINT=http://127.0.0.1:4317 \
 
 ### Kafka Input Consumer Metrics
 
-The `eca.kafka` consumer records these metrics for both `discover()` and the
-long-lived `open_consumer()` lifecycle described in
+The `eca.kafka` consumer records these metrics for `discover()` and the
+long-lived `open_consumer()` and `open_raw_consumer()` lifecycles described in
 [Kafka consumption and acknowledgements](kafka_lifecycle.md). The `lag` and
-`position.lag` gauges are reported only by `open_consumer()`. A `discover()`
+`position.lag` gauges are reported only by long-lived consumers. A `discover()`
 run reads to the end of its partitions and closes, so it has no ongoing lag.
 
 | Metric | Type | Unit | Labels | Meaning |
 | --- | --- | --- | --- | --- |
 | `attribution.kafka.consumer.consumed` | Counter | `{record}` | `topic`, `partition`, `consumer_group` | Records read from the broker |
 | `attribution.kafka.consumer.accepted` | Counter | `{record}` | `topic`, `partition`, `consumer_group` | Valid records returned by `poll()` or added to a `discover()` batch |
+| `attribution.kafka.consumer.raw.delivered` | Counter | `{record}` | `topic`, `partition`, `consumer_group` | Undecoded records returned by `poll_raw()`, including malformed payloads and tombstones |
 | `attribution.kafka.consumer.skipped` | Counter | `{record}` | `topic`, `partition`, `consumer_group`, `reason` | Records skipped as `filtered` or `malformed` |
 | `attribution.kafka.consumer.acknowledged` | Counter | `{record}` | `topic`, `partition`, `consumer_group` | Receipts acknowledged for the first time |
 | `attribution.kafka.consumer.commits` | Counter | `{commit}` | `topic`, `partition`, `consumer_group` | Offset commits that the broker confirmed |
@@ -1328,8 +1330,8 @@ run reads to the end of its partitions and closes, so it has no ongoing lag.
 | `attribution.kafka.consumer.rebalances` | Counter | `{partition}` | `topic`, `partition`, `consumer_group`, `change` | Partitions `assigned`, `revoked`, or `lost` in rebalance callbacks |
 | `attribution.kafka.consumer.lag` | Gauge | `{record}` | `topic`, `partition`, `consumer_group` | High watermark minus the committed offset |
 | `attribution.kafka.consumer.position.lag` | Gauge | `{record}` | `topic`, `partition`, `consumer_group` | High watermark minus the consumer's fetch position |
-| `attribution.kafka.consumer.unacknowledged` | Gauge | `{record}` | `topic`, `partition`, `consumer_group` | Records returned by `poll()` that the caller has not acknowledged |
-| `attribution.kafka.consumer.oldest_unacknowledged.age` | Gauge | `s` | `topic`, `partition`, `consumer_group` | Time since the earliest unacknowledged record was returned by `poll()`, or 0 |
+| `attribution.kafka.consumer.unacknowledged` | Gauge | `{record}` | `topic`, `partition`, `consumer_group` | Records returned by `poll()` or `poll_raw()` that the caller has not acknowledged |
+| `attribution.kafka.consumer.oldest_unacknowledged.age` | Gauge | `s` | `topic`, `partition`, `consumer_group` | Time since the earliest unacknowledged record was returned by `poll()` or `poll_raw()`, or 0 |
 
 `consumer_group` is the configured `group_id`. For a commit error, `error.type`
 is the exception class name. For a poll error, it is the Kafka error name, such
@@ -1362,6 +1364,7 @@ The built-in scrape endpoint renders these names:
 | --- | --- |
 | `attribution.kafka.consumer.consumed` | `attribution_kafka_consumer_consumed_total` |
 | `attribution.kafka.consumer.accepted` | `attribution_kafka_consumer_accepted_total` |
+| `attribution.kafka.consumer.raw.delivered` | `attribution_kafka_consumer_raw_delivered_total` |
 | `attribution.kafka.consumer.skipped` | `attribution_kafka_consumer_skipped_total` |
 | `attribution.kafka.consumer.acknowledged` | `attribution_kafka_consumer_acknowledged_total` |
 | `attribution.kafka.consumer.commits` | `attribution_kafka_consumer_commits_total` |
