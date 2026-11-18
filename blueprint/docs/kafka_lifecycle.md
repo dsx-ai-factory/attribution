@@ -43,6 +43,11 @@ Headers retain order, duplicate names, and null values. A missing header list
 remains `None`, and a present list is copied when the record is delivered.
 CloudEvent envelopes remain intact in the original bytes.
 
+Raw intake requires a non-deserializing consumer. Keys, values, and header values
+must be `bytes` or `None`; headers must be a list of `(str, bytes | None)` tuples
+or `None`. A consumer that returns other types causes `InvalidReceiptError` and
+closes without committing pending work. Payloads are never coerced into bytes.
+
 Every raw record receives a receipt, including invalid JSON, unsupported event
 types, tombstones, and duplicate events. The caller owns validation, filtering,
 recovery, and the acknowledgement boundary. Raw polling never commits a record
@@ -50,10 +55,11 @@ or skips it because of its payload. Handle or durably retain rejected records
 before acknowledging them; a later receipt cannot advance past an unacknowledged
 raw record. Decoding or correlation does not happen in the connector.
 
-Raw delivery increments `consumed`, `accepted`, and `returned`. Here, `accepted`
-counts raw deliveries, not validated execution contexts. The existing Kafka
-metrics report raw delivery backlog, acknowledgements, commits, and ownership
-changes through the same lifecycle.
+Raw delivery increments `consumed`, `raw_delivered`, and `returned`, and emits
+the `attribution.kafka.consumer.raw.delivered` counter. It does not increment
+`accepted`, which counts valid decoded contexts. The existing Kafka metrics
+report raw delivery backlog, acknowledgements, commits, and ownership changes
+through the same lifecycle.
 
 ## Processing handoff
 

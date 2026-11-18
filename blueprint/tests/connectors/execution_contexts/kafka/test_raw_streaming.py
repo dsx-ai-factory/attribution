@@ -6,6 +6,7 @@
 import time
 
 import pytest
+
 from attribution_blueprint.connectors.execution_contexts import InvalidReceiptError
 from attribution_blueprint.connectors.execution_contexts.kafka import _build
 

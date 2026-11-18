@@ -1310,16 +1310,17 @@ OTEL_EXPORTER_OTLP_ENDPOINT=http://127.0.0.1:4317 \
 
 ### Kafka Input Consumer Metrics
 
-The `eca.kafka` consumer records these metrics for both `discover()` and the
-long-lived `open_consumer()` lifecycle described in
+The `eca.kafka` consumer records these metrics for `discover()` and the
+long-lived `open_consumer()` and `open_raw_consumer()` lifecycles described in
 [Kafka consumption and acknowledgements](kafka_lifecycle.md). The `lag` and
-`position.lag` gauges are reported only by `open_consumer()`. A `discover()`
+`position.lag` gauges are reported only by long-lived consumers. A `discover()`
 run reads to the end of its partitions and closes, so it has no ongoing lag.
 
 | Metric | Type | Unit | Labels | Meaning |
 | --- | --- | --- | --- | --- |
 | `attribution.kafka.consumer.consumed` | Counter | `{record}` | `topic`, `partition`, `consumer_group` | Records read from the broker |
 | `attribution.kafka.consumer.accepted` | Counter | `{record}` | `topic`, `partition`, `consumer_group` | Valid records returned by `poll()` or added to a `discover()` batch |
+| `attribution.kafka.consumer.raw.delivered` | Counter | `{record}` | `topic`, `partition`, `consumer_group` | Undecoded records returned by `poll_raw()`, including malformed payloads and tombstones |
 | `attribution.kafka.consumer.skipped` | Counter | `{record}` | `topic`, `partition`, `consumer_group`, `reason` | Records skipped as `filtered` or `malformed` |
 | `attribution.kafka.consumer.acknowledged` | Counter | `{record}` | `topic`, `partition`, `consumer_group` | Receipts acknowledged for the first time |
 | `attribution.kafka.consumer.commits` | Counter | `{commit}` | `topic`, `partition`, `consumer_group` | Offset commits that the broker confirmed |
@@ -1328,8 +1329,8 @@ run reads to the end of its partitions and closes, so it has no ongoing lag.
 | `attribution.kafka.consumer.rebalances` | Counter | `{partition}` | `topic`, `partition`, `consumer_group`, `change` | Partitions `assigned`, `revoked`, or `lost` in rebalance callbacks |
 | `attribution.kafka.consumer.lag` | Gauge | `{record}` | `topic`, `partition`, `consumer_group` | High watermark minus the committed offset |
 | `attribution.kafka.consumer.position.lag` | Gauge | `{record}` | `topic`, `partition`, `consumer_group` | High watermark minus the consumer's fetch position |
-| `attribution.kafka.consumer.unacknowledged` | Gauge | `{record}` | `topic`, `partition`, `consumer_group` | Records returned by `poll()` that the caller has not acknowledged |
-| `attribution.kafka.consumer.oldest_unacknowledged.age` | Gauge | `s` | `topic`, `partition`, `consumer_group` | Time since the earliest unacknowledged record was returned by `poll()`, or 0 |
+| `attribution.kafka.consumer.unacknowledged` | Gauge | `{record}` | `topic`, `partition`, `consumer_group` | Records returned by `poll()` or `poll_raw()` that the caller has not acknowledged |
+| `attribution.kafka.consumer.oldest_unacknowledged.age` | Gauge | `s` | `topic`, `partition`, `consumer_group` | Time since the earliest unacknowledged record was returned by `poll()` or `poll_raw()`, or 0 |
 
 `consumer_group` is the configured `group_id`. For a commit error, `error.type`
 is the exception class name. For a poll error, it is the Kafka error name, such
@@ -1362,6 +1363,7 @@ The built-in scrape endpoint renders these names:
 | --- | --- |
 | `attribution.kafka.consumer.consumed` | `attribution_kafka_consumer_consumed_total` |
 | `attribution.kafka.consumer.accepted` | `attribution_kafka_consumer_accepted_total` |
+| `attribution.kafka.consumer.raw.delivered` | `attribution_kafka_consumer_raw_delivered_total` |
 | `attribution.kafka.consumer.skipped` | `attribution_kafka_consumer_skipped_total` |
 | `attribution.kafka.consumer.acknowledged` | `attribution_kafka_consumer_acknowledged_total` |
 | `attribution.kafka.consumer.commits` | `attribution_kafka_consumer_commits_total` |

@@ -6,6 +6,7 @@
 from dataclasses import replace
 
 import pytest
+
 from attribution_blueprint.connectors.execution_contexts import InvalidReceiptError
 from attribution_blueprint.connectors.execution_contexts.kafka import KafkaExecutionContextAdapter
 from attribution_blueprint.connectors.execution_contexts.kafka.connector import KafkaConsumerError
@@ -78,11 +79,74 @@ def test_raw_poll_keeps_cloudevent_envelope_and_bypasses_context_mapping(raw_str
     first, second = adapter.poll_raw(2, 0)
     assert first.value == second.value == message.value()
     assert adapter.last_discovery_stats["consumed"] == 2
-    assert adapter.last_discovery_stats["accepted"] == 2
+    assert adapter.last_discovery_stats["accepted"] == 0
+    assert adapter.last_discovery_stats["raw_delivered"] == 2
     assert adapter.last_discovery_stats["returned"] == 2
     assert adapter.last_discovery_stats["malformed"] == 0
     assert adapter.last_discovery_stats["filtered"] == 0
     assert consumer.commits == []
+
+
+@pytest.mark.parametrize(
+    "fields",
+    [
+        {"key": "decoded"},
+        {"key": {"id": 1}},
+        {"key": bytearray(b"key")},
+        {"value": "decoded"},
+        {"value": {"id": 1}},
+        {"value": bytearray(b"value")},
+        {"headers": [("trace", "decoded")]},
+        {"headers": [("trace", {"id": 1})]},
+        {"headers": [("trace", bytearray(b"value"))]},
+        {"headers": [(b"trace", b"value")]},
+        {"headers": [("trace",)]},
+        {"headers": [None]},
+        {"headers": {"trace": b"value"}},
+    ],
+    ids=[
+        "string-key",
+        "object-key",
+        "mutable-key",
+        "string-value",
+        "object-value",
+        "mutable-value",
+        "string-header-value",
+        "object-header-value",
+        "mutable-header-value",
+        "bytes-header-name",
+        "incomplete-header",
+        "null-header-entry",
+        "mapping-headers",
+    ],
+)
+def test_raw_poll_rejects_deserialized_fields_without_committing(raw_stream, fields):
+    """A deserializing consumer cannot silently break the original-byte contract."""
+    message = FakeMessage(**({"key": b"key", "value": b"value", "offset": 1} | fields))
+    adapter, consumer = raw_stream([FakeMessage(b"pending", 0), message])
+    [pending] = adapter.poll_raw(1, 0)
+
+    with pytest.raises(InvalidReceiptError, match="raw"):
+        adapter.poll_raw(1, 0)
+
+    assert consumer.closed
+    assert consumer.commits == []
+    assert adapter.last_discovery_stats["returned"] == 1
+    with pytest.raises(InvalidReceiptError, match="closed"):
+        adapter.ack(pending)
+
+
+def test_raw_receipt_validates_direct_construction_and_copies_headers(raw_stream):
+    """The public receipt enforces its contract even outside the connector."""
+    adapter, _ = raw_stream([FakeMessage(b"value", 0)])
+    [receipt] = adapter.poll_raw(1, 0)
+    with pytest.raises(InvalidReceiptError, match="raw"):
+        replace(receipt, value={"decoded": True})
+    headers = [("trace", b"")]
+    copied = replace(receipt, headers=headers, key=b"")
+    headers.clear()
+    assert copied.headers == [("trace", b"")]
+    assert copied.key == b""
 
 
 def test_raw_acknowledgements_cannot_skip_unhandled_payloads(raw_stream):

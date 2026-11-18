@@ -9,6 +9,7 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 import pytest
+
 from attribution_blueprint.connectors.execution_contexts.kafka import (
     KafkaExecutionContextAdapter,
     _build as build_kafka,

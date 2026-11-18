@@ -405,6 +405,7 @@ class KafkaExecutionContextAdapter:
             (
                 "consumed",
                 "accepted",
+                "raw_delivered",
                 "filtered",
                 "malformed",
                 "redeliveries",
@@ -432,21 +433,16 @@ class KafkaExecutionContextAdapter:
         """Retain every original payload under the existing acknowledgement tracker."""
         key, value, headers = message.key(), message.value(), message.headers()
         receipt = self._acknowledgements.register(message.topic(), message.partition(), message.offset())
+        delivery = KafkaRawReceipt(
+            receipt.topic, receipt.partition, receipt.offset, receipt.assignment_id, key, value, headers
+        )
         partition = (receipt.topic, receipt.partition)
         self.last_discovery_stats["consumed"] += 1
-        self.last_discovery_stats["accepted"] += 1
+        self.last_discovery_stats["raw_delivered"] += 1
         self.last_discovery_stats["returned"] += 1
         self._metrics.consumed(partition)
-        self._metrics.accepted(partition)
-        return KafkaRawReceipt(
-            receipt.topic,
-            receipt.partition,
-            receipt.offset,
-            receipt.assignment_id,
-            key,
-            value,
-            None if headers is None else list(headers),
-        )
+        self._metrics.raw_delivered(partition)
+        return delivery
 
     def _commit_acknowledged(self, key: PartitionKey) -> None:
         """Forget receipts only after their safe prefix was broker-confirmed."""
