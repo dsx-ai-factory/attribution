@@ -47,6 +47,11 @@ _accepted = _meter.create_counter(
     unit="{record}",
     description="Valid records delivered by poll() or added to a discovery batch.",
 )
+_raw_delivered = _meter.create_counter(
+    "attribution.kafka.consumer.raw.delivered",
+    unit="{record}",
+    description="Undecoded records delivered by poll_raw(), including tombstones and malformed payloads.",
+)
 _skipped = _meter.create_counter(
     "attribution.kafka.consumer.skipped", unit="{record}", description="Records skipped as filtered or malformed."
 )
@@ -124,6 +129,10 @@ class ConsumerMetrics:
     def accepted(self, key: PartitionKey) -> None:
         """Count one valid record."""
         _accepted.add(1, self._labels(key))
+
+    def raw_delivered(self, key: PartitionKey) -> None:
+        """Count one undecoded record, without asserting execution-context validity."""
+        _raw_delivered.add(1, self._labels(key))
 
     def skipped(self, key: PartitionKey, reason: SkipReason) -> None:
         """Count one record that produced no context."""
@@ -264,7 +273,7 @@ _meter.create_observable_gauge(
     "attribution.kafka.consumer.unacknowledged",
     callbacks=[_observe_unacknowledged],
     unit="{record}",
-    description="Records delivered by poll() that the caller has not acknowledged.",
+    description="Records delivered by poll() or poll_raw() that the caller has not acknowledged.",
 )
 _meter.create_observable_gauge(
     "attribution.kafka.consumer.oldest_unacknowledged.age",
