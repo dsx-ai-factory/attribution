@@ -684,3 +684,42 @@ def test_promql_unset_token_env_raises_mca_error(monkeypatch, tmp_path):
     )
     with pytest.raises(MCAError, match="DOES_NOT_EXIST_PROMQL"):
         load_config(p)
+
+
+def test_workload_nvl_inventory_is_loaded_as_a_snapshot(tmp_path):
+    inventory = tmp_path / "domains.json"
+    inventory.write_text(json.dumps({"NODE-A": "fabric-a", "node-b": "fabric-b"}))
+    config_path = tmp_path / "config.toml"
+    config_path.write_text(f'[workload]\nnvl_domain_mapping_path = "{inventory}"\n')
+    config = load_config(config_path)
+    inventory.write_text("{}")
+    assert config.node_to_nvl_domain == {"node-a": "fabric-a", "node-b": "fabric-b"}
+
+
+@pytest.mark.parametrize(
+    "content",
+    [
+        "not-json",
+        "[]",
+        '{"node-a": 42}',
+        '{"node-a": ""}',
+        '{"node-a": "00000000-0000-0000-0000-000000000000"}',
+        '{"node-a": "00000000000000000000000000000000"}',
+        '{"node-a": "fabric-a", "node-a": "fabric-b"}',
+        '{"node-a": "fabric-a", "NODE-A": "fabric-b"}',
+    ],
+)
+def test_invalid_workload_nvl_inventory_is_rejected(tmp_path, content):
+    inventory = tmp_path / "domains.json"
+    inventory.write_text(content)
+    config_path = tmp_path / "config.toml"
+    config_path.write_text(f'[workload]\nnvl_domain_mapping_path = "{inventory}"\n')
+    with pytest.raises(MCAError, match="nvl_domain_mapping_path"):
+        load_config(config_path)
+
+
+def test_missing_workload_nvl_inventory_is_rejected(tmp_path):
+    config_path = tmp_path / "config.toml"
+    config_path.write_text(f'[workload]\nnvl_domain_mapping_path = "{tmp_path / "missing.json"}"\n')
+    with pytest.raises(MCAError, match="nvl_domain_mapping_path"):
+        load_config(config_path)

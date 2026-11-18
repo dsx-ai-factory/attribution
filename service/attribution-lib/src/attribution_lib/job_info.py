@@ -6,6 +6,7 @@ from collections.abc import Iterable, Mapping, Sequence
 from datetime import datetime, timedelta
 from enum import StrEnum
 from typing import NamedTuple, Optional, TypeVar
+from uuid import UUID
 from zoneinfo import ZoneInfo
 
 from attribution_lib import ufmlog_common, utils
@@ -119,6 +120,44 @@ def _qualified_nodes_by_short_name(nodes: tuple[str, ...]) -> dict[str, tuple[st
     return {short_node: tuple(entries) for short_node, entries in index.items()}
 
 
+def normalize_node_to_nvl_domain(mapping: Mapping[str, str], nodes: Sequence[str]) -> dict[str, str]:
+    """Validate membership and match names using the allocation's hostname rules.
+
+    Domain identifiers are opaque, case-sensitive strings. Unknown membership
+    must be omitted rather than encoded as a blank or all-zero fabric UUID.
+    """
+    if not isinstance(mapping, Mapping):
+        raise ValueError("node_to_nvl_domain must be a hostname-to-domain mapping")
+    allocation = {node.lower() for node in nodes}
+    normalized: dict[str, str] = {}
+    for hostname, domain in mapping.items():
+        if not isinstance(hostname, str) or not hostname:
+            raise ValueError("node_to_nvl_domain keys must be non-empty hostnames")
+        node = hostname.lower()
+        if node not in allocation:
+            short_node = utils.convert_hostname_to_short_format(node)
+            if short_node in allocation:
+                node = short_node
+            elif short_node == node:
+                matches = _qualified_nodes_by_short_name(tuple(allocation)).get(short_node, ())
+                if len(matches) == 1:
+                    node = matches[0]
+        if node not in allocation:
+            raise ValueError(f"node_to_nvl_domain contains a node outside the allocation: {hostname!r}")
+        domain_id = domain.strip() if isinstance(domain, str) else ""
+        try:
+            nil_uuid = UUID(domain_id).int == 0
+        except ValueError:
+            nil_uuid = False
+        if not domain_id or domain_id == "0" or nil_uuid:
+            raise ValueError("node_to_nvl_domain values must be non-empty, non-zero domain identifiers")
+        domain = domain_id
+        if node in normalized and normalized[node] != domain:
+            raise ValueError(f"node_to_nvl_domain has conflicting domains for {node!r}")
+        normalized[node] = domain
+    return normalized
+
+
 class JobInfo(NamedTuple):
     """Immutable inputs supplied by a client to attribution engines.
 
@@ -173,6 +212,9 @@ class JobInfo(NamedTuple):
     # observations scoped to non-job cluster resources, where rules can consume
     # it through normal event, scrub, and cascade processing. Remove this field then.
     cluster_incident_context: Optional[ClusterIncidentContext] = None
+    # None retains the configured library resolver. An explicit map (including
+    # {}) is authoritative; omitted nodes have unknown domain membership.
+    node_to_nvl_domain: Optional[dict[str, str]] = None
 
     @property
     def attributed_cancellation(self) -> Optional[ExecutionCancellation]:
@@ -414,6 +456,7 @@ class JobInfoBuilder:
     _num_gpus: Optional[int] = None
     _job_script_content: Optional[str] = None
     _node_to_ranks: dict[str, list[int]]
+    _node_to_nvl_domain: Optional[dict[str, str]] = None
     _framework: str
     _source_name: str
     _timezone: ZoneInfo
@@ -628,6 +671,13 @@ class JobInfoBuilder:
         self._job_script_content = in_job_script_content
         return self
 
+    def node_to_nvl_domain(self, mapping: Mapping[str, str]) -> "JobInfoBuilder":
+        """Set an authoritative snapshot of the allocation's NVL membership."""
+        if self._node_to_nvl_domain is not None:
+            raise JobInfoDuplicateFieldError("node_to_nvl_domain")
+        self._node_to_nvl_domain = normalize_node_to_nvl_domain(mapping, list(self._node_to_ranks))
+        return self
+
     def build(self) -> JobInfo:
         if self._interest_start_time is None:
             self._interest_start_time = self._job_start_time
@@ -690,4 +740,5 @@ class JobInfoBuilder:
             l_context=context,
             job_script_content=self._job_script_content,
             node_from_rank=node_from_rank,
+            node_to_nvl_domain=(dict(self._node_to_nvl_domain) if self._node_to_nvl_domain is not None else None),
         )

@@ -707,3 +707,43 @@ class TestV2AttributionShape:
         body = response.json()
         assert body["verdict"]["decision_graph"] is None
         assert body["verdict"]["attribution_outcome"]
+
+
+class TestNvlDomainTransition:
+    @pytest.mark.parametrize("version", ["v1", "v2"])
+    def test_legacy_workloads_have_no_explicit_membership(self, version):
+        assert make_up_attributor_info(version).to_lib_jobinfo().node_to_nvl_domain is None
+
+    @pytest.mark.parametrize("domains", [{}, {"NODE0.example.test": "fabric-a"}])
+    def test_v2_translates_explicit_membership_without_changing_ranks(self, domains):
+        info = make_up_attributor_info("v2", node_to_nvl_domain=domains)
+        job = info.to_lib_jobinfo()
+        assert job.node_to_nvl_domain == ({"node0": "fabric-a"} if domains else {})
+        assert job.get_name_from_rank(0) == "node0"
+        assert len(job.nodes) == 10
+
+    @pytest.mark.parametrize(
+        "domains",
+        [
+            {"outside-allocation": "fabric-a"},
+            {"node0": "fabric-a", "NODE0.example.test": "fabric-b"},
+            {"node0": ""},
+            {"node0": "00000000-0000-0000-0000-000000000000"},
+            {"node0": "00000000000000000000000000000000"},
+            {"node0": 42},
+        ],
+    )
+    def test_invalid_membership_is_rejected_at_http_boundary(self, client, domains):
+        payload = json.loads(make_up_attributor_info("v2").model_dump_json())
+        payload["workload"]["node_to_nvl_domain"] = domains
+        response = client.post("/v2/attributor", json=payload)
+        assert response.status_code == 422
+
+    def test_membership_participates_in_attributor_identity(self, client):
+        payload = json.loads(make_up_attributor_info("v2").model_dump_json())
+        payload["workload"]["node_to_nvl_domain"] = {"node0": "fabric-a"}
+        first = client.post("/v2/attributor", json=payload)
+        payload["workload"]["node_to_nvl_domain"] = {"node0": "fabric-b"}
+        second = client.post("/v2/attributor", json=payload)
+        assert first.status_code == second.status_code == 201
+        assert first.json()["attributor_id"] != second.json()["attributor_id"]

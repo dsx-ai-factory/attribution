@@ -220,3 +220,13 @@ succeeds; SQLite success can therefore coexist with Kafka failure. This sink
 does not change input offset commits or provide durable application retries.
 Required-output policy, acknowledgement, and recovery belong to Runtime
 integration.
+
+
+
+## Optional NVLink topology snapshot
+
+When a run submits explicit NVLink membership, its enriched result includes
+`node_to_nvl_domain`, a hostname-to-physical-domain object. SQLite preserves it
+in that run's `raw_result_json`; the context also carries it in
+`raw_scheduler_json`. An empty object means explicitly unknown membership.
+Legacy runs omit the field. No SQL schema migration is required.

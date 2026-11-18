@@ -663,6 +663,8 @@ cluster before deploying; mismatches silently break rank-to-node attribution.
 | --------------- | -------- | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `gpus_per_node` | No       | `4`     | GPUs per node (ranks per node). The blueprint uses this to build the service v2 node-to-ranks payload. Default: `4`, applied when this key is unset. **You should review and override this for your cluster.** Clusters with a different GPU count per node will produce incorrect rank-to-node attribution if this is left at the default. |
 
+| `nvl_domain_mapping_path` | No | none | Path to a JSON hostname-to-physical-NVLink-domain inventory. Relative paths resolve from the Blueprint working directory. Loaded once per configuration. |
+
 
 Example:
 
@@ -673,6 +675,68 @@ gpus_per_node = 8
 
 For `nodes = ["node-a", "node-b"]`, the service v2 payload contains
 `{"node-a": [0, 1, 2, 3, 4, 5, 6, 7], "node-b": [8, 9, 10, 11, 12, 13, 14, 15]}`.
+
+#### Optional NVLink domain membership
+
+Keep Slurm discovery configured as usual and supply an inventory snapshot:
+
+```toml
+[workload]
+gpus_per_node = 4
+nvl_domain_mapping_path = "/etc/attribution/nvl-domains.json"
+```
+
+The file contains a flat hostname-to-domain object:
+
+```json
+{
+  "node-a": "fabric-domain-1",
+  "node-b": "fabric-domain-1",
+  "node-c": "fabric-domain-2"
+}
+```
+
+The same setting is available as
+`--connector workload nvl_domain_mapping_path /etc/attribution/nvl-domains.json`
+or `NVAB_WORKLOAD_NVL_DOMAIN_MAPPING_PATH`. Without this setting, existing
+Slurm ingestion and service requests are unchanged.
+
+Use the fabric cluster UUID, or a consistent inventory identifier for the
+physical NVLink domain. Keep logical clique IDs separate: the same clique ID
+can occur in different domains. Suitable inventory sources include
+[BCM's NVLink domain endpoint](https://docs.nvidia.com/base-command-manager/product-manuals/developer/restapi),
+[DCGM fabric identity fields](https://docs.nvidia.com/datacenter/dcgm/latest/dcgm-api/dcgm-api-field-ids.html),
+or Slurm topology blocks explicitly configured to match physical domains.
+This setting consumes an exported snapshot; it does not query those systems.
+Use one cluster's inventory per configured pipeline. For mixed-cluster input,
+supply membership in each context instead of a shared inventory.
+
+Blueprint filters the inventory to allocated nodes and adds the optional V2
+`workload.node_to_nvl_domain` field. Hostname case and unambiguous short/FQDN allocation names are normalized;
+ambiguous short names are rejected. The scheduler node list, ranks,
+Loki selectors and PromQL selectors retain their existing behavior. If Slurm
+node names differ from telemetry hostnames, export inventory keys matching the
+allocation; this setting does not introduce a hostname alias registry.
+
+A context supplied by an adapter or static `contexts_path` can carry its own
+`node_to_nvl_domain` object. That object overrides the configured inventory as a
+whole. `{}` explicitly means no known membership. Missing entries stay unknown
+and do not participate in cross-node domain pruning. A context field set to
+`null` bypasses the inventory and retains the service's default resolver behavior.
+Blank/all-zero domain IDs and conflicting aliases are rejected; omit unknown
+nodes instead. A configured file that cannot be read or parsed fails configuration.
+
+The submitted mapping is saved as `node_to_nvl_domain` in each enriched result,
+including SQLite's `raw_result_json`, so a later inventory update cannot replace
+the record of an earlier run. Inventory files must describe the workload's time
+window. For historical jobs after topology changes, supply the corresponding
+historical snapshot or a per-context mapping; automatic temporal lookup is not
+implemented.
+
+Upgrade the Attribution Service before enabling this setting, then use the
+regenerated client shipped with the updated Blueprint. Older services may
+silently ignore this optional field. Existing clients can continue using the
+new service without sending topology.
 
 ### `[output.<name>]`
 

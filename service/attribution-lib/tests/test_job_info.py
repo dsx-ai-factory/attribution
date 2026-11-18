@@ -569,3 +569,58 @@ class TestJobInfoBuilderScheduler:
         assert job_info.scheduler is Scheduler.SLURM
         assert job_info.type == "anything-else"  # type is untouched even though scheduler is pinned
         assert isinstance(job_info.job_start_time, datetime)
+
+
+class TestNvlDomainMembership:
+    def test_normalizes_names_and_copies_membership(self, timezone):
+        domains = {"NODE-A.example.test": "domain-1"}
+        job = (
+            _builder(timezone, node_to_ranks={"node-a": [0]})
+            .job_end_time(datetime.fromtimestamp(1700000100, tz=timezone))
+            .node_to_nvl_domain(domains)
+            .build()
+        )
+        domains["NODE-A.example.test"] = "other-domain"
+        assert job.node_to_nvl_domain == {"node-a": "domain-1"}
+        assert job.nodes == ["node-a"]
+        assert job.get_name_from_rank(0) == "node-a"
+
+    @pytest.mark.parametrize(
+        "domains",
+        [
+            {"foreign-node": "domain-1"},
+            {"node-a": "domain-1", "NODE-A.example.test": "domain-2"},
+            {"node-a": ""},
+            {"node-a": "00000000-0000-0000-0000-000000000000"},
+            {"node-a": "00000000000000000000000000000000"},
+            {"node-a": 42},
+        ],
+    )
+    def test_rejects_invalid_or_conflicting_membership(self, timezone, domains):
+        with pytest.raises(ValueError):
+            _builder(timezone, node_to_ranks={"node-a": [0]}).node_to_nvl_domain(domains)
+
+    def test_distinguishes_absent_and_empty_membership(self, timezone):
+        def builder():
+            return _builder(timezone, node_to_ranks={"node-a": [0]}).job_end_time(
+                datetime.fromtimestamp(1700000100, tz=timezone)
+            )
+
+        assert builder().build().node_to_nvl_domain is None
+        assert builder().node_to_nvl_domain({}).build().node_to_nvl_domain == {}
+
+
+
+def test_nvl_membership_accepts_unique_short_name_for_fqdn_allocation(timezone):
+    job = (_builder(timezone, node_to_ranks={"node-a.example.test": [0]})
+           .job_end_time(datetime.fromtimestamp(1700000100, tz=timezone))
+           .node_to_nvl_domain({"NODE-A": "fabric-a"}).build())
+    assert job.node_to_nvl_domain == {"node-a.example.test": "fabric-a"}
+
+
+@pytest.mark.parametrize("hostname", ["node-a", "node-a.other.test"])
+def test_nvl_membership_rejects_ambiguous_or_wrong_domain_hostname(timezone, hostname):
+    with pytest.raises(ValueError):
+        _builder(timezone, node_to_ranks={"node-a.one.test": [0], "node-a.two.test": [1]}).node_to_nvl_domain(
+            {hostname: "fabric-a"}
+        )

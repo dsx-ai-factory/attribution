@@ -20,6 +20,9 @@ class ExecutionContext(TypedDict):
     # Log selectors and Kafka result keys use this value, falling back to id.
     run_id: NotRequired[str]
     nodes: list[str]
+    # Physical NVLink domain membership, independent of node naming. An
+    # explicit map is authoritative; missing entries have unknown membership.
+    node_to_nvl_domain: NotRequired[dict[str, str] | None]
     start_time: datetime
     end_time: datetime
     # Optional IANA zone used to interpret offsetless evidence timestamps.
