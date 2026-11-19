@@ -68,8 +68,10 @@ class LocalFileLogConnector:
     resolves to a file, that file is read. For SYSLOG, each path is a base
     directory containing one child directory per context node. Missing APPLOG
     paths warn, and when no other configured APPLOG path exists and can be
-    listed ``collect`` raises :class:`MCAError` naming them so the run reports
-    the evidence gap. Missing SYSLOG node directories warn.
+    accessed and listed ``collect`` raises :class:`MCAError` naming them so the
+    run reports the evidence gap. A path that cannot be accessed, such as one
+    below a parent directory that denies access, warns and is skipped. Missing
+    SYSLOG node directories warn.
     A file whose name ends in ``.jsonl`` is read as one JSON entry per line
     and sent unchanged; for SYSLOG such a path names the file directly
     instead of a base directory.
@@ -112,7 +114,7 @@ class LocalFileLogConnector:
 
         Raises:
             MCAError: For APPLOG, when a rendered path is missing and no
-                other rendered path exists and can be listed.
+                other rendered path exists and can be accessed and listed.
         """
         # Reject naive datetimes at the boundary; the service rejects them and
         # attribution_lib has paths that crash on them.
@@ -129,20 +131,22 @@ class LocalFileLogConnector:
             if rendered is None:
                 continue
             configured = Path(rendered)
-            # Check the configured path before directory expansion and before the
-            # resolved-target dedup: an existing empty directory is still input, and
-            # dangling symlinks to one target are distinct missing inputs.
-            if _is_missing(configured):
-                if configured not in missing:
-                    logger.warning(
-                        f"local_file {self._source.name}: no file at {configured} for ctx {context.get('id')}"
-                    )
-                    missing.append(configured)
-                continue
-            # is_dir() and iterdir() can raise PermissionError on filesystems where a
-            # parent dir is accessible but the leaf isn't (common with Lustre user dirs).
-            # Such a path yields no evidence, so it does not count as input.
+            # The initial stat() raises PermissionError when a parent dir denies access,
+            # and iterdir() raises it when the leaf dir can't be listed (common with
+            # Lustre user dirs). Such a path yields no evidence, so it does not count as
+            # input. The stat() check is needed because is_dir() returns False instead
+            # of raising on Python 3.14.
             try:
+                # Check the configured path before directory expansion and before the
+                # resolved-target dedup: an existing empty directory is still input, and
+                # dangling symlinks to one target are distinct missing inputs.
+                if _is_missing(configured):
+                    if configured not in missing:
+                        logger.warning(
+                            f"local_file {self._source.name}: no file at {configured} for ctx {context.get('id')}"
+                        )
+                        missing.append(configured)
+                    continue
                 paths = self._resolve_paths(configured)
             except PermissionError as e:
                 logger.warning(
@@ -314,7 +318,10 @@ class LocalFileLogConnector:
             The files to read.
 
         Raises:
-            PermissionError: When the path cannot be stat'ed or listed.
+            PermissionError: When the directory cannot be listed. On Python 3.14
+                ``Path.is_dir()`` returns ``False`` instead of raising when the
+                path cannot be stat'ed, so callers check it with
+                :func:`_is_missing` first.
         """
         if path.is_dir():
             return sorted(p for p in path.iterdir() if p.is_file())
@@ -432,13 +439,24 @@ _registry.register_component(
 def _is_missing(path: Path) -> bool:
     """Return whether ``path`` does not exist.
 
-    Only a missing path counts. Other stat errors, such as permission denied,
-    return ``False`` so the reader reports them with their own warning.
+    Args:
+        path: Rendered configured path to stat.
+
+    Returns:
+        ``True`` only for a missing path. Other stat errors return ``False``
+        so the reader reports them with their own warning.
+
+    Raises:
+        PermissionError: When ``path`` or one of its parent directories denies
+            access, so the caller can warn and skip it without counting it as
+            input.
     """
     try:
         path.stat()
     except (FileNotFoundError, NotADirectoryError):
         return True
+    except PermissionError:
+        raise
     except OSError:
         return False
     return False

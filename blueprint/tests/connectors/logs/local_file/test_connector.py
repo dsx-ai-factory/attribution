@@ -136,6 +136,39 @@ def test_unlistable_directory_does_not_hide_missing_path(tmp_path, mocker, unlis
     assert any("permission denied" in warning and str(unlistable) in warning for warning in warnings)
 
 
+def _denies_access(path: Path) -> bool:
+    """Return whether stat'ing ``path`` fails with permission denied; root bypasses the permission bits."""
+    try:
+        path.stat()
+    except PermissionError:
+        return True
+    return False
+
+
+@pytest.mark.parametrize("inaccessible_first", [True, False])
+def test_path_under_inaccessible_parent_does_not_hide_missing_path(tmp_path, inaccessible_first):
+    """A path whose parent directory denies access yields no evidence, so a missing sibling path is still an error."""
+    locked = tmp_path / "locked"
+    locked.mkdir()
+    inaccessible = locked / "job.out"
+    inaccessible.write_text("line\n")
+    missing = tmp_path / "job.err"
+    templates = [str(inaccessible), str(missing)] if inaccessible_first else [str(missing), str(inaccessible)]
+    conn = LocalFileLogConnector(log_path_templates=templates)
+
+    locked.chmod(0o000)
+    try:
+        if not _denies_access(inaccessible):
+            pytest.skip("directory permission bits are not enforced for this user (running as root)")
+        error, warnings = _collection_error_with_warnings(conn, _ctx(tmp_path, ""))
+    finally:
+        locked.chmod(0o700)
+
+    assert str(missing) in str(error)
+    assert str(inaccessible) not in str(error)
+    assert any("permission denied" in warning and str(inaccessible) in warning for warning in warnings)
+
+
 def test_dangling_symlinks_to_one_target_are_each_reported_missing(tmp_path):
     """Missing configured paths are reported before deduplication by resolved target."""
     target = tmp_path / "unavailable"
