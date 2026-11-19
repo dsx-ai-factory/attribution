@@ -89,6 +89,34 @@ sacct --starttime=2026-05-25T00:00:00 \
 
 The adapter filters `.batch` and `.extern` rows and keeps numeric step rows such as `.0` and `.1`. Numeric steps can produce separate attribution contexts because they can have different windows and evidence.
 
+### SLURM Cancellations
+
+`sacct` reports a cancellation as `CANCELLED by <uid>`. The adapter splits that
+into state `CANCELLED` and `cancelled_by`, then resolves UID 0 per attempt,
+because the attribution rules key on names rather than UIDs:
+
+- A UID 0 step whose attempt (same `SLUID`) has a head row in state `TIMEOUT`,
+  and that was still running when the head's time limit was reached, was
+  cancelled by `slurmctld` enforcing the limit and is sent as
+  `cancelled_by: "Timeout"`. The limit is elapsed time from the head's start,
+  so a daylight-saving change in `cluster_tz` does not move it.
+- A UID 0 step of a `TIMEOUT` attempt that ended before that limit was
+  cancelled by an operator while the job ran on, and is sent as
+  `cancelled_by: "root"`. So is every row of an attempt whose head was itself
+  `CANCELLED by 0`.
+- In any other case the cause cannot be established, and the step keeps
+  `cancelled_by: "0"`. `slurmctld` also ends steps as UID 0 when it preempts a
+  job or loses a node, so a UID 0 step under a head in another state, such as
+  `PREEMPTED`, `NODE_FAIL`, or cancelled by another UID, does not show an
+  operator. A warning names the step when its head row was not retained or a
+  `TIMEOUT` head has no time limit.
+- Other UIDs are forwarded as digits. The Blueprint host need not share the
+  cluster's account database, so no name lookup is attempted.
+
+A client that calls the Attribution Service directly with `sacct` data must
+apply the same resolution. Refer to the
+[REST API guide](rest-api.md#1-create-an-attributor).
+
 ### Timezone Requirement
 
 Many `sacct` deployments return timestamps without timezone offsets. Configure the SLURM controller timezone in `attribution-blueprint.toml`:

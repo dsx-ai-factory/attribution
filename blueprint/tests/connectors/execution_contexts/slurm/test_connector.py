@@ -5,6 +5,8 @@ import subprocess
 from datetime import datetime
 from pathlib import Path
 
+import pytest
+
 from attribution_blueprint.connectors.execution_contexts.slurm import (
     SlurmExecutionContextAdapter,
 )
@@ -334,6 +336,195 @@ def test_cancelled_by_state_normalized(mocker):
     contexts = SlurmExecutionContextAdapter().discover_by_ids(["7002"])
     assert contexts[0]["state"] == "CANCELLED"
     assert contexts[0]["cancelled_by"] == "9001"
+
+
+def test_cancelled_by_root_uid_resolves_to_root(mocker):
+    """sacct reports `CANCELLED by 0` for an admin scancel; the refiner rules match "root"."""
+    row = (
+        "7003|7003|sluid-cby-7003|CANCELLED by 0|2026-05-01T12:00:00|2026-05-01T13:00:00|"
+        "node300||60|cpu=8|/o|/e|carol|short\n"
+    )
+    _mock_sacct(mocker, row)
+    contexts = SlurmExecutionContextAdapter().discover_by_ids(["7003"])
+    assert contexts[0]["cancelled_by"] == "root"
+
+
+def test_uid0_step_of_timed_out_attempt_resolves_to_timeout(mocker):
+    """slurmctld cancels the steps of a job that hit its time limit as UID 0.
+
+    The step must resolve to `Timeout`, the identity the timeout rules match, not
+    `root`; a root verdict turns an ordinary time-limit kill into Fail User.
+    """
+    rows = (
+        "7004|7004|sluid-cby-7004|TIMEOUT|2026-05-01T12:00:00|2026-05-01T13:00:00|"
+        "node300||60|cpu=8|/o|/e|carol|short\n"
+        "7004.batch|7004.batch|sluid-cby-7004|CANCELLED|2026-05-01T12:00:00|2026-05-01T13:00:00|"
+        "node300||60|cpu=8|||carol|batch\n"
+        "7004.0|7004.0|sluid-cby-7004|CANCELLED by 0|2026-05-01T12:00:05|2026-05-01T13:00:00|"
+        "node300||60|cpu=8|||carol|step0\n"
+    )
+    _mock_sacct(mocker, rows)
+    contexts = SlurmExecutionContextAdapter().discover_by_ids(["7004"])
+    by_id = {c["job_id"]: c for c in contexts}
+    assert by_id["7004"]["state"] == "TIMEOUT"
+    assert "cancelled_by" not in by_id["7004"]
+    assert by_id["7004.0"]["state"] == "CANCELLED"
+    assert by_id["7004.0"]["cancelled_by"] == "Timeout"
+
+
+def test_uid0_step_of_cancelled_attempt_resolves_to_root(mocker):
+    """An operator scancel cancels the head and its steps as UID 0; every row is root."""
+    rows = (
+        "7006|7006|sluid-cby-7006|CANCELLED by 0|2026-05-01T12:00:00|2026-05-01T12:10:00|"
+        "node300||60|cpu=8|/o|/e|carol|short\n"
+        "7006.0|7006.0|sluid-cby-7006|CANCELLED by 0|2026-05-01T12:00:05|2026-05-01T12:10:00|"
+        "node300||60|cpu=8|||carol|step0\n"
+    )
+    _mock_sacct(mocker, rows)
+    contexts = SlurmExecutionContextAdapter().discover_by_ids(["7006"])
+    assert [c["cancelled_by"] for c in contexts] == ["root", "root"]
+
+
+def test_timeout_of_one_requeue_attempt_does_not_leak_to_another(mocker):
+    """TIMEOUT is per attempt (SLUID). A UID 0 step of a different attempt of the same jobid stays root."""
+    rows = (
+        "7007|7007|sluid-cby-7007a|CANCELLED by 0|2026-05-01T12:00:00|2026-05-01T12:10:00|"
+        "node300||60|cpu=8|/o|/e|carol|short\n"
+        "7007.0|7007.0|sluid-cby-7007a|CANCELLED by 0|2026-05-01T12:00:05|2026-05-01T12:10:00|"
+        "node300||60|cpu=8|||carol|step0\n"
+        "7007|7007|sluid-cby-7007b|TIMEOUT|2026-05-01T12:20:00|2026-05-01T13:20:00|"
+        "node301||60|cpu=8|/o|/e|carol|short\n"
+        "7007.0|7007.0|sluid-cby-7007b|CANCELLED by 0|2026-05-01T12:20:05|2026-05-01T13:20:00|"
+        "node301||60|cpu=8|||carol|step0\n"
+    )
+    _mock_sacct(mocker, rows)
+    contexts = SlurmExecutionContextAdapter().discover_by_ids(["7007"])
+    steps = {c["sluid"]: c["cancelled_by"] for c in contexts if c.get("step_id") == "0"}
+    assert steps == {"sluid-cby-7007a": "root", "sluid-cby-7007b": "Timeout"}
+
+
+def test_uid0_step_cancelled_before_the_limit_of_a_timed_out_attempt_resolves_to_root(mocker):
+    """An operator cancels one step, and the job runs on until it hits its time limit.
+
+    The head ends TIMEOUT, but the step ended 50 minutes before the 60-minute limit,
+    so slurmctld did not end it: the cancel was root's, not the limit's.
+    """
+    rows = (
+        "7009|7009|sluid-cby-7009|TIMEOUT|2026-05-01T12:00:00|2026-05-01T13:00:00|"
+        "node300||60|cpu=8|/o|/e|carol|short\n"
+        "7009.0|7009.0|sluid-cby-7009|CANCELLED by 0|2026-05-01T12:00:05|2026-05-01T12:10:00|"
+        "node300||60|cpu=8|||carol|step0\n"
+        "7009.1|7009.1|sluid-cby-7009|CANCELLED by 0|2026-05-01T12:10:05|2026-05-01T13:00:00|"
+        "node300||60|cpu=8|||carol|step1\n"
+    )
+    _mock_sacct(mocker, rows)
+    contexts = SlurmExecutionContextAdapter().discover_by_ids(["7009"])
+    by_id = {c["job_id"]: c for c in contexts}
+    assert by_id["7009.0"]["cancelled_by"] == "root"
+    assert by_id["7009.1"]["cancelled_by"] == "Timeout"
+
+
+@pytest.mark.parametrize(
+    ("step_end", "expected"),
+    [
+        ("2026-03-08T03:00:00", "root"),
+        ("2026-03-08T03:30:00", "Timeout"),
+    ],
+    ids=["ended-before-elapsed-limit", "ran-to-elapsed-limit"],
+)
+def test_uid0_step_of_timed_out_attempt_across_a_dst_change_compares_elapsed_time(mocker, step_end, expected):
+    """The limit is elapsed time, so a spring-forward change moves its local deadline an hour later.
+
+    In New York the clock skips 02:00 to 03:00 on 2026-03-08. A job that starts at
+    01:30 EST with a 60-minute limit times out at 03:30 EDT. A step that ended at
+    03:00 EDT had run 30 minutes, so an operator cancelled it. Adding the limit to
+    the local start time gives 02:30, which would wrongly make that step `Timeout`.
+    """
+    rows = (
+        "7011|7011|sluid-cby-7011|TIMEOUT|2026-03-08T01:30:00|2026-03-08T03:30:00|"
+        "node300||60|cpu=8|/o|/e|carol|short\n"
+        f"7011.0|7011.0|sluid-cby-7011|CANCELLED by 0|2026-03-08T01:30:05|{step_end}|"
+        "node300||60|cpu=8|||carol|step0\n"
+    )
+    _mock_sacct(mocker, rows)
+    contexts = SlurmExecutionContextAdapter(cluster_tz="America/New_York").discover_by_ids(["7011"])
+    by_id = {c["job_id"]: c for c in contexts}
+    assert by_id["7011.0"]["cancelled_by"] == expected
+
+
+@pytest.mark.parametrize(
+    ("head_state", "head_cancelled_by"),
+    [
+        ("PREEMPTED", None),
+        ("NODE_FAIL", None),
+        ("CANCELLED by 4243", "4243"),
+    ],
+    ids=["preempted", "node-fail", "cancelled-by-user"],
+)
+def test_uid0_step_whose_head_was_not_cancelled_by_uid0_keeps_uid0(mocker, head_state, head_cancelled_by):
+    """slurmctld also ends steps as UID 0 when it preempts a job or loses a node.
+
+    Only a head that was itself cancelled by UID 0 shows that an operator ran
+    `scancel`. Under any other non-TIMEOUT head the step keeps the raw UID 0, so
+    a preemption, a node failure or a user's cancel is not reported as root.
+    """
+    rows = (
+        f"7012|7012|sluid-cby-7012|{head_state}|2026-05-01T12:00:00|2026-05-01T12:10:00|"
+        "node300||60|cpu=8|/o|/e|carol|short\n"
+        "7012.0|7012.0|sluid-cby-7012|CANCELLED by 0|2026-05-01T12:00:05|2026-05-01T12:10:00|"
+        "node300||60|cpu=8|||carol|step0\n"
+    )
+    _mock_sacct(mocker, rows)
+    contexts = SlurmExecutionContextAdapter().discover_by_ids(["7012"])
+    by_id = {c["job_id"]: c for c in contexts}
+    assert by_id["7012"].get("cancelled_by") == head_cancelled_by
+    assert by_id["7012.0"]["cancelled_by"] == "0"
+
+
+def test_uid0_step_of_timed_out_attempt_without_a_limit_keeps_uid0(mocker):
+    """Without the head's time limit there is no way to tell when the limit hit, so the raw UID 0 stays."""
+    rows = (
+        "7010|7010|sluid-cby-7010|TIMEOUT|2026-05-01T12:00:00|2026-05-01T13:00:00|"
+        "node300|||cpu=8|/o|/e|carol|short\n"
+        "7010.0|7010.0|sluid-cby-7010|CANCELLED by 0|2026-05-01T12:00:05|2026-05-01T13:00:00|"
+        "node300|||cpu=8|||carol|step0\n"
+    )
+    _mock_sacct(mocker, rows)
+    contexts = SlurmExecutionContextAdapter().discover_by_ids(["7010"])
+    by_id = {c["job_id"]: c for c in contexts}
+    assert "time_limit" not in by_id["7010"]
+    assert by_id["7010.0"]["cancelled_by"] == "0"
+
+
+def test_uid0_step_without_retained_head_keeps_uid0(mocker):
+    """A head row with an unparseable Start/End is skipped, leaving its UID 0 step orphaned.
+
+    Without the head there is no way to tell a time-limit kill from a scancel. The
+    step keeps the raw UID 0 the connector sent before resolution existed, rather
+    than a guessed `root` or `Timeout`, and the scheduler's value is not lost.
+    """
+    rows = (
+        "7008|7008|sluid-cby-7008|TIMEOUT|Unknown|Unknown|"
+        "node300||60|cpu=8|/o|/e|carol|short\n"
+        "7008.0|7008.0|sluid-cby-7008|CANCELLED by 0|2026-05-01T12:00:05|2026-05-01T13:00:00|"
+        "node300||60|cpu=8|||carol|step0\n"
+    )
+    _mock_sacct(mocker, rows)
+    contexts = SlurmExecutionContextAdapter().discover_by_ids(["7008"])
+    assert [c["job_id"] for c in contexts] == ["7008.0"]
+    assert contexts[0]["state"] == "CANCELLED"
+    assert contexts[0]["cancelled_by"] == "0"
+
+
+def test_cancelled_by_nonzero_uid_stays_numeric(mocker):
+    """A non-root canceller UID is left numeric; the Blueprint host may not share the cluster's accounts."""
+    row = (
+        "7005|7005|sluid-cby-7005|CANCELLED by 4243|2026-05-01T12:00:00|2026-05-01T13:00:00|"
+        "node300||60|cpu=8|/o|/e|carol|short\n"
+    )
+    _mock_sacct(mocker, row)
+    contexts = SlurmExecutionContextAdapter().discover_by_ids(["7005"])
+    assert contexts[0]["cancelled_by"] == "4243"
 
 
 def test_array_step_row_decomposes_array_id_and_attempt_index(mocker):
