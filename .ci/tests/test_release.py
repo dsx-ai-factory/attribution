@@ -70,6 +70,12 @@ class Repo:
     def results(self) -> list[release_rules.RuleResult]:
         return release_rules.check_release(self.path, self.statuses())
 
+    def pr_violations(self, *, light: bool = False) -> list[release_rules.Violation]:
+        results = release_rules.check_release_pr(
+            self.path, self.statuses(), "base", light=light
+        )
+        return release_rules.violations(results)
+
     def violations(self) -> list[release_rules.Violation]:
         return release_rules.violations(self.results())
 
@@ -308,6 +314,45 @@ def test_literals_are_compared_at_the_merge_base_not_the_tip_of_base(
     statuses = release_rules.releasing_components(repo.path, "main")
     assert not statuses["attribution-lib"].releasing
     assert not statuses["attribution-lib"].decreased
+
+
+def test_pr_that_changes_no_literal_has_no_release_violations(
+    repo: Repo,
+) -> None:
+    _release_everything_at_distance_zero(repo)
+    repo.write("service/attribution-lib/fix", "")
+    repo.commit("lib fix")
+
+    assert repo.pr_violations() == []
+    assert repo.pr_violations(light=True) == []
+
+
+@pytest.mark.parametrize("light", [False, True], ids=["full", "light"])
+def test_release_pr_touching_a_file_outside_the_release_set_fails(
+    repo: Repo, light: bool
+) -> None:
+    for component, literal in NEW_RELEASE.items():
+        repo.set_literal(component, literal)
+        repo.add_changelog(component, literal)
+    repo.write("service/attribution-lib/fix", "")
+    repo.commit("release with a fix")
+
+    (hit,) = repo.pr_violations(light=light)
+    assert hit.component == "release PR"
+
+
+def test_light_check_keeps_only_the_file_set_and_no_decrease_rules(repo: Repo) -> None:
+    repo.set_literal("blueprint", "0.2.0")
+    repo.commit("release blueprint over unreleased dependencies")
+
+    assert repo.pr_violations(light=True) == []
+    assert repo.pr_violations()
+
+    repo.set_literal("blueprint", "0.0.9")
+    repo.commit("lower blueprint")
+
+    (hit,) = repo.pr_violations(light=True)
+    assert hit.component == "blueprint"
 
 
 def test_only_an_rc_literal_is_a_prerelease(repo: Repo) -> None:

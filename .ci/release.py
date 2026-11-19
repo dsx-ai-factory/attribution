@@ -19,7 +19,12 @@ Needs a full clone with tags. Four subcommands:
             - CHANGELOG.md has a `## [X.Y.Z]` entry
             - every other component with distance above 0 releases in the
               same PR
-    tag     runs on main after a merge. Re-runs the `check` rules on the
+            - only version literals, CHANGELOG.md files and generated files
+              change
+            - no literal decreases
+            `--light` is for the PR that syncs a release back into the default
+            branch; see `check_release_pr` for the rules it keeps.
+    tag     runs on main after a merge. Re-runs `check_release` on the
             merged commit, then creates and pushes one `<component>-vX.Y.Z`
             tag per component that is releasing. Exit 1 on any FAIL.
             `--before SHA` is the push event's previous tip.
@@ -53,7 +58,7 @@ from release_rules import (
     ComponentStatus,
     Pass,
     RuleResult,
-    check_release,
+    check_release_pr,
     is_release_pr,
     releasing_components,
     violations,
@@ -224,6 +229,12 @@ def main(argv: Optional[list[str]] = None) -> int:
             help="ref whose merge-base with HEAD the literals are compared against",
         )
         sub.add_argument("--repo", type=Path, default=None, help="repository root")
+        if command == "check":
+            sub.add_argument(
+                "--light",
+                action="store_true",
+                help="sync-back PR into the default branch; see check_release_pr",
+            )
 
     tag = subparsers.add_parser(
         "tag", help="tag and push released components; main only, exit 1 on any FAIL"
@@ -252,7 +263,7 @@ def main(argv: Optional[list[str]] = None) -> int:
                 report, failed = render_status(repo, statuses), False
             case "check":
                 statuses = releasing_components(repo, args.base)
-                results = check_release(repo, statuses)
+                results = check_release_pr(repo, statuses, args.base, light=args.light)
                 report, failed = (
                     render_check(statuses, results),
                     bool(violations(results)),
