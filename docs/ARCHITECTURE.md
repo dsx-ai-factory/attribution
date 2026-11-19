@@ -142,11 +142,11 @@ The Service returns a raw verdict. The Blueprint enriches it with normalized fie
 | sub_domain | string | none, hardware, system_software, application, ambiguous, unattributed, expected, artificial, unclassified, plus cancellation/incomplete variants |
 | tenant_sre_action | string | Reserved field that is currently emitted as an empty string. |
 | cloud_operator_sre_action | string | Reserved field that is currently emitted as an empty string. |
-| connector_reports | list | List of `{connector: str, source: str, status: "ok" or "error", reason: str, observation_count: int}` |
+| connector_reports | list | List of `{connector: str, source: str, status: "ok", "partial" or "error", reason: str, observation_count: int}` |
 
 `terminal_state` and `sub_domain` are mapped from the service verdict via `taxonomy.py`. The mapping is deterministic. Downstream consumers should branch on these normalized fields.
 
-`connector_reports` is the collector coverage record for a run. A collector that raised mid-run reports `status: "error"` with a reason. A collector that returned zero observations reports `observation_count: 0`. Observation submission failures after collection are logged and skipped by the Blueprint, but they are not represented in `connector_reports`. Downstream consumers treating verdicts as evidence should inspect this list and the run logs.
+`connector_reports` is the collector coverage record for a run. A collector that raises `PartialCollectionError` retains its available observations and reports `status: "partial"` with a reason. Other collection errors report `status: "error"`. A collector that returned zero observations reports `observation_count: 0`. Observation submission failures after collection are recorded separately in `ingestion_reports`.
 
 ## Data sources (V1)
 

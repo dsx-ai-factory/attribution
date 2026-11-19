@@ -18,6 +18,7 @@ from attribution_blueprint.connectors.execution_contexts import ExecutionContext
 from attribution_blueprint.connectors.logs import LogConnector
 from attribution_blueprint.connectors.metrics import MetricsConnector
 from attribution_blueprint.connectors.outputs import OutputConnector
+from attribution_blueprint.exceptions import PartialCollectionError
 from attribution_blueprint.result import ConnectorReport, IngestionReport, enrich_attribution_result, service_outcome
 from attribution_blueprint.taxonomy import taxonomy_for_service_value
 
@@ -168,19 +169,25 @@ class AttributionOrchestrator:
         return results
 
     def _process_one(self, ctx: dict, collectors: list) -> tuple[dict, bool] | None:
+        """Collect available evidence, report coverage, attribute it and deliver the result to outputs."""
         # Collect before opening a session so collection/dump failures cannot
         # strand a newly created handle. A duplicate may still do this work.
         connector_reports: list[ConnectorReport] = []
         batches: list[tuple[ConnectorReport, list[dict]]] = []
         for collector in collectors:
+            status, reason = "ok", ""
             try:
                 collected = collector.collect(ctx)
+            except PartialCollectionError as error:
+                collected = error.observations
+                status, reason = "partial", str(error)
+                logger.warning(f"collector {getattr(collector, 'source', '?')} incomplete for ctx {ctx['id']}: {error}")
             except Exception as e:
                 logger.warning(f"collector {getattr(collector, 'source', '?')} failed for ctx {ctx['id']}: {e}")
                 connector_reports.append(_connector_report(collector, "error", str(e), 0))
                 batches.append((connector_reports[-1], []))
                 continue
-            connector_reports.append(_connector_report(collector, "ok", "", len(collected)))
+            connector_reports.append(_connector_report(collector, status, reason, len(collected)))
             batches.append((connector_reports[-1], collected))
         observations = [obs for _, collected in batches for obs in collected]
 
@@ -347,10 +354,12 @@ class AttributionOrchestrator:
             "nodes": node_to_ranks,
         }
         # ExecutionContext.scheduler is also used for connector provenance
-        # (for example, "static"). Only actual scheduler identities belong on
-        # the service wire; omitting other values leaves the service's
-        # scheduler unset (`UNKNOWN`).
+        # (for example, "static"). Fall back to the legacy wire type only when
+        # it is itself a supported scheduler identity, preserving explicit
+        # Slurm behavior for static contexts and contexts without this field.
         scheduler = ctx.get("scheduler")
+        if scheduler is None or scheduler == "static":
+            scheduler = ctx.get("workload_type")
         if scheduler in _SUPPORTED_WORKLOAD_SCHEDULERS:
             workload["scheduler"] = scheduler
         if "failed_node" in ctx:

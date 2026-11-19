@@ -55,8 +55,8 @@ API_URL = "https://api.github.com"
 BOT_LOGIN = "github-actions[bot]"
 REVIEWER_TEAM = "attribution"
 MAINTAINER_TEAM = "attribution-maintainer"
-# Never picked as primary: Ajay Hotchandani and Felix Abecassis.
-EXCLUDED_REVIEWERS = {"ajaymh", "flx42"}
+# Never picked as primary: Ajay Hotchandani, Felix Abecassis, and Pasha Shamis.
+EXCLUDED_REVIEWERS = {"ajaymh", "flx42", "shamisp"}
 PRIMARY_MARKER = re.compile(r"<!-- primary-reviewer: ([A-Za-z0-9-]+) -->")
 OVERDUE_MARKER = "<!-- review-overdue: {} -->"
 APPROVED_MARKER = "<!-- approved-notice: {} -->"

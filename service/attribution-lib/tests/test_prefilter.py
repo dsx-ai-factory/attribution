@@ -105,6 +105,19 @@ class TestBundledPrefilterRegistration:
         assert "error" in pf.include_terms
         assert "NCCL INFO" in pf.exclude_terms
 
+    def test_applog_prefilter_drops_crashpad_cpufreq_probe_but_keeps_real_enoent(self):
+        pf = attribution_lib.get_pre_filter(ObservationSource.APPLOG)
+        crashpad = (
+            "[1012:1012:20261110,223223.200719:ERROR file_io_posix.cc:145] open "
+            "/sys/devices/system/cpu/cpu0/cpufreq/scaling_cur_freq: No such file or directory (2)"
+        )
+        missing_checkpoint = (
+            "[rank0]: FileNotFoundError: [Errno 2] No such file or directory: '/data/run/checkpoints/iter_0001000'"
+        )
+        assert any(term in crashpad for term in pf.exclude_terms)
+        assert any(term in crashpad.replace("scaling_cur_freq", "scaling_max_freq") for term in pf.exclude_terms)
+        assert not any(term in missing_checkpoint for term in pf.exclude_terms)
+
     def test_ufmlog_prefilter_registered(self):
         pf = attribution_lib.get_pre_filter(ObservationSource.UFMLOG)
         assert "Link went down" in pf.include_terms

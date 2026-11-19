@@ -8,7 +8,7 @@ from attribution_blueprint.connectors.execution_contexts.kafka.connector import 
     KafkaExecutionContext,
     KafkaExecutionContextAdapter,
 )
-from attribution_blueprint.connectors.execution_contexts.kafka.receipts import KafkaReceipt
+from attribution_blueprint.connectors.execution_contexts.kafka.receipts import KafkaRawReceipt, KafkaReceipt
 from attribution_blueprint.connectors.kafka_client import SECURITY_SCHEMA_KEYS, security_config
 from attribution_blueprint.exceptions import MCAError
 from attribution_blueprint.mca_registry import _PARAM
@@ -59,6 +59,7 @@ def _build(spec: dict, ctx: dict) -> KafkaExecutionContextAdapter:
             consumer_error=KafkaException,
             topic=str(spec["topic"]),
             topic_partition=TopicPartition,
+            group_id=str(spec["group_id"]),
             event_types=event_types,
             scheduler=str(spec.get("scheduler") or "kafka"),
             workload_type=str(spec.get("workload_type", "")),
@@ -98,4 +99,4 @@ _registry.register_component(
 )
 
 
-__all__ = ["KafkaExecutionContext", "KafkaExecutionContextAdapter", "KafkaReceipt"]
+__all__ = ["KafkaExecutionContext", "KafkaExecutionContextAdapter", "KafkaRawReceipt", "KafkaReceipt"]

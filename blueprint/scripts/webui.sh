@@ -23,7 +23,7 @@ BUILD=1
 MODE=serve
 PNPM=()
 
-usage() { awk 'NR == 1 { next } /^#/ { sub(/^# ?/, ""); print; next } { exit }' "${BASH_SOURCE[0]}"; }
+usage() { awk 'NR == 1 || /^# SPDX-/ { next } /^#/ { sub(/^# ?/, ""); print; next } { exit }' "${BASH_SOURCE[0]}"; }
 
 die() {
   echo "error: $*" >&2

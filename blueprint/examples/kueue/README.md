@@ -8,13 +8,14 @@ Before running it:
 1. Replace every `CHANGE_ME` value in
    [attribution-blueprint.kueue.toml](./attribution-blueprint.kueue.toml).
 2. Set `workload.gpus_per_node` to the workload's actual per-node GPU count.
-3. Confirm that the Kueue Workload still exists. Owned pods are required for
-   `kubectl logs`, but placement can be recovered after pod deletion.
+3. Confirm that the Kueue Workload still exists, unless `kubernetes-daemon`
+   retained its history. Owned pods are required for `kubectl logs`, but
+   placement can be recovered after pod deletion.
 4. Confirm the Blueprint host can reach the Attribution Service and Loki.
-5. To recover Pod placement after deletion, install `kubernetes-daemon` before
-   workloads run, schedule it outside their failure domain, set
-   `placement_records_enabled = true`, and configure
-   `[eca.kueue.kubernetes_daemon]` with a reachable endpoint.
+5. To recover Pod placement or deleted Workloads, install `kubernetes-daemon`
+   with `integrations.kueue.enabled=true` before workloads run, schedule it
+   outside their failure domain, set `placement_records_enabled = true`, and
+   configure `[eca.kueue.kubernetes_daemon]` with a reachable endpoint.
 6. Prometheus placement recovery requires retained `kube_pod_info` and
    `kube_pod_labels` metrics, the
    `batch.kubernetes.io/controller-uid` Pod-label allowlist, and surviving

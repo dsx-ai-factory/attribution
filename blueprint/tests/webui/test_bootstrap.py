@@ -26,6 +26,7 @@ def _seed_one(
     line="Xid 79",
     detail="GPU off bus",
     source_time="2026-05-01T00:30:00+00:00",
+    attempt_ordinal=None,
 ):
     p = tmp_path / "m.db"
     out = SQLiteOutput(str(p))
@@ -54,6 +55,8 @@ def _seed_one(
         ctx["gpu_count"] = gpu_count
     if alloc_tres is not None:
         ctx["alloc_tres"] = alloc_tres
+    if attempt_ordinal is not None:
+        ctx["attempt_ordinal"] = attempt_ordinal
     out.write(
         ctx,
         {
@@ -369,6 +372,13 @@ def test_run_to_react_treats_cpu_only_slurm_alloc_tres_as_zero_gpus(tmp_path):
     run = _seed_one(tmp_path, gpus_per_node=8, alloc_tres="cpu=24,mem=96G")
     r = bootstrap.run_to_react(run)
     assert r["gpuCount"] == 0
+
+
+@pytest.mark.parametrize(("attempt_ordinal", "expected"), [(None, 1), (0, 1), (1, 2), (2, 3), ("2", 3), ("²", 1), ("", 1), (-1, 1)])
+def test_run_to_react_displays_one_based_attempt_ordinal(tmp_path, attempt_ordinal, expected):
+    """Show the zero-based Slurm attempt ordinal as a one-based attempt number."""
+    run = _seed_one(tmp_path, attempt_ordinal=attempt_ordinal)
+    assert bootstrap.run_to_react(run)["attempt"] == expected
 
 
 def test_log_keeps_distinct_time_sites_with_same_text(tmp_path):

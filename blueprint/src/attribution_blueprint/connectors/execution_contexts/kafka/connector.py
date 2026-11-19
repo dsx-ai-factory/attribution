@@ -15,9 +15,10 @@ from __future__ import annotations
 import math
 import time
 import weakref
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, Callable
+from typing import TYPE_CHECKING, Any, Literal, TypeVar
 
 from loguru import logger
 
@@ -29,17 +30,28 @@ from attribution_blueprint.connectors.execution_contexts.kafka.events import (
     _read_cloudevent,
 )
 from attribution_blueprint.connectors.execution_contexts.kafka.receipts import (
+    KafkaRawReceipt,
     KafkaReceipt,
     PartitionKey,
     _Acknowledgements,
+)
+from attribution_blueprint.connectors.execution_contexts.kafka.telemetry import (
+    ConsumerMetrics,
+    PartitionChange,
+    SkipReason,
 )
 
 if TYPE_CHECKING:
     from confluent_kafka import Consumer, Message
 
 CommittedContext = tuple[PartitionKey, KafkaExecutionContext]
+_Delivery = TypeVar("_Delivery", KafkaReceipt, KafkaRawReceipt)
 _MAX_POLL_TIMEOUT_SECONDS = 2_147_483.647  # Native timeouts use signed 32-bit milliseconds.
 _MAX_UNMATCHED_EVENT_TYPES = 100
+# Lag gauges read client-side state; refreshing it on every poll adds overhead without fresher data.
+_OFFSET_REFRESH_SECONDS = 5.0
+# Bounds the broker lookup of a new assignment's committed offsets, which blocks the polling thread.
+_COMMITTED_LOOKUP_TIMEOUT_SECONDS = 1.0
 
 
 def _validate_poll_timeout(timeout: float) -> None:
@@ -82,6 +94,7 @@ class KafkaExecutionContextAdapter:
         consumer_factory: Callable[[], Consumer] | None = None,
         topic: str,
         topic_partition: Callable[[str, int, int], Any],
+        group_id: str = "",
         consumer_error: type[Exception] = KafkaConsumerError,
         event_types: list[str] | None = None,
         scheduler: str = "kafka",
@@ -94,6 +107,7 @@ class KafkaExecutionContextAdapter:
 
         The factory supplies TopicPartition and KafkaException alongside the
         consumer. Only that specific client exception is recoverable here.
+        The group_id only labels metrics; the consumer configuration sets the group.
         """
         if consumer is None and consumer_factory is None:
             raise ValueError("kafka ECA: a consumer or consumer factory is required")
@@ -109,6 +123,7 @@ class KafkaExecutionContextAdapter:
         self._consumer_instance = None
         self._consumer_factory = consumer_factory
         self._topic, self._topic_partition = topic, topic_partition
+        self._group_id = group_id
         self._consumer_error = consumer_error
         self._consumer_errors = (consumer_error, KafkaConsumerError)
         self._event_types = frozenset(event_types or ())
@@ -123,8 +138,11 @@ class KafkaExecutionContextAdapter:
         self.discovery_incomplete = False
         self._closed = False
         self._mode: str | None = None
+        self._payload_mode: Literal["decoded", "raw"] | None = None
         self._paused = False
         self._acknowledgements = _Acknowledgements()
+        self._metrics = ConsumerMetrics(topic=topic, group_id=group_id, backlog=self._acknowledgements.backlog)
+        self._next_offset_refresh = 0.0
         self._close_consumer = None
         if consumer is not None:
             self._subscribe(consumer)
@@ -137,8 +155,8 @@ class KafkaExecutionContextAdapter:
             consumer.subscribe(
                 [self._topic],
                 on_assign=_weak(self._on_assign),
-                on_revoke=_weak(self._release),
-                on_lost=_weak(self._release),
+                on_revoke=_weak(self._on_revoke),
+                on_lost=_weak(self._on_lost),
             )
         except BaseException:
             self._close_after_discovery()
@@ -153,6 +171,18 @@ class KafkaExecutionContextAdapter:
 
     def open_consumer(self) -> KafkaExecutionContextAdapter:
         """Open an independent long-lived consumer for the configured topic/group."""
+        return self._open_consumer("decoded")
+
+    def open_raw_consumer(self) -> KafkaExecutionContextAdapter:
+        """Open an independent consumer for poll_raw(), with caller-owned decoding.
+
+        Event-type filters and execution-context mapping do not apply to raw
+        records. Use the existing ack(), pause(), resume() and close() lifecycle.
+        """
+        return self._open_consumer("raw")
+
+    def _open_consumer(self, payload_mode: Literal["decoded", "raw"]) -> KafkaExecutionContextAdapter:
+        """Open the configured factory through the shared streaming lifecycle."""
         if self._consumer_factory is None:
             raise KafkaConsumerError("kafka ECA: open_consumer requires a configured consumer factory")
         adapter = KafkaExecutionContextAdapter(
@@ -160,6 +190,7 @@ class KafkaExecutionContextAdapter:
             consumer_error=self._consumer_error,
             topic=self._topic,
             topic_partition=self._topic_partition,
+            group_id=self._group_id,
             event_types=list(self._event_types),
             scheduler=self._scheduler,
             workload_type=self._workload_type,
@@ -168,6 +199,7 @@ class KafkaExecutionContextAdapter:
             discovery_timeout_seconds=self._discovery_timeout_seconds,
         )
         adapter._require_mode("streaming")
+        adapter._require_payload_mode(payload_mode)
         adapter._consumer
         return adapter
 
@@ -203,20 +235,50 @@ class KafkaExecutionContextAdapter:
         records. Intentional skips count toward the bound. Keep polling while
         paused so assignment callbacks and group membership remain serviced.
         """
+        return self._poll_deliveries(max_records, timeout_seconds, payload_mode="decoded", delivery=self._delivery)
+
+    def poll_raw(self, max_records: int = 1, timeout_seconds: float | None = None) -> list[KafkaRawReceipt]:
+        """Return original records without decoding, filtering, or committing.
+
+        Malformed payloads, duplicate events and tombstones all receive receipts.
+        The caller owns validation, durable custody, and the acknowledgement
+        boundary. Keep polling while paused to service group membership.
+
+        Args:
+            max_records: Maximum records returned by this poll.
+            timeout_seconds: Wait for the first record; None uses the configured timeout.
+
+        Returns:
+            Records that remain unacknowledged until ack() is called.
+        """
+        return self._poll_deliveries(max_records, timeout_seconds, payload_mode="raw", delivery=self._raw_delivery)
+
+    def _poll_deliveries(
+        self,
+        max_records: int,
+        timeout_seconds: float | None,
+        *,
+        payload_mode: Literal["decoded", "raw"],
+        delivery: Callable[[Message], _Delivery | None],
+    ) -> list[_Delivery]:
+        """Apply the same polling limits, mode guards and failure cleanup to each payload format."""
         if type(max_records) is not int or max_records <= 0:
             raise ValueError("kafka ECA: max_records must be a positive integer")
         timeout = self._poll_timeout_seconds if timeout_seconds is None else timeout_seconds
         _validate_poll_timeout(timeout)
         self._require_mode("streaming")
+        self._require_payload_mode(payload_mode)
         try:
-            return self._poll_records(max_records, timeout)
+            return self._poll_records(max_records, timeout, delivery)
         except BaseException:
             # Cleanup covers cancellation too; propagate the original failure.
             self.discovery_incomplete = True
             self._close_after_discovery()
             raise
 
-    def _poll_records(self, max_records: int, timeout: float) -> list[KafkaReceipt]:
+    def _poll_records(
+        self, max_records: int, timeout: float, delivery: Callable[[Message], _Delivery | None]
+    ) -> list[_Delivery]:
         """Drain one bounded poll, including native ownership callbacks."""
         deliveries = []
         for index in range(max_records):
@@ -227,13 +289,49 @@ class KafkaExecutionContextAdapter:
             if error is not None:
                 if error.name() == "_PARTITION_EOF":
                     continue
+                self._metrics.consumer_error(error.name())
                 raise KafkaConsumerError(f"kafka ECA: consumer error: {error}")
             if self._paused:
                 raise KafkaConsumerError("kafka ECA: native consumer delivered a record while paused")
-            delivery = self._delivery(message)
-            if delivery is not None:
-                deliveries.append(delivery)
+            receipt = delivery(message)
+            if receipt is not None:
+                deliveries.append(receipt)
+        self._refresh_offsets()
         return deliveries
+
+    def _refresh_offsets(self) -> None:
+        """Publish fetch positions, cached high watermarks, and group offsets for the lag gauges.
+
+        Positions and watermarks use client-side state, so they do not wait for
+        a broker. The group's committed offset is read from the broker once per
+        assignment. A refresh failure leaves the previous values, retries at
+        the next refresh, and does not stop polling.
+        """
+        now = time.monotonic()
+        if now < self._next_offset_refresh:
+            return
+        self._next_offset_refresh = now + _OFFSET_REFRESH_SECONDS
+        try:
+            assigned = self._consumer.assignment()
+            if not assigned:
+                return
+            for position in self._consumer.position(assigned):
+                _, high = self._consumer.get_watermark_offsets(position, cached=True)
+                self._metrics.positions(
+                    (position.topic, position.partition),
+                    position=_known_offset(position.offset) if position.error is None else None,
+                    high=_known_offset(high),
+                )
+            unread = set(self._metrics.group_offsets_unread())
+            lookup = [partition for partition in assigned if (partition.topic, partition.partition) in unread]
+            if lookup:
+                for committed in self._consumer.committed(lookup, timeout=_COMMITTED_LOOKUP_TIMEOUT_SECONDS):
+                    if committed.error is None:
+                        self._metrics.group_offset(
+                            (committed.topic, committed.partition), _known_offset(committed.offset)
+                        )
+        except self._consumer_errors as exc:
+            logger.warning(f"kafka ECA: consumer lag refresh failed: {exc}")
 
     def ack(self, delivery: object) -> None:
         """Commit only the acknowledged prefix, even across many polls.
@@ -243,7 +341,9 @@ class KafkaExecutionContextAdapter:
         """
         if self._closed:
             raise InvalidReceiptError("kafka ECA: receipt belongs to a closed adapter")
-        key = self._acknowledgements.acknowledge(delivery)
+        key, first = self._acknowledgements.acknowledge(delivery)
+        if first:
+            self._metrics.acknowledged(key)
         try:
             self._commit_acknowledged(key)
         except BaseException:
@@ -273,10 +373,14 @@ class KafkaExecutionContextAdapter:
             raise
 
     def _on_assign(self, consumer: Consumer, partitions: list[Any]) -> None:
-        """Apply pauses before records from a new assignment can be delivered."""
+        """Restore flow control because native pauses survive reassignment."""
         consumer.assign(partitions)
         if self._paused:
             consumer.pause(partitions)
+        else:
+            consumer.resume(partitions)
+        self._metrics.partitions_changed(PartitionChange.ASSIGNED, _keys(partitions))
+        self._next_offset_refresh = 0.0
 
     def _require_mode(self, mode: str) -> None:
         """Keep one-shot and streaming lifecycles exclusive on one consumer."""
@@ -289,12 +393,19 @@ class KafkaExecutionContextAdapter:
             if mode == "streaming":
                 self._reset_stats()
 
+    def _require_payload_mode(self, payload_mode: Literal["decoded", "raw"]) -> None:
+        """Keep decoding policies exclusive without having pause() choose one."""
+        if self._payload_mode is not None and self._payload_mode != payload_mode:
+            raise KafkaConsumerError("kafka ECA: cannot mix poll() and poll_raw() on one adapter")
+        self._payload_mode = payload_mode
+
     def _reset_stats(self) -> None:
         """Initialize per-discovery counters, or cumulative streaming counters."""
         self.last_discovery_stats = dict.fromkeys(
             (
                 "consumed",
                 "accepted",
+                "raw_delivered",
                 "filtered",
                 "malformed",
                 "redeliveries",
@@ -317,6 +428,21 @@ class KafkaExecutionContextAdapter:
         context, event = decoded
         self.last_discovery_stats["returned"] += 1
         return KafkaReceipt(receipt.topic, receipt.partition, receipt.offset, receipt.assignment_id, context, event)
+
+    def _raw_delivery(self, message: Message) -> KafkaRawReceipt:
+        """Retain every original payload under the existing acknowledgement tracker."""
+        key, value, headers = message.key(), message.value(), message.headers()
+        receipt = self._acknowledgements.register(message.topic(), message.partition(), message.offset())
+        delivery = KafkaRawReceipt(
+            receipt.topic, receipt.partition, receipt.offset, receipt.assignment_id, key, value, headers
+        )
+        partition = (receipt.topic, receipt.partition)
+        self.last_discovery_stats["consumed"] += 1
+        self.last_discovery_stats["raw_delivered"] += 1
+        self.last_discovery_stats["returned"] += 1
+        self._metrics.consumed(partition)
+        self._metrics.raw_delivered(partition)
+        return delivery
 
     def _commit_acknowledged(self, key: PartitionKey) -> None:
         """Forget receipts only after their safe prefix was broker-confirmed."""
@@ -348,6 +474,7 @@ class KafkaExecutionContextAdapter:
             elif error.name() == "_PARTITION_EOF":
                 self._end_offsets[(message.topic(), message.partition())] = message.offset()
             else:
+                self._metrics.consumer_error(error.name())
                 raise KafkaConsumerError(f"kafka ECA: consumer error: {error}")
 
     def _is_drained(self, deadline: float) -> bool:
@@ -379,11 +506,14 @@ class KafkaExecutionContextAdapter:
 
     def _decode_record(self, message: Message) -> tuple[KafkaExecutionContext, dict] | None:
         """Share payload validation and skip accounting across both lifecycles."""
+        key = (message.topic(), message.partition())
         self.last_discovery_stats["consumed"] += 1
+        self._metrics.consumed(key)
         try:
             event_id, event_type, data, subject, source, event = _read_cloudevent(message.value(), message.headers())
             if self._event_types and event_type not in self._event_types:
                 self.last_discovery_stats["filtered"] += 1
+                self._metrics.skipped(key, SkipReason.FILTERED)
                 self._record_filtered_type(event_type)
                 return
             context = _context_from_data(
@@ -396,9 +526,11 @@ class KafkaExecutionContextAdapter:
             )
         except EventError as exc:
             self.last_discovery_stats["malformed"] += 1
-            logger.warning(f"kafka ECA: skipping {(message.topic(), message.partition())}@{message.offset()}: {exc}")
+            self._metrics.skipped(key, SkipReason.MALFORMED)
+            logger.warning(f"kafka ECA: skipping {key}@{message.offset()}: {exc}")
             return
         self.last_discovery_stats["accepted"] += 1
+        self._metrics.accepted(key)
         return context, event
 
     def _record_filtered_type(self, event_type: str) -> None:
@@ -412,9 +544,14 @@ class KafkaExecutionContextAdapter:
 
     def _commit_partition(self, key: PartitionKey, offset: int) -> None:
         """Commit one partition and require an explicit successful native result."""
-        results = self._consumer.commit(offsets=[self._topic_partition(*key, offset)], asynchronous=False)
-        if not results or any(tp.error is not None for tp in results):
-            raise KafkaConsumerError("commit returned no successful result")
+        try:
+            results = self._consumer.commit(offsets=[self._topic_partition(*key, offset)], asynchronous=False)
+            if not results or any(tp.error is not None for tp in results):
+                raise KafkaConsumerError("commit returned no successful result")
+        except self._consumer_errors as exc:
+            self._metrics.commit_failed(key, type(exc).__name__)
+            raise
+        self._metrics.committed(key, offset)
 
     def _commit_batch(self) -> list[CommittedContext]:
         """Commit one partition per call so earlier successes remain returnable.
@@ -449,7 +586,17 @@ class KafkaExecutionContextAdapter:
             self.discovery_incomplete = True
             logger.warning(f"kafka ECA: consumer close failed: {exc}")
 
-    def _release(self, consumer: Consumer, partitions: list[Any]) -> None:
+    def _on_revoke(self, consumer: Consumer, partitions: list[Any]) -> None:
+        """Release partitions that the group moved to another member."""
+        self._metrics.partitions_changed(PartitionChange.REVOKED, _keys(partitions))
+        self._release(partitions)
+
+    def _on_lost(self, consumer: Consumer, partitions: list[Any]) -> None:
+        """Release partitions whose ownership ended without a clean revocation."""
+        self._metrics.partitions_changed(PartitionChange.LOST, _keys(partitions))
+        self._release(partitions)
+
+    def _release(self, partitions: list[Any]) -> None:
         """Drop revoked/lost records without committing; their next owner replays."""
         for partition in partitions:
             key = (partition.topic, partition.partition)
@@ -498,8 +645,19 @@ class KafkaExecutionContextAdapter:
         """Leave the group once; a closed adapter cannot be reused."""
         self._closed = True
         self._acknowledgements.clear()
+        self._metrics.close()
         if self._close_consumer is not None:
             self._close_consumer()
+
+
+def _keys(partitions: list[Any]) -> list[PartitionKey]:
+    """Return the topic and partition of each native TopicPartition."""
+    return [(partition.topic, partition.partition) for partition in partitions]
+
+
+def _known_offset(offset: int) -> int | None:
+    """Treat librdkafka's negative logical offsets, such as OFFSET_INVALID, as unknown."""
+    return offset if offset >= 0 else None
 
 
 def _weak(method: Callable[..., None]) -> Callable[..., None]:
