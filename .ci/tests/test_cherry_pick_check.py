@@ -78,7 +78,8 @@ def test_fresh_commit_fails_and_release_commit_passes(repo: Repo) -> None:
     repo.git("switch", "-c", "pr", "release")
     repo.commit("v.py", '__version__ = "1.1.0"\n', "chore: release")
     fresh = repo.commit("b.txt", "new\n", "fix: only on the branch")
-    assert repo.violations() == [fresh]
+    mixed = repo.commit("v.py", '__version__ = "1.2.0"; print("x")\n', "chore: release")
+    assert repo.violations() == [fresh, mixed]
 
 
 def test_trailer_naming_a_branch_or_missing_commit_fails(repo: Repo) -> None:

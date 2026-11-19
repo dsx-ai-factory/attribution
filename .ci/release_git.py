@@ -161,7 +161,7 @@ def changes_beyond_release_edits(
         "diff",
         "--name-only",
         "--no-renames",  # a file moved into a generated directory must still show
-        f"-I^{LITERAL_PREFIX}",
+        f'-I^{LITERAL_PREFIX}[^"]*"$',
         rev,
         head,
         "--",
