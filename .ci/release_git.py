@@ -148,9 +148,9 @@ class TagInfo:
 
 
 def changes_beyond_release_edits(
-    repo: Path, rev: str, paths: Sequence[str]
+    repo: Path, rev: str, paths: Sequence[str], head: str = "HEAD"
 ) -> list[str]:
-    """Paths under `paths` whose content differs between `rev` and HEAD beyond release edits.
+    """Paths under `paths` whose content differs between `rev` and `head` beyond release edits.
 
     A release PR rewrites the version literal line, each component's CHANGELOG.md
     and the files `.gitattributes` marks `linguist-generated`.
@@ -163,7 +163,7 @@ def changes_beyond_release_edits(
         "--no-renames",  # a file moved into a generated directory must still show
         f"-I^{LITERAL_PREFIX}",
         rev,
-        "HEAD",
+        head,
         "--",
         *paths,
         *changelogs,
