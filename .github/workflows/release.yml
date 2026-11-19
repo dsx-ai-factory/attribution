@@ -3,13 +3,14 @@
 
 name: Release
 
-# Fires only when a merge to main touches a `__version__` literal, so an ordinary
-# merge never shows a tag run. The script still gates on the literal moving: a
-# touch that leaves the version unchanged prints NOOP rows and creates nothing.
+# Fires only when a push to a release branch touches a `__version__` literal, so
+# an ordinary pick never shows a tag run. The script still gates on the literal
+# moving: a touch that leaves the version unchanged prints NOOP rows and creates
+# nothing.
 on:
   push:
     branches:
-      - main
+      - release/**
     paths:
       - service/attribution-lib/src/attribution_lib/__init__.py
       - service/service-app/app/__init__.py
@@ -28,7 +29,7 @@ env:
 jobs:
   tag:
     name: tag-on-merge
-    if: github.ref == 'refs/heads/main'
+    if: startsWith(github.ref, 'refs/heads/release/')
     runs-on: linux-arm64-cpu16
     # GITHUB_TOKEN with contents:write creates the tags; its pushes do not
     # trigger workflows (nothing listens on tags anyway).
