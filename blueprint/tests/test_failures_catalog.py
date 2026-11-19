@@ -231,10 +231,16 @@ def test_additional_catalog_guidance_has_safe_actions_and_evidence(catalog_by_id
         "A process of this unit has been killed by the OOM killer",
         "kubepods-burstable-pod01234567_89ab_cdef_0123_456789abcdef.slice: "
         "A process of this unit has been killed by the OOM killer",
+        "ray.exceptions.OutOfMemoryError: 1 worker(s) were killed due to the node running low on memory. "
+        "Memory on the node (IP: 192.0.2.24, ID: 5e1d2c3b4a59) was 29.12GB used / 30.00GB limit (0.970667)",
+        "Memory on the node (IP: 192.0.2.24, ID: 5e1d2c3b4a59) where the task (task ID: 0f1e2d3c, "
+        "name=TrainWorker.train, pid=4321, memory used=12.40GB) was running was 29.12GB / 30.00GB (0.970667)",
+        "1 Workers (tasks / actors) killed due to memory pressure (OOM), 0 Workers crashed due to other reasons "
+        "at node (ID: 5e1d2c3b4a59, IP: 192.0.2.24) over the last time period.",
     ],
 )
 def test_user_task_oom_guidance_covers_task_and_pod_signals(catalog_by_id, message):
-    """Recognize both OOM log formats without treating ordinary pod startup as a kill."""
+    """Recognize Linux, Kubernetes, and Ray OOM kill formats without treating ordinary pod startup as a kill."""
     patterns = [signal["pattern"] for signal in catalog_by_id["oom-kill-of-user-task"]["signals"]]
     assert any(re.search(pattern, message) for pattern in patterns)
     assert not any(re.search(pattern, "pod started successfully") for pattern in patterns)
