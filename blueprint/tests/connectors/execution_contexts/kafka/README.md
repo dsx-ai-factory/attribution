@@ -18,9 +18,9 @@ uv run --project blueprint --frozen --extra dev --extra kafka pytest \
 
 The repository Blueprint gate installs the `kafka` extra so native-exception
 coverage runs even without a broker. Broker-only tests need just the Kafka
-endpoint; tests that attribute jobs also need the Service endpoint. Unit tests check payload mapping,
-malformed/filtered events, exact `(source, id)` redeliveries, latest-attempt selection,
-cross-partition warnings, timeouts, commit boundaries,
+endpoint; tests that attribute jobs also need the Service endpoint. Unit tests check payload mapping
+for flat and per-node `allocations` placement, malformed/filtered events,
+exact `(source, id)` redeliveries, latest-attempt selection, cross-partition warnings, timeouts, commit boundaries,
 revocation/loss, and propagation of programming and native client errors.
 
 Live tests cover both CloudEvent encodings, source-scoped redeliveries, restarts
@@ -39,6 +39,18 @@ The adapter closes instead of seeking or retrying after failures. Retry tests co
 uncommitted records replay. Rebalance callbacks never commit. Native Kafka
 exceptions are injected separately from programming errors, which must escape.
 Catch-all handlers only perform failure cleanup and re-raise, including cancellation.
+
+`test_event_shapes.py` needs only the Kafka endpoint. It lists a flat and a
+per-node `allocations` event type in `event_types`, publishes one event of each
+shape to the same topic, and checks both contexts from `discover()` and
+`poll()`. It also checks that a later allocation event supersedes a flat event
+for the same attempt:
+
+```bash
+ATTRIBUTION_TEST_KAFKA_BOOTSTRAP_SERVERS=127.0.0.1:39093 \
+uv run --project blueprint --frozen --extra dev --extra kafka pytest \
+  blueprint/tests/connectors/execution_contexts/kafka/test_event_shapes.py -q
+```
 
 Deferred-acknowledgement tests additionally cover prefix commits, offset gaps,
 stale receipts, and intentionally skipped records. Real-broker streaming tests
