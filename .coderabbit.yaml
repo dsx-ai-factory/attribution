@@ -15,6 +15,10 @@ reviews:
         - Newly added, manually maintained first-party source and configuration files that support comments must include the repository-standard NVIDIA SPDX copyright and Apache-2.0 license header.
         - For generated files, ensure the generator or template emits the header instead of recommending manual edits to generated output.
         - Do not require source-code headers on vendored files, lockfiles, fixtures, sample data, binaries, or file formats that cannot carry comments.
+        - On follow-up reviews (after your first review, unless a full review was requested), comment only on lines added or changed by the commits pushed since your last review. Treat earlier code those commits did not touch as already reviewed.
+        - Exception: flag earlier code only when the new commits directly break it or change its behavior (changed signature, return value or contract, removed symbol), and point to the new line that causes it, or to the deleted line when the cause is a removal.
+        - Ignore base-branch code that arrives through a merge or rebase. Still review conflict resolutions, which are new changes.
+        - On follow-up reviews (unless a full review was requested), do not repeat earlier findings or post outside-diff-range comments on code the new commits did not change.
 
     - path: "service/attribution-lib/src/attribution_lib/bundled_rules/**"
       instructions: |
