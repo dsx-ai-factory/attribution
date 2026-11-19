@@ -175,3 +175,31 @@ name = "LocalHcaCommandFailure"
 match_re = 'Call to (?P<verb>ibv_query_qp|ibv_create_cq|ibv_reg_mr|ibv_dereg_mr) failed with (?P<error>[^\r\n]+)'
 processor = "applog:LocalHcaCommandFailure"
 derived_event_types = ["Application.hca.command_failure", "Attribution.node.bad", "Attribution.node.interesting"]
+
+# Ray memory-monitor OOM kills. Ray reports a kill through the driver, so the
+# line is stored under the node whose log carried it (usually the head node),
+# not the node that ran out of memory. One processor (applog:RayHostOomKill)
+# resolves the IP in the message to a job node for both stanzas, and emits a
+# job-level symptom when it cannot. Only lines that name the node match:
+#   - "Memory on the node (IP: ..., ID: ...)" followed by the node's memory
+#     usage. Ray 2.55 and later print it on the error's first line, after
+#     "N worker(s) were killed due to the node running low on memory."; Ray 2.54
+#     and earlier print it on the next line, as "... where the task (...) was
+#     running was ..." ("where the lease" from Ray 2.50);
+#   - the raylet's periodic kill summary, unchanged from Ray 2.3 to the latest
+#     version checked (2.56).
+# The Ray 2.54 and earlier first line ("Task was killed due to the node running
+# low on memory.") names no node; matching it would report one kill twice. The
+# IP group accepts only dotted digits, so a trailing ANSI colour escape is never
+# captured.
+[[extractor]]
+name                = "RayMemoryMonitorOomKill"
+match_re            = 'Memory on the node \(IP: (?P<ip>\d+(?:\.\d+){3}), ID: [0-9a-fA-F]+\) (?:where the (?:task|lease) \(.*?\) was running )?was \d+(?:\.\d+)?GB (?:used )?/ \d+(?:\.\d+)?GB'
+processor           = "applog:RayHostOomKill"
+derived_event_types = ["Attribution.node.bad"]
+
+[[extractor]]
+name                = "RayletOomKillSummary"
+match_re            = '\d+ Workers \(tasks / actors\) killed due to memory pressure \(OOM\), \d+ Workers crashed due to other reasons at node \(ID: [0-9a-fA-F]+, IP: (?P<ip>\d+(?:\.\d+){3})\b'
+processor           = "applog:RayHostOomKill"
+derived_event_types = ["Attribution.node.bad"]

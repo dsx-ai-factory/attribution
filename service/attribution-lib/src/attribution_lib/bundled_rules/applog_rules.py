@@ -29,6 +29,7 @@ import attribution_lib
 from attribution_lib.attr_types import BadPairInfo
 from attribution_lib.event_helpers import query_events_with_source
 from attribution_lib.events import BAD_PAIR_EVENT_TYPES, DemotionTypes, sql_placeholders
+from attribution_lib.exceptions import UnknownNodeError
 from attribution_lib.network_identity import NetworkSourceIdentity, network_source_identity, normalize_network_hostname
 from attribution_lib.observation.inbound import Source as ObsSource
 from attribution_lib.rule_helpers import _bad, _interesting
@@ -617,6 +618,53 @@ def connection_closed_by_remote_peer_event(
     if matches_ignored_hostname_prefix(peer_node) or matches_ignored_hostname_prefix(raw_peer):
         return []
     return [_bad(peer_node, "Connection closed", source, demotion="Connection closed by remote peer")]
+
+
+def _ray_reported_job_node(ip: str, ctx: RuleContext) -> str | None:
+    """Resolve the address of a node that Ray reported to one of the job's nodes.
+
+    Args:
+        ip: Node address from the Ray message.
+        ctx: Rule context with the job allocation.
+
+    Returns:
+        The node name as the allocation lists it, or None when no allocation is
+        known, the address is unmapped, or it maps to a node outside the job.
+    """
+    if ctx.job_info is None:
+        return None
+    hostname = get_hostname(ip)
+    # get_hostname returns an unmapped address unchanged. An address is not a node
+    # name, and verify_node accepts any name for a job without a node list.
+    if normalize_network_hostname(hostname) is None:
+        return None
+    # verify_node matches short and qualified names but never across domains;
+    # stripping the domain first would bypass that check.
+    try:
+        return ctx.job_info.verify_node(hostname)
+    except UnknownNodeError:
+        return None
+
+
+@rule_processor("applog:RayHostOomKill")
+def ray_host_oom_kill_event(groups: dict[str, str], source: Source, ctx: RuleContext) -> list[EventTriple]:
+    """Attribute a Ray memory-monitor kill to the node that ran out of memory.
+
+    Ray reports the kill through the driver, so the node whose log carried the
+    line, usually the head node, is not evidence of where memory ran out. The
+    processor does not take that node and never falls back to it.
+
+    Args:
+        groups: Matched capture groups; ``ip`` is the address of the node that
+            Ray reported as low on memory.
+        source: Original application-log evidence.
+        ctx: Rule context with the job allocation.
+
+    Returns:
+        One user-task OOM kill on the reported node, or a job-level one (node
+        None) when the address does not resolve to one of the job's nodes.
+    """
+    return [_bad(_ray_reported_job_node(groups["ip"], ctx), "OOM kill of user task", source)]
 
 
 # BusErrorSignal, BusErrorKeyword, and AddressAlreadyInUse ported to

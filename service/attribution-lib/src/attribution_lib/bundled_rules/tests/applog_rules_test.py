@@ -3,19 +3,25 @@
 
 import ast
 import json
+import re
+from collections import defaultdict
 from datetime import datetime
+from typing import cast
 from unittest.mock import patch
 
 import pytest
 import attribution_lib
-from attribution_lib.rule_types.definitions import CollectorContext
-from attribution_lib.core import process_check
+from attribution_lib.rule_types.definitions import CollectorContext, RuleContext
+from attribution_lib.core import AttributionResult, attribute, calculate_bad_nodes, process_check
 from attribution_lib.events import DemotionTypes
 from attribution_lib.job_info import JobInfoBuilder
+from attribution_lib.observation import Context as ObservationContext
 from attribution_lib.observation.inbound import (
     Source as ObservationSource,
     TimeInterval,
 )
+from attribution_lib.resources.resource_set import AllJobResources
+from attribution_lib.sources import Source
 from attribution_lib.utils import hostname_mapping
 from loguru import logger
 from test_support.helpers import line_entries, make_applog_entry, make_node_to_ranks
@@ -607,3 +613,193 @@ def test_multicast_skip_marker_logs_from_applog(app_tst_bldr, big_jobinfo):
         app_tst_bldr(big_jobinfo, entries=test_data)
 
     mock_info.assert_any_call("Applog marker detected: Gracefully skipping multicast initialization")
+
+
+# Ray memory-monitor OOM kills reach the application log through the driver, so
+# each line is stored under the head node even when another node ran out of memory.
+_RAY_HEAD_IP = "198.51.100.7"
+_RAY_OOM_IP = "192.0.2.24"
+_RAY_NODE_ID = "5e1d2c3b4a596875e1d2c3b4a596875e1d2c3b4a596875e1d2c3b4a5"
+_RAY_MEMORY_MONITOR_KILL = (
+    f"(TrainWorker pid=4321, ip={_RAY_HEAD_IP}) ray.exceptions.OutOfMemoryError: 1 worker(s) were killed due to the "
+    f"node running low on memory. Memory on the node (IP: {_RAY_OOM_IP}, ID: {_RAY_NODE_ID}) was 29.12GB used / "
+    "30.00GB limit (0.970667)"
+)
+_RAY_TASK_KILL_DETAILS = (
+    f"Memory on the node (IP: {_RAY_OOM_IP}, ID: {_RAY_NODE_ID}) where the task (task ID: "
+    "0f1e2d3c4b5a6978ffffffffffffffffffffffff01000000, name=TrainWorker.train, pid=4321, memory used=12.40GB) was "
+    "running was 29.12GB / 30.00GB (0.970667), which exceeds the memory usage threshold of 0.95."
+)
+_RAYLET_OOM_SUMMARY = (
+    "1 Workers (tasks / actors) killed due to memory pressure (OOM), 0 Workers crashed due to other reasons at node "
+    f"(ID: {_RAY_NODE_ID}, IP: {_RAY_OOM_IP}) over the last time period. To see more information about the Workers "
+    f"killed on this node, use `ray logs raylet.out -ip {_RAY_OOM_IP}`"
+)
+_USER_TASK_OOM_KILL = "OOM kill of user task"
+
+
+@pytest.fixture
+def ray_job(simple_job_factory):
+    return simple_job_factory(
+        state="FAILED", exit_code_signal=1, nodes=["gpu-n01", "gpu-n02", "gpu-n03"], ranks_per_node=1
+    )
+
+
+@pytest.fixture
+def attribute_ray_logs(attribution_test_builder):
+    """Attribute application-log lines stored under the job's first (head) node.
+
+    Args:
+        attribution_test_builder: Fixture that builds the application-log observation.
+
+    Returns:
+        A function that takes the job, its log lines and the IP-to-node mapping
+        in effect during extraction, and returns the attribution result.
+    """
+
+    def _attribute(job_info, lines, mapping) -> AttributionResult:
+        start = job_info.job_start_time.timestamp()
+        entries = [
+            make_applog_entry(line, (start + 20 + offset) * 1e9, hostname=job_info.nodes[0])
+            for offset, line in enumerate(lines)
+        ]
+        extracted = attribution_test_builder(
+            job_info=job_info, data=entries, source=ObservationSource.APPLOG, insert_tflops_line=False
+        )
+        with hostname_mapping(mapping):
+            bad_nodes = calculate_bad_nodes(
+                event_stream=extracted.event_stream, job_info=job_info, applog_in=extracted.observation_source
+            )
+        return attribute(
+            event_stream=extracted.event_stream,
+            job_info=job_info,
+            bad_node_result=bad_nodes,
+            extract_job_metadata_from_logfile=False,
+        )
+
+    return _attribute
+
+
+def _bad_symptoms_by_node(result: AttributionResult) -> dict[str, set[str]]:
+    bad, interesting, epilog = defaultdict(set), defaultdict(set), defaultdict(set)
+    result.bad_nodes_attr.my_bad_nodes.extract_bad_interesting_epilog(bad, interesting, epilog)
+    return dict(bad)
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        pytest.param(_RAY_MEMORY_MONITOR_KILL, id="memory-monitor-kill"),
+        pytest.param(_RAY_TASK_KILL_DETAILS, id="task-kill-details"),
+        pytest.param(_RAYLET_OOM_SUMMARY, id="raylet-summary"),
+    ],
+)
+def test_ray_oom_kill_blames_the_mapped_node_not_the_head_node_that_logged_it(attribute_ray_logs, ray_job, line):
+    result = attribute_ray_logs(ray_job, [line], {_RAY_HEAD_IP: "gpu-n01", _RAY_OOM_IP: "gpu-n02"})
+
+    assert _bad_symptoms_by_node(result) == {"gpu-n02": {_USER_TASK_OOM_KILL}}
+    assert _USER_TASK_OOM_KILL not in result.bad_nodes_attr.my_bad_nodes.job_level
+
+
+def test_ray_oom_kill_with_unmapped_ip_is_a_job_level_fail_user(attribute_ray_logs, ray_job):
+    result = attribute_ray_logs(ray_job, [_RAY_MEMORY_MONITOR_KILL], {_RAY_HEAD_IP: "gpu-n01"})
+
+    assert _bad_symptoms_by_node(result) == {}
+    assert _USER_TASK_OOM_KILL in result.bad_nodes_attr.my_bad_nodes.job_level
+    outcome = result.outcome_attr.value()
+    assert outcome.outcome == "Fail User"
+    assert outcome.root_cause_symptom == _USER_TASK_OOM_KILL
+
+
+def test_ray_oom_kill_mapped_to_a_node_outside_the_job_is_job_level(attribute_ray_logs, ray_job):
+    result = attribute_ray_logs(ray_job, [_RAY_TASK_KILL_DETAILS], {_RAY_OOM_IP: "gpu-n09"})
+
+    assert _bad_symptoms_by_node(result) == {}
+    assert _USER_TASK_OOM_KILL in result.bad_nodes_attr.my_bad_nodes.job_level
+
+
+def test_ray_oom_kill_and_raylet_summary_merge_into_one_node_symptom(attribute_ray_logs, ray_job):
+    result = attribute_ray_logs(ray_job, [_RAY_MEMORY_MONITOR_KILL, _RAYLET_OOM_SUMMARY], {_RAY_OOM_IP: "gpu-n02"})
+
+    assert _bad_symptoms_by_node(result) == {"gpu-n02": {_USER_TASK_OOM_KILL}}
+    my_bad_nodes = result.bad_nodes_attr.my_bad_nodes
+    sources = my_bad_nodes.attributions["gpu-n02"].attributions[_USER_TASK_OOM_KILL]
+    assert sorted(source.rule for source in sources) == ["RayMemoryMonitorOomKill", "RayletOomKillSummary"]
+    assert _USER_TASK_OOM_KILL not in my_bad_nodes.job_level
+
+
+@pytest.mark.parametrize(
+    "nodes,mapped,expected_bad",
+    [
+        pytest.param(
+            ["gpu-n01.cluster.example", "gpu-n02.cluster.example"],
+            "gpu-n02",
+            {"gpu-n02.cluster.example": {_USER_TASK_OOM_KILL}},
+            id="short-mapping-qualified-allocation",
+        ),
+        pytest.param(
+            ["gpu-n01", "gpu-n02"],
+            "gpu-n02.cluster.example",
+            {"gpu-n02": {_USER_TASK_OOM_KILL}},
+            id="qualified-mapping-short-allocation",
+        ),
+        pytest.param(
+            ["gpu-n01.cluster.example", "gpu-n02.cluster.example"],
+            "gpu-n02.other.example",
+            {},
+            id="qualified-mapping-in-another-domain",
+        ),
+    ],
+)
+def test_ray_oom_kill_resolves_short_and_qualified_node_names(
+    attribute_ray_logs, simple_job_factory, nodes, mapped, expected_bad
+):
+    job = simple_job_factory(state="FAILED", exit_code_signal=1, nodes=nodes, ranks_per_node=1)
+
+    result = attribute_ray_logs(job, [_RAYLET_OOM_SUMMARY], {_RAY_OOM_IP: mapped})
+
+    assert _bad_symptoms_by_node(result) == expected_bad
+
+
+def test_ray_oom_kill_without_job_information_never_blames_the_logging_node():
+    rule = attribution_lib.get_rules_engine().rules["RayletOomKillSummary"]
+    source = Source(
+        source_context=cast(ObservationContext, None),
+        line_num=None,
+        datum=_RAYLET_OOM_SUMMARY,
+        time=None,
+        resources=AllJobResources,
+        rule=None,
+    )
+
+    with hostname_mapping({_RAY_OOM_IP: "gpu-n02"}):
+        events = rule.process(re.search(rule.match_re, source.datum), source, RuleContext(hostname="gpu-n01"))
+
+    assert [(event.type, event.payload) for event in events] == [
+        ("Attribution.node.bad", {"node": None, "symptom": _USER_TASK_OOM_KILL})
+    ]
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        pytest.param(_RAY_MEMORY_MONITOR_KILL, id="memory-monitor-kill"),
+        pytest.param(_RAY_TASK_KILL_DETAILS, id="task-kill-details"),
+        pytest.param(_RAYLET_OOM_SUMMARY, id="raylet-summary"),
+        pytest.param(
+            f"\x1b[33m(raylet, ip={_RAY_OOM_IP})\x1b[0m [2026-03-13 10:15:42,123 E 4321 4321] (raylet) "
+            f"node_manager.cc:3537: {_RAYLET_OOM_SUMMARY}",
+            id="forwarded-raylet-summary",
+        ),
+    ],
+)
+def test_applog_prefilter_keeps_ray_oom_kill_lines(line):
+    pf = attribution_lib.get_pre_filter(ObservationSource.APPLOG)
+
+    assert not any(term in line for term in pf.exclude_terms)
+
+
+def test_applog_prefilter_collects_raylet_oom_summary_keyword():
+    pf = attribution_lib.get_pre_filter(ObservationSource.APPLOG)
+
+    assert "killed due to memory pressure" in pf.include_terms
