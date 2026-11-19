@@ -9,6 +9,10 @@ import pytest
 
 from attribution_blueprint import mca_registry
 from attribution_blueprint.connectors.execution_contexts.kai import KaiExecutionContextAdapter
+from attribution_blueprint.connectors.execution_contexts.kai.attempts import (
+    attempt_id_for,
+    snapshots_from_live_resources,
+)
 from attribution_blueprint.connectors.execution_contexts.kai.connector import _resolve_owner
 from attribution_blueprint.exceptions import MCAError
 from attribution_blueprint.kubernetes.client import KubernetesClientError
@@ -246,6 +250,17 @@ def warnings(mocker):
     return mocker.patch("attribution_blueprint.connectors.execution_contexts.kai.connector.logger.warning")
 
 
+@pytest.fixture
+def frozen_now(mocker):
+    now = datetime(2026, 5, 2, tzinfo=timezone.utc)
+    clock = mocker.patch(
+        "attribution_blueprint.connectors.execution_contexts.kai.connector.datetime",
+        wraps=datetime,
+    )
+    clock.now.return_value = now
+    return now
+
+
 def _logged(warning) -> str:
     return "\n".join(str(call.args[0]) for call in warning.call_args_list)
 
@@ -358,7 +373,15 @@ def test_failed_jobset_reports_the_failed_reason(mocker):
     assert ctx["owner_state"] == "Failed:ReachedMaxRestarts"
 
 
-def test_jobset_uses_verified_child_deadline_and_failure_reason(mocker):
+@pytest.mark.parametrize(
+    "started",
+    [False, True],
+    ids=["unscheduled-fallback", "started-attempt"],
+)
+def test_jobset_uses_verified_child_deadline_and_failure_reason(
+    mocker,
+    started,
+):
     jobset = _jobset("pg-a-job", "uid-job-uid-pg-a", failed_at="2026-05-01T12:45:00Z")
     jobset["status"]["conditions"][0]["reason"] = "ReachedMaxRestarts"
     children = [
@@ -385,7 +408,15 @@ def test_jobset_uses_verified_child_deadline_and_failure_reason(mocker):
             deadline_seconds=30,
         ),
     ]
-    _wire_kubectl(mocker, [_podgroup(owner_kind="JobSet")], [], children, [jobset])
+    podgroup = _podgroup(
+        owner_kind="JobSet",
+        status=(
+            {"lastStartTimestamp": "2026-05-01T12:00:00Z"}
+            if started
+            else None
+        ),
+    )
+    _wire_kubectl(mocker, [podgroup], [], children, [jobset])
 
     [ctx] = KaiExecutionContextAdapter().discover_by_ids(["team-alpha/pg-a"])
 
@@ -501,7 +532,6 @@ def test_owner_comes_from_top_owner_annotation(mocker):
     [ctx] = KaiExecutionContextAdapter().discover_by_ids(["team-alpha/pg-train-mnist-1a2b3c4d"])
 
     assert (ctx["owner_kind"], ctx["owner_name"], ctx["owner_uid"]) == ("Job", "train-mnist", "uid-job-1001")
-    assert ctx["podgroup_shape"] == "owned"
 
 
 @pytest.mark.parametrize(
@@ -518,7 +548,6 @@ def test_owner_falls_back_to_controller_owner_reference(mocker, api_version, kin
     [ctx] = KaiExecutionContextAdapter().discover_by_ids(["team-alpha/pg-a"])
 
     assert (ctx["owner_kind"], ctx["owner_name"], ctx["owner_uid"]) == (kind, "owner", "uid-owner")
-    assert ctx["podgroup_shape"] == "owned"
 
 
 def test_malformed_top_owner_annotation_leaves_the_podgroup_unowned(mocker):
@@ -527,18 +556,6 @@ def test_malformed_top_owner_annotation_leaves_the_podgroup_unowned(mocker):
     _wire_kubectl(mocker, [pg], [])
 
     assert KaiExecutionContextAdapter().discover_by_ids(["team-alpha/pg-a"]) == []
-
-
-def test_hierarchical_podgroup_is_emitted_and_flagged(mocker):
-    pg = _podgroup(
-        owner_kind="JobSet",
-        spec={"queue": "q", "subGroups": [{"name": "decode", "minMember": 1}]},
-    )
-    _wire_kubectl(mocker, [pg], [])
-
-    [ctx] = KaiExecutionContextAdapter().discover_by_ids(["team-alpha/pg-a"])
-
-    assert ctx["podgroup_shape"] == "hierarchical"
 
 
 def test_recreated_podgroup_under_unchanged_job_is_a_known_limitation(mocker):
@@ -683,14 +700,13 @@ def test_malformed_podgroups_are_skipped(mocker):
     assert [c["id"] for c in contexts] == ["uid-c"]
 
 
-def test_active_job_window_ends_now_without_a_warning(mocker, warnings):
+def test_active_job_window_ends_now_without_a_warning(mocker, warnings, frozen_now):
     pod = _pod("a-0", controller=("Job", "uid-job-uid-pg-a"))
     _wire_kubectl(mocker, [_podgroup()], [pod], [_job("pg-a-job", "uid-job-uid-pg-a")])
 
-    before = datetime.now(tz=timezone.utc)
     [ctx] = KaiExecutionContextAdapter().discover_by_ids(["team-alpha/pg-a"])
 
-    assert ctx["end_time"] >= before
+    assert ctx["end_time"] == frozen_now
     warnings.assert_not_called()
 
 
@@ -735,14 +751,13 @@ def test_terminal_jobset_condition_supplies_end_time(mocker, owner, expected_end
     assert ctx["end_time"] == datetime.fromisoformat(expected_end)
 
 
-def test_active_jobset_window_ends_now(mocker):
+def test_active_jobset_window_ends_now(mocker, frozen_now):
     pg = _podgroup(owner_kind="JobSet")
     _wire_kubectl(mocker, [pg], [])
 
-    before = datetime.now(tz=timezone.utc)
     [ctx] = KaiExecutionContextAdapter().discover_by_ids(["team-alpha/pg-a"])
 
-    assert ctx["end_time"] >= before
+    assert ctx["end_time"] == frozen_now
 
 
 def test_jobset_joins_only_pods_from_current_child_jobs(mocker):
@@ -781,7 +796,7 @@ def test_member_without_a_node_contributes_no_node(mocker):
     assert ctx["nodes"] == ["node001"]
 
 
-def test_surviving_terminal_pods_do_not_prove_completion(mocker):
+def test_surviving_terminal_pods_do_not_prove_completion(mocker, frozen_now):
     pod = _pod(
         "a-0",
         phase="Succeeded",
@@ -792,7 +807,7 @@ def test_surviving_terminal_pods_do_not_prove_completion(mocker):
 
     [ctx] = KaiExecutionContextAdapter().discover_by_ids(["team-alpha/pg-a"])
 
-    assert ctx["end_time"] > datetime(2026, 5, 2, tzinfo=timezone.utc)
+    assert ctx["end_time"] == frozen_now
 
 
 def _non_batch_job_podgroup():
@@ -1017,6 +1032,155 @@ def test_failed_podgroup_list_fails_the_pass(mocker):
         KaiExecutionContextAdapter(namespace="team-alpha").discover_by_time_range(START, END)
 
 
+def test_time_range_bounds_retained_history_query(mocker):
+    _wire_kubectl(mocker, [], [])
+    history_reader = mocker.Mock()
+    history_reader.find_histories.return_value = []
+    adapter = KaiExecutionContextAdapter(
+        namespace="team-alpha",
+        history_reader=history_reader,
+    )
+
+    assert adapter.discover_by_time_range(START, END) == []
+
+    history_reader.find_histories.assert_called_once_with(
+        "team-alpha",
+        "PodGroup",
+        start=START,
+        end=END,
+    )
+
+
+def test_started_live_and_retained_resources_share_canonical_attempt(mocker):
+    started = "2026-05-01T12:00:00Z"
+    podgroup = _podgroup()
+    podgroup["metadata"]["annotations"][
+        "kai.scheduler/last-start-timestamp"
+    ] = started
+    live_owner = _job("pg-a-job", "uid-job-uid-pg-a")
+    live_pod = _pod(
+        "live-pod",
+        node="node-b",
+        controller=("Job", "uid-job-uid-pg-a"),
+    )
+    live_pod["metadata"]["uid"] = "live-pod-uid"
+    live_pod["status"]["startTime"] = "2026-05-01T12:02:00Z"
+    _wire_kubectl(mocker, [podgroup], [live_pod], [live_owner])
+
+    retained_owner = _job(
+        "pg-a-job",
+        "uid-job-uid-pg-a",
+        failed_at="2026-05-01T13:00:00Z",
+    )
+    retained_pod = _pod(
+        "retained-pod",
+        node="node-a",
+        controller=("Job", "uid-job-uid-pg-a"),
+    )
+    retained_pod["metadata"]["uid"] = "retained-pod-uid"
+    retained_pod["status"]["startTime"] = "2026-05-01T12:01:00Z"
+    history_reader = mocker.Mock()
+    history_reader.find_histories.return_value = [
+        {
+            "observations": snapshots_from_live_resources(
+                podgroup,
+                [retained_pod],
+                [retained_owner],
+                retained_owner,
+                now=datetime(2026, 5, 1, 13, tzinfo=timezone.utc),
+            ),
+            "coverage": {},
+        }
+    ]
+    adapter = KaiExecutionContextAdapter(
+        history_reader=history_reader,
+    )
+
+    contexts = adapter.discover_by_ids(["team-alpha/pg-a"])
+
+    assert len(contexts) == 1
+    [context] = contexts
+    assert context["id"] == context["attempt_id"] == attempt_id_for(
+        "uid-pg-a", started, "0"
+    )
+    assert context["state"] == "FAILED"
+    assert context["nodes"] == ["node-a", "node-b"]
+
+
+def test_live_restart_evidence_corrects_provisional_retained_identity(
+    mocker,
+):
+    started = "2026-05-01T12:00:00Z"
+    podgroup = _podgroup(
+        owner_kind="JobSet",
+        status={"lastStartTimestamp": started},
+    )
+    jobset = _jobset("pg-a-job", "uid-job-uid-pg-a")
+    child = _job(
+        "worker-0",
+        "uid-worker-0",
+        jobset=("pg-a-job", "uid-job-uid-pg-a"),
+    )
+    child["metadata"]["labels"][
+        "jobset.sigs.k8s.io/restart-attempt"
+    ] = "1"
+    child["status"]["startTime"] = started
+    live_pod = _pod(
+        "worker-0-pod",
+        node="node-b",
+        controller=("Job", "uid-worker-0"),
+    )
+    live_pod["metadata"]["uid"] = "live-pod-uid"
+    live_pod["metadata"]["labels"] = {
+        "jobset.sigs.k8s.io/restart-attempt": "1"
+    }
+    live_pod["status"]["startTime"] = "2026-05-01T12:01:00Z"
+    _wire_kubectl(
+        mocker,
+        [podgroup],
+        [live_pod],
+        [child],
+        [jobset],
+    )
+    history_reader = mocker.Mock()
+    history_reader.find_histories.return_value = [
+        {
+            "observations": [
+                {
+                    "kind": "PodGroup",
+                    "metadata": {
+                        "namespace": "team-alpha",
+                        "name": "pg-a",
+                        "uid": "uid-pg-a",
+                    },
+                    "selectedMetadata": {
+                        "annotations": podgroup["metadata"][
+                            "annotations"
+                        ]
+                    },
+                    "observedAt": started,
+                    "status": {"lastStartTimestamp": started},
+                }
+            ],
+            "coverage": {},
+        }
+    ]
+    adapter = KaiExecutionContextAdapter(
+        history_reader=history_reader,
+    )
+
+    contexts = adapter.discover_by_ids(["team-alpha/pg-a"])
+
+    assert len(contexts) == 1
+    [context] = contexts
+    assert context["attempt_id"] == attempt_id_for(
+        "uid-pg-a",
+        started,
+        "1",
+    )
+    assert context["nodes"] == ["node-b"]
+
+
 def _fail_on(mocker, resource, error):
     fake = _wire_kubectl(mocker, [_podgroup()], [], [])
     fake.failures[resource] = KubernetesClientError(error)
@@ -1195,3 +1359,12 @@ def test_builder_coerces_cli_and_environment_boolean_strings():
             {"placement_records_enabled": "sometimes"},
             ctx={"framework": "eca"},
         )
+
+
+@pytest.mark.parametrize("subgroups, expected", [([], "owned"), ([{"name": "workers"}], "hierarchical")])
+def test_live_podgroup_shape_is_preserved(mocker, subgroups, expected):
+    podgroup = _podgroup()
+    podgroup["spec"]["subGroups"] = subgroups
+    _wire_kubectl(mocker, [podgroup], [], [_job("pg-a-job", "uid-job-uid-pg-a")])
+    [context] = KaiExecutionContextAdapter().discover_by_ids(["team-alpha/pg-a"])
+    assert context["podgroup_shape"] == expected
