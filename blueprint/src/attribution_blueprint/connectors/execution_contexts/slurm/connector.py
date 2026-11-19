@@ -514,7 +514,9 @@ class SlurmExecutionContextAdapter:
             parsed = _parse_row(row, cluster_tz=self.cluster_tz)
             if parsed is not None:
                 contexts.append(parsed)
-        return _resolve_nonzero_cancellers(_resolve_cancellers(_assign_attempt_ordinals(_apply_head_row_context(contexts))))
+        return _resolve_nonzero_cancellers(
+            _resolve_cancellers(_assign_attempt_ordinals(_apply_head_row_context(contexts)))
+        )
 
     def _format_sacct_time(self, dt: datetime) -> str:
         """sacct accepts `YYYY-MM-DD[THH:MM[:SS]]` only — no timezone offset.
