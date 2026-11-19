@@ -83,10 +83,11 @@ pull request rewrites. A dependency that has moved since its tag gets its own
 release in the same pull request. The cascade runs upward:
 when the Library changes, the Service and the Blueprint release with it, and
 when the Service changes, the Blueprint releases with it. A component whose
-closure is unchanged gets no tag. A stable release only bundles stable
-dependencies; a release candidate may bundle stable or release candidate ones,
-so a Library release candidate makes its changed dependants release candidates
-too.
+closure is unchanged gets no tag unless its literal changes, as when a release
+candidate with no change since its tag becomes stable. A stable release only
+bundles stable dependencies; a release candidate may bundle stable or release
+candidate ones, so a Library release candidate makes its changed dependants
+release candidates too.
 
 ## Choosing a release
 
@@ -173,7 +174,8 @@ branch. The default branch therefore carries only released version literals.
 4. CI detects the changed version literals and creates one tag per releasing
    component on the merge commit on the release branch. Components whose
    version literals did not change receive no new tag.
-5. Run `git switch -c <branch> origin/main` and
+5. Once CI has created every tag from step 4, run
+   `git switch -c <branch> origin/main` and
    `git cherry-pick <squashed commit on the release branch>`, then open a
    sync-back pull request into the default branch that carries only that
    commit. The check on this pull request is the light check described under
