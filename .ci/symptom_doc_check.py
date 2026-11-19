@@ -3,8 +3,8 @@
 
 """Check the real symptom/catalog contract without introducing new historic gaps.
 
-Snapshots contain public identifiers only, not guidance or source code. Consumers
-must treat snapshots as untrusted data and bind them to the tested commit.
+Snapshots contain symptom and document identifiers, not guidance or source code.
+Consumers must treat snapshots as untrusted data and bind them to the tested commit.
 """
 
 from __future__ import annotations
@@ -67,7 +67,7 @@ def git(root: Path, *args: str) -> str:
 def collect(root: Path) -> dict:
     """Load rules from the active Python environment and catalog metadata from root.
 
-    Return public identifiers bound to root's HEAD, without guidance or rule code.
+    Return identifiers bound to root's HEAD, without guidance or rule code.
     The caller must select root's library in PYTHONPATH when isolating a checkout.
     """
     # Only the credential-free producer imports and executes candidate rules.
@@ -115,7 +115,7 @@ def gaps(snapshot: dict) -> set[DocumentationGap]:
     """Identify exact gaps, including outcome so changed guidance is rechecked."""
     declarations = [SymptomDeclaration(**row) for row in snapshot["declarations"]]
     index = build_doc_name_index(snapshot["documents"])
-    # The public UI indexes canonical catalog IDs only. Documentation-site
+    # The UI indexes canonical catalog IDs only. Documentation-site
     # redirects do not make an old ID usable as a verdict's catalog_id.
     canonical_ids = {row["id"] for row in snapshot["documents"]}
     index = {
@@ -163,7 +163,7 @@ def snapshot_process(root: Path, destination: Path) -> None:
 
 
 def report_to_github(report: dict) -> None:
-    """Render public findings safely as Actions annotations and a job summary."""
+    """Render coverage findings safely as Actions annotations and a job summary."""
     if os.environ.get("GITHUB_ACTIONS") != "true":
         return
     status = report["status"]
@@ -196,7 +196,7 @@ def report_to_github(report: dict) -> None:
                 # quoting prevents control characters from creating extra rows.
                 message = (
                     f"Documentation coverage needs attention for {json.dumps(name)} "
-                    f"(document {json.dumps(doc)}, {kind}). Add or update the public "
+                    f"(document {json.dumps(doc)}, {kind}). Add or update the "
                     "catalog entry or mapping, or ask a maintainer to coordinate the update."
                 )
                 message = (

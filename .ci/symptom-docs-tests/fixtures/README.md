@@ -3,7 +3,7 @@ SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All 
 SPDX-License-Identifier: Apache-2.0
 -->
 
-# Public symptom contract fixture
+# Symptom documentation contract fixture
 
 `public-symptom-contract.json` is synthetic document metadata for the
 [dsx-ai-factory/attribution](https://github.com/dsx-ai-factory/attribution)

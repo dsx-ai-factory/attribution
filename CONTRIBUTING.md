@@ -239,15 +239,15 @@ which you could not run in the pull request.
 
 ### Check symptom documentation
 
-Run `bash .ci/run-tests.sh symptom-docs` when changing symptoms or the public failure
-catalog. The check loads the real registry and verifies public document IDs, exact
+Run `bash .ci/run-tests.sh symptom-docs` when changing symptoms or the failure
+catalog. The check loads the real registry and verifies document IDs, exact
 names/aliases for all documentable declarations in the loaded rules. It compares
 against the merge base with `origin/main`, so existing unrelated gaps do not block
 a change.
 Set `SYMPTOM_DOC_BASE` to a full commit SHA to select another baseline. Removing
 a document or alias that previously resolved is a regression too.
 Rule documentation mappings must use canonical catalog IDs. A documentation-site
-redirect alone does not resolve a verdict's catalog ID in the public UI.
+redirect alone does not resolve a verdict's catalog ID in the UI.
 
 Changing a symptom's outcome, name or document mapping rechecks its coverage,
 even if the previous declaration had a grandfathered gap. The baseline is
@@ -257,7 +257,7 @@ require particular rules to be loaded. A green comparison means no new coverage
 gaps; it does not mean the baseline has complete documentation.
 
 CI shows `Tests / Documentation coverage` on repository branch pushes. It runs validation
-when the library, public catalog, checker, or its CI configuration changes.
+when the library, catalog, checker, or its CI configuration changes.
 Unrelated changes report a successful skip, without installing dependencies or
 running validation. Manual workflow runs always run validation. Fork PRs need
 the existing repository branch/mirror process to run these self-hosted jobs.
@@ -277,10 +277,9 @@ the validation helpers; a baseline that cannot load is an error, not a pass.
 
 Fix new gaps in `blueprint/src/attribution_blueprint/data/failures.yml` or the
 rule's documentation mapping. Do not add an unrelated alias just to pass CI.
-The check verifies coverage in the public catalog, not the technical accuracy or
-publication approval of guidance. Human review is still required. It does not
-check private documentation or change the downstream validation process.
-Public metadata and results are saved under `.symptom-doc-check/` and attached
+The check verifies coverage in the failure catalog, not the technical accuracy or
+publication approval of guidance. Human review is still required.
+Symptom metadata and results are saved under `.symptom-doc-check/` and attached
 to the workflow run. The branch controls the checker and its output; these
 artifacts are diagnostic data, not an approval record. Configuring this job as
 a required merge check is a separate repository setting.
