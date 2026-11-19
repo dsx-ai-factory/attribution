@@ -412,6 +412,45 @@ def test_native_flow_control_failure_closes_and_propagates(stream, monkeypatch, 
     assert consumer.commits == []
 
 
+@pytest.mark.parametrize("release", [revoke, lose])
+def test_resume_without_ownership_unpauses_a_later_assignment(stream, release):
+    """A partition's retained native pause cannot stall its next assignment."""
+    adapter, consumer = stream(_structured(_events()))
+    original = _one(adapter)
+    adapter.pause()
+    release(0)(consumer)
+    adapter.resume()
+    assert consumer.assignment() == []
+    assert consumer.commits == []
+
+    consumer.on_assign(consumer, [TP(TOPIC, 0)])
+    delivery = _one(adapter)
+    assert delivery.offset == 1
+    with pytest.raises(InvalidReceiptError):
+        adapter.ack(original)
+    adapter.ack(delivery)
+    assert consumer.commits == [{0: 2}]
+
+
+@pytest.mark.parametrize("paused", [False, True])
+def test_assignment_flow_control_failure_closes_without_committing(stream, monkeypatch, paused):
+    """Assignment failures propagate through poll without acknowledging work."""
+    adapter, consumer = stream([lambda client: client.on_assign(client, [TP(TOPIC, 0)])])
+    if paused:
+        adapter.pause()
+    error = KafkaConsumerError("assignment flow control failed")
+
+    def fail(partitions):
+        raise error
+
+    monkeypatch.setattr(consumer, "pause" if paused else "resume", fail)
+    with pytest.raises(KafkaConsumerError) as caught:
+        adapter.poll(1, 0)
+    assert caught.value is error
+    assert consumer.closed
+    assert consumer.commits == []
+
+
 def test_registered_source_opens_fresh_consumers_without_an_idle_group_member(monkeypatch):
     """Factory reconnects must not add an unused source consumer to the group."""
     from attribution_blueprint.connectors.execution_contexts.kafka import _build

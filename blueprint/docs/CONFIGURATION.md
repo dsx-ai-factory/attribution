@@ -208,7 +208,8 @@ uv run --project blueprint --frozen nvidia-attribution-blueprint --config ./attr
 | `namespace`              | No       | all namespaces  | Optional namespace scope. Also allows bare workload names in `ids` mode. Required when `placement_records_enabled` is set. |
 | `timeout_seconds`        | No       | `60`            | Timeout for each Kubernetes API request.                                                                          |
 | `workload_api_version`   | No       | `kueue.x-k8s.io/v1beta1` | Kueue Workload CRD `<group>/<version>` to read. Set this if the cluster serves a different Workload API version. |
-| `placement_records_enabled` | No    | `false`         | Reads retained placement from the configured `kubernetes-daemon`; discovery fails if it cannot be read. Requires `namespace`, matching the one namespace the daemon watches. |
+| `placement_records_enabled` | No    | `false`         | Reads retained placement and Workload history from the configured `kubernetes-daemon`; discovery fails if it cannot be read. Requires `namespace`, matching the one namespace the daemon watches. |
+| `event_max_age_seconds`  | No       | `3600`          | Skips the Kubernetes Events fallback for Workloads that ended longer ago than this many seconds. |
 
 
 The baseline Kueue adapter does not require `kubernetes-daemon` or Prometheus. It
@@ -286,13 +287,13 @@ Fields:
 
 `cluster` and `cluster_label` are optional for a single-cluster endpoint, but
 must be set together for a shared backend. The source evaluates an instant
-`last_over_time` query over the relevant Workload intervals. Following FACT's
-node-metadata collection pattern, the adapter combines owner Job UIDs from
-every Workload in the run that has one, orders unique Job UIDs by padded
-Workload interval, and queries them in namespace-scoped, bounded batches. 
-The query joins `kube_pod_labels` to `kube_pod_info` on namespace, Pod name, 
-and Pod UID. For JobSets, the adapter first resolves the current child Job UIDs 
-from Kubernetes. Configure kube-state-metrics with:
+`last_over_time` query over the relevant Workload intervals. The adapter
+combines owner Job UIDs from every Workload in the run that has one, orders
+unique Job UIDs by padded Workload interval, and queries them in
+namespace-scoped, bounded batches. The query joins `kube_pod_labels` to
+`kube_pod_info` on namespace, Pod name, and Pod UID. For JobSets, the adapter
+first resolves the current child Job UIDs from Kubernetes. Configure
+kube-state-metrics with:
 
 ```text
 --metric-labels-allowlist=pods=[batch.kubernetes.io/controller-uid]
@@ -345,11 +346,11 @@ attribution time so their UIDs can be resolved without a name-based metrics
 join. If both a JobSet's Pods and child Jobs have been deleted, this UID-safe
 Prometheus route returns no placement even when the old metrics remain.
 
-For durable pod-to-node placement, see
-[Kubernetes daemon](#kubernetes-daemon) above. Its `queueSize` and `workers`
-must be positive. Runtime API defaults are Kueue Workload `v1beta1` and
-JobSet `v1alpha2`; override `integrations.kueue.workloadVersion` or
-`jobsetVersion` to match the installed controllers.
+For durable pod-to-node placement, refer to
+[Kubernetes daemon](#kubernetes-daemon) above. Keep the daemon's
+`integrations.kueue.workloadVersion` (version only, such as `v1beta1`)
+consistent with `workload_api_version` (such as `kueue.x-k8s.io/v1beta1`);
+both must name a Workload API version that the cluster serves.
 
 The adapter derives `kueue_state` from Kueue conditions, using finished
 conditions before evicted, preempted, admitted, quota-reserved, and pending
@@ -935,7 +936,7 @@ Fields:
 
 The bundled Loki templates are examples. If your labels are not `service_name`, `app`, or `host_name`, set `query`, `queries`, `query_kwargs`, and `node_label` for your environment.
 
-Custom templates may use `{job_id}` (the execution context ID) and any `{key}` supplied in `query_kwargs`. Literal `{` and `}` in LogQL label selectors must be doubled (`{{`, `}}`).
+Custom templates may use `{job_id}` (the provider `run_id`, falling back to the execution context `id`) and any `{key}` supplied in `query_kwargs`. Literal `{` and `}` in LogQL label selectors must be doubled (`{{`, `}}`).
 
 ### VictoriaLogs SYSLOG Or APPLOG
 
@@ -971,6 +972,7 @@ Fields:
 | `endpoint` | Yes | VictoriaLogs base URL. |
 | `timeout_seconds` | No | HTTP timeout. Defaults to `60.0`. |
 | `limit` | No | Maximum records per query response. Defaults to `5000`; must be positive. |
+| `max_pages` | No | Maximum responses per query. Defaults to `20`; must be a positive integer. Increase for larger collection windows, at the cost of more requests and memory. |
 | `node_field` | No | Row field used as the node name and to scope each query to context nodes. Defaults to `host_name`; set to `""` to disable node filtering and row-based node lookup. |
 | `auth.type` | No | Optional `token` or `mtls` authentication. Omit the entire `auth` block for an unauthenticated endpoint. |
 | `auth.token_env` | For token | Environment variable containing the bearer token. |
@@ -983,11 +985,18 @@ Fields:
 | `queries` | No | Custom LogsQL template list replacing the bundled templates; takes precedence over `query`. |
 
 The bundled templates target `service_name`, `app`, `slurm_job_id`, and `host_name`.
-Templates may use `{job_id}` (the execution context ID) and any `{key}` supplied
+Templates may use `{job_id}` (the provider `run_id`, falling back to the execution context `id`) and any `{key}` supplied
 in `query_kwargs`. LogsQL queries are paginated backward in time when a response
-reaches `limit`; rows at a page boundary are deduplicated. If more than `limit`
-records share one timestamp, the connector warns that some records may be
-truncated.
+reaches `limit`; rows at a page boundary are deduplicated. The collector report is
+`partial` with a reason when a template argument is missing, invalid response
+records or rows with invalid `_time` or non-string `_msg` are skipped, the page budget is
+exhausted, a later request fails after rows have been fetched, or a saturated
+response cannot advance past one timestamp, has no parseable `_time`, or reaches
+the window start. Available entries are retained. Other configured queries still
+run after HTTP errors or timeouts. If all attempted queries fail without a
+response, the first request error propagates. A successful empty query combined
+with a failed query reports partial coverage with no observations. Refer to the
+[upgrade guide](../../docs/blueprint-upgrading.md#victorialogs-partial-collection-reporting) for caller changes.
 
 The bundled templates do not use `{cluster}`. A custom template can scope its
 query to a cluster with `{cluster}` and a `cluster` entry in `query_kwargs`.
@@ -1239,8 +1248,50 @@ It includes the body of an error response.
 Command calls measure encoded stdout. Streamed HTTP responses omit size.
 Kafka output records no response size.
 Kubernetes watch and log-follow calls record no response size, because their bodies are streams that the metrics must not read.
-The Kafka input consumer is not measured.
+The Kafka input consumer has its own metrics, described in
+[Kafka Input Consumer Metrics](#kafka-input-consumer-metrics).
 The `kubernetes-daemon` watch process is not measured because its watch streams are long-lived.
+
+### Query Result Metrics
+
+The Loki, VictoriaLogs, and PromQL connectors also record what each query
+returned. These metrics have the same `connector` and `operation` labels as the
+request metrics. A query is one template for one execution context, including
+all of its pages.
+
+| Metric | Type | Unit | Meaning |
+| --- | --- | --- | --- |
+| `attribution.connector.query.entries` | Histogram | `{entry}` | Log entries returned by one Loki or VictoriaLogs query, across its pages and before deduplication |
+| `attribution.connector.query.pages` | Histogram | `{page}` | Requests issued by one Loki or VictoriaLogs query, including a final empty page |
+| `attribution.connector.query.truncations` | Counter | `{query}` | Loki or VictoriaLogs queries that may have left entries unread, counted once per reason |
+| `attribution.connector.query.series` | Histogram | `{series}` | Series returned by one successful PromQL query |
+
+The truncation counter has a `reason` label. A query that matches several
+reasons is counted once under each of them.
+
+- `page_limit`: the query fetched its page budget of full pages (20 by default;
+  VictoriaLogs reads it from `max_pages`). With the default `limit` of 5000, this
+  is 100,000 entries. Entries older than the last page are missing from the
+  observation. To avoid it, narrow the template query so that it matches fewer
+  entries. For VictoriaLogs, you can also raise `limit` if your backend accepts
+  larger responses, or raise `max_pages`.
+- `missing_timestamp`: a full VictoriaLogs page had no parseable `_time` field,
+  or held only malformed records, so the connector cannot request the next page.
+- `timestamp_tie`: a full VictoriaLogs page held only entries with the newest
+  timestamp the request could return. The connector cannot page within one
+  timestamp, so it skips past it, and entries with that timestamp that did not
+  fit on the page are missing. Raising `limit` above the number of entries per
+  timestamp avoids it.
+- `window_start`: a full Loki or VictoriaLogs page reached the start of the time
+  window.
+  Entries at the start boundary may be missing.
+- `request_error`: a VictoriaLogs request failed after earlier pages had
+  succeeded. The query keeps the entries it has, and the request metrics record
+  the error. If the first request fails, the query records nothing.
+
+The same conditions are also reported as collection issues or warnings. A PromQL query whose API
+status is not `success` records no series count; its request metrics record
+the call. A scalar or string result also records no series count.
 
 ### Built-in Scrape Endpoint
 
@@ -1259,8 +1310,9 @@ The endpoint is off when the variable is unset or empty.
 A short-lived run exits after its last job. A scraper sees its metrics only
 while that run is active.
 
-The scraper sees these names. Labels are `connector`, `operation`, and
-`error_type` for failures. Histogram buckets also have the `le` label.
+The scraper sees these names. Request labels are `connector`, `operation`, and
+`error_type` for failures. A label name with a dot, such as `error.type`, uses
+an underscore. Histogram buckets also have the `le` label.
 The Prometheus exporter also adds `otel_scope_name`, `otel_scope_version`, and
 `otel_scope_schema_url` labels to every series.
 
@@ -1271,6 +1323,10 @@ The Prometheus exporter also adds `otel_scope_name`, `otel_scope_version`, and
 | `attribution.connector.errors` | `attribution_connector_errors_total` |
 | `attribution.connector.response.size` | `attribution_connector_response_size_bytes_total` |
 | `attribution.connector.request.duration` | `attribution_connector_request_duration_seconds_bucket`, `attribution_connector_request_duration_seconds_sum`, `attribution_connector_request_duration_seconds_count` |
+| `attribution.connector.query.entries` | `attribution_connector_query_entries_bucket`, `attribution_connector_query_entries_sum`, `attribution_connector_query_entries_count` |
+| `attribution.connector.query.pages` | `attribution_connector_query_pages_bucket`, `attribution_connector_query_pages_sum`, `attribution_connector_query_pages_count` |
+| `attribution.connector.query.truncations` | `attribution_connector_query_truncations_total` |
+| `attribution.connector.query.series` | `attribution_connector_query_series_bucket`, `attribution_connector_query_series_sum`, `attribution_connector_query_series_count` |
 
 ### Other OpenTelemetry Exporters
 
@@ -1285,6 +1341,80 @@ OTEL_SERVICE_NAME=attribution-blueprint \
 OTEL_METRICS_EXPORTER=otlp \
 OTEL_EXPORTER_OTLP_ENDPOINT=http://127.0.0.1:4317 \
   opentelemetry-instrument nvidia-attribution-blueprint --config ./attribution-blueprint.toml
+```
+
+### Kafka Input Consumer Metrics
+
+The `eca.kafka` consumer records these metrics for `discover()` and the
+long-lived `open_consumer()` and `open_raw_consumer()` lifecycles described in
+[Kafka consumption and acknowledgements](kafka_lifecycle.md). The `lag` and
+`position.lag` gauges are reported only by long-lived consumers. A `discover()`
+run reads to the end of its partitions and closes, so it has no ongoing lag.
+
+| Metric | Type | Unit | Labels | Meaning |
+| --- | --- | --- | --- | --- |
+| `attribution.kafka.consumer.consumed` | Counter | `{record}` | `topic`, `partition`, `consumer_group` | Records read from the broker |
+| `attribution.kafka.consumer.accepted` | Counter | `{record}` | `topic`, `partition`, `consumer_group` | Valid records returned by `poll()` or added to a `discover()` batch |
+| `attribution.kafka.consumer.raw.delivered` | Counter | `{record}` | `topic`, `partition`, `consumer_group` | Undecoded records returned by `poll_raw()`, including malformed payloads and tombstones |
+| `attribution.kafka.consumer.skipped` | Counter | `{record}` | `topic`, `partition`, `consumer_group`, `reason` | Records skipped as `filtered` or `malformed` |
+| `attribution.kafka.consumer.acknowledged` | Counter | `{record}` | `topic`, `partition`, `consumer_group` | Receipts acknowledged for the first time |
+| `attribution.kafka.consumer.commits` | Counter | `{commit}` | `topic`, `partition`, `consumer_group` | Offset commits that the broker confirmed |
+| `attribution.kafka.consumer.commit.errors` | Counter | `{commit}` | `topic`, `partition`, `consumer_group`, `error.type` | Offset commits that failed or have an uncertain outcome |
+| `attribution.kafka.consumer.errors` | Counter | `{error}` | `topic`, `consumer_group`, `error.type` | Errors returned by a poll, other than end of partition |
+| `attribution.kafka.consumer.rebalances` | Counter | `{partition}` | `topic`, `partition`, `consumer_group`, `change` | Partitions `assigned`, `revoked`, or `lost` in rebalance callbacks |
+| `attribution.kafka.consumer.lag` | Gauge | `{record}` | `topic`, `partition`, `consumer_group` | High watermark minus the committed offset |
+| `attribution.kafka.consumer.position.lag` | Gauge | `{record}` | `topic`, `partition`, `consumer_group` | High watermark minus the consumer's fetch position |
+| `attribution.kafka.consumer.unacknowledged` | Gauge | `{record}` | `topic`, `partition`, `consumer_group` | Records returned by `poll()` or `poll_raw()` that the caller has not acknowledged |
+| `attribution.kafka.consumer.oldest_unacknowledged.age` | Gauge | `s` | `topic`, `partition`, `consumer_group` | Time since the earliest unacknowledged record was returned by `poll()` or `poll_raw()`, or 0 |
+
+`consumer_group` is the configured `group_id`. For a commit error, `error.type`
+is the exception class name. For a poll error, it is the Kafka error name, such
+as `_TRANSPORT`.
+
+Gauges report only the partitions that the consumer currently owns, and stop
+when the consumer closes. The connector computes them from state that the
+polling thread publishes, and never contacts the broker when the metrics are
+read:
+
+- The high watermark is the client's cached value from its latest fetch. The
+  fetch position is the client's local position. The connector refreshes both
+  while the owner thread polls, at most once every 5 seconds.
+- The committed offset starts at the group's committed offset, which the
+  polling thread reads from the broker once after it receives the partition.
+  After the consumer commits, it is the offset of that commit. If the group has
+  no committed offset for the partition, `lag` is omitted until the consumer
+  commits. If the broker lookup fails, the next refresh retries it.
+
+The connector commits only the acknowledged prefix of each partition, so one
+slow record holds back every later commit in its partition. When
+`oldest_unacknowledged.age` keeps growing while `lag` grows and `position.lag`
+stays low, the consumer is reading records but a delivered record is still
+waiting for its acknowledgement. If the consumer restarts, Kafka replays every
+record after the committed offset.
+
+The built-in scrape endpoint renders these names:
+
+| OpenTelemetry metric | Prometheus name |
+| --- | --- |
+| `attribution.kafka.consumer.consumed` | `attribution_kafka_consumer_consumed_total` |
+| `attribution.kafka.consumer.accepted` | `attribution_kafka_consumer_accepted_total` |
+| `attribution.kafka.consumer.raw.delivered` | `attribution_kafka_consumer_raw_delivered_total` |
+| `attribution.kafka.consumer.skipped` | `attribution_kafka_consumer_skipped_total` |
+| `attribution.kafka.consumer.acknowledged` | `attribution_kafka_consumer_acknowledged_total` |
+| `attribution.kafka.consumer.commits` | `attribution_kafka_consumer_commits_total` |
+| `attribution.kafka.consumer.commit.errors` | `attribution_kafka_consumer_commit_errors_total` |
+| `attribution.kafka.consumer.errors` | `attribution_kafka_consumer_errors_total` |
+| `attribution.kafka.consumer.rebalances` | `attribution_kafka_consumer_rebalances_total` |
+| `attribution.kafka.consumer.lag` | `attribution_kafka_consumer_lag` |
+| `attribution.kafka.consumer.position.lag` | `attribution_kafka_consumer_position_lag` |
+| `attribution.kafka.consumer.unacknowledged` | `attribution_kafka_consumer_unacknowledged` |
+| `attribution.kafka.consumer.oldest_unacknowledged.age` | `attribution_kafka_consumer_oldest_unacknowledged_age_seconds` |
+
+For example, this PromQL expression finds partitions in which a delivered
+record has waited for its acknowledgement for more than one hour:
+
+```promql
+max by (topic, partition, consumer_group) (attribution_kafka_consumer_oldest_unacknowledged_age_seconds) > 3600
 ```
 
 ## Environment Variables

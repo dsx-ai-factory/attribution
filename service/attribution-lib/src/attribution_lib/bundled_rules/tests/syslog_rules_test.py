@@ -10,7 +10,7 @@ import attribution_lib.core as core
 import pytest
 from attribution_lib.bundled_rules.common.syslog_helpers import SyslogAttributionParams
 from attribution_lib.core import process_check
-from attribution_lib.job_info import JobInfoBuilder
+from attribution_lib.job_info import JobInfoBuilder, Scheduler
 from attribution_lib.observation.inbound import (
     Format as ObservationFormat,
     Source as ObservationSource,
@@ -981,7 +981,11 @@ class TestBadNicStateOutcome:
     def test_slurm_node_failure_and_bad_nic_state_both_remain_active(
         self, request, sys_tst_bldr, job_info, extra_symptoms
     ):
-        job_info = job_info._replace(state="NODE_FAIL", failed_node="test-node-001")
+        job_info = job_info._replace(
+            state="NODE_FAIL",
+            failed_node="test-node-001",
+            scheduler=Scheduler.SLURM,
+        )
         result = self._attribute(
             request,
             sys_tst_bldr,

@@ -7,7 +7,8 @@ from enum import StrEnum
 
 
 class FailedNodeResolution(StrEnum):
-    """Describe how attribution associated a Slurm node failure with a node."""
+    """Describe how attribution associated a scheduler node failure with a node."""
 
     SLURM_FAILED_NODE_FIELD = "slurm_failed_node_field"
+    SCHEDULER_FAILED_NODE_FIELD = "scheduler_failed_node_field"
     SINGLE_ALLOCATED_NODE_INFERENCE = "single_allocated_node_inference"

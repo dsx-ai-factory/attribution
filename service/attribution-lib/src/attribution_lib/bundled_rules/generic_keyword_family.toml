@@ -101,6 +101,7 @@ rows = [
   { key = "collective timeout seq", symptom = "pmix collective timeout", rule = "alias else", demotion = "alias else" },
   { key = "Unexpected result inf", symptom = "Bad Token", rule = "alias else", demotion = "alias else" },
   { key = "RESOURCE_EXHAUSTED: Out of memory", symptom = "cudaError out of memory", rule = "cudaError out of memory", demotion = "cudaError out of memory" },
+  { key = "ncclMemAlloc failed", symptom = "cudaError out of memory", rule = "cudaError out of memory", demotion = "cudaError out of memory" },
   { key = "wandb.errors.CommError: Run initialization has timed out", symptom = "wandb.errors.CommError: Run initialization has timed out", rule = "alias else", demotion = "alias else" },
   { key = "http.client.RemoteDisconnected", symptom = "http.client.RemoteDisconnected", rule = "alias else", demotion = "alias else" },
   { key = "EOFError: Ran out of input", symptom = "EOFError: Ran out of input", rule = "alias else", demotion = "alias else" },

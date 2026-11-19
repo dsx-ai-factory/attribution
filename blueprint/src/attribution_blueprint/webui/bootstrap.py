@@ -208,7 +208,7 @@ def _positive_int(value: Any) -> int | None:
         return None
     if isinstance(value, int) and value > 0:
         return value
-    if isinstance(value, str) and value.strip().isdigit():
+    if isinstance(value, str) and value.strip().isdecimal():
         parsed = int(value.strip())
         if parsed > 0:
             return parsed
@@ -228,7 +228,7 @@ def _non_negative_int(value: Any) -> int | None:
         return None
     if isinstance(value, int) and value >= 0:
         return value
-    if isinstance(value, str) and value.strip().isdigit():
+    if isinstance(value, str) and value.strip().isdecimal():
         return int(value.strip())
     return None
 
@@ -372,11 +372,13 @@ def _run_summary_fields(run) -> dict[str, Any]:
 
     symptoms = [{"name": name, "sites": count} for name, count in symptom_summary(run)]
     diagnose = diagnose_card(run)
+    # Slurm stamps a 0-based ordinal on requeued attempts; single attempts have none.
+    attempt_ordinal = _non_negative_int(_object(run.raw_scheduler).get("attempt_ordinal"))
     return {
         "id": run.run_id,
         "jobId": job,
         "workload": job if "/" in job else "—",
-        "attempt": 1,
+        "attempt": 1 if attempt_ordinal is None else attempt_ordinal + 1,
         "attemptUid": run.attempt_id or run.run_id,
         "user": run.user_name or "",
         "status": status,

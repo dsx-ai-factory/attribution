@@ -75,6 +75,7 @@ HEADER_SURFACE_PATHS = (
 FIXTURE_PATHS = (
     *HEADER_SURFACE_PATHS,
     *SOURCE_VERSION_PATHS.values(),
+    "docs/blueprint-upgrading.md",
     ".ci/build-and-check-license-artifacts.sh",
     ".ci/check-client-drift.sh",
     ".ci/check-license-compliance.py",
@@ -416,6 +417,45 @@ class LicenseComplianceTest(unittest.TestCase):
         with valid_fixture() as root:
             artifacts = make_artifact_set(root)
             self.assert_compliant(root, artifacts)
+
+    def test_markdown_spdx_headers_require_exact_notices_and_closed_comments(self) -> None:
+        relative_path = "docs/blueprint-upgrading.md"
+        for preamble in ("", "---\ntitle: Upgrade guide\n---\n\n"):
+            with self.subTest(preamble=preamble), valid_fixture() as root:
+                (root / "docs").mkdir(exist_ok=True)
+                (root / relative_path).write_text(
+                    preamble + "{/*\n"
+                    f"{COPYRIGHT_TAG} Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.\n"
+                    f"{APACHE_IDENTIFIER}\n"
+                    "*/}\n\n# Upgrade guide\n",
+                    encoding="utf-8",
+                )
+                self.stage(root, relative_path)
+                self.assert_compliant(root)
+                self.replace_and_stage(root, relative_path, "*/}", "*/")
+                self.assert_violation(root, f"{relative_path}: expected a closed SPDX HTML comment")
+                self.replace_and_stage(root, relative_path, "*/", "*/}")
+                self.replace_and_stage(root, relative_path, "Apache-2.0", "MIT")
+                self.assert_violation(
+                    root, f"{relative_path}: expected one exact Apache SPDX comment after the permitted preamble"
+                )
+
+    def test_upgrade_guide_requires_copyright_even_when_all_notices_are_removed(self) -> None:
+        relative_path = "docs/blueprint-upgrading.md"
+        for remove_header in (False, True):
+            with self.subTest(remove_header=remove_header), valid_fixture() as root:
+                path = root / relative_path
+                text = path.read_text(encoding="utf-8")
+                if remove_header:
+                    text = text.split("*/}", 1)[1]
+                else:
+                    text = "\n".join(line for line in text.splitlines() if not line.startswith(COPYRIGHT_TAG))
+                path.write_text(text, encoding="utf-8")
+                self.stage(root, relative_path)
+                self.assert_violation(
+                    root,
+                    f"{relative_path}: expected one exact NVIDIA SPDX copyright comment after the permitted preamble",
+                )
 
     def test_rejects_each_mutated_canonical_license(self) -> None:
         for relative_path in CANONICAL_LICENSE_PATHS:
