@@ -11,6 +11,7 @@ derived placeholders pending the attribution documentation manifest.
 """
 
 from attribution_lib.rules import SymptomFamily, cascade_symptom, known_symptom, outcome_symptom
+from attribution_lib.bundled_rules.common.scheduler_formatting import NODE_FAILURE_IDS, NODE_FAILURE_PREFIX
 from attribution_lib.symptoms.declarations import (
     CascadeScope,
     DagDiscardBehavior,
@@ -28,7 +29,7 @@ NVL_DOMAIN_CASCADE_TARGETS = (
 )
 
 NODE_FAILURE_CASCADE_TARGETS = (
-    "Node failure reported by slurm",
+    *NODE_FAILURE_IDS,
     "Node not responding",
     "Corroborated node failure",
 )
@@ -335,7 +336,7 @@ outcome_symptom(
     priority=OutcomePriority.HIGH_HW,
     doc="corroborated-node-failure",
     hw_cause="Known HW Cause - Node",
-    cascade_discards=("Node failure reported by slurm", "Node not responding"),
+    cascade_discards=(*NODE_FAILURE_IDS, "Node not responding"),
 )
 
 outcome_symptom(
@@ -390,7 +391,7 @@ outcome_symptom(
     doc="oom-kill-of-system-service",
     cascade_discards=(
         "Node not responding",
-        "Node failure reported by slurm",
+        *NODE_FAILURE_IDS,
         "Corroborated node failure",
         "Node unexpectedly rebooted",
         "node offline",
@@ -404,7 +405,7 @@ outcome_symptom(
     doc="oom-kill-of-a-system-pod",
     cascade_discards=(
         "Node not responding",
-        "Node failure reported by slurm",
+        *NODE_FAILURE_IDS,
         "Corroborated node failure",
         "Node unexpectedly rebooted",
         "node offline",
@@ -482,7 +483,7 @@ outcome_symptom(
     outcome="Fail MultiCategory",
     priority=OutcomePriority.HIGH,
     doc="nmi-watchdog-hard-lockup",
-    cascade_discards=("Node failure reported by slurm", "Corroborated node failure"),
+    cascade_discards=(*NODE_FAILURE_IDS, "Corroborated node failure"),
 )
 
 outcome_symptom(
@@ -638,7 +639,7 @@ outcome_symptom(
     cascade_discards=(
         "Node not responding",
         "Node unexpectedly rebooted",
-        "Node failure reported by slurm",
+        *NODE_FAILURE_IDS,
         "Corroborated node failure",
         "node offline",
         "Fabric manager lost connection to all GPUs",
@@ -653,7 +654,7 @@ outcome_symptom(
     doc="node-unexpectedly-rebooted",
     cascade_discards=(
         "Node unexpectedly rebooted",
-        "Node failure reported by slurm",
+        *NODE_FAILURE_IDS,
         "Node not responding",
         "Corroborated node failure",
         "node offline",
@@ -664,15 +665,16 @@ outcome_symptom(
 )
 
 outcome_symptom(
-    "Node failure reported by slurm",
+    NODE_FAILURE_PREFIX,
     outcome="Fail InfraSW",
     priority=OutcomePriority.MEDIUM,
     doc="node-failure-reported-by-slurm",
     cascade_discards=("Stopping nvidia-imex.service",),
+    fallback_prefix=True,
 )
 
 cascade_symptom(
-    "Node failure reported by slurm",
+    NODE_FAILURE_PREFIX,
     cascade_discards=NVL_DOMAIN_CASCADE_TARGETS,
     scope=CascadeScope.NVL_DOMAIN,
 )
@@ -699,7 +701,7 @@ outcome_symptom(
     priority=OutcomePriority.MEDIUM_SW,
     doc="node-stopped-by-controller",
     cascade_discards=(
-        "Node failure reported by slurm",
+        *NODE_FAILURE_IDS,
         "Node not responding",
         "Corroborated node failure",
         "Node unexpectedly rebooted",
@@ -880,7 +882,7 @@ outcome_symptom(
         "cudaErrorECCUncorrectable",
         "error running nvidia-smi",
         "ncclUnhandledCudaError",
-        "Node failure reported by slurm",
+        *NODE_FAILURE_IDS,
         "Corroborated node failure",
     ),
 )
@@ -1309,7 +1311,7 @@ outcome_symptom(
         "NMI watchdog hard LOCKUP",
         "general protection fault",
         "Node not responding",
-        "Node failure reported by slurm",
+        *NODE_FAILURE_IDS,
         "Corroborated node failure",
         "Node unexpectedly rebooted",
     ),
@@ -1324,7 +1326,7 @@ outcome_symptom(
         "NMI watchdog hard LOCKUP",
         "general protection fault",
         "Node not responding",
-        "Node failure reported by slurm",
+        *NODE_FAILURE_IDS,
         "Corroborated node failure",
         "Node unexpectedly rebooted",
     ),
@@ -1355,7 +1357,7 @@ outcome_symptom(
         "NMI watchdog hard LOCKUP",
         "general protection fault",
         "Node not responding",
-        "Node failure reported by slurm",
+        *NODE_FAILURE_IDS,
         "Corroborated node failure",
         "Node unexpectedly rebooted",
     ),
@@ -1366,7 +1368,7 @@ outcome_symptom(
     outcome="Fail MultiCategory",
     priority=OutcomePriority.LOW,
     doc="general-protection-fault",
-    cascade_discards=("Node failure reported by slurm", "Corroborated node failure"),
+    cascade_discards=(*NODE_FAILURE_IDS, "Corroborated node failure"),
 )
 
 outcome_symptom(
@@ -1852,7 +1854,7 @@ outcome_symptom(
     doc="ns-network-connection-lost",
     hw_cause="possibly node crash or network issue",
     cascade_discards=(
-        "Node failure reported by slurm",
+        *NODE_FAILURE_IDS,
         "Node not responding",
         "Corroborated node failure",
         "Lustre Client Evicted",
@@ -2714,7 +2716,7 @@ outcome_symptom(
     doc="fabric-manager-lost-connection-to-all-gpus",
     hw_cause="Known HW Cause - Node",
     cascade_discards=(
-        "Node failure reported by slurm",
+        *NODE_FAILURE_IDS,
         "Corroborated node failure",
         "Stopping nvidia-imex.service",
     ),

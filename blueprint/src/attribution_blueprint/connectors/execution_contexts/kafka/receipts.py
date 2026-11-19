@@ -37,6 +37,37 @@ class KafkaReceipt(_Receipt):
     event: dict
 
 
+@dataclass(frozen=True)
+class KafkaRawReceipt(_Receipt):
+    """One undecoded Kafka record with the current partition ownership token.
+
+    Values and keys retain their bytes, including empty bytes and None for
+    tombstones or missing keys. Headers retain order, duplicates and null values.
+    """
+
+    key: bytes | None
+    value: bytes | None
+    headers: list[tuple[str, bytes | None]] | None
+
+    def __post_init__(self) -> None:
+        """Reject deserialized payloads and retain a separate header list."""
+        for name, value in (("key", self.key), ("value", self.value)):
+            if value is not None and not isinstance(value, bytes):
+                raise InvalidReceiptError(
+                    f"kafka ECA: raw {name} must be bytes or None; use a non-deserializing consumer"
+                )
+        if self.headers is None:
+            return
+        if not isinstance(self.headers, list):
+            raise InvalidReceiptError("kafka ECA: raw headers must be a list or None")
+        for header in self.headers:
+            if not isinstance(header, tuple) or len(header) != 2 or not isinstance(header[0], str):
+                raise InvalidReceiptError("kafka ECA: raw headers must contain (str, bytes or None) tuples")
+            if header[1] is not None and not isinstance(header[1], bytes):
+                raise InvalidReceiptError("kafka ECA: raw header values must be bytes or None")
+        object.__setattr__(self, "headers", list(self.headers))
+
+
 class Backlog(NamedTuple):
     """Delivered receipts in one partition that the caller has not acknowledged."""
 
