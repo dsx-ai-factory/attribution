@@ -18,6 +18,7 @@ from __future__ import annotations
 import argparse
 import re
 import sys
+from collections.abc import Container, Sequence
 from pathlib import Path
 from typing import NamedTuple
 
@@ -30,12 +31,16 @@ PICK_TRAILER = re.compile(
 
 
 class Violation(NamedTuple):
+    """A commit that fails the check, and why."""
+
     sha: str
     subject: str
     reason: str
 
 
-def find_violations(repo: Path, base: str, head: str, main_ref: str) -> list[Violation]:
+def find_violations(
+    repo: Path, *, base: str, head: str, main_ref: str
+) -> list[Violation]:
     """Commits in `base..head` that are not picks of a commit on `main_ref`."""
     if git(repo, "rev-parse", "--is-shallow-repository").strip() == "true":
         raise ReleaseError("shallow clone; fetch the full history")
@@ -54,7 +59,9 @@ def find_violations(repo: Path, base: str, head: str, main_ref: str) -> list[Vio
     return found
 
 
-def _reason(repo: Path, sha: str, main_ref: str, equivalent: set[str]) -> str | None:
+def _reason(
+    repo: Path, sha: str, main_ref: str, equivalent: Container[str]
+) -> str | None:
     parents = git(repo, "show", "-s", "--format=%P", sha).split()
     if len(parents) > 1:
         return "is a merge commit; rebase the branch instead of merging into it"
@@ -85,7 +92,8 @@ def _on(repo: Path, sha: str, ref: str) -> bool:
     return not git(repo, "rev-list", "-1", sha, "--not", ref).strip()
 
 
-def main(argv: list[str] | None = None) -> int:
+def main(argv: Sequence[str] | None = None) -> int:
+    """Run the check on the current repository and return the exit code."""
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--base", required=True, help="tip of the release branch")
     parser.add_argument("--head", required=True, help="tip of the pull request branch")
@@ -93,7 +101,9 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     try:
-        violations = find_violations(default_repo(), args.base, args.head, args.main)
+        violations = find_violations(
+            default_repo(), base=args.base, head=args.head, main_ref=args.main
+        )
     except ReleaseError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1

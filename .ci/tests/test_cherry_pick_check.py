@@ -28,7 +28,9 @@ class Repo:
         return self.git("rev-parse", "HEAD")
 
     def violations(self) -> list[str]:
-        found = cherry_pick_check.find_violations(self.path, "release", "HEAD", "main")
+        found = cherry_pick_check.find_violations(
+            self.path, base="release", head="HEAD", main_ref="main"
+        )
         return [v.sha for v in found]
 
 
