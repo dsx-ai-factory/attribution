@@ -16,14 +16,22 @@ failed_node, also matching the Kueue convention. Numeric allocation fields
 must be non-negative integers; a time_limit of 0 means no limit and is
 dropped. Invalid events raise EventError; callers decide whether to skip them
 and how to account for their offsets.
+
+A non-null data `allocations` list replaces the flat placement fields with
+one entry per node. The payload, not the CloudEvent type, selects the shape,
+so one consumer can accept producers on either side of a migration. nodes,
+gpu_count, pod_names, pod_nodes, and a cluster shared by every allocation are
+then derived from the allocations, which the context also keeps.
 """
 
 from __future__ import annotations
 
 import errno
+import ipaddress
 import json
+from collections import Counter
 from datetime import datetime
-from typing import NotRequired
+from typing import NotRequired, TypedDict
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from attribution_blueprint.orchestrator import _service_timezone_name
@@ -39,6 +47,26 @@ _OPTIONAL_STR_FIELDS = (
     "namespace",
     "cluster",
 )
+_REQUIRED_DATA_KEYS = ("id", "start_time", "end_time")
+# Placement fields that `allocations` replaces; sending both is ambiguous.
+_FLAT_PLACEMENT_FIELDS = ("nodes", "gpu_count", "cluster", "pod_names", "pod_nodes")
+
+
+class ReplicaPlacement(TypedDict):
+    """One replica (for example, a Pod) placed on an allocated node."""
+
+    name: str
+    # Normalized address; absent when the producer did not report one.
+    ip: NotRequired[str]
+
+
+class NodeAllocation(TypedDict):
+    """The GPUs a job held on one node and the replicas placed there."""
+
+    node: str
+    cluster: str
+    gpus: int
+    replicas: list[ReplicaPlacement]
 
 
 class KafkaExecutionContext(ExecutionContext):
@@ -52,6 +80,8 @@ class KafkaExecutionContext(ExecutionContext):
     namespace: NotRequired[str]
     pod_names: NotRequired[list[str]]
     pod_nodes: NotRequired[dict[str, str]]
+    # Per-node placement, in event order, when the event uses that shape.
+    allocations: NotRequired[list[NodeAllocation]]
 
 
 class EventError(ValueError):
@@ -120,17 +150,28 @@ def _context_from_data(
     workload_type: str,
     event_subject: str | None = None,
 ) -> KafkaExecutionContext:
-    """Validate an event `data` object and build an ExecutionContext from it."""
-    missing = [key for key in ("id", "start_time", "end_time", "nodes") if data.get(key) in (None, "", [])]
+    """Validate an event `data` object and build an ExecutionContext from it.
+
+    A non-null `allocations` key selects the per-node placement shape;
+    otherwise the flat `nodes` shape applies unchanged.
+    """
+    has_allocations = data.get("allocations") is not None
+    required = _REQUIRED_DATA_KEYS if has_allocations else (*_REQUIRED_DATA_KEYS, "nodes")
+    missing = [key for key in required if data.get(key) in (None, "", [])]
     if missing:
         raise EventError(f"CloudEvent {event_id} data missing required keys: {missing}")
+    allocations = _allocations(data, event_id) if has_allocations else None
 
     ctx_id = str(data["id"])
     ctx: KafkaExecutionContext = {
         "id": ctx_id,
         "workload_type": workload_type,
         "scheduler": _str_or_default(data.get("scheduler"), default_scheduler),
-        "nodes": _str_list(data["nodes"], "nodes", event_id),
+        "nodes": (
+            _str_list(data["nodes"], "nodes", event_id)
+            if allocations is None
+            else [allocation["node"] for allocation in allocations]
+        ),
         "start_time": _aware_datetime(data["start_time"], "start_time", event_id),
         "end_time": _aware_datetime(data["end_time"], "end_time", event_id),
         "job_id": _str_or_default(data.get("job_id"), ctx_id),
@@ -146,7 +187,86 @@ def _context_from_data(
 
     _validate_timezone(ctx, data.get("timezone"), event_id)
     _copy_optional_fields(ctx, data, event_id)
+    if allocations is not None:
+        _copy_allocation_fields(ctx, allocations)
     return ctx
+
+
+def _allocations(data: dict, event_id: str) -> list[NodeAllocation]:
+    """Validate the per-node placement list and reject ambiguous flat fields."""
+    conflicting = [key for key in _FLAT_PLACEMENT_FIELDS if data.get(key) is not None]
+    if conflicting:
+        raise EventError(f"CloudEvent {event_id} allocations cannot be combined with {conflicting}")
+    raw = data["allocations"]
+    if not isinstance(raw, list) or not raw:
+        raise EventError(f"CloudEvent {event_id} allocations must be a non-empty list of objects")
+    allocations = [_allocation(item, f"allocations[{index}]", event_id) for index, item in enumerate(raw)]
+    _reject_duplicates([allocation["node"] for allocation in allocations], "allocation node", event_id)
+    replica_names = [replica["name"] for allocation in allocations for replica in allocation["replicas"]]
+    _reject_duplicates(replica_names, "replica name", event_id)
+    return allocations
+
+
+def _allocation(value: object, field: str, event_id: str) -> NodeAllocation:
+    """Validate one node allocation; missing or null replicas mean none."""
+    if not isinstance(value, dict):
+        raise EventError(f"CloudEvent {event_id} {field} must be an object")
+    replicas = value.get("replicas")
+    if replicas is None:
+        replicas = []
+    if not isinstance(replicas, list):
+        raise EventError(f"CloudEvent {event_id} {field}.replicas must be a list of objects")
+    return {
+        "node": _non_empty_str(value.get("node"), f"{field}.node", event_id),
+        "cluster": _non_empty_str(value.get("cluster"), f"{field}.cluster", event_id),
+        "gpus": _non_negative_int(value.get("gpus"), f"{field}.gpus", event_id),
+        "replicas": [_replica(item, f"{field}.replicas[{index}]", event_id) for index, item in enumerate(replicas)],
+    }
+
+
+def _replica(value: object, field: str, event_id: str) -> ReplicaPlacement:
+    """Validate one replica; a missing, null, or empty IP is unknown, not invalid."""
+    if not isinstance(value, dict):
+        raise EventError(f"CloudEvent {event_id} {field} must be an object")
+    replica: ReplicaPlacement = {"name": _non_empty_str(value.get("name"), f"{field}.name", event_id)}
+    ip = value.get("ip")
+    if ip is None or ip == "":
+        return replica
+    # ip_address also accepts integers, which are not a supported encoding.
+    if not isinstance(ip, str):
+        raise EventError(f"CloudEvent {event_id} {field}.ip must be a string")
+    try:
+        replica["ip"] = str(ipaddress.ip_address(ip))
+    except ValueError as exc:
+        raise EventError(f"CloudEvent {event_id} {field}.ip {ip!r} is not an IP address") from exc
+    return replica
+
+
+def _reject_duplicates(values: list[str], field: str, event_id: str) -> None:
+    """Reject a placement that names the same node or replica twice."""
+    duplicates = sorted(value for value, count in Counter(values).items() if count > 1)
+    if duplicates:
+        raise EventError(f"CloudEvent {event_id} {field} appears more than once: {duplicates}")
+
+
+def _copy_allocation_fields(ctx: KafkaExecutionContext, allocations: list[NodeAllocation]) -> None:
+    """Derive the flat placement fields that collectors and outputs already read.
+
+    gpu_count is set even when 0, so outputs do not replace it with an
+    estimate from the configured GPUs per node.
+    """
+    ctx["allocations"] = allocations
+    ctx["gpu_count"] = sum(allocation["gpus"] for allocation in allocations)
+    pod_nodes = {
+        replica["name"]: allocation["node"] for allocation in allocations for replica in allocation["replicas"]
+    }
+    if pod_nodes:
+        ctx["pod_names"] = list(pod_nodes)
+        ctx["pod_nodes"] = pod_nodes
+    # A job spanning clusters has no single cluster to query or report.
+    clusters = {allocation["cluster"] for allocation in allocations}
+    if len(clusters) == 1:
+        ctx["cluster"] = allocations[0]["cluster"]
 
 
 def _copy_optional_fields(ctx: KafkaExecutionContext, data: dict, event_id: str) -> None:
@@ -225,6 +345,13 @@ def _str_list(value: object, field: str, event_id: str) -> list[str]:
     if not isinstance(value, list) or not all(isinstance(item, str) and item for item in value):
         raise EventError(f"CloudEvent {event_id} {field} must be a list of non-empty strings")
     return list(value)
+
+
+def _non_empty_str(value: object, field: str, event_id: str) -> str:
+    """Require a non-empty string without coercing other JSON types."""
+    if not isinstance(value, str) or not value:
+        raise EventError(f"CloudEvent {event_id} {field} must be a non-empty string")
+    return value
 
 
 def _aware_datetime(value: object, field: str, event_id: str) -> datetime:

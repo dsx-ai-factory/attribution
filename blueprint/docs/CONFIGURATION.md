@@ -559,7 +559,9 @@ batch incomplete without discarding committed contexts or hiding a read error.
 Unexpected exceptions propagate; they are not classified as invalid events.
 
 The event `data` object uses ExecutionContext field names: `id`, `start_time`,
-`end_time` (with UTC offset) and a non-empty `nodes` list are required;
+`end_time` (with UTC offset) and a non-empty `nodes` list are required, unless
+the event describes placement with `allocations` (refer to
+[Per-node allocations](#per-node-allocations));
 `job_id`, `attempt_id`, `scheduler`, `state`, `name`, `user_name`,
 `workload_framework`, `timezone`, `time_limit`, `gpu_count`, `cancelled_by`,
 `failed_nodes`, `failed_node`, `std_out`, `std_err`, `namespace`, `pod_names`,
@@ -583,6 +585,56 @@ is attributed. Events in earlier runs are not deduplicated. The input preserves
 the winning CloudEvent ID and source as `event_id` and `event_source` for
 correlation by the output connector. CloudEvent `source` is required and must
 be a non-empty string without whitespace.
+
+#### Per-node allocations
+
+Instead of the flat `nodes`, `gpu_count`, `cluster`, `pod_names`, and
+`pod_nodes` fields, the event `data` can describe placement as a non-empty
+`allocations` list with one object per node:
+
+```json
+"allocations": [
+  {"node": "cpu-n07", "cluster": "cluster-a", "gpus": 0,
+   "replicas": [{"name": "job-1234-head-0", "ip": "192.0.2.10"}]},
+  {"node": "gpu-n01", "cluster": "cluster-b", "gpus": 8,
+   "replicas": [{"name": "job-1234-worker-0", "ip": "198.51.100.21"}]}
+]
+```
+
+| Field             | Required | Meaning                                                                                                                       |
+| ----------------- | -------- | ----------------------------------------------------------------------------------------------------------------------------- |
+| `node`            | Yes      | Non-empty node name. A node appears in only one allocation.                                                                   |
+| `cluster`         | Yes      | Non-empty name of the cluster that owns the node.                                                                             |
+| `gpus`            | Yes      | Non-negative integer number of GPUs allocated on the node. Use 0 for a CPU-only node.                                         |
+| `replicas`        | No       | Replicas, such as Pods, placed on the node. A missing or null list means none.                                                |
+| `replicas[].name` | Yes      | Non-empty replica name. A name appears only once across all allocations.                                                      |
+| `replicas[].ip`   | No       | IPv4 or IPv6 address. A missing, null, or empty value means unknown. The context stores the normalized form, such as `2001:db8::1`. |
+
+The adapter derives the flat context fields from the allocations:
+
+- `nodes` lists each allocation's `node` in event order.
+- `gpu_count` is the sum of `gpus`. It is set even when the sum is 0, so
+  outputs do not estimate it from `gpus_per_node`.
+- `pod_names` lists every replica name in allocation order, and `pod_nodes`
+  maps each replica name to its allocation's node. Both are omitted when no
+  allocation has replicas.
+- `cluster` is set only when every allocation names the same cluster. A job
+  that spans clusters has no context `cluster`.
+- `allocations` keeps the validated list. Each allocation has `node`,
+  `cluster`, `gpus`, and `replicas` (possibly empty), and each replica has
+  `name` and, when the event supplied one, `ip`.
+
+The payload, not the CloudEvent type, selects the shape. A `data` object with a
+non-null `allocations` key uses the allocation shape, and `nodes` is then not
+required. Any other `data` object uses the flat fields exactly as described
+above. An allocation event that also has a non-null `nodes`, `gpu_count`,
+`cluster`, `pod_names`, or `pod_nodes` is ambiguous and is skipped as
+malformed, as is an event that breaks any rule in the table. `namespace` is
+still copied from `data`. Because the shape does not depend on the type, you
+can migrate a producer to a new event type by listing the old and new types in
+`event_types` until the old type stops arriving. Deduplication ignores the
+shape, so a later allocation event supersedes an earlier flat event for the
+same `(scheduler, job_id, attempt_id)`.
 
 Deduplication runs after offset commits, on the successfully committed contexts.
 Within a partition, latest means highest offset. Across partitions, the last
@@ -1205,9 +1257,11 @@ workload context; adjust its nodes and time window to match your data.
 The VictoriaLogs and PromQL connectors accept `cluster_from_context`. It is off
 by default because only some execution-context adapters set `cluster`, and the
 value must equal the field or label value in your telemetry. The Kafka adapter
-copies `data.cluster` unchanged, and a static `contexts_path` file passes
-through any `cluster` key. The Slurm, Kueue, and KAI adapters do not set it, so
-their contexts always use the configured value. A context `cluster` that
+copies `data.cluster` unchanged, or, for an event with per-node `allocations`,
+sets the cluster that every allocation shares. A job whose allocations span
+clusters has no context `cluster` and uses the configured value. A static
+`contexts_path` file passes through any `cluster` key. The Slurm, Kueue, and
+KAI adapters do not set it, so their contexts always use the configured value. A context `cluster` that
 contains a quote, backslash, or control character is rejected: the connector
 reports an error for that context instead of querying another cluster.
 
