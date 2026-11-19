@@ -6,7 +6,6 @@ from datetime import datetime
 from pathlib import Path
 
 import pytest
-
 from attribution_blueprint.connectors.execution_contexts.slurm import (
     SlurmExecutionContextAdapter,
 )
@@ -344,7 +343,7 @@ def test_cancelled_by_root_uid_resolves_to_root(mocker):
     """sacct reports `CANCELLED by 0` for an admin scancel; the refiner rules match "root"."""
     row = (
         "7003|7003|sluid-cby-7003|CANCELLED by 0|2026-05-01T12:00:00|2026-05-01T13:00:00|"
-        "node300||60|cpu=8|/o|/e|carol|short\n"
+        "node300||60|cpu=8|/o|/e|carol||short\n"
     )
     _mock_sacct(mocker, row)
     contexts = SlurmExecutionContextAdapter().discover_by_ids(["7003"])
@@ -359,18 +358,18 @@ def test_uid0_step_of_timed_out_attempt_resolves_to_timeout(mocker):
     """
     rows = (
         "7004|7004|sluid-cby-7004|TIMEOUT|2026-05-01T12:00:00|2026-05-01T13:00:00|"
-        "node300||60|cpu=8|/o|/e|carol|short\n"
+        "node300||60|cpu=8|/o|/e|carol||short\n"
         "7004.batch|7004.batch|sluid-cby-7004|CANCELLED|2026-05-01T12:00:00|2026-05-01T13:00:00|"
-        "node300||60|cpu=8|||carol|batch\n"
+        "node300||60|cpu=8|||carol||batch\n"
         "7004.0|7004.0|sluid-cby-7004|CANCELLED by 0|2026-05-01T12:00:05|2026-05-01T13:00:00|"
-        "node300||60|cpu=8|||carol|step0\n"
+        "node300||60|cpu=8|||carol||step0\n"
     )
     _mock_sacct(mocker, rows)
     contexts = SlurmExecutionContextAdapter().discover_by_ids(["7004"])
     by_id = {c["job_id"]: c for c in contexts}
     assert by_id["7004"]["state"] == "TIMEOUT"
     assert "cancelled_by" not in by_id["7004"]
-    assert by_id["7004.0"]["state"] == "CANCELLED"
+    assert by_id["7004.0"]["state"] == "TIMEOUT"
     assert by_id["7004.0"]["cancelled_by"] == "Timeout"
 
 
@@ -378,9 +377,9 @@ def test_uid0_step_of_cancelled_attempt_resolves_to_root(mocker):
     """An operator scancel cancels the head and its steps as UID 0; every row is root."""
     rows = (
         "7006|7006|sluid-cby-7006|CANCELLED by 0|2026-05-01T12:00:00|2026-05-01T12:10:00|"
-        "node300||60|cpu=8|/o|/e|carol|short\n"
+        "node300||60|cpu=8|/o|/e|carol||short\n"
         "7006.0|7006.0|sluid-cby-7006|CANCELLED by 0|2026-05-01T12:00:05|2026-05-01T12:10:00|"
-        "node300||60|cpu=8|||carol|step0\n"
+        "node300||60|cpu=8|||carol||step0\n"
     )
     _mock_sacct(mocker, rows)
     contexts = SlurmExecutionContextAdapter().discover_by_ids(["7006"])
@@ -391,13 +390,13 @@ def test_timeout_of_one_requeue_attempt_does_not_leak_to_another(mocker):
     """TIMEOUT is per attempt (SLUID). A UID 0 step of a different attempt of the same jobid stays root."""
     rows = (
         "7007|7007|sluid-cby-7007a|CANCELLED by 0|2026-05-01T12:00:00|2026-05-01T12:10:00|"
-        "node300||60|cpu=8|/o|/e|carol|short\n"
+        "node300||60|cpu=8|/o|/e|carol||short\n"
         "7007.0|7007.0|sluid-cby-7007a|CANCELLED by 0|2026-05-01T12:00:05|2026-05-01T12:10:00|"
-        "node300||60|cpu=8|||carol|step0\n"
+        "node300||60|cpu=8|||carol||step0\n"
         "7007|7007|sluid-cby-7007b|TIMEOUT|2026-05-01T12:20:00|2026-05-01T13:20:00|"
-        "node301||60|cpu=8|/o|/e|carol|short\n"
+        "node301||60|cpu=8|/o|/e|carol||short\n"
         "7007.0|7007.0|sluid-cby-7007b|CANCELLED by 0|2026-05-01T12:20:05|2026-05-01T13:20:00|"
-        "node301||60|cpu=8|||carol|step0\n"
+        "node301||60|cpu=8|||carol||step0\n"
     )
     _mock_sacct(mocker, rows)
     contexts = SlurmExecutionContextAdapter().discover_by_ids(["7007"])
@@ -413,11 +412,11 @@ def test_uid0_step_cancelled_before_the_limit_of_a_timed_out_attempt_resolves_to
     """
     rows = (
         "7009|7009|sluid-cby-7009|TIMEOUT|2026-05-01T12:00:00|2026-05-01T13:00:00|"
-        "node300||60|cpu=8|/o|/e|carol|short\n"
+        "node300||60|cpu=8|/o|/e|carol||short\n"
         "7009.0|7009.0|sluid-cby-7009|CANCELLED by 0|2026-05-01T12:00:05|2026-05-01T12:10:00|"
-        "node300||60|cpu=8|||carol|step0\n"
+        "node300||60|cpu=8|||carol||step0\n"
         "7009.1|7009.1|sluid-cby-7009|CANCELLED by 0|2026-05-01T12:10:05|2026-05-01T13:00:00|"
-        "node300||60|cpu=8|||carol|step1\n"
+        "node300||60|cpu=8|||carol||step1\n"
     )
     _mock_sacct(mocker, rows)
     contexts = SlurmExecutionContextAdapter().discover_by_ids(["7009"])
@@ -444,9 +443,9 @@ def test_uid0_step_of_timed_out_attempt_across_a_dst_change_compares_elapsed_tim
     """
     rows = (
         "7011|7011|sluid-cby-7011|TIMEOUT|2026-03-08T01:30:00|2026-03-08T03:30:00|"
-        "node300||60|cpu=8|/o|/e|carol|short\n"
+        "node300||60|cpu=8|/o|/e|carol||short\n"
         f"7011.0|7011.0|sluid-cby-7011|CANCELLED by 0|2026-03-08T01:30:05|{step_end}|"
-        "node300||60|cpu=8|||carol|step0\n"
+        "node300||60|cpu=8|||carol||step0\n"
     )
     _mock_sacct(mocker, rows)
     contexts = SlurmExecutionContextAdapter(cluster_tz="America/New_York").discover_by_ids(["7011"])
@@ -472,9 +471,9 @@ def test_uid0_step_whose_head_was_not_cancelled_by_uid0_keeps_uid0(mocker, head_
     """
     rows = (
         f"7012|7012|sluid-cby-7012|{head_state}|2026-05-01T12:00:00|2026-05-01T12:10:00|"
-        "node300||60|cpu=8|/o|/e|carol|short\n"
+        "node300||60|cpu=8|/o|/e|carol||short\n"
         "7012.0|7012.0|sluid-cby-7012|CANCELLED by 0|2026-05-01T12:00:05|2026-05-01T12:10:00|"
-        "node300||60|cpu=8|||carol|step0\n"
+        "node300||60|cpu=8|||carol||step0\n"
     )
     _mock_sacct(mocker, rows)
     contexts = SlurmExecutionContextAdapter().discover_by_ids(["7012"])
@@ -487,9 +486,9 @@ def test_uid0_step_of_timed_out_attempt_without_a_limit_keeps_uid0(mocker):
     """Without the head's time limit there is no way to tell when the limit hit, so the raw UID 0 stays."""
     rows = (
         "7010|7010|sluid-cby-7010|TIMEOUT|2026-05-01T12:00:00|2026-05-01T13:00:00|"
-        "node300|||cpu=8|/o|/e|carol|short\n"
+        "node300|||cpu=8|/o|/e|carol||short\n"
         "7010.0|7010.0|sluid-cby-7010|CANCELLED by 0|2026-05-01T12:00:05|2026-05-01T13:00:00|"
-        "node300|||cpu=8|||carol|step0\n"
+        "node300|||cpu=8|||carol||step0\n"
     )
     _mock_sacct(mocker, rows)
     contexts = SlurmExecutionContextAdapter().discover_by_ids(["7010"])
@@ -507,9 +506,9 @@ def test_uid0_step_without_retained_head_keeps_uid0(mocker):
     """
     rows = (
         "7008|7008|sluid-cby-7008|TIMEOUT|Unknown|Unknown|"
-        "node300||60|cpu=8|/o|/e|carol|short\n"
+        "node300||60|cpu=8|/o|/e|carol||short\n"
         "7008.0|7008.0|sluid-cby-7008|CANCELLED by 0|2026-05-01T12:00:05|2026-05-01T13:00:00|"
-        "node300||60|cpu=8|||carol|step0\n"
+        "node300||60|cpu=8|||carol||step0\n"
     )
     _mock_sacct(mocker, rows)
     contexts = SlurmExecutionContextAdapter().discover_by_ids(["7008"])
@@ -623,10 +622,11 @@ def test_step_log_tokens_drop_the_step_suffix(mocker):
 
 def test_cancelled_by_uid_resolves_to_username(mocker):
     """The attribution rules key root cancellations on the username `root`."""
-    mocker.patch("pwd.getpwuid", side_effect=lambda uid: mocker.Mock(pw_name="root") if uid == 0 else None)
+    lookup = mocker.patch("pwd.getpwuid")
     _mock_sacct(mocker, _row("9400", "9400", "s-root", "CANCELLED by 0", "12:00:00", "13:00:00"))
     contexts = SlurmExecutionContextAdapter().discover_by_ids(["9400"])
     assert contexts[0]["cancelled_by"] == "root"
+    lookup.assert_not_called()
 
 
 def test_cancelled_by_unknown_uid_stays_numeric(mocker):
