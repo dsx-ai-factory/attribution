@@ -19,6 +19,17 @@ def test_row_remap_does_not_drive_outcome():
     assert registry.outcome_for(["Row Remap"]) is None
 
 
+def test_nvrx_remapped_rows_health_check_discards_itself_and_unhealthy_node():
+    """Discard the pending row-remap health check and the unhealthy-node symptom it causes."""
+    loader = RuleLoader()
+    loader.load(str(get_bundled_rules_path() / "symptom_defaults.py"))
+    registry = registry_from_declarations(loader.symptom_declarations)
+
+    remapped_rows = "NVRx node health check failed: hw_drv_gpu_ecc_remapped_rows"
+    assert set(registry.cascade_discards_for(remapped_rows)) == {remapped_rows, "NVRx unhealthy node"}
+    assert registry.cascade_discards_for("NVRx node health check failed: example_check") == []
+
+
 def test_corroborated_node_failure_has_dedicated_documentation():
     """Keep the independently emitted composite on its canonical page."""
     loader = RuleLoader()
