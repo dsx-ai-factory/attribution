@@ -122,4 +122,6 @@ include = [
     "raise ",
     "http.client",
     "compiling and loading fused kernels",
+    # Ray raylet's periodic summary of workers its memory monitor killed.
+    "killed due to memory pressure",
 ]
