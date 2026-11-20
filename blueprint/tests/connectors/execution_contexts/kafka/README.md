@@ -29,9 +29,8 @@ consumers rebalancing without missing/overlapping contexts. The base connector
 PR retains one structured completion smoke through real Service and SQLite.
 This Blueprint integration follow-up expands it into a full-payload matrix
 (structured/binary, single/multiple failed nodes, and empty/operator cancellation)
-and verifies latest-trigger correlation across later batches. It is independent
-of MFN Runtime integration. Service/output failures explicitly verify the
-documented commit-before-attribution limitation.
+and verifies latest-trigger correlation across later batches. Service/output
+failures explicitly verify the documented commit-before-attribution limitation.
 
 Each discovery closes the consumer before attribution starts. Filtered-only
 batches succeed with visible counts; invalid pod-to-node mappings are skipped.
@@ -68,6 +67,6 @@ metrics), and `__init__.py` (MCA settings). Consumer metric tests use these fake
 from `blueprint/tests/test_telemetry_kafka_consumer.py`, which shares the
 process meter provider with `test_telemetry.py`.
 The [acknowledgement API](../../../../docs/kafka_lifecycle.md) is available;
-Runtime durable storage and its integration remain follow-up work. Kafka result publishing is
-implemented by `output.kafka` and covered in the
+durable work tracking belongs to the application that uses it. Kafka result
+publishing is implemented by `output.kafka` and covered in the
 [Kafka output tests](../../outputs/kafka/).
