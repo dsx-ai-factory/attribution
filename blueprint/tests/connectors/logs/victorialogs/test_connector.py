@@ -1,12 +1,16 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
+import contextvars
 import json
+import math
+import threading
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
 import requests
+import requests.adapters
 from pytest_mock import MockerFixture
 
 from attribution_blueprint.connectors.auth import MTLSAuth, TokenAuth
@@ -15,7 +19,7 @@ from attribution_blueprint.connectors.logs.victorialogs import (
     _build,
     connector as victorialogs,
 )
-from attribution_blueprint.exceptions import PartialCollectionError
+from attribution_blueprint.exceptions import MCAError, PartialCollectionError
 from attribution_blueprint.orchestrator import AttributionOrchestrator
 from attribution_blueprint.types import Source
 
@@ -690,6 +694,199 @@ def test_invalid_source_and_limit_raise_value_error():
         VictoriaLogsConnector(endpoint="http://victorialogs.example", source="unknown")
     with pytest.raises(ValueError, match="limit"):
         _connector(limit=0)
+
+
+def _ns(value: datetime) -> int:
+    return int(value.timestamp()) * 1_000_000_000
+
+
+def _sent_windows(post) -> list[tuple[int, int]]:
+    return [(call.kwargs["data"]["start"], call.kwargs["data"]["end"]) for call in post.call_args_list]
+
+
+def test_window_splits_into_fewest_equal_slices_newest_first(mocker):
+    """A 10-hour window with 4-hour slices reads three equal slices with no gap or overlap."""
+    post = mocker.patch("requests.Session.post", return_value=_response("", mocker))
+    context = _context()
+    start, end = _ns(context["start_time"]), _ns(context["end_time"]) + 1
+    span = end - start
+
+    assert _connector(window_slice_seconds=4 * 3600).collect(context) == []
+
+    assert _sent_windows(post) == [
+        (start + span * 2 // 3, end),
+        (start + span // 3, start + span * 2 // 3),
+        (start, start + span // 3),
+    ]
+
+
+def test_window_of_exact_slice_multiple_sends_no_sliver_request(mocker):
+    """The one-nanosecond exclusive end does not add a request for a sliver slice."""
+    post = mocker.patch("requests.Session.post", return_value=_response("", mocker))
+
+    _connector(window_slice_seconds=2 * 3600).collect(_context())
+
+    assert post.call_count == 5
+
+
+def test_window_shorter_than_one_slice_is_read_as_one_range(mocker):
+    """A window that fits in one slice sends the same single request as an unsliced connector."""
+    post = mocker.patch("requests.Session.post", return_value=_response("", mocker))
+    context = _context()
+
+    _connector(window_slice_seconds=24 * 3600).collect(context)
+
+    assert _sent_windows(post) == [(_ns(context["start_time"]), _ns(context["end_time"]) + 1)]
+
+
+def test_each_slice_pages_under_its_own_budget_and_reports_its_truncation(mocker):
+    """A saturated slice keeps its rows and names itself, without stopping the other slices."""
+    pages = {
+        0: _ndjson([_row("2026-01-15T09:00:00Z", "late")]),
+        1: _ndjson([_row("2026-01-15T03:00:00Z", "early")]),
+    }
+    post = mocker.patch(
+        "requests.Session.post",
+        side_effect=[_response(pages[0], mocker), _response(pages[1], mocker)],
+    )
+
+    with pytest.raises(PartialCollectionError) as raised:
+        _connector(limit=1, max_pages=1, window_slice_seconds=5 * 3600).collect(_context())
+
+    assert post.call_count == 2
+    assert "query 1 slice 1/2: page limit of 1" in str(raised.value)
+    assert "query 1 slice 2/2: page limit of 1" in str(raised.value)
+    assert [entry["body"] for entry in json.loads(raised.value.observations[0]["body"])] == ["early", "late"]
+
+
+def test_concurrent_reads_run_at_the_same_time(mocker):
+    """With a concurrency of three, three reads are in flight together; serial reads would break the barrier."""
+    barrier = threading.Barrier(3, timeout=5)
+
+    def post(*args, **kwargs):
+        barrier.wait()
+        return _response("", mocker)
+
+    mocker.patch("requests.Session.post", side_effect=post)
+    connector = VictoriaLogsConnector(
+        endpoint="http://logs.example",
+        source=Source.SYSLOG,
+        templates={Source.SYSLOG: ["first", "second", "third"]},
+        query_concurrency=3,
+    )
+
+    assert connector.collect(_context()) == []
+
+
+def test_concurrent_failures_keep_read_order_regardless_of_completion_order(mocker):
+    """The first read's error is the one raised even when a later read fails first."""
+    later_failed = threading.Event()
+    first_error = requests.Timeout("first")
+
+    def post(*args, **kwargs):
+        if kwargs["data"]["query"].endswith("(first)"):
+            assert later_failed.wait(timeout=5)
+            raise first_error
+        later_failed.set()
+        raise requests.HTTPError("second")
+
+    mocker.patch("requests.Session.post", side_effect=post)
+    connector = VictoriaLogsConnector(
+        endpoint="http://logs.example",
+        source=Source.SYSLOG,
+        templates={Source.SYSLOG: ["first", "second"]},
+        query_concurrency=2,
+    )
+
+    with pytest.raises(requests.Timeout) as raised:
+        connector.collect(_context())
+
+    assert raised.value is first_error
+
+
+def test_concurrent_reads_keep_rows_in_read_order(mocker):
+    """Rows merge in query order even when a later query answers first."""
+    first_may_answer = threading.Event()
+
+    def post(*args, **kwargs):
+        if kwargs["data"]["query"].endswith("(first)"):
+            assert first_may_answer.wait(timeout=5)
+            return _response(_ndjson([_row("2026-01-15T05:00:00Z", "same", node="node-01")]), mocker)
+        first_may_answer.set()
+        return _response(_ndjson([_row("2026-01-15T05:00:00Z", "same", node="node-02")]), mocker)
+
+    mocker.patch("requests.Session.post", side_effect=post)
+    connector = VictoriaLogsConnector(
+        endpoint="http://logs.example",
+        source=Source.SYSLOG,
+        templates={Source.SYSLOG: ["first", "second"]},
+        node_field="node",
+        query_concurrency=2,
+    )
+
+    [observation] = connector.collect(_context())
+
+    hosts = [entry["resources"][0]["hostname"] for entry in json.loads(observation["body"])]
+    assert hosts == ["node-01", "node-02"]
+
+
+def test_concurrent_reads_run_in_the_callers_context(mocker):
+    """Context-bound values, such as log fields, are visible inside every concurrent read."""
+    marker: contextvars.ContextVar[str | None] = contextvars.ContextVar("marker", default=None)
+    seen: list[str | None] = []
+
+    def post(*args, **kwargs):
+        seen.append(marker.get())
+        return _response("", mocker)
+
+    mocker.patch("requests.Session.post", side_effect=post)
+    connector = _connector(query_concurrency=2, window_slice_seconds=3600)
+    marker.set("caller")
+
+    connector.collect(_context())
+
+    assert seen == ["caller"] * 10
+
+
+def test_concurrency_sizes_the_connection_pool():
+    """Each concurrent read can keep its own pooled connection."""
+    assert _connector(query_concurrency=32)._session.get_adapter("https://")._pool_maxsize == 32
+    assert _connector()._session.get_adapter("https://")._pool_maxsize == requests.adapters.DEFAULT_POOLSIZE
+
+
+@pytest.mark.parametrize("query_concurrency", [0, -1, True, 1.5, "2", None])
+def test_query_concurrency_requires_a_positive_integer(query_concurrency):
+    with pytest.raises(ValueError, match="query_concurrency must be a positive integer"):
+        _connector(query_concurrency=query_concurrency)
+
+
+@pytest.mark.parametrize("window_slice_seconds", [0, -1, 1e-12, math.nan, math.inf, True, "60"])
+def test_window_slice_requires_a_positive_number(window_slice_seconds):
+    with pytest.raises(ValueError, match="window_slice_seconds must be a positive number"):
+        _connector(window_slice_seconds=window_slice_seconds)
+
+
+def test_configured_concurrency_and_slices_reach_the_connector(mocker):
+    """The MCA factory forwards both settings to the requests the connector sends."""
+    post = mocker.patch("requests.Session.post", return_value=_response("", mocker))
+    connector = _build(
+        {"endpoint": "http://logs.example", "query": "*", "query_concurrency": 2, "window_slice_seconds": 7200},
+        {"source": Source.SYSLOG},
+    )
+
+    connector.collect(_context())
+
+    assert post.call_count == 5
+    assert connector._session.get_adapter("https://")._pool_maxsize == requests.adapters.DEFAULT_POOLSIZE
+
+
+@pytest.mark.parametrize(
+    ("setting", "value"),
+    [("query_concurrency", 0), ("window_slice_seconds", 0), ("window_slice_seconds", "inf")],
+)
+def test_factory_rejects_invalid_concurrency_and_slice_settings(setting, value):
+    with pytest.raises(MCAError, match=f"{setting} must be"):
+        _build({"endpoint": "http://logs.example", "query": "*", setting: value}, {"source": Source.SYSLOG})
 
 
 def _cluster_connector(query_kwargs=None, **kwargs):
