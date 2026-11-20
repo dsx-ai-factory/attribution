@@ -1,0 +1,229 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+{{- include "attribution.validate" . }}
+{{- $name := include "attribution.fullname" . }}
+{{- $persistence := eq (include "attribution.persistence" .) "true" }}
+{{- $needsData := or .Values.runner.enabled .Values.dashboard.enabled }}
+{{- $existingConfig := eq (include "attribution.existingConfig" .) "true" }}
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ $name }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "attribution.labels" . | nindent 4 }}
+spec:
+  # One replica: SQLite is single-writer, and the Service keeps per-attributor
+  # state in memory.
+  replicas: 1
+  serviceName: {{ $name }}
+  selector:
+    matchLabels:
+      {{- include "attribution.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "attribution.selectorLabels" . | nindent 8 }}
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+    spec:
+      serviceAccountName: {{ $name }}
+      # Only the runner reads the Kubernetes API.
+      automountServiceAccountToken: {{ .Values.runner.enabled }}
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.podSecurityContext }}
+      securityContext:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        {{- if .Values.service.enabled }}
+        - name: service
+          image: {{ include "attribution.componentImage" (list . "service") | quote }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          {{- if .Values.service.command }}
+          command:
+            {{- toYaml .Values.service.command | nindent 12 }}
+          {{- else }}
+          command:
+            - /opt/attribution-service/.venv/bin/uvicorn
+            - app.main:app
+            - --host
+            - {{ include "attribution.serviceBindAddress" . | quote }}
+            - --port
+            - {{ .Values.service.port | quote }}
+          {{- end }}
+          {{- with .Values.service.args }}
+          args:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with .Values.service.env }}
+          env:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with .Values.service.envFrom }}
+          envFrom:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- if .Values.service.api.enabled }}
+          ports:
+            - {name: api, containerPort: {{ .Values.service.port }}, protocol: TCP}
+          {{- end }}
+          readinessProbe:
+            {{- include "attribution.serviceProbe" (list . .Values.service.probes.readiness) | nindent 12 }}
+          livenessProbe:
+            {{- include "attribution.serviceProbe" (list . .Values.service.probes.liveness) | nindent 12 }}
+          resources:
+            {{- toYaml .Values.service.resources | nindent 12 }}
+          {{- with .Values.securityContext }}
+          securityContext:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with .Values.service.extraVolumeMounts }}
+          volumeMounts:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+        {{- end }}
+        {{- if .Values.runner.enabled }}
+        - name: runner
+          image: {{ include "attribution.componentImage" (list . "runner") | quote }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          {{- if .Values.runner.command }}
+          command:
+            {{- toYaml .Values.runner.command | nindent 12 }}
+          {{- else }}
+          command: [bash, /etc/attribution/runner.sh]
+          {{- end }}
+          {{- with .Values.runner.args }}
+          args:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          env:
+            - {name: SERVICE_URL, value: {{ include "attribution.serviceUrl" . | quote }}}
+            - {name: ECA_COMPONENT, value: {{ .Values.eca.component | quote }}}
+            - {name: LOG_CONNECTOR, value: {{ .Values.logs.connector | quote }}}
+            - {name: NAMESPACES, value: {{ join " " .Values.namespaces | quote }}}
+            - {name: INTERVAL_SECONDS, value: {{ .Values.runner.intervalSeconds | int64 | quote }}}
+            - {name: SETTLE_SECONDS, value: {{ .Values.runner.settleSeconds | int64 | quote }}}
+            - {name: INITIAL_LOOKBACK_SECONDS, value: {{ .Values.runner.initialLookbackSeconds | int64 | quote }}}
+            {{- with .Values.runner.env }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          {{- with .Values.runner.envFrom }}
+          envFrom:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          resources:
+            {{- toYaml .Values.runner.resources | nindent 12 }}
+          {{- with .Values.securityContext }}
+          securityContext:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          volumeMounts:
+            - {name: data, mountPath: /data}
+            - {name: config, mountPath: /etc/attribution, readOnly: true}
+            {{- with .Values.runner.extraVolumeMounts }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+        {{- end }}
+        {{- if .Values.dashboard.enabled }}
+        - name: dashboard
+          image: {{ include "attribution.componentImage" (list . "dashboard") | quote }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          {{- if .Values.dashboard.command }}
+          command:
+            {{- toYaml .Values.dashboard.command | nindent 12 }}
+          {{- else }}
+          command: [bash, /etc/attribution/dashboard.sh]
+          {{- end }}
+          {{- with .Values.dashboard.args }}
+          args:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          env:
+            - {name: ATTRIBUTION_DB, value: {{ .Values.dashboard.databasePath | quote }}}
+            - {name: ATTRIBUTION_WEB_PORT, value: {{ .Values.dashboard.port | quote }}}
+          ports:
+            - {name: web, containerPort: {{ .Values.dashboard.port }}, protocol: TCP}
+          readinessProbe:
+            {{- toYaml .Values.dashboard.probes.readiness | nindent 12 }}
+            httpGet: {path: {{ .Values.dashboard.probes.path }}, port: web}
+          livenessProbe:
+            {{- toYaml .Values.dashboard.probes.liveness | nindent 12 }}
+            httpGet: {path: {{ .Values.dashboard.probes.path }}, port: web}
+          resources:
+            {{- toYaml .Values.dashboard.resources | nindent 12 }}
+          {{- with .Values.securityContext }}
+          securityContext:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          volumeMounts:
+            - {name: data, mountPath: /data}
+            - {name: config, mountPath: /etc/attribution, readOnly: true}
+        {{- end }}
+      volumes:
+        {{- if or .Values.runner.enabled .Values.dashboard.enabled }}
+        - name: config
+          projected:
+            sources:
+              - configMap:
+                  name: {{ $name }}
+              {{- if and .Values.runner.enabled $existingConfig }}
+              {{- with .Values.config.existing.configMap }}
+              {{- if .name }}
+              - configMap:
+                  name: {{ .name }}
+                  items:
+                    - {key: {{ .key | quote }}, path: blueprint.toml}
+              {{- end }}
+              {{- end }}
+              {{- with .Values.config.existing.secret }}
+              {{- if .name }}
+              - secret:
+                  name: {{ .name }}
+                  items:
+                    - {key: {{ .key | quote }}, path: blueprint.toml}
+              {{- end }}
+              {{- end }}
+              {{- end }}
+        {{- end }}
+        {{- if and $needsData (or (not $persistence) .Values.persistence.existingClaim) }}
+        - name: data
+          {{- if and $persistence .Values.persistence.existingClaim }}
+          persistentVolumeClaim:
+            claimName: {{ .Values.persistence.existingClaim }}
+          {{- else }}
+          emptyDir: {}
+          {{- end }}
+        {{- end }}
+        {{- with .Values.extraVolumes }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+  {{- if and $needsData $persistence (not .Values.persistence.existingClaim) }}
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: [ReadWriteOnce]
+        {{- with .Values.persistence.storageClassName }}
+        storageClassName: {{ . }}
+        {{- end }}
+        resources:
+          requests:
+            storage: {{ .Values.persistence.size }}
+  {{- end }}

@@ -1,0 +1,9 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+apiVersion: v2
+name: attribution
+description: Runs the NVIDIA Attribution Service, web UI and a Blueprint runner inside a Kubernetes cluster
+type: application
+version: 0.1.0
+appVersion: "0.1.0"

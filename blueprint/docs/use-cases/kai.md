@@ -6,6 +6,9 @@ The KAI execution-context adapter discovers PodGroups owned by Kubernetes
 and uses the owner lifecycle to report completion, failure, timeout,
 cancellation, and end time.
 
+To run the Blueprint inside the cluster instead of from an operator host, see
+[Run the Blueprint in a cluster](./in-cluster.md).
+
 ## Prerequisites
 
 The Kubernetes identity used by the Blueprint needs `get` and `list` access to

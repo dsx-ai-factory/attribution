@@ -11,3 +11,6 @@ workflows.
   [representative healthy and unhealthy output](./kueue-sample-output.md).
 - [KAI PodGroups](./kai.md) discovers supported Job- and JobSet-owned KAI
   workloads and documents the current lifecycle and retention scope.
+- [Run the Blueprint in a cluster](./in-cluster.md) deploys the Service, web UI
+  and a Blueprint runner as one pod with a Helm chart, and attributes finished
+  KAI or Kueue workloads on a loop.

@@ -1,0 +1,130 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+{{- include "attribution.validate" . }}
+{{- if or .Values.runner.enabled .Values.dashboard.enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "attribution.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "attribution.labels" . | nindent 4 }}
+data:
+  {{- if and .Values.runner.enabled (ne (include "attribution.existingConfig" .) "true") }}
+  # The runner calls the Service at the URL below. No kubeconfig or context: the
+  # adapter and the pod-log connector fall back to the pod's service account.
+  # The namespace and the time window of each pass come from the runner as
+  # command-line overrides.
+  blueprint.toml: |
+    [attribution]
+    service_url = {{ include "attribution.serviceUrl" . | quote }}
+    timeout_seconds = {{ .Values.serviceTimeoutSeconds }}
+
+    [workload]
+    gpus_per_node = {{ .Values.workload.gpusPerNode }}
+
+    [eca]
+    component = {{ .Values.eca.component | quote }}
+
+    [eca.{{ .Values.eca.component }}]
+    timeout_seconds = {{ .Values.eca.timeoutSeconds }}
+    {{- if and (eq .Values.eca.component "kueue") .Values.eca.workloadApiVersion }}
+    workload_api_version = {{ .Values.eca.workloadApiVersion | quote }}
+    {{- end }}
+
+    [log.applog]
+    component = {{ .Values.logs.connector | quote }}
+
+    [log.applog.{{ .Values.logs.connector }}]
+    timestamps = {{ .Values.logs.timestamps }}
+    since_context_start = {{ .Values.logs.sinceContextStart }}
+    max_bytes_per_pod = {{ .Values.logs.maxBytesPerPod | quote }}
+    timeout_seconds = {{ .Values.logs.timeoutSeconds }}
+
+    [output.db]
+    component = "sqlite"
+
+    [output.db.sqlite]
+    path = {{ .Values.dashboard.databasePath | quote }}
+    {{- with .Values.extraConfig }}
+
+    {{- . | nindent 4 }}
+    {{- end }}
+  {{- end }}
+  {{- if .Values.runner.enabled }}
+
+  # One pass per interval and namespace, over [mark, now - settle]. The mark
+  # moves only after the Blueprint exits 0, so a failed pass is retried over the
+  # same window. Consecutive windows meet at the mark and never overlap.
+  # Re-attributing a workload updates its execution_context row and adds an
+  # attribution_run row.
+  runner.sh: |
+    #!/usr/bin/env bash
+    set -uo pipefail
+    state=/data/runner
+    mkdir -p "$state"
+    trap 'exit 0' TERM INT
+
+    # kubectl_logs shells out to kubectl, which the bundle image does not
+    # contain. Without it every pass would fail on its first workload with pods,
+    # so stop here, where the log says why.
+    if [[ "${LOG_CONNECTOR}" == "kubectl_logs" ]] && ! command -v kubectl >/dev/null 2>&1; then
+      echo "logs.connector is kubectl_logs but kubectl is not in this image; build an image that adds it (blueprint/docs/use-cases/in-cluster.md)" >&2
+      exit 1
+    fi
+
+    # The image has no curl, so the health probe is the Blueprint's own Python,
+    # and its errors stay visible in the log.
+    echo "waiting for the service at ${SERVICE_URL}"
+    until /opt/blueprint/.venv/bin/python -c 'import os, urllib.request; urllib.request.urlopen(os.environ["SERVICE_URL"] + "/v2/healthz", timeout=3)'; do
+      echo "service not healthy yet" >&2
+      sleep 2
+    done
+    echo "service healthy; first pass starts"
+
+    ts() { date -u -d "@$1" +%Y-%m-%dT%H:%M:%S+00:00; }
+
+    while true; do
+      now=$(date -u +%s)
+      end=$(( now - SETTLE_SECONDS ))
+      for ns in ${NAMESPACES}; do
+        mark="${state}/${ns}.hwm"
+        if [[ -s "$mark" ]]; then start=$(cat "$mark"); else start=$(( now - INITIAL_LOOKBACK_SECONDS )); fi
+        if (( start >= end )); then continue; fi
+        echo "pass ns=${ns} window=$(ts "$start")..$(ts "$end")"
+        if /opt/blueprint/.venv/bin/nvidia-attribution-blueprint \
+            --config /etc/attribution/blueprint.toml \
+            --connector eca "${ECA_COMPONENT}" namespace "$ns" \
+            --connector eca "${ECA_COMPONENT}" start_time "$(ts "$start")" \
+            --connector eca "${ECA_COMPONENT}" end_time "$(ts "$end")" \
+            {{- range .Values.runner.extraArgs }}
+            {{ . | quote }} \
+            {{- end }}
+            ; then
+          echo "$end" > "$mark"
+        else
+          echo "pass failed ns=${ns}; window kept for retry" >&2
+        fi
+      done
+      sleep "${INTERVAL_SECONDS}" &
+      wait $!
+    done
+  {{- end }}
+  {{- if .Values.dashboard.enabled }}
+
+  dashboard.sh: |
+    #!/usr/bin/env bash
+    set -euo pipefail
+    # Create the results database if it does not exist yet, so the dashboard can
+    # start before the first pass writes to it. Creating it is safe when the
+    # runner also does.
+    mkdir -p "$(dirname "${ATTRIBUTION_DB}")"
+    if [[ ! -f "${ATTRIBUTION_DB}" ]]; then
+      echo "creating the results database at ${ATTRIBUTION_DB}"
+      /opt/blueprint/.venv/bin/python -c 'import os; from attribution_blueprint.connectors.outputs.sqlite import migrate; migrate(os.environ["ATTRIBUTION_DB"])'
+    fi
+    exec /opt/blueprint/.venv/bin/nvidia-attribution-blueprint-web \
+      --db "${ATTRIBUTION_DB}" --host 0.0.0.0 --port "${ATTRIBUTION_WEB_PORT}"
+  {{- end }}
+{{- end }}

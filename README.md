@@ -79,7 +79,7 @@ Three cases the rules engine handles in production:
 
 ## Prerequisites
 
-* **Python.** `>=3.14.6,<3.15` on the host running the Attribution Service. 3.11+ on the host running the Blueprint orchestrator. The two can run on the same host or different hosts.
+* **Python.** `>=3.14.6,<3.15` on the host running the Attribution Service. 3.11+ on the host running the Blueprint orchestrator. The two can run on the same host or different hosts. The Blueprint can also run as a pod inside a Kubernetes cluster: see [Run the Blueprint in a cluster](blueprint/docs/use-cases/in-cluster.md).
 * **uv package manager.** Install with `curl -LsSf https://astral.sh/uv/install.sh | sh`. Every `uv run` command resolves and installs dependencies on first invocation, no separate install step.
 * **Scheduler.** Slurm 25.11+ (SLUID required), Kueue v0.6+ with JobSet v0.5+, or NVIDIA KAI Scheduler for supported Job- and JobSet-owned PodGroups. See the [KAI scope](blueprint/docs/use-cases/kai.md).
 * **Telemetry backends (any subset of):** Loki or VictoriaLogs for application or system logs, a PromQL-compatible Prometheus or Mimir instance for node metrics, `kubectl` access for Kueue pod log collection, or local files for sacct-resolved StdOut/StdErr paths.
@@ -177,6 +177,7 @@ Without `--db`, the helper seeds and serves a demo database. Run it with `--help
 * Common questions: [docs/FAQ.md](docs/FAQ.md)
 * Writing rules: [Add a New Extractor Rule](service/attribution-lib/docs/adding-a-rule.md)
 * Runnable release-bundle quickstart: [docs/quickstart.md](blueprint/docs/quickstart.md)
+* Running the Blueprint inside a cluster with a Helm chart: [Run the Blueprint in a cluster](blueprint/docs/use-cases/in-cluster.md)
 * Blueprint configuration reference: [docs/CONFIGURATION.md](blueprint/docs/CONFIGURATION.md)
 * Bringing your own logs, the observation format every source accepts: [Observation Format](service/service-app/docs/api/observation-format.md)
 * Attributing from syslogs you collected yourself: [Manually Collected Syslogs](blueprint/docs/use-cases/manually-collected-syslogs.md)
