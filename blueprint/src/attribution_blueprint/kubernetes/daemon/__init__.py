@@ -5,32 +5,32 @@
 
 from attribution_blueprint.kubernetes.daemon.client import KubernetesDaemonClient
 from attribution_blueprint.kubernetes.daemon.models import (
-    ObservationEventType,
     OwnerReference,
     PlacementRecord,
     PodPlacement,
     ResourceIdentity,
-    ResourceObservation,
+    ResourceSnapshot,
+    SnapshotEventType,
 )
 from attribution_blueprint.kubernetes.daemon.runtime import KubernetesDaemon
 from attribution_blueprint.kubernetes.daemon.store import (
     CreateResult,
-    ObservationAppendResult,
-    ObservationJournal,
     PlacementStore,
+    SnapshotAppendResult,
+    SnapshotJournal,
 )
 
 __all__ = [
     "CreateResult",
     "KubernetesDaemon",
     "KubernetesDaemonClient",
-    "ObservationAppendResult",
-    "ObservationEventType",
-    "ObservationJournal",
+    "SnapshotAppendResult",
+    "SnapshotEventType",
+    "SnapshotJournal",
     "OwnerReference",
     "PlacementRecord",
     "PlacementStore",
     "PodPlacement",
     "ResourceIdentity",
-    "ResourceObservation",
+    "ResourceSnapshot",
 ]

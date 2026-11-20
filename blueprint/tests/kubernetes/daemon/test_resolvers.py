@@ -8,7 +8,7 @@ import pytest
 from attribution_blueprint.kubernetes.daemon.models import (
     OwnerReference,
     ResourceIdentity,
-    ResourceObservation,
+    ResourceSnapshot,
 )
 from attribution_blueprint.kubernetes.daemon.resolvers import (
     KubernetesOwnershipResolver,
@@ -51,12 +51,12 @@ class _CustomApi:
 
 
 class _Journal:
-    def __init__(self, observations):
-        self.observations = observations
+    def __init__(self, snapshots):
+        self.snapshots = snapshots
 
-    def list_observations_for_uid(self, cluster_id, namespace, uid):
+    def list_snapshots_for_uid(self, cluster_id, namespace, uid):
         assert (cluster_id, namespace) == ("cluster-a", "team-a")
-        return self.observations.get(uid, [])
+        return self.snapshots.get(uid, [])
 
 
 class _UnexpectedApi:
@@ -64,8 +64,8 @@ class _UnexpectedApi:
         raise AssertionError(f"live API should not be used: {name}")
 
 
-def _observation(*, kind, name, uid, owners=()):
-    return ResourceObservation(
+def _snapshot(*, kind, name, uid, owners=()):
+    return ResourceSnapshot(
         cluster_id="cluster-a",
         api_version=(
             "batch/v1"
@@ -194,7 +194,7 @@ def test_resolves_deleted_jobset_owner_from_uid_verified_journal():
     journal = _Journal(
         {
             "job-uid-1": [
-                _observation(
+                _snapshot(
                     kind="Job",
                     name="trainer",
                     uid="job-uid-1",
@@ -202,7 +202,7 @@ def test_resolves_deleted_jobset_owner_from_uid_verified_journal():
                 )
             ],
             "jobset-uid-1": [
-                _observation(
+                _snapshot(
                     kind="JobSet",
                     name="trainer-set",
                     uid="jobset-uid-1",

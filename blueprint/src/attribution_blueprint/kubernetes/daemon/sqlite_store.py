@@ -16,15 +16,15 @@ from attribution_blueprint.kubernetes.daemon.models import (
     CoverageGapReason,
     OwnerReference,
     PlacementRecord,
-    ResourceObservation,
+    ResourceSnapshot,
     WatchCoverage,
 )
 from attribution_blueprint.kubernetes.daemon.store import (
     CaptureResult,
     CreateResult,
-    ObservationAppendResult,
-    ObservationConflictError,
     PlacementConflictError,
+    SnapshotAppendResult,
+    SnapshotConflictError,
 )
 
 _SCHEMA = """
@@ -54,7 +54,7 @@ CREATE TABLE IF NOT EXISTS placement_deletion (
 );
 CREATE INDEX IF NOT EXISTS placement_deletion_expiration
     ON placement_deletion(deleted_at);
-CREATE TABLE IF NOT EXISTS resource_observation (
+CREATE TABLE IF NOT EXISTS resource_snapshot (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     cluster_id TEXT NOT NULL,
     api_version TEXT NOT NULL,
@@ -71,19 +71,19 @@ CREATE TABLE IF NOT EXISTS resource_observation (
     status_json TEXT,
     UNIQUE(cluster_id, api_version, kind, uid, resource_version)
 );
-CREATE INDEX IF NOT EXISTS resource_observation_identity
-    ON resource_observation(cluster_id, namespace, uid, id);
-CREATE INDEX IF NOT EXISTS resource_observation_kind
-    ON resource_observation(cluster_id, namespace, kind, id);
-CREATE TABLE IF NOT EXISTS observation_owner_reference (
-    observation_id INTEGER NOT NULL,
+CREATE INDEX IF NOT EXISTS resource_snapshot_identity
+    ON resource_snapshot(cluster_id, namespace, uid, id);
+CREATE INDEX IF NOT EXISTS resource_snapshot_kind
+    ON resource_snapshot(cluster_id, namespace, kind, id);
+CREATE TABLE IF NOT EXISTS snapshot_owner_reference (
+    snapshot_id INTEGER NOT NULL,
     owner_uid TEXT NOT NULL,
     controller INTEGER NOT NULL,
-    PRIMARY KEY(observation_id, owner_uid),
-    FOREIGN KEY(observation_id) REFERENCES resource_observation(id) ON DELETE CASCADE
+    PRIMARY KEY(snapshot_id, owner_uid),
+    FOREIGN KEY(snapshot_id) REFERENCES resource_snapshot(id) ON DELETE CASCADE
 );
-CREATE INDEX IF NOT EXISTS observation_owner_identity
-    ON observation_owner_reference(owner_uid, observation_id);
+CREATE INDEX IF NOT EXISTS snapshot_owner_identity
+    ON snapshot_owner_reference(owner_uid, snapshot_id);
 CREATE TABLE IF NOT EXISTS watch_coverage (
     cluster_id TEXT NOT NULL,
     namespace TEXT NOT NULL,
@@ -137,10 +137,10 @@ class SQLitePlacementStore:
         self.retention_days = retention_days
         Path(path).parent.mkdir(parents=True, exist_ok=True)
         with self._connection() as connection:
+            self._reject_legacy_schema(connection)
             connection.executescript(_SCHEMA)
-            self._migrate_observation_schema(connection)
             self._migrate_coverage_gap_schema(connection)
-            connection.execute("PRAGMA user_version = 4")
+            connection.execute("PRAGMA user_version = 5")
             self._prune_expired(connection)
 
     def _connect(self) -> sqlite3.Connection:
@@ -227,9 +227,9 @@ class SQLitePlacementStore:
                 (namespace,),
             )
 
-    def capture_observation(
+    def capture_snapshot(
         self,
-        observation: ResourceObservation,
+        snapshot: ResourceSnapshot,
         *,
         source_name: str,
         placement: PlacementRecord | None,
@@ -240,7 +240,7 @@ class SQLitePlacementStore:
             raise ValueError("mark_deleted requires a placement")
         with self._connection() as connection:
             connection.execute("BEGIN IMMEDIATE")
-            observation_result = self._append_observation(connection, observation)
+            snapshot_result = self._append_snapshot(connection, snapshot)
             placement_result = self._create(connection, placement) if placement is not None else None
             if mark_deleted:
                 connection.execute(
@@ -254,77 +254,77 @@ class SQLitePlacementStore:
             if advance_checkpoint:
                 self._mark_watch_checkpoint(
                     connection,
-                    cluster_id=observation.cluster_id,
-                    namespace=observation.namespace,
+                    cluster_id=snapshot.cluster_id,
+                    namespace=snapshot.namespace,
                     source_name=source_name,
-                    resource_version=observation.resource_version,
-                    checkpointed_at=observation.observed_at,
+                    resource_version=snapshot.resource_version,
+                    checkpointed_at=snapshot.observed_at,
                 )
-            return CaptureResult(observation_result, placement_result)
+            return CaptureResult(snapshot_result, placement_result)
 
-    def list_observations_for_uid(
+    def list_snapshots_for_uid(
         self,
         cluster_id: str,
         namespace: str,
         uid: str,
-    ) -> list[ResourceObservation]:
+    ) -> list[ResourceSnapshot]:
         with self._connection() as connection:
             rows = connection.execute(
                 """
                 SELECT *
-                FROM resource_observation
+                FROM resource_snapshot
                 WHERE cluster_id = ? AND namespace = ? AND uid = ?
                 ORDER BY id
                 """,
                 (cluster_id, namespace, uid),
             ).fetchall()
-        return [_observation_from_row(row) for row in rows]
+        return [_snapshot_from_row(row) for row in rows]
 
-    def list_observations_for_owner(
+    def list_snapshots_for_owner(
         self,
         cluster_id: str,
         namespace: str,
         owner_uid: str,
-    ) -> list[ResourceObservation]:
+    ) -> list[ResourceSnapshot]:
         with self._connection() as connection:
             rows = connection.execute(
                 """
-                SELECT observation.*
-                FROM resource_observation AS observation
-                JOIN observation_owner_reference AS owner
-                  ON owner.observation_id = observation.id
-                WHERE observation.cluster_id = ?
-                  AND observation.namespace = ?
+                SELECT snapshot.*
+                FROM resource_snapshot AS snapshot
+                JOIN snapshot_owner_reference AS owner
+                  ON owner.snapshot_id = snapshot.id
+                WHERE snapshot.cluster_id = ?
+                  AND snapshot.namespace = ?
                   AND owner.owner_uid = ?
-                ORDER BY observation.id
+                ORDER BY snapshot.id
                 """,
                 (cluster_id, namespace, owner_uid),
             ).fetchall()
-        return [_observation_from_row(row) for row in rows]
+        return [_snapshot_from_row(row) for row in rows]
 
-    def list_latest_observations_for_kind(
+    def list_latest_snapshots_for_kind(
         self,
         cluster_id: str,
         namespace: str,
         kind: str,
-    ) -> list[ResourceObservation]:
+    ) -> list[ResourceSnapshot]:
         with self._connection() as connection:
             rows = connection.execute(
                 """
                 WITH latest AS (
-                    SELECT uid, MAX(id) AS observation_id
-                    FROM resource_observation
+                    SELECT uid, MAX(id) AS snapshot_id
+                    FROM resource_snapshot
                     WHERE cluster_id = ? AND namespace = ? AND kind = ?
                     GROUP BY uid
                 )
-                SELECT observation.*
-                FROM resource_observation AS observation
-                JOIN latest ON latest.observation_id = observation.id
-                ORDER BY observation.id
+                SELECT snapshot.*
+                FROM resource_snapshot AS snapshot
+                JOIN latest ON latest.snapshot_id = snapshot.id
+                ORDER BY snapshot.id
                 """,
                 (cluster_id, namespace, kind),
             ).fetchall()
-        return [_observation_from_row(row) for row in rows]
+        return [_snapshot_from_row(row) for row in rows]
 
     def list_history_controller_uids(
         self,
@@ -343,8 +343,8 @@ class SQLitePlacementStore:
         Exact overlap remains the reconstruction layer's responsibility.
         """
         del end
-        grouped: dict[str, list[ResourceObservation]] = {}
-        for candidate in self.list_latest_observations_for_kind(
+        grouped: dict[str, list[ResourceSnapshot]] = {}
+        for candidate in self.list_latest_snapshots_for_kind(
             cluster_id,
             namespace,
             kind,
@@ -377,33 +377,33 @@ class SQLitePlacementStore:
             )
         ]
 
-    def list_observations_for_controller(
+    def list_snapshots_for_controller(
         self,
         cluster_id: str,
         namespace: str,
         controller_uid: str,
-    ) -> list[ResourceObservation]:
+    ) -> list[ResourceSnapshot]:
         with self._connection() as connection:
             rows = connection.execute(
                 """
                 WITH RECURSIVE related(uid) AS (
                     SELECT ?
                     UNION
-                    SELECT observation.uid
-                    FROM resource_observation AS observation
-                    JOIN observation_owner_reference AS owner
-                      ON owner.observation_id = observation.id
+                    SELECT snapshot.uid
+                    FROM resource_snapshot AS snapshot
+                    JOIN snapshot_owner_reference AS owner
+                      ON owner.snapshot_id = snapshot.id
                     JOIN related
                       ON related.uid = owner.owner_uid
-                    WHERE observation.cluster_id = ?
-                      AND observation.namespace = ?
+                    WHERE snapshot.cluster_id = ?
+                      AND snapshot.namespace = ?
                 )
-                SELECT observation.*
-                FROM resource_observation AS observation
+                SELECT snapshot.*
+                FROM resource_snapshot AS snapshot
                 JOIN related USING (uid)
-                WHERE observation.cluster_id = ?
-                  AND observation.namespace = ?
-                ORDER BY observation.id
+                WHERE snapshot.cluster_id = ?
+                  AND snapshot.namespace = ?
+                ORDER BY snapshot.id
                 """,
                 (
                     controller_uid,
@@ -413,7 +413,7 @@ class SQLitePlacementStore:
                     namespace,
                 ),
             ).fetchall()
-        return [_observation_from_row(row) for row in rows]
+        return [_snapshot_from_row(row) for row in rows]
 
     def get_watch_coverage(
         self,
@@ -582,25 +582,25 @@ class SQLitePlacementStore:
         rows = connection.execute(
             """
             WITH latest AS (
-                SELECT uid, MAX(id) AS observation_id
-                FROM resource_observation
+                SELECT uid, MAX(id) AS snapshot_id
+                FROM resource_snapshot
                 WHERE cluster_id = ? AND namespace = ?
                   AND api_version = ? AND kind = ?
                 GROUP BY uid
             )
-            SELECT observation.*
-            FROM resource_observation AS observation
-            JOIN latest ON latest.observation_id = observation.id
+            SELECT snapshot.*
+            FROM resource_snapshot AS snapshot
+            JOIN latest ON latest.snapshot_id = snapshot.id
             """,
             (cluster_id, namespace, api_version, kind),
         ).fetchall()
         for row in rows:
-            latest = _observation_from_row(row)
+            latest = _snapshot_from_row(row)
             if latest.uid in active_resource_uids or latest.event_type == "DELETED":
                 continue
             # Relist absence proves retirement, but not the exact deletion time.
             # Preserve source metadata so consumers only use a real deletionTimestamp.
-            self._append_observation(
+            self._append_snapshot(
                 connection,
                 replace(
                     latest,
@@ -720,56 +720,56 @@ class SQLitePlacementStore:
         self._update(connection, merged)
         return CreateResult.UPDATED
 
-    def _append_observation(
+    def _append_snapshot(
         self,
         connection: sqlite3.Connection,
-        observation: ResourceObservation,
-    ) -> ObservationAppendResult:
-        owner_references_json = _owner_references_json(observation.owner_references)
-        selected_metadata_json = _optional_json(observation.selected_metadata)
-        status_json = _optional_json(observation.status)
+        snapshot: ResourceSnapshot,
+    ) -> SnapshotAppendResult:
+        owner_references_json = _owner_references_json(snapshot.owner_references)
+        selected_metadata_json = _optional_json(snapshot.selected_metadata)
+        status_json = _optional_json(snapshot.status)
         row = connection.execute(
             """
             SELECT *
-            FROM resource_observation
+            FROM resource_snapshot
             WHERE cluster_id = ? AND api_version = ? AND kind = ?
               AND uid = ? AND resource_version = ?
             """,
             (
-                observation.cluster_id,
-                observation.api_version,
-                observation.kind,
-                observation.uid,
-                observation.resource_version,
+                snapshot.cluster_id,
+                snapshot.api_version,
+                snapshot.kind,
+                snapshot.uid,
+                snapshot.resource_version,
             ),
         ).fetchone()
         if row is not None:
-            existing = _observation_from_row(row)
-            merged = _merge_observations(existing, observation)
+            existing = _snapshot_from_row(row)
+            merged = _merge_snapshots(existing, snapshot)
             if merged == existing:
-                return ObservationAppendResult.DUPLICATE
-            self._update_observation(connection, row["id"], merged)
-            return ObservationAppendResult.UPDATED
+                return SnapshotAppendResult.DUPLICATE
+            self._update_snapshot(connection, row["id"], merged)
+            return SnapshotAppendResult.UPDATED
 
         cursor = connection.execute(
             """
-            INSERT INTO resource_observation(
+            INSERT INTO resource_snapshot(
                 cluster_id, api_version, kind, namespace, name, uid,
                 resource_version, event_type, observed_at, source_timestamp,
                 owner_references_json, selected_metadata_json, status_json
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
-                observation.cluster_id,
-                observation.api_version,
-                observation.kind,
-                observation.namespace,
-                observation.name,
-                observation.uid,
-                observation.resource_version,
-                observation.event_type,
-                observation.observed_at,
-                observation.source_timestamp,
+                snapshot.cluster_id,
+                snapshot.api_version,
+                snapshot.kind,
+                snapshot.namespace,
+                snapshot.name,
+                snapshot.uid,
+                snapshot.resource_version,
+                snapshot.event_type,
+                snapshot.observed_at,
+                snapshot.source_timestamp,
                 owner_references_json,
                 selected_metadata_json,
                 status_json,
@@ -777,35 +777,35 @@ class SQLitePlacementStore:
         )
         connection.executemany(
             """
-            INSERT INTO observation_owner_reference(observation_id, owner_uid, controller)
+            INSERT INTO snapshot_owner_reference(snapshot_id, owner_uid, controller)
             VALUES (?, ?, ?)
             """,
             [
                 (cursor.lastrowid, owner.uid, int(owner.controller))
-                for owner in observation.owner_references
+                for owner in snapshot.owner_references
             ],
         )
-        return ObservationAppendResult.APPENDED
+        return SnapshotAppendResult.APPENDED
 
     @staticmethod
-    def _update_observation(
+    def _update_snapshot(
         connection: sqlite3.Connection,
-        observation_id: int,
-        observation: ResourceObservation,
+        snapshot_id: int,
+        snapshot: ResourceSnapshot,
     ) -> None:
         connection.execute(
             """
-            UPDATE resource_observation
+            UPDATE resource_snapshot
             SET source_timestamp = ?,
                 selected_metadata_json = ?,
                 status_json = ?
             WHERE id = ?
             """,
             (
-                observation.source_timestamp,
-                _optional_json(observation.selected_metadata),
-                _optional_json(observation.status),
-                observation_id,
+                snapshot.source_timestamp,
+                _optional_json(snapshot.selected_metadata),
+                _optional_json(snapshot.status),
+                snapshot_id,
             ),
         )
 
@@ -862,17 +862,20 @@ class SQLitePlacementStore:
             ],
         )
 
-    @staticmethod
-    def _migrate_observation_schema(connection: sqlite3.Connection) -> None:
-        columns = {
-            row["name"]
-            for row in connection.execute(
-                "PRAGMA table_info(resource_observation)"
-            ).fetchall()
-        }
-        if "selected_metadata_json" not in columns:
-            connection.execute(
-                "ALTER TABLE resource_observation ADD COLUMN selected_metadata_json TEXT"
+    def _reject_legacy_schema(self, connection: sqlite3.Connection) -> None:
+        legacy = connection.execute(
+            """
+            SELECT name
+            FROM sqlite_master
+            WHERE type = 'table'
+              AND name IN ('resource_observation', 'observation_owner_reference')
+            LIMIT 1
+            """
+        ).fetchone()
+        if legacy is not None:
+            raise RuntimeError(
+                "legacy KubernetesDaemon observation schema detected in "
+                f"{self.path!r}; delete and recreate the database"
             )
 
     @staticmethod
@@ -916,13 +919,13 @@ class SQLitePlacementStore:
         rows = connection.execute(
             """
             WITH latest AS (
-                SELECT cluster_id, namespace, uid, MAX(id) AS observation_id
-                FROM resource_observation
+                SELECT cluster_id, namespace, uid, MAX(id) AS snapshot_id
+                FROM resource_snapshot
                 GROUP BY cluster_id, namespace, uid
             )
-            SELECT observation.*
-            FROM resource_observation AS observation
-            JOIN latest ON latest.observation_id = observation.id
+            SELECT snapshot.*
+            FROM resource_snapshot AS snapshot
+            JOIN latest ON latest.snapshot_id = snapshot.id
             """
         ).fetchall()
         latest_by_uid = {
@@ -1002,7 +1005,7 @@ class SQLitePlacementStore:
                 related.update(children)
             connection.executemany(
                 """
-                DELETE FROM resource_observation
+                DELETE FROM resource_snapshot
                 WHERE cluster_id = ? AND namespace = ? AND uid = ?
                 """,
                 [(cluster_id, namespace, uid) for uid in related],
@@ -1027,7 +1030,7 @@ class SQLitePlacementStore:
 
 
 def _history_candidate_may_overlap(
-    candidate: ResourceObservation,
+    candidate: ResourceSnapshot,
     start: datetime | None,
 ) -> bool:
     if start is None:
@@ -1148,8 +1151,8 @@ def _optional_json(value: dict | None) -> str | None:
     return json.dumps(value, separators=(",", ":"), sort_keys=True) if value is not None else None
 
 
-def _observation_from_row(row: sqlite3.Row) -> ResourceObservation:
-    return ResourceObservation(
+def _snapshot_from_row(row: sqlite3.Row) -> ResourceSnapshot:
+    return ResourceSnapshot(
         cluster_id=row["cluster_id"],
         api_version=row["api_version"],
         kind=row["kind"],
@@ -1179,10 +1182,10 @@ def _observation_from_row(row: sqlite3.Row) -> ResourceObservation:
     )
 
 
-def _merge_observations(
-    existing: ResourceObservation,
-    replayed: ResourceObservation,
-) -> ResourceObservation:
+def _merge_snapshots(
+    existing: ResourceSnapshot,
+    replayed: ResourceSnapshot,
+) -> ResourceSnapshot:
     immutable_existing = (
         existing.cluster_id,
         existing.api_version,
@@ -1216,7 +1219,7 @@ def _merge_observations(
             replayed.source_timestamp,
         )
     except ValueError as error:
-        raise ObservationConflictError(
+        raise SnapshotConflictError(
             f"resource {replayed.kind} {replayed.namespace}/{replayed.name} "
             f"UID {replayed.uid} version {replayed.resource_version} changed during replay: {error}"
         ) from error

@@ -32,7 +32,7 @@ class ResourceIdentity:
     uid: str
 
 
-ObservationEventType = Literal["SNAPSHOT", "ADDED", "MODIFIED", "DELETED"]
+SnapshotEventType = Literal["SNAPSHOT", "ADDED", "MODIFIED", "DELETED"]
 CoverageGapReason = Literal["RESOURCE_VERSION_EXPIRED", "WATCH_SOURCE_CHANGED"]
 
 
@@ -74,7 +74,7 @@ class CoverageGap:
 
 
 @dataclass(frozen=True)
-class ResourceObservation:
+class ResourceSnapshot:
     """One durable Kubernetes resource version from a list or watch."""
 
     cluster_id: str
@@ -84,7 +84,7 @@ class ResourceObservation:
     name: str
     uid: str
     resource_version: str
-    event_type: ObservationEventType
+    event_type: SnapshotEventType
     observed_at: str
     owner_references: tuple[OwnerReference, ...] = ()
     selected_metadata: dict | None = None
@@ -97,12 +97,12 @@ class ResourceObservation:
         resource: dict,
         *,
         cluster_id: str,
-        event_type: ObservationEventType,
+        event_type: SnapshotEventType,
         status: dict | None = None,
         selected_metadata: dict | None = None,
         source_timestamp: str | None = None,
         observed_at: str | None = None,
-    ) -> ResourceObservation:
+    ) -> ResourceSnapshot:
         metadata = resource.get("metadata") or {}
         required = {
             "cluster_id": cluster_id,
@@ -115,7 +115,7 @@ class ResourceObservation:
         }
         missing = [field for field, value in required.items() if not value]
         if missing:
-            raise ValueError(f"resource observation is missing {', '.join(missing)}")
+            raise ValueError(f"resource snapshot is missing {', '.join(missing)}")
         return cls(
             cluster_id=cluster_id,
             api_version=required["api_version"],

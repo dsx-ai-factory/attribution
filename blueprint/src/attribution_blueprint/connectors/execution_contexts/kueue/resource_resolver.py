@@ -8,14 +8,14 @@ from attribution_blueprint.connectors.execution_contexts.kueue.helpers import (
 )
 from attribution_blueprint.kubernetes.daemon.models import (
     ResourceIdentity,
-    ResourceObservation,
-)
-from attribution_blueprint.kubernetes.daemon.observation_queries import (
-    latest_observations_for_kind,
-    observation_identity,
+    ResourceSnapshot,
 )
 from attribution_blueprint.kubernetes.daemon.resolvers import ResolutionPending, UnsupportedOwner
-from attribution_blueprint.kubernetes.daemon.store import ObservationJournal
+from attribution_blueprint.kubernetes.daemon.snapshot_queries import (
+    latest_snapshots_for_kind,
+    snapshot_identity,
+)
+from attribution_blueprint.kubernetes.daemon.store import SnapshotJournal
 
 
 class KueueResourceResolver:
@@ -26,7 +26,7 @@ class KueueResourceResolver:
         custom_api,
         *,
         workload_version: str = "v1beta1",
-        journal: ObservationJournal | None = None,
+        journal: SnapshotJournal | None = None,
         cluster_id: str = "default",
     ):
         self.custom_api = custom_api
@@ -103,7 +103,7 @@ class KueueResourceResolver:
     ) -> ResourceIdentity | None:
         if self.journal is None:
             return None
-        named = latest_observations_for_kind(
+        named = latest_snapshots_for_kind(
             self.journal,
             self.cluster_id,
             namespace,
@@ -111,12 +111,12 @@ class KueueResourceResolver:
             name=workload_name,
         )
         matches = [
-            observation
-            for observation in named
-            if _observation_matches_owner(observation, owner)
+            snapshot
+            for snapshot in named
+            if _snapshot_matches_owner(snapshot, owner)
         ]
         if len(matches) == 1:
-            return observation_identity(matches[0])
+            return snapshot_identity(matches[0])
         if len(matches) > 1:
             raise UnsupportedOwner("multiple retained Kueue Workloads match the Pod owner")
         # A retained object with the same name can belong to an older or
@@ -128,16 +128,16 @@ def _matches_owner(workload: dict, owner: ResourceIdentity) -> bool:
     return workload_matches_owner(workload, owner)
 
 
-def _observation_matches_owner(
-    observation: ResourceObservation,
+def _snapshot_matches_owner(
+    snapshot: ResourceSnapshot,
     owner: ResourceIdentity,
 ) -> bool:
     if any(
         reference.controller
         and reference.kind == owner.kind
         and reference.uid == owner.uid
-        for reference in observation.owner_references
+        for reference in snapshot.owner_references
     ):
         return True
-    selected_metadata = observation.selected_metadata or {}
+    selected_metadata = snapshot.selected_metadata or {}
     return (selected_metadata.get("labels") or {}).get(WORKLOAD_OWNER_UID_LABEL) == owner.uid

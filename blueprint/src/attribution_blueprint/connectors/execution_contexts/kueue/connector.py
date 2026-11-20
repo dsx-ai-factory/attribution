@@ -71,7 +71,7 @@ from attribution_blueprint.connectors.execution_contexts.kueue.prometheus_placem
     PlacementResolver,
 )
 from attribution_blueprint.kubernetes.attempts import (
-    resource_from_observation,
+    resource_from_snapshot,
     retained_history_covers_window,
 )
 from attribution_blueprint.kubernetes.client import (
@@ -988,9 +988,9 @@ class KueueExecutionContextAdapter:
         for history in histories:
             workloads = {
                 metadata["uid"]: metadata["name"]
-                for observation in history.get("observations") or []
-                if observation.get("kind") == "Workload"
-                and (metadata := observation.get("metadata") or {}).get("uid")
+                for snapshot in history.get("snapshots") or []
+                if snapshot.get("kind") == "Workload"
+                and (metadata := snapshot.get("metadata") or {}).get("uid")
                 and metadata.get("name")
                 and (workload_name is None or metadata["name"] == workload_name)
             }
@@ -999,9 +999,9 @@ class KueueExecutionContextAdapter:
                 placement = PlacementRecord.from_resource(resource)
                 history_placements[placement.pod_uid] = placement
             resources_by_uid = {
-                metadata["uid"]: resource_from_observation(observation)
-                for observation in history.get("observations") or []
-                if (metadata := observation.get("metadata") or {}).get("uid")
+                metadata["uid"]: resource_from_snapshot(snapshot)
+                for snapshot in history.get("snapshots") or []
+                if (metadata := snapshot.get("metadata") or {}).get("uid")
             }
             for retained_name in sorted(set(workloads.values())):
                 for attempt in attempts_from_workload_history(

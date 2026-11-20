@@ -1830,7 +1830,7 @@ def test_collect_pod_evidence_prefers_node_loss_over_alphabetically_smaller_exit
 
 def test_collect_pod_evidence_reports_node_failure_without_a_resolvable_node_name():
     """A verified Pod can report NodeLost with no resolvable `spec.nodeName`
-    (e.g. a retained observation that selected the failure reason but not
+    (e.g. a retained snapshot that selected the failure reason but not
     the node binding). `has_node_failure` must still be True even though
     there's no node name to add to `node_loss_nodes` or pick as
     `failed_node` — losing this signal would let a genuinely failed

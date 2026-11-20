@@ -12,7 +12,7 @@ from urllib.parse import parse_qs, urlparse
 from loguru import logger
 
 from attribution_blueprint.kubernetes.daemon.health import HealthState
-from attribution_blueprint.kubernetes.daemon.models import ResourceObservation
+from attribution_blueprint.kubernetes.daemon.models import ResourceSnapshot
 from attribution_blueprint.kubernetes.daemon.store import PlacementStore
 
 
@@ -84,7 +84,7 @@ def serve_api(
                             else None
                         )
                         for controller_uid in controller_uids:
-                            observations = evidence_store.list_observations_for_controller(
+                            snapshots = evidence_store.list_snapshots_for_controller(
                                 cluster_id,
                                 requested_namespace,
                                 controller_uid,
@@ -92,10 +92,10 @@ def serve_api(
                             histories.append(
                                 _history_response(
                                     requested_namespace,
-                                    observations,
-                                    _placements_for_observations(
+                                    snapshots,
+                                    _placements_for_snapshots(
                                         evidence_store,
-                                        observations,
+                                        snapshots,
                                     ),
                                     coverage,
                                 )
@@ -158,27 +158,27 @@ def _aware_datetime(value: str | None) -> datetime | None:
 
 def _history_response(
     namespace: str,
-    observations: list[ResourceObservation],
+    snapshots: list[ResourceSnapshot],
     placements: list[dict],
     coverage: dict,
 ) -> dict:
     return {
         "namespace": namespace,
-        "observations": [_observation_response(observation) for observation in observations],
+        "snapshots": [_snapshot_response(snapshot) for snapshot in snapshots],
         "placements": placements,
         "coverage": coverage,
     }
 
 
-def _observation_response(observation: ResourceObservation) -> dict:
+def _snapshot_response(snapshot: ResourceSnapshot) -> dict:
     result = {
-        "apiVersion": observation.api_version,
-        "kind": observation.kind,
+        "apiVersion": snapshot.api_version,
+        "kind": snapshot.kind,
         "metadata": {
-            "namespace": observation.namespace,
-            "name": observation.name,
-            "uid": observation.uid,
-            "resourceVersion": observation.resource_version,
+            "namespace": snapshot.namespace,
+            "name": snapshot.name,
+            "uid": snapshot.uid,
+            "resourceVersion": snapshot.resource_version,
             "ownerReferences": [
                 {
                     "apiVersion": owner.api_version,
@@ -187,30 +187,30 @@ def _observation_response(observation: ResourceObservation) -> dict:
                     "uid": owner.uid,
                     "controller": owner.controller,
                 }
-                for owner in observation.owner_references
+                for owner in snapshot.owner_references
             ],
         },
-        "eventType": observation.event_type,
-        "observedAt": observation.observed_at,
+        "eventType": snapshot.event_type,
+        "observedAt": snapshot.observed_at,
     }
-    if observation.selected_metadata is not None:
-        result["selectedMetadata"] = observation.selected_metadata
-    if observation.source_timestamp is not None:
-        result["sourceTimestamp"] = observation.source_timestamp
-    if observation.status is not None:
-        result["status"] = observation.status
+    if snapshot.selected_metadata is not None:
+        result["selectedMetadata"] = snapshot.selected_metadata
+    if snapshot.source_timestamp is not None:
+        result["sourceTimestamp"] = snapshot.source_timestamp
+    if snapshot.status is not None:
+        result["status"] = snapshot.status
     return result
 
 
-def _placements_for_observations(
+def _placements_for_snapshots(
     evidence_store: PlacementStore,
-    observations: list[ResourceObservation],
+    snapshots: list[ResourceSnapshot],
 ) -> list[dict]:
     pod_uids = sorted(
         {
-            observation.uid
-            for observation in observations
-            if observation.kind == "Pod"
+            snapshot.uid
+            for snapshot in snapshots
+            if snapshot.kind == "Pod"
         }
     )
     records = {
