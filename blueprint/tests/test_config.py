@@ -696,6 +696,17 @@ def test_workload_nvl_inventory_is_loaded_as_a_snapshot(tmp_path):
     assert config.node_to_nvl_domain == {"node-a": "fabric-a", "node-b": "fabric-b"}
 
 
+def test_workload_nvl_inventory_preserves_nonzero_identifiers(tmp_path):
+    inventory = tmp_path / "domains.json"
+    inventory.write_text(json.dumps({"alpha": "01", "omega": "00fabric", "beta": "fabric-00"}))
+    config_path = tmp_path / "config.toml"
+    config_path.write_text(f'[workload]\nnvl_domain_mapping_path = "{inventory}"\n')
+
+    config = load_config(config_path)
+
+    assert config.node_to_nvl_domain == {"alpha": "01", "omega": "00fabric", "beta": "fabric-00"}
+
+
 @pytest.mark.parametrize(
     "content",
     [
@@ -705,6 +716,10 @@ def test_workload_nvl_inventory_is_loaded_as_a_snapshot(tmp_path):
         '{"node-a": ""}',
         '{"node-a": "00000000-0000-0000-0000-000000000000"}',
         '{"node-a": "00000000000000000000000000000000"}',
+        pytest.param('{"alpha": "00", "omega": "00"}', id="double-zero"),
+        pytest.param('{"alpha": "000", "omega": "000"}', id="triple-zero"),
+        pytest.param('{"alpha": "0000000000000000000000000000000000000000000000000000000000000000"}', id="long-zero"),
+        pytest.param('{"alpha": " 00 "}', id="padded-zero"),
         '{"node-a": "fabric-a", "node-a": "fabric-b"}',
         '{"node-a": "fabric-a", "NODE-A": "fabric-b"}',
     ],

@@ -710,6 +710,26 @@ class TestV2AttributionShape:
 
 
 class TestNvlDomainTransition:
+    @pytest.mark.parametrize(
+        "domain",
+        ["0", "00", "000", "0" * 64, " 00 "],
+        ids=["single-zero", "double-zero", "triple-zero", "long-zero", "padded-zero"],
+    )
+    def test_zero_only_domains_are_rejected_at_http_boundary(self, client, domain):
+        payload = json.loads(make_up_attributor_info("v2").model_dump_json())
+        payload["workload"]["nodes"] = {"alpha": [0], "omega": [1]}
+        payload["workload"]["node_to_nvl_domain"] = {"alpha": domain, "omega": domain}
+
+        response = client.post("/v2/attributor", json=payload)
+
+        assert response.status_code == 422
+
+    @pytest.mark.parametrize("domain", ["01", "00fabric", "fabric-00"])
+    def test_v2_preserves_nonzero_inventory_identifiers(self, domain):
+        info = make_up_attributor_info("v2", node_to_nvl_domain={"node0": domain})
+
+        assert info.to_lib_jobinfo().node_to_nvl_domain == {"node0": domain}
+
     @pytest.mark.parametrize("version", ["v1", "v2"])
     def test_legacy_workloads_have_no_explicit_membership(self, version):
         assert make_up_attributor_info(version).to_lib_jobinfo().node_to_nvl_domain is None

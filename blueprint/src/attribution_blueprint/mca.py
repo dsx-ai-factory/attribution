@@ -649,7 +649,7 @@ def _load_nvl_domain_mapping(path: Any) -> dict[str, str] | None:
             nil_uuid = UUID(domain_id).int == 0
         except ValueError:
             nil_uuid = False
-        if not hostname or not domain_id or domain_id == "0" or nil_uuid:
+        if not hostname or not domain_id.strip("0") or nil_uuid:
             raise MCAError(f"{field} requires non-empty hostnames and non-empty, non-zero domain IDs")
         node = hostname.lower()
         domain = domain_id

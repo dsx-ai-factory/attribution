@@ -129,6 +129,7 @@ def normalize_node_to_nvl_domain(mapping: Mapping[str, str], nodes: Sequence[str
     if not isinstance(mapping, Mapping):
         raise ValueError("node_to_nvl_domain must be a hostname-to-domain mapping")
     allocation = {node.lower() for node in nodes}
+    qualified_nodes = _qualified_nodes_by_short_name(tuple(allocation))
     normalized: dict[str, str] = {}
     for hostname, domain in mapping.items():
         if not isinstance(hostname, str) or not hostname:
@@ -139,7 +140,7 @@ def normalize_node_to_nvl_domain(mapping: Mapping[str, str], nodes: Sequence[str
             if short_node in allocation:
                 node = short_node
             elif short_node == node:
-                matches = _qualified_nodes_by_short_name(tuple(allocation)).get(short_node, ())
+                matches = qualified_nodes.get(short_node, ())
                 if len(matches) == 1:
                     node = matches[0]
         if node not in allocation:
@@ -149,7 +150,7 @@ def normalize_node_to_nvl_domain(mapping: Mapping[str, str], nodes: Sequence[str
             nil_uuid = UUID(domain_id).int == 0
         except ValueError:
             nil_uuid = False
-        if not domain_id or domain_id == "0" or nil_uuid:
+        if not domain_id.strip("0") or nil_uuid:
             raise ValueError("node_to_nvl_domain values must be non-empty, non-zero domain identifiers")
         domain = domain_id
         if node in normalized and normalized[node] != domain:

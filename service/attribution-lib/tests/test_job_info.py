@@ -572,6 +572,27 @@ class TestJobInfoBuilderScheduler:
 
 
 class TestNvlDomainMembership:
+    @pytest.mark.parametrize(
+        "domain",
+        ["0", "00", "000", "0" * 64, " 00 "],
+        ids=["single-zero", "double-zero", "triple-zero", "long-zero", "padded-zero"],
+    )
+    def test_rejects_zero_only_domains_for_allocated_nodes(self, timezone, domain):
+        with pytest.raises(ValueError, match="non-zero domain identifiers"):
+            _builder(timezone, node_to_ranks={"alpha": [0], "omega": [1]}).node_to_nvl_domain(
+                {"alpha": domain, "omega": domain}
+            )
+
+    @pytest.mark.parametrize("domain", ["01", "00fabric", "fabric-00"])
+    def test_preserves_nonzero_inventory_identifiers(self, timezone, domain):
+        job = (
+            _builder(timezone, node_to_ranks={"alpha": [0], "omega": [1]})
+            .job_end_time(datetime.fromtimestamp(1700000100, tz=timezone))
+            .node_to_nvl_domain({"alpha": domain, "omega": domain})
+            .build()
+        )
+        assert job.node_to_nvl_domain == {"alpha": domain, "omega": domain}
+
     def test_normalizes_names_and_copies_membership(self, timezone):
         domains = {"NODE-A.example.test": "domain-1"}
         job = (

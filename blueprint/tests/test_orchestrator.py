@@ -1037,6 +1037,31 @@ def test_nvl_inventory_enriches_only_allocated_hosts_and_preserves_snapshots(ove
     assert result["node_to_nvl_domain"] == expected
 
 
+def test_explicit_null_membership_bypasses_inventory_and_preserves_legacy_wire_payload():
+    ctx = _make_ctx("1")
+    ctx["node_to_nvl_domain"] = None
+    eca = MagicMock()
+    eca.discover.return_value = [ctx]
+    output = _ListOutput()
+    attribution = _make_attribution_mock()
+    pipeline = AttributionOrchestrator(
+        execution_context_adapters=[eca],
+        log_connectors=[],
+        metrics_connectors=[],
+        attribution=attribution,
+        outputs=[output],
+        node_to_nvl_domain={"node-1-1": "fabric-a", "node-1-2": "fabric-a"},
+    )
+
+    pipeline.analyze()
+
+    saved_context, result = output.entries[0]
+    assert saved_context["node_to_nvl_domain"] is None
+    assert "node_to_nvl_domain" not in result
+    wire = _wire(attribution.create_attributor.call_args.args[0])
+    assert "node_to_nvl_domain" not in wire["workload"]
+
+
 def test_nvl_inventory_rejects_conflicting_fqdn_aliases():
     eca = MagicMock()
     eca.discover.return_value = [_make_ctx("1")]
