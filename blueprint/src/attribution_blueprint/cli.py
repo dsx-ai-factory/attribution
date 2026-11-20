@@ -276,6 +276,7 @@ def _run_config(
         config.outputs,
         dump_observations_dir=Path(dump_observations) if dump_observations else None,
         gpus_per_node=config.gpus_per_node,
+        node_to_nvl_domain=config.node_to_nvl_domain,
     )
 
     try:

@@ -12,7 +12,7 @@ from loguru import logger
 import attribution_lib
 from attribution_lib.attr_types import JobNodeAttributions
 from attribution_lib.decision_trace_recorder import Action, DecisionRecorder, NodeType
-from attribution_lib.exceptions import UnknownSymptomError
+from attribution_lib.exceptions import UnknownNodeError, UnknownSymptomError
 from attribution_lib.job_info import JobInfo
 from attribution_lib.sources import SourceSet, SymptomSet
 from attribution_lib.symptoms.base import BaseSymptom
@@ -24,6 +24,7 @@ UNKNOWN_SYMPTOM_PREFIX = "unknown-symptom-"
 
 def _apply_nvl_domain_cascade_pruning(
     node_symptoms: dict[str, SymptomSet[BaseSymptom]],
+    job_info: JobInfo,
     recorder: Optional[DecisionRecorder] = None,
 ) -> None:
     """Prune allowlisted cascade targets when a *sibling* node reports a primary.
@@ -34,35 +35,46 @@ def _apply_nvl_domain_cascade_pruning(
 
     Args:
         node_symptoms: Per-node symptoms after same-node DAG pruning.
+        job_info: Workload membership; absent maps retain the configured resolver.
         recorder: Optional decision recorder for cascade-prune trace events.
     """
-    domain_resolver = attribution_lib.node_domain_resolver
+    domain_resolver = (
+        job_info.node_to_nvl_domain.get
+        if job_info.node_to_nvl_domain is not None
+        else attribution_lib.node_domain_resolver
+    )
     if domain_resolver is None:
         return
 
     registry = attribution_lib.get_symptom_registry()
-    nodes_by_nvl_domain: dict[str, list[str]] = defaultdict(list)
+    nodes_by_nvl_domain: dict[str, list[tuple[str, str]]] = defaultdict(list)
     discards_by_nvl_domain_and_node: dict[str, dict[str, list[str]]] = defaultdict(lambda: defaultdict(list))
 
     for node, per_node_set in node_symptoms.items():
-        nvl_domain = domain_resolver(node)
+        canonical_node = node
+        if job_info.node_to_nvl_domain is not None:
+            try:
+                canonical_node = job_info.verify_node(node)
+            except UnknownNodeError:
+                continue
+        nvl_domain = domain_resolver(canonical_node)
         if nvl_domain is None:
             continue
 
-        nodes_by_nvl_domain[nvl_domain].append(node)
+        nodes_by_nvl_domain[nvl_domain].append((node, canonical_node))
         for symptom in per_node_set.symptoms():
             if symptom.symptom_id.startswith(UNKNOWN_SYMPTOM_PREFIX):
                 continue
-            discards_by_nvl_domain_and_node[nvl_domain][node].extend(
+            discards_by_nvl_domain_and_node[nvl_domain][canonical_node].extend(
                 registry.cascade_discards_for(symptom.symptom_id, scope=CascadeScope.NVL_DOMAIN)
             )
 
     for nvl_domain, nodes in nodes_by_nvl_domain.items():
-        for node in nodes:
+        for node, canonical_node in nodes:
             sibling_targets = {
                 target
                 for primary_node, targets in discards_by_nvl_domain_and_node[nvl_domain].items()
-                if primary_node != node
+                if primary_node != canonical_node
                 for target in targets
             }
             if len(sibling_targets) == 0:
@@ -171,7 +183,7 @@ def translate_and_prune_node_attributions(
             resolved = registry.resolve_symptom(base_symptom.symptom_id)
             cascade_prune(per_node_set, resolved, job_info=job_info, recorder=recorder, hostname=node)
 
-    _apply_nvl_domain_cascade_pruning(node_symptoms, recorder=recorder)
+    _apply_nvl_domain_cascade_pruning(node_symptoms, job_info, recorder=recorder)
 
     for node, per_node_set in node_symptoms.items():
         # Keep only nodes that still have at least one "bad" symptom after pruning.

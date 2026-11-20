@@ -28,7 +28,7 @@ from attribution_lib.decision_trace_recorder import (
     NodeType as LibNodeType,
 )
 from attribution_lib.ingest_summary import DropReason, IngestSummary
-from attribution_lib.job_info import JobInfo, JobInfoBuilder, Scheduler
+from attribution_lib.job_info import JobInfo, JobInfoBuilder, Scheduler, normalize_node_to_nvl_domain
 from attribution_lib.observation.inbound import Id as ObservationId
 from attribution_lib.sources import (
     Source as LibSource,
@@ -36,7 +36,7 @@ from attribution_lib.sources import (
 )
 from fastapi.encoders import jsonable_encoder
 from loguru import logger
-from pydantic import AwareDatetime, BaseModel, Field
+from pydantic import AwareDatetime, BaseModel, Field, model_validator
 
 from app.attribution import AttributionSource, Symptom
 from app.attributor import (
@@ -67,10 +67,27 @@ class AttributorWorkloadInfoV2(HashableModel):
     failed_node: Optional[str] = None
     status: str
     nodes: dict[str, list[int]]
+    node_to_nvl_domain: Optional[dict[str, str]] = Field(
+        default=None,
+        description=(
+            "Optional hostname-to-physical-NVLink-domain mapping, independent of hostname conventions. "
+            "Use fabric cluster UUIDs or inventory domain IDs, not bare clique IDs. "
+            "Keys must identify allocated nodes; unambiguous short/FQDN and case normalization follow node verification. "
+            "Blank and all-zero domain IDs are invalid: omit unknown nodes. "
+            "An explicit empty or partial map is authoritative. Null or absent retains the library resolver."
+        ),
+    )
     name: str
     username: str
     last_tflops_time: Optional[datetime] = None
     framework: str
+
+    @model_validator(mode="after")
+    def validate_nvl_membership(self) -> "AttributorWorkloadInfoV2":
+        """Reject invalid topology before constructing an attributor."""
+        if self.node_to_nvl_domain is not None:
+            self.node_to_nvl_domain = normalize_node_to_nvl_domain(self.node_to_nvl_domain, list(self.nodes))
+        return self
 
 
 class AttributorInfoV2(HashableModel):
@@ -94,6 +111,8 @@ class AttributorInfoV2(HashableModel):
             timezone=w.timezone,
             node_to_ranks=w.nodes,
         )
+        if w.node_to_nvl_domain is not None:
+            builder.node_to_nvl_domain(w.node_to_nvl_domain)
         if w.scheduler is not None:
             builder.scheduler(w.scheduler)
         if w.interest_start_time:

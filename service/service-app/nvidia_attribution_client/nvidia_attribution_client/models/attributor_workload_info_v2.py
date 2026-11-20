@@ -36,11 +36,12 @@ class AttributorWorkloadInfoV2(BaseModel):
     failed_node: Optional[StrictStr] = None
     status: StrictStr
     nodes: Dict[str, List[StrictInt]]
+    node_to_nvl_domain: Optional[Dict[str, StrictStr]] = None
     name: StrictStr
     username: StrictStr
     last_tflops_time: Optional[datetime] = None
     framework: StrictStr
-    __properties: ClassVar[List[str]] = ["id", "type", "scheduler", "srun_cmd", "job_start_time", "timezone", "job_end_time", "interest_start_time", "interest_end_time", "exit_code_signal", "cancelled_by", "time_limit", "failed_node", "status", "nodes", "name", "username", "last_tflops_time", "framework"]
+    __properties: ClassVar[List[str]] = ["id", "type", "scheduler", "srun_cmd", "job_start_time", "timezone", "job_end_time", "interest_start_time", "interest_end_time", "exit_code_signal", "cancelled_by", "time_limit", "failed_node", "status", "nodes", "node_to_nvl_domain", "name", "username", "last_tflops_time", "framework"]
 
     model_config = ConfigDict(
         validate_by_name=True,
@@ -126,6 +127,11 @@ class AttributorWorkloadInfoV2(BaseModel):
         if self.failed_node is None and "failed_node" in self.model_fields_set:
             _dict['failed_node'] = None
 
+        # set to None if node_to_nvl_domain (nullable) is None
+        # and model_fields_set contains the field
+        if self.node_to_nvl_domain is None and "node_to_nvl_domain" in self.model_fields_set:
+            _dict['node_to_nvl_domain'] = None
+
         # set to None if last_tflops_time (nullable) is None
         # and model_fields_set contains the field
         if self.last_tflops_time is None and "last_tflops_time" in self.model_fields_set:
@@ -158,6 +164,7 @@ class AttributorWorkloadInfoV2(BaseModel):
             "failed_node": obj.get("failed_node"),
             "status": obj.get("status"),
             "nodes": obj.get("nodes"),
+            "node_to_nvl_domain": obj.get("node_to_nvl_domain"),
             "name": obj.get("name"),
             "username": obj.get("username"),
             "last_tflops_time": obj.get("last_tflops_time"),

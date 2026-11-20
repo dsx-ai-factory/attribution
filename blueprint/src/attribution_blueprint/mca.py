@@ -18,12 +18,14 @@ Precedence: CLI > env > TOML > built-in defaults.
 
 from __future__ import annotations
 
+import json
 import os
 import tomllib
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Mapping
+from uuid import UUID
 
 from loguru import logger
 
@@ -50,7 +52,9 @@ if "attribution" not in _registry._FRAMEWORKS:
         direct_params={"service_url": _PARAM, "timeout_seconds": _PARAM},
     )
 if "workload" not in _registry._FRAMEWORKS:
-    _registry.register_framework(name="workload", direct_params={"gpus_per_node": _PARAM})
+    _registry.register_framework(
+        name="workload", direct_params={"gpus_per_node": _PARAM, "nvl_domain_mapping_path": _PARAM}
+    )
 
 # Auto-discover every connector package under attribution_blueprint.connectors.
 # Each package registers its framework and/or component via side-effect imports
@@ -559,6 +563,7 @@ class Config:
     log_connectors: list[LogConnector]
     metrics_connectors: list[MetricsConnector]
     gpus_per_node: int | None = None
+    node_to_nvl_domain: dict[str, str] | None = None
 
 
 def _coerce_int(value: Any, field: str) -> int:
@@ -615,6 +620,45 @@ def _component_or_raise(framework: str, name: str):
         raise MCAError(f"unknown {framework} component: {name!r}")
 
 
+def _load_nvl_domain_mapping(path: Any) -> dict[str, str] | None:
+    """Load an optional inventory snapshot; unknown hosts should be omitted."""
+    if path is None:
+        return None
+    field = "workload.nvl_domain_mapping_path"
+    if not isinstance(path, str) or not path:
+        raise MCAError(f"{field} must be a non-empty path")
+
+    def unique_domains(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+        inventory: dict[str, Any] = {}
+        for hostname, domain in pairs:
+            if hostname in inventory and inventory[hostname] != domain:
+                raise ValueError(f"conflicting domains for {hostname!r}")
+            inventory[hostname] = domain
+        return inventory
+
+    try:
+        raw = json.loads(Path(path).expanduser().read_text(encoding="utf-8"), object_pairs_hook=unique_domains)
+    except (OSError, ValueError) as exc:
+        raise MCAError(f"{field} could not load a JSON mapping: {path}") from exc
+    if not isinstance(raw, dict):
+        raise MCAError(f"{field} must contain a hostname-to-domain JSON object")
+    normalized: dict[str, str] = {}
+    for hostname, domain in raw.items():
+        domain_id = domain.strip() if isinstance(domain, str) else ""
+        try:
+            nil_uuid = UUID(domain_id).int == 0
+        except ValueError:
+            nil_uuid = False
+        if not hostname or not domain_id.strip("0") or nil_uuid:
+            raise MCAError(f"{field} requires non-empty hostnames and non-empty, non-zero domain IDs")
+        node = hostname.lower()
+        domain = domain_id
+        if node in normalized and normalized[node] != domain:
+            raise MCAError(f"{field} contains conflicting domains for {node!r}")
+        normalized[node] = domain
+    return normalized
+
+
 def build_config(merged: dict) -> Config:
     attr = merged.get("attribution") or {}
     service_url = attr.get("service_url", "http://localhost:8080")
@@ -648,6 +692,7 @@ def build_config(merged: dict) -> Config:
         log_connectors=log_connectors,
         metrics_connectors=metrics_connectors,
         gpus_per_node=gpus_per_node,
+        node_to_nvl_domain=_load_nvl_domain_mapping(workload.get("nvl_domain_mapping_path")),
     )
 
 
