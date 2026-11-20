@@ -24,11 +24,15 @@ PreFilterCallable: TypeAlias = Callable[["EntryProtocol", "JobInfo"], Union[bool
 
 @dataclass
 class PreFilterSpec:
-    """Pre-filter specification registered by rules for a given source type."""
+    """Pre-filter specification registered by rules for a given source type.
+
+    An entry that contains a keep term is exempt from the exclude terms. Callables still apply to it.
+    """
 
     include_terms: list[str] = field(default_factory=list)
     exclude_terms: list[str] = field(default_factory=list)
     callables: list[PreFilterCallable] = field(default_factory=list)
+    keep_terms: list[str] = field(default_factory=list)
 
 
 @dataclass
