@@ -1836,3 +1836,62 @@ tflops_start = false
 [[cases.expected_events]]
 event_type = "Application.mfu"
 rule = "MFU"
+
+# Ray memory-monitor OOM kills (applog:RayHostOomKill), as Ray prints them. The
+# 2.55 and 2.56 lines stop after the clause that follows the memory figures; Ray
+# continues those lines with object store and worker details. The IPs are
+# unmapped, so each kill is job-level; tests/applog_rules_test.py covers node
+# resolution and the IP-less first line of the two-line form.
+[[cases]]
+description = "Ray 2.59 memory monitor kill emits user task OOM kill"
+line = "ray.exceptions.OutOfMemoryError: 1 worker(s) were killed due to the node running low on memory. Memory on the node (IP: 192.0.2.24, ID: 5e1d2c3b4a596875e1d2c3b4a596875e1d2c3b4a596875e1d2c3b4a5) was 29.12GB used / 30.00GB limit (0.970671)"
+
+[[cases.expected_events]]
+event_type = "Attribution.node.bad"
+rule = "RayMemoryMonitorOomKill"
+payload = { symptom = "OOM kill of user task" }
+
+[[cases]]
+description = "Ray 2.56 memory monitor kill emits user task OOM kill"
+line = "ray.exceptions.OutOfMemoryError: 1 worker(s) were killed due to the node running low on memory. Memory on the node (IP: 192.0.2.24, ID: 5e1d2c3b4a596875e1d2c3b4a596875e1d2c3b4a596875e1d2c3b4a5) was 29.12GB / 30.00GB (0.970671); OOM kill reason: Memory usage 31267487744B exceeded threshold of 30601641984B (95.0% of 32212254720B total)"
+
+[[cases.expected_events]]
+event_type = "Attribution.node.bad"
+rule = "RayMemoryMonitorOomKill"
+payload = { symptom = "OOM kill of user task" }
+
+[[cases]]
+description = "Ray 2.55 memory monitor kill emits user task OOM kill"
+line = "ray.exceptions.OutOfMemoryError: 1 worker(s) were killed due to the node running low on memory. Memory on the node (IP: 192.0.2.24, ID: 5e1d2c3b4a596875e1d2c3b4a596875e1d2c3b4a596875e1d2c3b4a5) was 29.12GB / 30.00GB (0.970671), which exceeds the memory usage threshold of 0.950000"
+
+[[cases.expected_events]]
+event_type = "Attribution.node.bad"
+rule = "RayMemoryMonitorOomKill"
+payload = { symptom = "OOM kill of user task" }
+
+[[cases]]
+description = "Ray 2.54 memory monitor lease details line emits user task OOM kill"
+line = "Memory on the node (IP: 192.0.2.24, ID: 5e1d2c3b4a596875e1d2c3b4a596875e1d2c3b4a596875e1d2c3b4a5) where the lease (lease ID: 01000000b0c1d2e3f4051627b0c1d2e3f4051627b0c1d2e3f4051627b0c1d2e3, name=TrainWorker.__init__, pid=4321, memory used=12.40GB) was running was 29.12GB / 30.00GB (0.970671), which exceeds the memory usage threshold of 0.95. Ray killed this worker (ID: b0c1d2e3f4051627b0c1d2e3f4051627b0c1d2e3f4051627b0c1d2e3) because it was the most recently scheduled task; to see more information about memory usage on this node, use `ray logs raylet.out -ip 192.0.2.24`. To see the logs of the worker, use `ray logs worker-b0c1d2e3f4051627b0c1d2e3f4051627b0c1d2e3f4051627b0c1d2e3*out -ip 192.0.2.24. Top 10 memory users:"
+
+[[cases.expected_events]]
+event_type = "Attribution.node.bad"
+rule = "RayMemoryMonitorOomKill"
+payload = { symptom = "OOM kill of user task" }
+
+[[cases]]
+description = "Ray 2.49 memory monitor task details line emits user task OOM kill"
+line = "Memory on the node (IP: 192.0.2.24, ID: 5e1d2c3b4a596875e1d2c3b4a596875e1d2c3b4a596875e1d2c3b4a5) where the task (task ID: 0f1e2d3c4b5a6978ffffffffffffffffffffffff01000000, name=preprocess_shard, pid=4321, memory used=12.40GB) was running was 29.12GB / 30.00GB (0.970671), which exceeds the memory usage threshold of 0.95. Ray killed this worker (ID: b0c1d2e3f4051627b0c1d2e3f4051627b0c1d2e3f4051627b0c1d2e3) because it was the most recently scheduled task; to see more information about memory usage on this node, use `ray logs raylet.out -ip 192.0.2.24`. To see the logs of the worker, use `ray logs worker-b0c1d2e3f4051627b0c1d2e3f4051627b0c1d2e3f4051627b0c1d2e3*out -ip 192.0.2.24. Top 10 memory users:"
+
+[[cases.expected_events]]
+event_type = "Attribution.node.bad"
+rule = "RayMemoryMonitorOomKill"
+payload = { symptom = "OOM kill of user task" }
+
+[[cases]]
+description = "Ray raylet OOM summary forwarded to the driver emits user task OOM kill"
+line = "\u001b[33m(raylet, ip=192.0.2.24)\u001b[0m [2026-03-13 10:15:42,123 E 4321 4321] (raylet) node_manager.cc:3388: 1 Workers (tasks / actors) killed due to memory pressure (OOM), 0 Workers crashed due to other reasons at node (ID: 5e1d2c3b4a596875e1d2c3b4a596875e1d2c3b4a596875e1d2c3b4a5, IP: 192.0.2.24) over the last time period. To see more information about the Workers killed on this node, use `ray logs raylet.out -ip 192.0.2.24`"
+
+[[cases.expected_events]]
+event_type = "Attribution.node.bad"
+rule = "RayletOomKillSummary"
+payload = { symptom = "OOM kill of user task" }

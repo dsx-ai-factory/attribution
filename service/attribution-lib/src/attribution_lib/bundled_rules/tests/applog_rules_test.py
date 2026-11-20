@@ -607,3 +607,75 @@ def test_multicast_skip_marker_logs_from_applog(app_tst_bldr, big_jobinfo):
         app_tst_bldr(big_jobinfo, entries=test_data)
 
     mock_info.assert_any_call("Applog marker detected: Gracefully skipping multicast initialization")
+
+
+@pytest.mark.parametrize(
+    "lines",
+    [
+        [
+            "ray.exceptions.OutOfMemoryError: 1 worker(s) were killed due to the node running low on memory. "
+            "Memory on the node (IP: {ip}, ID: 5e1d2c3b4a596875e1d2c3b4a596875e1d2c3b4a596875e1d2c3b4a5) "
+            "was 29.12GB used / 30.00GB limit (0.970671)",
+        ],
+        # Through Ray 2.54 the first line names no node, so the two lines are one kill.
+        [
+            "ray.exceptions.OutOfMemoryError: Task was killed due to the node running low on memory.",
+            "Memory on the node (IP: {ip}, ID: 5e1d2c3b4a596875e1d2c3b4a596875e1d2c3b4a596875e1d2c3b4a5) "
+            "where the task (task ID: 0f1e2d3c4b5a6978ffffffffffffffffffffffff01000000, name=preprocess_shard, "
+            "pid=4321, memory used=12.40GB) was running was 29.12GB / 30.00GB (0.970671), which exceeds the "
+            "memory usage threshold of 0.95. Ray killed this worker "
+            "(ID: b0c1d2e3f4051627b0c1d2e3f4051627b0c1d2e3f4051627b0c1d2e3) because it was the most recently "
+            "scheduled task; to see more information about memory usage on this node, use "
+            "`ray logs raylet.out -ip {ip}`. To see the logs of the worker, use "
+            "`ray logs worker-b0c1d2e3f4051627b0c1d2e3f4051627b0c1d2e3f4051627b0c1d2e3*out -ip {ip}. "
+            "Top 10 memory users:",
+        ],
+        [
+            "1 Workers (tasks / actors) killed due to memory pressure (OOM), 0 Workers crashed due to other "
+            "reasons at node (ID: 5e1d2c3b4a596875e1d2c3b4a596875e1d2c3b4a596875e1d2c3b4a5, IP: {ip}) over the "
+            "last time period. To see more information about the Workers killed on this node, use "
+            "`ray logs raylet.out -ip {ip}`",
+        ],
+    ],
+    ids=["memory-monitor-kill", "two-line-kill", "raylet-summary"],
+)
+@pytest.mark.parametrize(
+    "nodes,ip,mapping,expected_node",
+    [
+        pytest.param(["gpu-n01", "gpu-n02"], "192.0.2.24", {"192.0.2.24": "gpu-n02"}, "gpu-n02", id="job-node"),
+        pytest.param(
+            ["gpu-n01", "gpu-n02"],
+            "192.0.2.24",
+            {"192.0.2.24": "gpu-n02.cluster.example"},
+            "gpu-n02",
+            id="qualified-job-node",
+        ),
+        pytest.param(["gpu-n01", "gpu-n02"], "192.0.2.24", {}, None, id="unmapped"),
+        pytest.param(["gpu-n01", "gpu-n02"], "192.0.2.24", {"192.0.2.24": "gpu-n09"}, None, id="node-outside-job"),
+        # Nodes named by IP: Ray reports a pod IP that maps to the node, or the node's own IP.
+        pytest.param(
+            ["198.51.100.7", "198.51.100.8"],
+            "192.0.2.24",
+            {"192.0.2.24": "198.51.100.8"},
+            "198.51.100.8",
+            id="ip-named-node-mapped",
+        ),
+        pytest.param(["198.51.100.7", "198.51.100.8"], "198.51.100.8", {}, "198.51.100.8", id="ip-named-node"),
+        pytest.param(["198.51.100.7", "198.51.100.8"], "198.51.100.9", {}, None, id="ip-outside-ip-named-job"),
+    ],
+)
+def test_ray_oom_kill_blames_the_reported_job_node_not_the_logging_node(
+    app_tst_bldr, simple_job_factory, lines, nodes, ip, mapping, expected_node
+):
+    job_info = simple_job_factory(nodes=nodes)
+    # Ray forwards the kill through the driver, so every line is stored under the head node.
+    entries = [{"body": line.format(ip=ip), "resources": [{"kind": "node", "hostname": nodes[0]}]} for line in lines]
+    with hostname_mapping(mapping):
+        result = app_tst_bldr(job_info, entries=entries)
+    rows = result.event_stream.query_raw(
+        "SELECT e.payload FROM events e JOIN event_types et ON e.event_type = et.id "
+        "JOIN rules r ON e.source_rule = r.id "
+        "WHERE et.name = 'Attribution.node.bad' AND r.name IN ('RayMemoryMonitorOomKill', 'RayletOomKillSummary')",
+        [],
+    )
+    assert [json.loads(payload) for (payload,) in rows] == [{"node": expected_node, "symptom": "OOM kill of user task"}]
