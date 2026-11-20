@@ -17,14 +17,67 @@ from attribution_blueprint.connectors.execution_contexts.kafka import (
 )
 from attribution_blueprint.connectors.execution_contexts.kafka.connector import KafkaConsumerError
 from attribution_blueprint.exceptions import MCAError
+from attribution_blueprint.orchestrator import _context_with_workload_gpu_defaults
 
 FIXTURE = Path(__file__).parents[3] / "fixtures" / "kafka_completion_events.json"
 EVENT_TYPE = "com.example.job.completed.v1"
+EVENT_TYPE_V2 = "com.example.job.completed.v2"
 TOPIC = "job-events"
 
 
 def _events() -> list[dict]:
     return json.loads(FIXTURE.read_text())
+
+
+def _allocations_event() -> dict:
+    """Return a completion event that places the job as per-node allocations across two clusters."""
+    return {
+        "specversion": "1.0",
+        "id": "3f6c1b8e-2d4a-4e9b-a7c5-9e0d1f2a3b04",
+        "source": "/example/scheduler",
+        "type": EVENT_TYPE_V2,
+        "subject": "jobs/job-1234",
+        "time": "2026-10-22T09:30:12Z",
+        "datacontenttype": "application/json",
+        "data": {
+            "id": "job-1234",
+            "job_id": "job-1234",
+            "attempt_id": "1",
+            "scheduler": "example",
+            "name": "sample-pretrain-run",
+            "user_name": "example-user",
+            "state": "FAILED",
+            "start_time": "2026-10-22T06:00:00Z",
+            "end_time": "2026-10-22T09:30:00Z",
+            "timezone": "America/Los_Angeles",
+            "time_limit": 600,
+            "failed_nodes": ["gpu-n02"],
+            "cancelled_by": "",
+            "allocations": [
+                {
+                    "node": "cpu-n07",
+                    "cluster": "cluster-a",
+                    "gpus": 0,
+                    "replicas": [{"name": "job-1234-head-0", "ip": "192.0.2.10"}],
+                },
+                {
+                    "node": "gpu-n01",
+                    "cluster": "cluster-b",
+                    "gpus": 8,
+                    "replicas": [
+                        {"name": "job-1234-worker-0", "ip": "198.51.100.21"},
+                        {"name": "job-1234-worker-1", "ip": "198.51.100.22"},
+                    ],
+                },
+                {
+                    "node": "gpu-n02",
+                    "cluster": "cluster-b",
+                    "gpus": 8,
+                    "replicas": [{"name": "job-1234-worker-2", "ip": "203.0.113.5"}],
+                },
+            ],
+        },
+    }
 
 
 class TP:
@@ -987,3 +1040,305 @@ def test_uncommitted_resend_cannot_supersede_a_committed_event():
     assert eca.last_discovery_stats["superseded"] == 0
     assert eca.last_discovery_stats["redeliveries"] == 0
     assert consumer.commits == [{0: 1}, {1: 1}]
+
+
+def _discover_one(event, encoding="structured"):
+    """Discover a single event with both completion event types accepted."""
+    message = _structured([event]) if encoding == "structured" else [_binary(event)]
+    eca, _ = _make_eca(message, event_types=[EVENT_TYPE, EVENT_TYPE_V2])
+    contexts = eca.discover()
+    assert eca.last_discovery_stats["malformed"] == 0
+    [context] = contexts
+    return context
+
+
+@pytest.mark.parametrize("encoding", ["structured", "binary"])
+def test_allocations_event_derives_placement_fields_and_keeps_allocations(encoding):
+    ctx = _discover_one(_allocations_event(), encoding)
+
+    assert ctx["id"] == ctx["job_id"] == "job-1234"
+    assert ctx["attempt_id"] == "1"
+    assert ctx["scheduler"] == "example"
+    assert ctx["state"] == "FAILED"
+    assert ctx["start_time"] == datetime(2026, 10, 22, 6, 0, tzinfo=timezone.utc)
+    assert ctx["end_time"] == datetime(2026, 10, 22, 9, 30, tzinfo=timezone.utc)
+    assert ctx["timezone"] == "America/Los_Angeles"
+    assert ctx["time_limit"] == 600
+    assert ctx["failed_node"] == "gpu-n02"
+    assert ctx["nodes"] == ["cpu-n07", "gpu-n01", "gpu-n02"]
+    assert ctx["gpu_count"] == 16
+    assert ctx["pod_names"] == ["job-1234-head-0", "job-1234-worker-0", "job-1234-worker-1", "job-1234-worker-2"]
+    assert ctx["pod_nodes"] == {
+        "job-1234-head-0": "cpu-n07",
+        "job-1234-worker-0": "gpu-n01",
+        "job-1234-worker-1": "gpu-n01",
+        "job-1234-worker-2": "gpu-n02",
+    }
+    assert "cluster" not in ctx
+    assert "namespace" not in ctx
+    assert ctx["allocations"] == [
+        {
+            "node": "cpu-n07",
+            "cluster": "cluster-a",
+            "gpus": 0,
+            "replicas": [{"name": "job-1234-head-0", "ip": "192.0.2.10"}],
+        },
+        {
+            "node": "gpu-n01",
+            "cluster": "cluster-b",
+            "gpus": 8,
+            "replicas": [
+                {"name": "job-1234-worker-0", "ip": "198.51.100.21"},
+                {"name": "job-1234-worker-1", "ip": "198.51.100.22"},
+            ],
+        },
+        {
+            "node": "gpu-n02",
+            "cluster": "cluster-b",
+            "gpus": 8,
+            "replicas": [{"name": "job-1234-worker-2", "ip": "203.0.113.5"}],
+        },
+    ]
+
+
+def test_allocations_in_one_cluster_set_the_context_cluster():
+    event = _allocations_event()
+    event["data"]["allocations"][0]["cluster"] = "cluster-b"
+
+    ctx = _discover_one(event)
+
+    assert ctx["cluster"] == "cluster-b"
+
+
+def test_cpu_only_allocations_report_zero_gpus_instead_of_a_per_node_estimate():
+    event = _allocations_event()
+    event["data"]["allocations"] = [
+        {"node": "cpu-n07", "cluster": "cluster-a", "gpus": 0, "replicas": [{"name": "job-1234-head-0"}]}
+    ]
+
+    ctx = _discover_one(event)
+
+    assert ctx["nodes"] == ["cpu-n07"]
+    assert ctx["gpu_count"] == 0
+    # Outputs estimate gpu_count from gpus_per_node only when it is absent.
+    assert _context_with_workload_gpu_defaults(ctx, 8)["gpu_count"] == 0
+
+
+@pytest.mark.parametrize(
+    "replica",
+    [
+        {"name": "job-1234-head-0"},
+        {"name": "job-1234-head-0", "ip": ""},
+        {"name": "job-1234-head-0", "ip": None},
+    ],
+    ids=["missing", "empty", "null"],
+)
+def test_replica_without_an_ip_is_kept_without_one(replica):
+    event = _allocations_event()
+    event["data"]["allocations"][0]["replicas"] = [replica]
+
+    ctx = _discover_one(event)
+
+    assert ctx["allocations"][0]["replicas"] == [{"name": "job-1234-head-0"}]
+    assert ctx["pod_nodes"]["job-1234-head-0"] == "cpu-n07"
+
+
+@pytest.mark.parametrize(
+    "ip, expected",
+    [
+        ("2001:DB8:0:0:0:0:0:1", "2001:db8::1"),
+        ("2001:0db8::000a", "2001:db8::a"),
+        ("2001:db8::1", "2001:db8::1"),
+    ],
+    ids=["uppercase-expanded", "leading-zeros", "already-normal"],
+)
+def test_replica_ipv6_address_is_normalized(ip, expected):
+    event = _allocations_event()
+    event["data"]["allocations"][1]["replicas"][0]["ip"] = ip
+
+    ctx = _discover_one(event)
+
+    assert ctx["allocations"][1]["replicas"][0] == {"name": "job-1234-worker-0", "ip": expected}
+
+
+@pytest.mark.parametrize("replicas", ["missing", None, []])
+def test_allocations_without_replicas_omit_pod_fields(replicas):
+    event = _allocations_event()
+    for allocation in event["data"]["allocations"]:
+        if replicas == "missing":
+            allocation.pop("replicas")
+        else:
+            allocation["replicas"] = replicas
+
+    ctx = _discover_one(event)
+
+    assert [allocation["replicas"] for allocation in ctx["allocations"]] == [[], [], []]
+    assert ctx["nodes"] == ["cpu-n07", "gpu-n01", "gpu-n02"]
+    assert "pod_names" not in ctx
+    assert "pod_nodes" not in ctx
+
+
+def test_namespace_is_copied_alongside_allocations():
+    event = _allocations_event()
+    event["data"]["namespace"] = "example-team"
+
+    ctx = _discover_one(event)
+
+    assert ctx["namespace"] == "example-team"
+    assert ctx["pod_names"][0] == "job-1234-head-0"
+
+
+def test_null_allocations_keep_the_flat_shape():
+    event = _events()[0]
+    event["data"]["allocations"] = None
+
+    ctx = _discover_one(event)
+
+    assert ctx["nodes"] == ["example-node-001", "example-node-002"]
+    assert ctx["gpu_count"] == 16
+    assert "allocations" not in ctx
+
+
+def test_flat_and_allocation_events_are_both_accepted_when_both_types_are_listed():
+    flat, allocated = _events()[0], _allocations_event()
+    eca, consumer = _make_eca(_structured([flat, allocated]), event_types=[EVENT_TYPE, EVENT_TYPE_V2])
+
+    contexts = eca.discover()
+
+    assert [ctx["event_id"] for ctx in contexts] == [flat["id"], allocated["id"]]
+    assert contexts[0]["nodes"] == ["example-node-001", "example-node-002"]
+    assert contexts[0]["namespace"] == "example-team"
+    assert "allocations" not in contexts[0]
+    assert contexts[1]["nodes"] == ["cpu-n07", "gpu-n01", "gpu-n02"]
+    assert contexts[1]["gpu_count"] == 16
+    assert eca.last_discovery_stats["accepted"] == 2
+    assert eca.last_discovery_stats["filtered"] == 0
+    assert consumer.commits == [{0: 2}]
+
+
+def test_allocation_event_supersedes_a_flat_event_for_the_same_attempt():
+    flat = _events()[0]
+    allocated = _allocations_event()
+    allocated["data"].update(id="job-a1", job_id="job-a1", attempt_id="2")
+    eca, _ = _make_eca(_structured([flat, allocated]), event_types=[EVENT_TYPE, EVENT_TYPE_V2])
+
+    [ctx] = eca.discover()
+
+    assert ctx["event_id"] == allocated["id"]
+    assert ctx["nodes"] == ["cpu-n07", "gpu-n01", "gpu-n02"]
+    assert "namespace" not in ctx
+    assert eca.last_discovery_stats["superseded"] == 1
+
+
+def _replace_allocations(value):
+    return lambda data: data.update(allocations=value)
+
+
+def _update_allocation(index, **fields):
+    return lambda data: data["allocations"][index].update(fields)
+
+
+def _drop_allocation_key(index, key):
+    return lambda data: data["allocations"][index].pop(key)
+
+
+def _update_replica(index, **fields):
+    return lambda data: data["allocations"][index]["replicas"][0].update(fields)
+
+
+_NOT_LIST = "allocations must be a non-empty list of objects"
+_NODE = "allocations[1].node must be a non-empty string"
+_CLUSTER = "allocations[1].cluster must be a non-empty string"
+_GPUS = "allocations[1].gpus must be a non-negative integer"
+_REPLICAS = "allocations[1].replicas must be a list of objects"
+_REPLICA_NAME = "allocations[1].replicas[0].name must be a non-empty string"
+_NOT_IP = "is not an IP address"
+_CONFLICT = "allocations cannot be combined with"
+
+
+@pytest.mark.parametrize(
+    "mutate, reason",
+    [
+        pytest.param(_replace_allocations([]), _NOT_LIST, id="allocations-empty"),
+        pytest.param(_replace_allocations({"node": "gpu-n01"}), _NOT_LIST, id="allocations-object"),
+        pytest.param(_replace_allocations("gpu-n01"), _NOT_LIST, id="allocations-string"),
+        pytest.param(_replace_allocations(["gpu-n01"]), "allocations[0] must be an object", id="allocation-not-object"),
+        pytest.param(_drop_allocation_key(1, "node"), _NODE, id="node-missing"),
+        pytest.param(_update_allocation(1, node=None), _NODE, id="node-null"),
+        pytest.param(_update_allocation(1, node=""), _NODE, id="node-empty"),
+        pytest.param(_update_allocation(1, node=7), _NODE, id="node-not-string"),
+        pytest.param(_drop_allocation_key(1, "cluster"), _CLUSTER, id="cluster-missing"),
+        pytest.param(_update_allocation(1, cluster=""), _CLUSTER, id="cluster-empty"),
+        pytest.param(_update_allocation(1, cluster=["cluster-b"]), _CLUSTER, id="cluster-not-string"),
+        pytest.param(_drop_allocation_key(1, "gpus"), _GPUS, id="gpus-missing"),
+        pytest.param(_update_allocation(1, gpus=None), _GPUS, id="gpus-null"),
+        pytest.param(_update_allocation(1, gpus=-1), _GPUS, id="gpus-negative"),
+        pytest.param(_update_allocation(1, gpus=True), _GPUS, id="gpus-bool"),
+        pytest.param(_update_allocation(1, gpus=8.0), _GPUS, id="gpus-float"),
+        pytest.param(_update_allocation(1, gpus="8"), _GPUS, id="gpus-string"),
+        pytest.param(_update_allocation(1, replicas="job-1234-worker-0"), _REPLICAS, id="replicas-string"),
+        pytest.param(_update_allocation(1, replicas={"name": "job-1234-worker-0"}), _REPLICAS, id="replicas-object"),
+        pytest.param(
+            _update_allocation(1, replicas=["job-1234-worker-0"]),
+            "allocations[1].replicas[0] must be an object",
+            id="replica-not-object",
+        ),
+        pytest.param(
+            lambda data: data["allocations"][1]["replicas"][0].pop("name"), _REPLICA_NAME, id="replica-name-missing"
+        ),
+        pytest.param(_update_replica(1, name=""), _REPLICA_NAME, id="replica-name-empty"),
+        pytest.param(_update_replica(1, name=3), _REPLICA_NAME, id="replica-name-not-string"),
+        pytest.param(_update_replica(1, ip="192.0.2.300"), _NOT_IP, id="ip-out-of-range"),
+        pytest.param(_update_replica(1, ip="gpu-n01"), _NOT_IP, id="ip-hostname"),
+        pytest.param(_update_replica(1, ip="192.0.2.10/32"), _NOT_IP, id="ip-network"),
+        pytest.param(
+            _update_replica(1, ip=3_221_225_994), "allocations[1].replicas[0].ip must be a string", id="ip-integer"
+        ),
+        pytest.param(
+            _update_allocation(2, node="gpu-n01"), "allocation node appears more than once", id="duplicate-node"
+        ),
+        pytest.param(
+            _update_replica(2, name="job-1234-head-0"),
+            "replica name appears more than once",
+            id="duplicate-replica-across-nodes",
+        ),
+        pytest.param(
+            lambda data: data["allocations"][2]["replicas"].append({"name": "job-1234-worker-2"}),
+            "replica name appears more than once",
+            id="duplicate-replica-on-one-node",
+        ),
+        pytest.param(lambda data: data.update(nodes=["gpu-n01"]), _CONFLICT, id="conflict-nodes"),
+        pytest.param(lambda data: data.update(nodes=[]), _CONFLICT, id="conflict-empty-nodes"),
+        pytest.param(lambda data: data.update(gpu_count=16), _CONFLICT, id="conflict-gpu-count"),
+        pytest.param(lambda data: data.update(cluster="cluster-b"), _CONFLICT, id="conflict-cluster"),
+        pytest.param(lambda data: data.update(pod_names=["job-1234-worker-0"]), _CONFLICT, id="conflict-pod-names"),
+        pytest.param(
+            lambda data: data.update(pod_nodes={"job-1234-worker-0": "gpu-n01"}), _CONFLICT, id="conflict-pod-nodes"
+        ),
+        pytest.param(lambda data: data.pop("start_time"), "missing required keys", id="start-time-missing"),
+    ],
+)
+def test_malformed_allocations_event_is_skipped_without_blocking(mutate, reason, monkeypatch):
+    warnings = []
+    monkeypatch.setattr(
+        "attribution_blueprint.connectors.execution_contexts.kafka.connector.logger.warning", warnings.append
+    )
+    bad = _allocations_event()
+    mutate(bad["data"])
+    eca, consumer = _make_eca(_structured([bad, _events()[1]]), event_types=[EVENT_TYPE, EVENT_TYPE_V2])
+
+    assert [ctx["id"] for ctx in eca.discover()] == ["job-b7"]
+    assert eca.last_discovery_stats["malformed"] == 1
+    assert consumer.commits == [{0: 2}]
+    [warning] = warnings
+    assert reason in warning
+
+
+@pytest.mark.parametrize("field", ["nodes", "gpu_count", "cluster", "pod_names", "pod_nodes"])
+def test_null_flat_placement_field_does_not_conflict_with_allocations(field):
+    event = _allocations_event()
+    event["data"][field] = None
+
+    ctx = _discover_one(event)
+
+    assert ctx["nodes"] == ["cpu-n07", "gpu-n01", "gpu-n02"]
