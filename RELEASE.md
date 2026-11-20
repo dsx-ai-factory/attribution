@@ -155,7 +155,8 @@ change one in any other pick.
 
 A release takes two pull requests, in this order: the release commit into the
 release branch, then a sync-back pull request that carries it into the default
-branch. The default branch therefore carries only released version literals.
+branch. The default branch therefore carries only released version literals,
+and it may lag the release branch until the stable release.
 
 1. On a local branch from `origin/release/YYYY.N`, create the release commit,
    so the changelogs and generated files describe what the branch releases, not
@@ -174,12 +175,14 @@ branch. The default branch therefore carries only released version literals.
 4. CI detects the changed version literals and creates one tag per releasing
    component on the merge commit on the release branch. Components whose
    version literals did not change receive no new tag.
-5. Once CI has created every tag from step 4, run
-   `git switch -c <branch> origin/main` and
-   `git cherry-pick <squashed commit on the release branch>`, then open a
-   sync-back pull request into the default branch that carries only that
-   commit. The check on this pull request is the light check described under
-   [Release checks](#release-checks). A maintainer squash-merges it.
+5. Sync back after the stable release at the latest; after a release
+   candidate it is optional. Once CI has created every tag from step 4, run
+   `git switch -c <branch> origin/main` and `git cherry-pick` each release
+   commit on the release branch that is not yet on the default branch, oldest
+   first, then open a sync-back pull request into the default branch that
+   carries only those commits. The check on this pull request is the light
+   check described under [Release checks](#release-checks). A maintainer
+   squash-merges it.
 
 If the release is abandoned before the merge in step 3, close its pull request;
 the default branch never saw the new version.
@@ -251,8 +254,8 @@ A pull request into a release branch gets the full check:
   the same pull request.
 
 A pull request into the default branch that changes a literal is the sync-back
-pull request of a release. The default branch holds later content and the tag
-already exists, so only the first two rules apply.
+pull request of one or more releases. The default branch holds later content
+and the tags already exist, so only the first two rules apply.
 
 A pull request into a release branch also runs the cherry-pick check. A commit
 passes when its `(cherry picked from commit <sha>)` trailer names a commit
