@@ -207,7 +207,8 @@ authentication, and size/timeout settings.
 
 A write succeeds only after broker acknowledgement, using `acks=all` and an
 idempotent producer. Enqueue errors, delivery failures, and unconfirmed delivery
-raise to the caller. Broker acceptance does not confirm RunAPI consumption.
+raise to the caller. Broker acceptance does not confirm that a consumer processed
+the result.
 
 A timeout can occur after the broker stored the record. Native idempotence
 covers client transport retries; separate writes and application restarts can
@@ -218,5 +219,5 @@ meet the size limit. Closing flushes pending records and rejects later writes.
 The current Blueprint orchestrator counts a context as successful if any output
 succeeds; SQLite success can therefore coexist with Kafka failure. This sink
 does not change input offset commits or provide durable application retries.
-Required-output policy, acknowledgement, and recovery belong to Runtime
-integration.
+Required-output policy, acknowledgement, and recovery belong to the application
+that runs Blueprint.

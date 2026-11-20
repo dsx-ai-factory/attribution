@@ -725,7 +725,7 @@ component = "kafka"
 
 [output.events.kafka]
 bootstrap_servers = "localhost:9092"
-topic = "mfn.attribution.run-results"
+topic = "attribution.run-results"
 # For MSK SCRAM, enable these and provide credentials through the environment:
 # security_protocol = "SASL_SSL"
 # sasl_mechanism = "SCRAM-SHA-512"
