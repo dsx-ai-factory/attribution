@@ -388,9 +388,18 @@ For a complete runnable configuration, see
 
 ### `[eca.kai]`
 
-Use the KAI adapter for Kubernetes batch workloads scheduled by the KAI
-scheduler. It reads KAI `PodGroup` objects, follows owner references to Job
-or JobSet pods, and normalizes the result into execution contexts. See
+Use the KAI adapter for Kubernetes workloads scheduled by the KAI scheduler.
+It reads KAI `PodGroup` objects, resolves owning `Job`, `JobSet`,
+`LeaderWorkerSet`, `PyTorchJob`, `RayJob`, `Deployment`, or
+`DynamoGraphDeployment` resources, joins verified member Pods, and normalizes
+the result into execution contexts. Batch owners supply terminal `COMPLETED`,
+`FAILED`, `TIMEOUT` (for `DeadlineExceeded`, `PreRunningDeadlineExceeded`, or
+a `PyTorchJob` whose `Failed` condition reports an exceeded deadline), and
+`CANCELLED` (for a stopped `RayJob`) states and end times, while active or
+long-running serving workloads (`Deployment`, `LeaderWorkerSet` without a
+`Failed` condition, and `DynamoGraphDeployment`) keep an open `RUNNING` window
+ending at `now()` (or `NODE_FAIL` when a member Pod reports node loss) while
+preserving native rollout or reconciliation status in `owner_state`. See
 [Attribute KAI PodGroups](./use-cases/kai.md) for the full use case.
 
 Example:
@@ -428,7 +437,9 @@ can have missing `nodes` or `pod_names`.
 The KAI adapter reads from the same `kubernetes-daemon` installation used for
 Kueue (see [Kubernetes daemon](#kubernetes-daemon) above), scoped by KAI
 PodGroup UID instead of Kueue Workload UID; enable the KAI integration on
-that installation. Point the adapter at the Service:
+that installation. Retained placement recovery through `kubernetes-daemon`
+currently covers `Job` and `JobSet` owners; other owner kinds use live Pods
+only. Point the adapter at the Service:
 
 ```toml
 [eca.kai]
