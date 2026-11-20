@@ -116,6 +116,15 @@ Pull requests are squash-merged, so the PR title becomes the commit subject on
   not bump. A component still at `0.y.z` shifts each bump down one place:
   `!` is minor, and `feat` and `fix` are patch.
 
+## Branch updates and stacked pull requests
+
+Follow [Keep your branch current](CONTRIBUTING.md#keep-your-branch-current) and
+[Stack dependent pull requests](CONTRIBUTING.md#stack-dependent-pull-requests)
+in `CONTRIBUTING.md`. Stack dependent changes where that section recommends it.
+`gh stack submit`, `gh stack sync`, and `gh stack merge` push branches, open or
+change pull requests, and merge, so they require the human confirmation listed
+above.
+
 ## Secret handling
 
 - Never put credentials, tokens, private keys, customer data, or other secrets

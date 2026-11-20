@@ -70,9 +70,10 @@ release candidate may bundle stable or release candidate ones.
 
 ## Merge and branch policy
 
-Pull requests use squash merges into the default branch. Rebase feature branches
-onto the default branch to keep them current. Do not merge the default branch
-into a feature branch.
+Pull requests use squash merges into the default branch. Prefer rebasing feature
+branches onto the default branch to keep them current. For stacked pull
+requests, refer to
+[Stack dependent pull requests](CONTRIBUTING.md#stack-dependent-pull-requests).
 
 ## Release process
 

@@ -22,7 +22,64 @@ for scope, correctness, tests, and compatibility with the project.
 Create a branch for an accepted issue, make the change, and open a pull
 request that links the issue. Include the test commands and results in the
 pull request description. A maintainer reviews the pull request and must
-approve it before it can merge.
+approve it before it can merge. To keep a branch current, refer to
+[Keep your branch current](#keep-your-branch-current). To split a large change
+into dependent pull requests, refer to
+[Stack dependent pull requests](#stack-dependent-pull-requests).
+
+## Keep your branch current
+
+Rebase your branch onto `main` to bring in new changes. The
+[merge and branch policy](RELEASE.md#merge-and-branch-policy) explains the
+preference. Push the rebased branch with
+`git push --force-with-lease --force-if-includes`, not `--force`. After a
+`git fetch`, `--force-with-lease` alone accepts the fetched remote commits as
+expected and overwrites them. Adding `--force-if-includes` (Git 2.30 or later)
+makes the push fail when the remote branch has commits that you fetched but did
+not integrate into your local branch. If you share a branch with another
+contributor, tell them before you rebase.
+
+## Stack dependent pull requests
+
+Stacked pull requests are encouraged when a change is easier to review as a
+sequence of small pull requests than as one large one, or when later work
+depends on an earlier pull request that has not merged. Typical cases are a
+refactor followed by the feature that uses it, or a format or API change
+followed by its consumers. Keep each pull request in the stack reviewable on its
+own, keep the stack short enough to review, and merge from the bottom up. Land
+independent changes as separate pull requests, each branched from `main`,
+not as a stack.
+
+Create and maintain stacks with the `gh stack` extension for GitHub CLI. It
+requires GitHub CLI 2.0 or later and Git 2.36 or later. These steps were checked
+with `gh stack` v0.3.0. The extension is new and changing, so refer to its
+documentation when a command behaves differently.
+
+1. Install it with `gh extension install github/gh-stack`.
+2. Create the stack with `gh stack init`, and add a layer with `gh stack add`.
+   Commit your work to each layer before you add the next one.
+3. Open the pull requests with `gh stack submit`.
+4. Keep the stack current with `gh stack sync`. Run it when `main` has new
+   commits and after a lower pull request merges. It fast-forwards `main`,
+   rebases each layer onto its updated parent, and pushes the layers.
+5. Merge with `gh stack merge`. The `gh pr merge` command does not merge a pull
+   request that belongs to a stack.
+
+If `gh stack sync` hits a rebase conflict, it restores every branch to its
+original state and pushes nothing. Run `gh stack rebase`, resolve each conflict
+and stage the files with `git add`, then run `gh stack rebase --continue` and
+`gh stack push`. After you change a layer in the middle of a stack, run
+`gh stack rebase --upstack` from that layer, then `gh stack push`.
+
+For the full command reference, refer to the
+[`gh stack` documentation](https://github.github.com/gh-stack/) and the
+[GitHub stacked pull requests overview](https://gh.io/stacks), or run
+`gh stack --help`.
+
+Do not build a stack by hand. Branching from an unmerged feature branch, or
+merging one feature branch into another, breaks after a squash merge, because
+the dependent branch still carries the original commits. If you cannot use
+`gh stack`, wait for the lower pull request to merge and branch from `main`.
 
 ## Documentation review
 
