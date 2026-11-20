@@ -6,7 +6,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
-__version__ = "2.0.0"
+__version__ = "2.1.0rc1"
 
 # Define package exports
 __all__ = [
