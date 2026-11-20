@@ -1,5 +1,20 @@
 # Changelog
 
+## [2.1.0rc1] - 2026-11-20
+
+### Features
+- Recognize runapi as a workload scheduler (#324)
+- Configure DuckDB spill capacity and retry cleanup (#253)
+
+### Bug Fixes
+- Render scheduler-aware wording (#384)
+- Encode straggler node reports in the V2 collectors digest (#375)
+- Warn on invalid `LOG_LEVEL` (#337)
+- Keep failure verdict on preempted jobs (#328)
+- Attribute local RDMA command failures to their emitter (#314)
+- Stop trusting the compromised emSign ECC Root CA - G3 (#316)
+- Preserve documentation for fallback symptoms (#263)
+
 ## [2.0.0] - 2026-10-14
 
 First release from this repository. The changes below are relative to the previous version of this component.
