@@ -2652,6 +2652,16 @@ cascade_symptom(
     cascade_discards=("XID-63-INFOROM_DRAM_RETIREMENT_EVENT",),
 )
 
+# A pending row remap (XID 63) is informational: the next GPU reset applies it.
+# The NVRx check and the unhealthy-node exception it raises do not show a failure.
+cascade_symptom(
+    "NVRx node health check failed: hw_drv_gpu_ecc_remapped_rows",
+    cascade_discards=(
+        "NVRx node health check failed: hw_drv_gpu_ecc_remapped_rows",
+        "NVRx unhealthy node",
+    ),
+)
+
 cascade_symptom(
     "XID-31-MMU_ERR_FLT",
     family=_xid_member(31, mnemonic="MMU_ERR_FLT"),

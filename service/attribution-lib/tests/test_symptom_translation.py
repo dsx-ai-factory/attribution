@@ -300,6 +300,41 @@ def test_translate_and_prune_system_oom_discards_slurm_noise(root_cause):
     assert skipped == set()
 
 
+@pytest.mark.parametrize(
+    ("other_checks", "expected_remaining"),
+    [
+        ((), set()),
+        (("NVRx node health check failed: example_check",), {"NVRx node health check failed: example_check"}),
+    ],
+)
+def test_translate_and_prune_discards_nvrx_remapped_rows_health_check(other_checks, expected_remaining):
+    """Discard the pending row-remap health check and the unhealthy-node symptom it causes.
+
+    Args:
+        other_checks: Other failed health-check symptoms on the same node.
+        expected_remaining: Symptom ids that must survive pruning.
+    """
+    node_name = "node-remap"
+    src = _make_source_for_node(node_name)
+
+    job_attributions = JobNodeAttributions()
+    for symptom_id in (
+        "NVRx node health check failed: hw_drv_gpu_ecc_remapped_rows",
+        "NVRx unhealthy node",
+        *other_checks,
+    ):
+        job_attributions.add([node_name], SourceSet(symptom_id).add(src))
+
+    start = datetime(2025, 1, 1, tzinfo=ZoneInfo("UTC"))
+    job_info = _build_job_info_for_test(start=start, end=start + timedelta(hours=1))
+
+    pruned, skipped = translate_and_prune_node_attributions(job_attributions, job_info)
+
+    remaining_ids = {s.symptom_id for s in pruned[node_name].symptoms()} if node_name in pruned else set()
+    assert remaining_ids == expected_remaining
+    assert skipped == set()
+
+
 class TestUnregisteredXidSubSymptomPreservation:
     """Dynamically-generated XID sub-symptoms (e.g. XID-149.21-...) that are
     not explicitly in RegisteredSymptoms must still flow through the translation
