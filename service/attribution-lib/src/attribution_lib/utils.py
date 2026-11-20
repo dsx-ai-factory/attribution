@@ -138,6 +138,56 @@ NCCL_HOST_PID_TID_REGEX = re.compile(
 # Megatron rank errors name the emitting node: "RuntimeError: Rank N, node HOST, device D[, ...]:".
 # Match only through the device number so trailing fields such as ", iteration N" still match.
 MEGATRON_RANK_ERROR_REGEX = re.compile(r"RuntimeError: Rank \d+, node (?P<node>[A-Za-z0-9._-]+), device \d+")
+# A transport label belongs to the process collecting Ray output, not to the
+# actor named inside it. Actor ranks likewise need not be scheduler task ranks.
+_RAY_PREFIX = re.compile(
+    r"^(?:(?:\d+:|\[rank\s*:?\s*\d+\]:?)\s*)?"
+    r"\([^()\r\n]*?\bpid=\d+(?P<fields>[^()\r\n]*)\)"
+)
+_RAY_IP_FIELD = re.compile(r"(?:^|,)\s*ip=([^,\s]+)")
+
+
+class RayLogIdentity(NamedTuple):
+    """A recognized Ray prefix with a resolved node or explicitly unknown identity."""
+
+    node: Optional[str]
+
+
+def ray_log_identity(line: str) -> Optional[RayLogIdentity]:
+    """Identify the worker in a leading Ray forwarding envelope without I/O.
+
+    Only the envelope's IP may resolve the actor through the caller's hostname
+    mapping. Missing, invalid, duplicate, or conflicting identity stays unknown.
+    A nested NCCL/Megatron hostname must agree with that resolved identity; it
+    does not replace an absent mapping. Neither actor nor transport ranks are
+    interpreted as scheduler ranks.
+
+    Args:
+        line: One application-log line, optionally prefixed by srun or torchrun.
+
+    Returns:
+        None for a non-Ray line. Otherwise an identity whose node is a mapped
+        hostname, an unmapped IP, or None when the identity is unusable.
+    """
+    if "pid=" not in line:
+        return None
+    line = TORCHRUN_TEE_PREFIX_REGEX.sub("", line, count=1)
+    prefix = _RAY_PREFIX.match(line)
+    if prefix is None:
+        return None
+    addresses = _RAY_IP_FIELD.findall(prefix.group("fields"))
+    if len(addresses) != 1:
+        return RayLogIdentity(None)
+    address = addresses[0]
+    if is_ipv4(address) is False and is_ipv6(address) is False:
+        return RayLogIdentity(None)
+    node = get_hostname(address)
+    body = line[prefix.end() :]
+    for pattern in (NCCL_HOST_PID_TID_REGEX, MEGATRON_RANK_ERROR_REGEX):
+        explicit = pattern.search(body)
+        if explicit is not None and get_hostname(explicit.group("node")).lower() != node.lower():
+            return RayLogIdentity(None)
+    return RayLogIdentity(node)
 
 
 def _leading_explicit_applog_rank(line: str) -> Optional[int]:
@@ -168,7 +218,8 @@ def applog_extract_node_rank(line: str) -> tuple[Optional[str], Optional[int]]:
     Prefers the node named by a Megatron ``RuntimeError: Rank N, node HOST, device D``
     message or an NCCL ``hostname:pid:tid [cudaDev]`` prefix when present.
     Rank is only a leading srun ``-l`` or ``[rankN]`` prefix, never NCCL's
-    CUDA device index.
+    CUDA device index. Ray envelopes instead use their worker IP mapping;
+    neither the actor rank nor a collecting process's rank identifies a node.
 
     Args:
         line: One application-log line.
@@ -177,6 +228,9 @@ def applog_extract_node_rank(line: str) -> tuple[Optional[str], Optional[int]]:
         ``(node, rank)`` with ``None`` for any field that could not be identified.
     """
     line = TORCHRUN_TEE_PREFIX_REGEX.sub("", line, count=1)
+    ray_identity = ray_log_identity(line)
+    if ray_identity is not None:
+        return ray_identity.node, None
     rank = None
     node = None
     if (

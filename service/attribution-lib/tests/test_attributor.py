@@ -40,6 +40,7 @@ from attribution_lib.observation.inbound import (
 from attribution_lib.prefilters import PreFilterSpec
 from attribution_lib.rule_types.definitions import EventTriple, ExtractorRule, RuleLocation
 from attribution_lib.rules_engine import RuleLoader
+from attribution_lib.utils import hostname_mapping
 from test_support.helpers import line_entries, make_node_to_ranks, make_syslog_entry
 
 # APPLOG registers "error" as an include-keyword.
@@ -985,6 +986,65 @@ def test_unlabelled_applog_line_on_multi_node_job_is_job_level(request, event_ma
     assert symptom in result.symptoms
     assert symptom in result.bad_nodes_attr.my_bad_nodes.job_level
     assert not any(symptom in group.symptoms() for _, group in result.bad_nodes_attr.my_bad_nodes.items())
+
+
+@pytest.mark.parametrize(
+    "envelope,mapping",
+    [
+        ("(Worker[rank=27] pid=123, ip=192.0.2.7)", {"192.0.2.7": "worker"}),
+        ("0: (Worker[rank=27] pid=123, ip=192.0.2.7)", {}),
+        ("(Worker pid=123)", {}),
+        ("(Worker pid=123, ip=invalid)", {}),
+    ],
+)
+def test_forwarded_ray_error_does_not_blame_single_node_reader(request, event_manager, envelope, mapping):
+    """Keep remote or unresolved actor symptoms without inventing head ownership.
+
+    Args:
+        request: Pytest request identifying this attribution stream.
+        event_manager: In-memory attribution event manager.
+        envelope: Synthetic Ray forwarding prefix.
+        mapping: Explicit worker-address mapping for this execution.
+
+    Returns:
+        None.
+    """
+    with hostname_mapping(mapping):
+        result = _attribute_applog(
+            request,
+            event_manager,
+            _job_info_on("head"),
+            [f"{envelope} CUDA error: an illegal memory access was encountered"],
+        )
+    symptom = "cudaErrorIllegalAddress"
+    assert symptom in result.symptoms
+    assert symptom in result.bad_nodes_attr.my_bad_nodes.job_level
+    assert all(symptom not in group.symptoms() for _, group in result.bad_nodes_attr.my_bad_nodes.items())
+
+
+def test_forwarded_ray_error_uses_verified_worker_node(request, event_manager):
+    """Attribute a forwarded error to its mapped worker inside the allocation.
+
+    Args:
+        request: Pytest request identifying this attribution stream.
+        event_manager: In-memory attribution event manager.
+
+    Returns:
+        None.
+    """
+    with hostname_mapping({"192.0.2.7": "worker"}):
+        result = _attribute_applog(
+            request,
+            event_manager,
+            _job_info_on("head,worker"),
+            ["(Worker[rank=27] pid=123, ip=192.0.2.7) CUDA error: an illegal memory access was encountered"],
+        )
+    assert "cudaErrorIllegalAddress" in result.bad_nodes_attr.my_bad_nodes["worker"].symptoms()
+    assert all(
+        "cudaErrorIllegalAddress" not in group.symptoms()
+        for node, group in result.bad_nodes_attr.my_bad_nodes.items()
+        if node != "worker"
+    )
 
 
 def test_malformed_rank_prefix_on_single_node_job_blames_sole_node(request, event_manager):

@@ -53,10 +53,11 @@ from attribution_lib.rule_types.definitions import (
 from attribution_lib.rule_types.observation import ObservationProcessor
 from attribution_lib.symptoms.declarations import SymptomDeclaration
 from attribution_lib.symptoms.predicate_registry import SymptomPredicate
+from attribution_lib.utils import ray_log_identity
 
 # Bump when extraction output changes without an extractor rule change, such as a
 # fix to timestamp parsing, so that cached events are extracted again.
-_EXTRACTION_VERSION = "2"
+_EXTRACTION_VERSION = "3"
 
 
 @dataclass(frozen=True, slots=True)
@@ -604,9 +605,15 @@ def process_observation_source(
             except UnknownResourceError as e:
                 log_ignored_node_line(e, entry, job_info, entry.context().source)
                 att_src_base = entry.attribution_source_base(None)
-            if att_src_base.resources == ResourceSetClass.ANY and len(job_info.nodes) == 1:
+            if (
+                att_src_base.resources == ResourceSetClass.ANY
+                and len(job_info.nodes) == 1
+                and not (source_type == ObservationSource.APPLOG and ray_log_identity(entry.body()) is not None)
+            ):
                 # Unlabelled output (no ``srun --label`` prefix) of a single-node
-                # job can only have come from its sole allocated node. Without a
+                # job is inferred to come from its sole allocated node. A Ray
+                # forwarding envelope explicitly permits a remote emitter and
+                # must retain unknown identity when resolution fails. Without a
                 # node, symptoms are silently dropped when node attributions are
                 # built, so infer it as SchedulerNodeFailure does for NODE_FAIL.
                 # This covers both a prefix that is not a job node (raised above)
