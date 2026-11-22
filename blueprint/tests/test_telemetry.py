@@ -11,22 +11,8 @@ from types import SimpleNamespace
 import pytest
 import requests
 from opentelemetry import metrics
-from opentelemetry.sdk.metrics import MeterProvider
-from opentelemetry.sdk.metrics.export import InMemoryMetricReader
 
 from attribution_blueprint import telemetry
-
-
-@pytest.fixture(scope="module")
-def reader():
-    """Set the process provider once.
-
-    Returns:
-        The reader used by this module.
-    """
-    reader = InMemoryMetricReader()
-    metrics.set_meter_provider(MeterProvider(metric_readers=[reader]))
-    return reader
 
 
 def points(reader, connector, name):
@@ -41,6 +27,8 @@ def points(reader, connector, name):
         Matching data points.
     """
     data = reader.get_metrics_data()
+    if data is None:
+        return []
     return [
         point
         for resource in data.resource_metrics
@@ -309,7 +297,13 @@ def test_prometheus_endpoint():
 import os
 import socket
 from urllib.request import urlopen
-from attribution_blueprint.telemetry import enable_prometheus_endpoint_from_env, track
+from attribution_blueprint.telemetry import (
+    QueryTruncation,
+    enable_prometheus_endpoint_from_env,
+    record_paginated_query,
+    record_series,
+    track,
+)
 
 with socket.socket() as sock:
     sock.bind(("127.0.0.1", 0))
@@ -323,6 +317,8 @@ try:
         raise ValueError("failed")
 except ValueError:
     pass
+record_paginated_query("scrape_test", "read", entries=3, pages=1, truncations={QueryTruncation.PAGE_LIMIT})
+record_series("scrape_test", "read", 2)
 with urlopen(f"http://127.0.0.1:{port}/metrics", timeout=5) as response:
     print(response.read().decode())
 """,
@@ -340,11 +336,16 @@ with urlopen(f"http://127.0.0.1:{port}/metrics", timeout=5) as response:
         "attribution_connector_request_duration_seconds_bucket",
         "attribution_connector_request_duration_seconds_sum",
         "attribution_connector_request_duration_seconds_count",
+        "attribution_connector_query_entries_bucket",
+        "attribution_connector_query_pages_bucket",
+        "attribution_connector_query_series_bucket",
+        "attribution_connector_query_truncations_total",
     ):
         assert name in result.stdout
     assert 'connector="scrape_test"' in result.stdout
     assert 'operation="read"' in result.stdout
     assert 'error_type="ValueError"' in result.stdout
+    assert 'reason="page_limit"' in result.stdout
 
 
 def test_prometheus_endpoint_bind_error(mocker):
@@ -716,3 +717,255 @@ def test_kubernetes_timeout_without_reading_preloaded_response(reader, mocker):
         point for point in points(reader, "kubernetes", "response.size") if point.attributes["operation"] == "POST"
     ] == []
     assert any(point.attributes["operation"] == "POST" for point in points(reader, "kubernetes", "requests"))
+
+
+def query_totals(reader, connector):
+    """Sum query-result measurements for one connector.
+
+    Args:
+        reader: Metric reader for this process.
+        connector: Connector name to select.
+
+    Returns:
+        Totals keyed by measurement, with truncations keyed by reason.
+    """
+    entries = points(reader, connector, "query.entries")
+    totals = {
+        "queries": sum(point.count for point in entries),
+        "entries": sum(point.sum for point in entries),
+        "pages": sum(point.sum for point in points(reader, connector, "query.pages")),
+    }
+    for point in points(reader, connector, "query.truncations"):
+        totals[point.attributes["reason"]] = point.value
+    return totals
+
+
+def query_delta(reader, connector, run):
+    """Measure what one call adds to a connector's cumulative query totals.
+
+    Args:
+        reader: Metric reader for this process.
+        connector: Connector name to select.
+        run: Call that issues the query.
+
+    Returns:
+        Non-zero increases keyed as in query_totals.
+    """
+    before = query_totals(reader, connector)
+    run()
+    after = query_totals(reader, connector)
+    return {key: value - before.get(key, 0) for key, value in after.items() if value != before.get(key, 0)}
+
+
+def victorialogs_page(*rows):
+    """Build a VictoriaLogs NDJSON response.
+
+    Args:
+        *rows: `(timestamp, message)` pairs.
+
+    Returns:
+        A response stand-in whose text holds the rows.
+    """
+    text = "\n".join(f'{{"_time": "{timestamp}", "_msg": "{message}"}}' for timestamp, message in rows)
+    return SimpleNamespace(text=text, raise_for_status=lambda: None)
+
+
+@pytest.mark.parametrize(
+    "responses, expected",
+    [
+        ([victorialogs_page(("2026-01-15T05:00:20Z", "one"))], {"queries": 1, "entries": 1, "pages": 1}),
+        (
+            [
+                victorialogs_page(("2026-01-15T05:00:20Z", "one"), ("2026-01-15T05:00:10Z", "two")),
+                victorialogs_page(("2026-01-15T05:00:10Z", "two"), ("2026-01-15T05:00:09Z", "three")),
+            ],
+            {"queries": 1, "entries": 4, "pages": 2, "page_limit": 1},
+        ),
+        (
+            [SimpleNamespace(text='{"_msg": "one"}\n{"_msg": "two"}', raise_for_status=lambda: None)],
+            {"queries": 1, "entries": 2, "pages": 1, "missing_timestamp": 1},
+        ),
+        (
+            [
+                victorialogs_page(("2026-01-15T05:00:10Z", "one"), ("2026-01-15T05:00:10Z", "two")),
+                victorialogs_page(("2026-01-15T05:00:10Z", "one"), ("2026-01-15T05:00:10Z", "two")),
+            ],
+            {"queries": 1, "entries": 4, "pages": 2, "timestamp_tie": 1, "page_limit": 1},
+        ),
+        (
+            [victorialogs_page(("2026-01-15T00:00:05Z", "one"), ("2026-01-15T00:00:00Z", "two"))],
+            {"queries": 1, "entries": 2, "pages": 1, "window_start": 1},
+        ),
+        ([SimpleNamespace(text="", raise_for_status=lambda: None)], {"queries": 1, "pages": 1}),
+        (
+            [SimpleNamespace(text="not-json\n[]", raise_for_status=lambda: None)],
+            {"queries": 1, "pages": 1, "missing_timestamp": 1},
+        ),
+        (
+            [
+                victorialogs_page(("2026-01-15T05:00:20Z", "one"), ("2026-01-15T05:00:10Z", "two")),
+                requests.ConnectionError("connection reset"),
+            ],
+            {"queries": 1, "entries": 2, "pages": 2, "request_error": 1},
+        ),
+    ],
+    ids=[
+        "unsaturated",
+        "page-limit",
+        "no-timestamp",
+        "timestamp-tie",
+        "window-start",
+        "empty",
+        "malformed-only",
+        "request-error",
+    ],
+)
+def test_victorialogs_query_records_entries_pages_and_truncation(reader, mocker, responses, expected):
+    """Count a truncated VictoriaLogs query by each reason it may have left entries unread.
+
+    Args:
+        reader: Metric reader for this process.
+        mocker: Pytest mock helper.
+        responses: Pages the backend returns.
+        expected: Increases in the query totals.
+    """
+    from contextlib import suppress
+    from datetime import UTC, datetime
+
+    from attribution_blueprint.connectors.logs.victorialogs import VictoriaLogsConnector
+    from attribution_blueprint.exceptions import PartialCollectionError
+    from attribution_blueprint.types import Source
+
+    mocker.patch("requests.Session.post", side_effect=responses)
+    source = VictoriaLogsConnector(
+        endpoint="http://victorialogs.example",
+        source=Source.SYSLOG,
+        templates={Source.SYSLOG: ["*"]},
+        limit=2,
+        max_pages=2,
+    )
+    context = {
+        "id": "job-1",
+        "start_time": datetime(2026, 1, 15, 0, 0, tzinfo=UTC),
+        "end_time": datetime(2026, 1, 15, 10, 0, tzinfo=UTC),
+    }
+
+    def collect():
+        with suppress(PartialCollectionError):
+            source.collect(context)
+
+    assert query_delta(reader, "victorialogs", collect) == expected
+
+
+@pytest.mark.parametrize(
+    "offsets, expected",
+    [
+        ([(20, 10), (9, 8)], {"queries": 1, "entries": 4, "pages": 2, "page_limit": 1}),
+        ([(1, 0)], {"queries": 1, "entries": 2, "pages": 1, "window_start": 1}),
+    ],
+    ids=["page-limit", "window-start"],
+)
+def test_loki_query_records_truncation(reader, mocker, monkeypatch, offsets, expected):
+    """Count a Loki query whose full pages may have left entries unread.
+
+    Args:
+        reader: Metric reader for this process.
+        mocker: Pytest mock helper.
+        monkeypatch: Pytest patch helper.
+        offsets: Entry offsets from the window start in each page, newest first.
+        expected: Increases in the query totals.
+    """
+    from datetime import UTC, datetime
+
+    from attribution_blueprint.connectors.auth import TokenAuth
+    from attribution_blueprint.connectors.logs.loki import LokiConnector, connector
+    from attribution_blueprint.types import Source
+
+    monkeypatch.setattr(connector, "MAX_PAGES", 2)
+    start_ns = 1_777_636_800_000_000_000
+    page = mocker.Mock()
+    page.json.side_effect = [
+        {"data": {"result": [{"stream": {}, "values": [[str(start_ns + offset), "line"] for offset in pair]}]}}
+        for pair in offsets
+    ]
+    mocker.patch("requests.Session.post", return_value=page)
+    source = LokiConnector(
+        endpoint="http://loki.example",
+        auth=TokenAuth("placeholder"),
+        source=Source.SYSLOG,
+        query_kwargs={},
+        templates={Source.SYSLOG: ['{{job="example"}}']},
+        limit=2,
+    )
+    context = {
+        "id": "job-1",
+        "start_time": datetime(2026, 5, 1, 12, 0, tzinfo=UTC),
+        "end_time": datetime(2026, 5, 1, 12, 30, tzinfo=UTC),
+    }
+    assert query_delta(reader, "loki", lambda: source.collect(context)) == expected
+
+
+def promql_series(reader):
+    """Return the query count and series total recorded for instant PromQL queries.
+
+    Args:
+        reader: Metric reader for this process.
+
+    Returns:
+        Cumulative histogram count and sum.
+    """
+    selected = [
+        point for point in points(reader, "promql", "query.series") if point.attributes["operation"] == "/api/v1/query"
+    ]
+    return sum(point.count for point in selected), sum(point.sum for point in selected)
+
+
+@pytest.mark.parametrize(
+    "payload, expected",
+    [
+        (
+            {
+                "status": "success",
+                "data": {"resultType": "vector", "result": [{"metric": {}}, {"metric": {}}, {"metric": {}}]},
+            },
+            (1, 3),
+        ),
+        ({"status": "success", "data": {"resultType": "vector", "result": []}}, (1, 0)),
+        ({"status": "success", "data": {"resultType": "scalar", "result": [0, "1"]}}, (0, 0)),
+        ({"status": "success", "data": {"resultType": "string", "result": [0, "up"]}}, (0, 0)),
+        ({"status": "error", "error": "query timeout"}, (0, 0)),
+        ({"status": "success", "data": {"result": {}}}, (0, 0)),
+        ({"status": "success", "data": {"result": ""}}, (0, 0)),
+        ({"status": "success", "data": {"result": None}}, (0, 0)),
+        ({"status": "success", "data": {}}, (0, 0)),
+    ],
+    ids=[
+        "three-series",
+        "empty",
+        "scalar-type",
+        "string-type",
+        "api-error",
+        "object-result",
+        "string-result",
+        "null-result",
+        "missing-result",
+    ],
+)
+def test_promql_query_records_series_only_for_successful_results(reader, mocker, payload, expected):
+    """Record the series count of each successful PromQL query.
+
+    Args:
+        reader: Metric reader for this process.
+        mocker: Pytest mock helper.
+        payload: Prometheus API response body.
+        expected: Increase in recorded queries and in the series total.
+    """
+    from attribution_blueprint.connectors.metrics.promql.client import PrometheusClient
+
+    response = mocker.Mock()
+    response.json.return_value = payload
+    mocker.patch("requests.Session.post", return_value=response)
+    queries, series = promql_series(reader)
+    PrometheusClient(endpoint="http://prometheus.example").query(name="up", query="up", timestamp=0)
+    after_queries, after_series = promql_series(reader)
+    assert (after_queries - queries, after_series - series) == expected

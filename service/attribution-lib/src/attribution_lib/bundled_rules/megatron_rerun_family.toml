@@ -1,0 +1,37 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Megatron-LM rerun state machine verdicts (megatron/core/rerun_state_machine.py).
+# After an "Unexpected result" (the "Bad Token" symptom), Megatron reruns the step
+# on the same GPU and then, from a checkpoint, on a different GPU. It logs one
+# verdict per rerun. Megatron adds "Rank R, node H, device D, iteration #N: " in
+# front of some messages and "!" after them, and it logs at ERROR or WARNING. The
+# keys match the message text only.
+#
+# Each verdict stays on the node that logged it as supporting evidence. It does
+# not make that node a bad node, because the second rerun runs on a different
+# GPU. The MegatronRerunVerdict refiner discards each "Bad Token" with the same
+# iteration number as a verdict, and adds the verdicts that have an outcome to
+# the job-level symptoms.
+
+author  = "NVIDIA Attribution team"
+sources = ["APPLOG"]
+
+
+[[family]]
+name    = "megatron-rerun"
+pattern = "{key}"
+emit    = { type = "interesting_node", symptom = "{symptom}" }
+rows = [
+  { key = "First rerun: unexpected result is not reproducible within the tolerance", symptom = "Unexpected value not reproduced on same GPU" },
+  { key = "Possible transient error", symptom = "Transient error reported by Megatron" },
+  { key = "Second rerun: unexpected result is not reproducible on a different GPU", symptom = "Unexpected value not reproduced on other GPU" },
+  { key = "Possible persistent error", symptom = "Persistent error reported by Megatron" },
+  { key = "First rerun: unexpected result is reproducible within the tolerance", symptom = "Unexpected value reproduced on same GPU" },
+  { key = "Second rerun: unexpected result is reproducible on a different GPU", symptom = "Unexpected value reproduced on other GPU" },
+  { key = "Correct result (but possible Application error)", symptom = "Application error reported by Megatron" },
+]
+
+[[family.cases]]
+expansion = "rows"
+expect    = "interesting"

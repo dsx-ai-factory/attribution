@@ -5,8 +5,10 @@ import json
 from datetime import datetime, timezone
 
 import pytest
+from pytest_mock import MockerFixture
 
 from attribution_blueprint.connectors.auth import MTLSAuth, TokenAuth
+from attribution_blueprint.connectors.logs import HEALTH_CHECK_GRACE
 from attribution_blueprint.connectors.logs.loki import LokiConnector
 from attribution_blueprint.types import Source
 
@@ -45,6 +47,41 @@ def test_renders_query_and_passes_time_window_in_ns(mocker):
     assert kwargs["data"]["start"] == int(ctx["start_time"].timestamp() * 1e9)
     assert kwargs["data"]["end"] == int(ctx["end_time"].timestamp() * 1e9)
     assert kwargs["data"]["limit"] == 5000
+
+
+def test_health_check_query_reaches_past_the_job_end(mocker):
+    """Health checks report after the job ends; the query range must include that grace."""
+    post = _mock_response(mocker, [])
+    conn = LokiConnector(
+        endpoint="https://loki.example/",
+        auth=TokenAuth("tok"),
+        source=Source.HEALTH_CHECK,
+        query_kwargs={"service_name": "cluster-x"},
+        templates={Source.HEALTH_CHECK: ['{{service_name="{service_name}"}}']},
+    )
+    ctx = _ctx()
+    ctx["nodes"] = []
+    conn.collect(ctx)
+    _, kwargs = post.call_args
+    assert kwargs["data"]["start"] == int(ctx["start_time"].timestamp() * 1e9)
+    assert kwargs["data"]["end"] == int((ctx["end_time"] + HEALTH_CHECK_GRACE).timestamp() * 1e9)
+
+
+def test_processing_id_preserves_provider_job_query(mocker: MockerFixture) -> None:
+    """Different processing items query the original provider run."""
+    post = _mock_response(mocker, [])
+    conn = LokiConnector(
+        endpoint="https://loki.example",
+        source=Source.APPLOG,
+        auth=TokenAuth("tok"),
+        query_kwargs={},
+        templates={Source.APPLOG: ['{{job="{job_id}"}}']},
+    )
+    contexts = [{**_ctx(), "id": f"processing-{i}", "run_id": "provider-run"} for i in range(2)]
+
+    assert [conn.collect(context) for context in contexts] == [[], []]
+    assert post.call_count == 2
+    assert all('job="provider-run"' in call.kwargs["data"]["query"] for call in post.call_args_list)
 
 
 def test_returns_empty_when_no_streams(mocker):

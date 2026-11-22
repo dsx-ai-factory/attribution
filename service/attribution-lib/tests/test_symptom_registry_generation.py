@@ -6,6 +6,7 @@ from typing import cast
 import pytest
 
 import attribution_lib
+from attribution_lib.bundled_rules.common.scheduler_formatting import NODE_FAILURE_IDS, NODE_FAILURE_PREFIX
 from attribution_lib.core import get_bundled_rules_path
 from attribution_lib.exceptions import (
     DuplicateSymptomDeclarationError,
@@ -159,14 +160,15 @@ def test_nv_err_insufficient_resources_maps_to_multicategory():
     assert match.outcome == "Fail MultiCategory"
 
 
-def test_slurm_node_failure_maps_to_infrasw():
+@pytest.mark.parametrize("node_failure", NODE_FAILURE_IDS)
+def test_scheduler_node_failure_maps_to_infrasw(node_failure):
     """Treat the scheduler's NODE_FAIL state as infrastructure software evidence."""
     registry = _load_committed_registry()
 
-    match = registry.outcome_for(["Node failure reported by slurm"])
+    match = registry.outcome_for([node_failure])
 
     assert match is not None
-    assert match.matched_prefix == "Node failure reported by slurm"
+    assert match.matched_prefix == NODE_FAILURE_PREFIX
     assert match.outcome == "Fail InfraSW"
     assert match.hw_cause == "Not Applicable"
     assert match.tier_index == OUTCOME_PRIORITIES.index(OutcomePriority.MEDIUM)
@@ -182,7 +184,7 @@ def test_slurm_node_failure_takes_precedence_over_xid31_in_any_order():
         match = registry.outcome_for(symptoms)
 
         assert match is not None
-        assert match.matched_prefix == node_failure
+        assert match.matched_prefix == NODE_FAILURE_PREFIX
         assert match.outcome == "Fail InfraSW"
         assert match.tier_index == OUTCOME_PRIORITIES.index(OutcomePriority.MEDIUM)
 
@@ -213,7 +215,7 @@ def test_corroborated_node_failure_maps_to_infra_hw_and_discards_component_signa
     assert match.hw_cause == "Known HW Cause - Node"
     assert match.tier_index == OUTCOME_PRIORITIES.index(OutcomePriority.HIGH_HW)
     assert registry.cascade_discards_for("Corroborated node failure") == [
-        "Node failure reported by slurm",
+        *NODE_FAILURE_IDS,
         "Node not responding",
     ]
 
@@ -675,6 +677,7 @@ def test_generated_registry_resolves_all_declared_fallback_families():
         "Local HCA command failure (ibv_query_qp eno 110)": "Local HCA command failure",
         "NVRx node health check failed: example_gpu_check": "NVRx node health check failed",
         "NVRx GPU recovery action: Requires a node reboot to recover": "NVRx GPU recovery action",
+        "Node failure reported by slurm": NODE_FAILURE_PREFIX,
     }
     # Guard against drift: the cases above must exercise every declared fallback
     # family, so a newly declared fallback_prefix forces a new case here.
@@ -729,7 +732,7 @@ def test_domain_cascade_policy_is_generated_from_committed_declarations():
         "cudaErrorLaunchFailure",
     }
 
-    for primary in ("Node failure reported by slurm", "Fabric manager lost connection to all GPUs"):
+    for primary in (*NODE_FAILURE_IDS, "Fabric manager lost connection to all GPUs"):
         assert set(registry.cascade_discards_for(primary, scope=CascadeScope.NVL_DOMAIN)) == expected_targets
 
 

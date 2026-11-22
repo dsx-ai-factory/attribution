@@ -172,11 +172,20 @@ CREATE TABLE IF NOT EXISTS webui_node_day_fact (
 );
 ```
 
+The dashboard date window is a UTC day. Write `end_day` in both rollup tables
+as the UTC day of the run's end time, `date(end_time)` in SQLite. The dashboard
+derives `webui_run_fact` days from `end_time` and does not read its `end_day`,
+but `webui_node_day_fact` has no end time to normalize, so window GPU capacity
+uses its `end_day` as written. A producer that wrote source-local days must
+regenerate `webui_node_day_fact`.
+
 ## Kafka result events
 
 Kafka output publishes structured CloudEvents 1.0 JSON with an
 `application/cloudevents+json` header. The record key is the execution context
-`id` (Run ID for RunAPI). See [configuration](CONFIGURATION.md) for connection,
+`run_id` when it is a non-empty string, otherwise `id`.
+This lets callers use a distinct processing `id` for each attempt while retaining
+the original run as the partition key. See [configuration](CONFIGURATION.md) for connection,
 authentication, and size/timeout settings.
 
 | Event field | Value |
@@ -185,7 +194,7 @@ authentication, and size/timeout settings.
 | `id`, `time` | A new UUID per emit and the UTC production time. |
 | `source`, `type` | Configured values; defaults are `/attribution/blueprint` and `com.nvidia.attribution.job.attributed.v1`. |
 | `subject` | Triggering `event_subject`, falling back to `jobs/<job_id>`. |
-| `data.job_id`, `data.attempt_id` | Context job/attempt identity; defaults are context `id` and `"0"`. |
+| `data.job_id`, `data.attempt_id` | Context job/attempt identity; defaults are the context run identity (`run_id`, otherwise `id`) and `"0"`. |
 | `data.cluster`, `data.scheduler` | Context values; cluster can fall back to configuration. Missing values are null. |
 | `data.trigger_event_id` | Original completion event ID, or null for contexts without a triggering event. |
 | `data.terminal_state`, `data.sub_domain` | Blueprint summary fields. |

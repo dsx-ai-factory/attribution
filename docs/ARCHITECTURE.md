@@ -89,7 +89,7 @@ This is the bounded CLI flow. Long-lived applications can instead use the
 to keep consuming while processing separately, then acknowledge handled work.
 
 1. **Discover.** Execution-context adapters return one or more `ExecutionContext` objects. Slurm queries `sacct`, Kueue and KAI query Kubernetes APIs, Static uses supplied workload metadata, and Kafka reads a bounded batch of completion CloudEvents. Kafka commits offsets per partition before attribution. Only contexts from successfully committed partitions are returned.
-2. **Collect.** For each context, every configured log and metric collector runs `collect(ctx)` and returns zero or more `Observation` objects. Each `Observation` carries a `Source` enum value (`applog`, `syslog`, `node_metrics`) and an `entry_timeseries` body; the entry shape is in [Observation entry format](https://github.com/dsx-ai-factory/attribution/blob/main/service/service-app/docs/api/observation-format.md).
+2. **Collect.** For each context, every configured log and metric collector runs `collect(ctx)` and returns zero or more `Observation` objects. Each `Observation` carries a `Source` enum value (`applog`, `syslog`, `health_check`, `node_metrics`) and an `entry_timeseries` body; the entry shape is in [Observation entry format](https://github.com/dsx-ai-factory/attribution/blob/main/service/service-app/docs/api/observation-format.md).
 3. **Open attributor.** `POST /v2/attributor` creates a per-context handle. On a duplicate-session 409, the connector raises `AttributorConflictError` with the original HTTP error as its cause. The Blueprint preserves the existing session, records that context as `conflicted` in the run statistics and summaries, and continues with other contexts. Retry after the existing session's owner finishes and deletes it.
 4. **Submit observations.** Each `Observation` goes via `POST /v2/attributor/{id}/observation`. Individual failures are logged and skipped. A duplicate-observation 409 counts as delivered. Per-connector delivery outcomes land in `ingestion_reports`.
 5. **Get verdict.** `GET /v2/attributor/{id}/attribution` returns the raw verdict.
@@ -124,7 +124,7 @@ The Blueprint's configuration model is patterned on Open MPI's Modular Component
 | Framework | Components today | Shape | Sources |
 |---|---|---|---|
 | eca (execution context adapter) | slurm, kueue, kai, static, kafka | component-selector | (none) |
-| log | loki, victorialogs, local_file, kubectl_logs | per-source component-selector | applog, syslog |
+| log | loki, victorialogs, local_file, kubectl_logs | per-source component-selector | applog, syslog, health_check |
 | metrics | promql | per-source component-selector | node_metrics |
 | output | stdout, sqlite, kafka | per-instance component-selector | (none) |
 | attribution | (implicit HTTP client) | flat: service_url, timeout_seconds | (none) |
@@ -154,6 +154,7 @@ The Service returns a raw verdict. The Blueprint enriches it with normalized fie
 |---|---|---|
 | applog | Application stdout, NCCL output, framework logs from PyTorch and NeMo, anything written by the workload itself | loki, victorialogs, local_file, kubectl_logs (pod stdout) |
 | syslog | Kernel ring buffer, XID lines, dmesg, systemd, fabric manager | loki, victorialogs, local_file, kubectl_logs (with a node-agent DaemonSet) |
+| health_check | Output of a node health check, such as a Slurm `HealthCheckProgram` or an epilog hook, that reports a node fault after the workload on it ends; collected over the context window plus ten minutes | loki, local_file |
 | node_metrics | DCGM counters, NVLink PLR, host-side fabric counters, anything PromQL can query | promql |
 
 Source names are wire-format enum values the Service expects. Each log or metric connector instance produces exactly one `Source`. A backend serving multiple Sources is instantiated once per Source so failure isolation lives at the instance boundary.

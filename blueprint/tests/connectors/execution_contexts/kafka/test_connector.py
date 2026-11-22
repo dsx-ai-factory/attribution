@@ -49,18 +49,22 @@ class FakeError:
 
 
 class FakeMessage:
-    def __init__(self, value, offset, partition=0, headers=None, error=None):
+    def __init__(self, value, offset, partition=0, headers=None, error=None, key=None):
         self._value = value
         self._offset = offset
         self._partition = partition
         self._headers = headers
         self._error = error
+        self._key = key
 
     def error(self):
         return self._error
 
     def value(self):
         return self._value
+
+    def key(self):
+        return self._key
 
     def headers(self):
         return self._headers
@@ -94,6 +98,7 @@ class FakeConsumer:
         self._commit_raises = commit_raises
         self.polls = 0
         self.commits = []
+        self.group_offsets = {}
         self.closed = False
         self.paused_partitions = set()
 
@@ -136,18 +141,28 @@ class FakeConsumer:
         if self._commit_raises:
             raise KafkaConsumerError("coordinator unavailable")
         self.commits.append({tp.partition: tp.offset for tp in offsets})
+        self.group_offsets.update(
+            {tp.partition: tp.offset for tp in offsets if tp.partition not in self._commit_errors}
+        )
         if any(tp.partition in self._commit_errors for tp in offsets):
             # Match the native synchronous client: a failed partition can
             # raise, including when other partitions in a mixed call committed.
             raise KafkaConsumerError("partition commit failed")
         return [TP(tp.topic, tp.partition, tp.offset) for tp in offsets]
 
+    def committed(self, partitions, *, timeout):
+        assert timeout > 0
+        return [TP(tp.topic, tp.partition, self.group_offsets.get(tp.partition, -1001)) for tp in partitions]
+
     def position(self, partitions):
         return [TP(tp.topic, tp.partition, self._positions.get(tp.partition, -1001)) for tp in partitions]
 
-    def get_watermark_offsets(self, tp, *, timeout, cached):
+    def get_watermark_offsets(self, tp, *, timeout=None, cached=False):
+        # Discovery asks the broker; lag metrics read only the client's cache.
+        if cached:
+            assert timeout is None
+            return 0, self._highs.get(tp.partition, -1001)
         assert timeout > 0
-        assert cached is False
         return 0, self._highs.get(tp.partition, 0)
 
     def close(self):
