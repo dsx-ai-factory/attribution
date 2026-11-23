@@ -266,6 +266,26 @@ describe('RunsToolbar', () => {
 })
 
 describe('RunsSection', () => {
+  it.each([
+    ['aleatoric', 'uncertainty type', 'Aleatoric'],
+    ['infrahw', 'failure domain', 'InfraHW'],
+    ['cancelled', 'terminal state', 'Cancelled'],
+    ['scheduler', 'cancellation actor', 'Scheduler'],
+    ['partial', 'evidence status', 'Partial'],
+  ])('labels and highlights the verdict match for %s', (q, label, value) => {
+    const sample = run({
+      uncertaintyType: 'Aleatoric', failureDomains: ['User', 'InfraHW'],
+      terminalStates: ['Fail', 'Cancelled'], cancellationActors: ['Scheduler'], evidenceStatus: 'Partial',
+    })
+    renderInRouter(<RunsSection
+      groups={[{ outcome: 'hardware', runs: [sample], total: 1, page: 0, pageSize: 10 }]}
+      matchingRuns={1} visibleRuns={[sample]} filter={{ ...filter, q }}
+      setFilter={vi.fn()} pageByOutcome={{}} pageSize={10} setPageSize={vi.fn()} setGroupPage={vi.fn()}
+    />)
+    const mark = screen.getByText(value, { selector: 'mark' })
+    expect(mark.parentElement?.textContent).toBe(`Matched in ${label}: ${value}`)
+  })
+
   it('shows each run’s own log line for a shared hardware address', () => {
     const address = 'PCI:0000:81:00'
     const lines = [`${address}: Double-bit ECC error`, `${address}: NVLINK_RLW_ERROR`]

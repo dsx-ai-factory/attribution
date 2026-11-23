@@ -100,6 +100,11 @@ function searchHint(r: RunSummary, query = '') {
     ['attempt ID', r.attemptUid],
     ['run details', r.detail],
     ['log line', r.rootSymptom.line],
+    ['uncertainty type', r.uncertaintyType ?? ''],
+    ['evidence status', r.evidenceStatus ?? ''],
+    ...(r.failureDomains ?? []).map((domain): [string, string] => ['failure domain', domain]),
+    ...(r.terminalStates ?? []).map((state): [string, string] => ['terminal state', state]),
+    ...(r.cancellationActors ?? []).map((actor): [string, string] => ['cancellation actor', actor]),
   ]
   for (const [label, text] of fields) {
     const match = pattern.exec(text)
