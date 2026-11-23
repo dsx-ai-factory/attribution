@@ -28,7 +28,10 @@ Frontend-only commands run from this directory: `pnpm build`, `pnpm test`, `pnpm
 
 The server searches the full run record. When the search term is hidden from
 the Runs table but appears in the run summary, the row shows where it matched
-and highlights the text. If the summary contains no match, the row says
+and highlights the text. The server searches stored JSON, where double quotes
+and backslashes are escaped. For queries containing either character, the row
+can still identify a matching plain-text attempt ID. When the dashboard
+cannot verify a hidden match, the row says
 “Search matched the full run record.”
 
 A possible follow-up is for the server to return the matching field or a short

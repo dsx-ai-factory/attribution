@@ -267,6 +267,27 @@ describe('RunsToolbar', () => {
 
 describe('RunsSection', () => {
   it.each([
+    ['"offline"', undefined],
+    ['rack\\device', undefined],
+    ['offline', 'Matched in run details: device "offline" on rack\\device'],
+    ['attempt\\42', 'Matched in attempt ID: attempt\\42'],
+  ] as const)('only attributes a verifiable match for %s', (q, expected) => {
+    const sample = run({ detail: 'device "offline" on rack\\device', attemptUid: 'attempt\\42' })
+    renderInRouter(<RunsSection
+      groups={[{ outcome: 'hardware', runs: [sample], total: 1, page: 0, pageSize: 10 }]}
+      matchingRuns={1} visibleRuns={[sample]} filter={{ ...filter, q }}
+      setFilter={vi.fn()} pageByOutcome={{}} pageSize={10} setPageSize={vi.fn()} setGroupPage={vi.fn()}
+    />)
+    const row = within(screen.getByRole('link', { name: sample.jobId }).closest('tr')!)
+    if (expected) {
+      expect(row.getByText(q, { selector: 'mark' }).parentElement?.textContent).toBe(expected)
+    } else {
+      expect(row.getByText('Search matched the full run record.')).toBeTruthy()
+      expect(row.queryByText(/./, { selector: 'mark' })).toBeNull()
+    }
+  })
+
+  it.each([
     ['aleatoric', 'uncertainty type', 'Aleatoric'],
     ['infrahw', 'failure domain', 'InfraHW'],
     ['cancelled', 'terminal state', 'Cancelled'],
