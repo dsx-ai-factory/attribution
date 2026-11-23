@@ -147,6 +147,38 @@ the service-only image. The DuckDB event storage variables are described in
 | `OTEL_EXPORTER_OTLP_TOKEN` | unset | Optional bearer token sent with exported logs. |
 | `OTEL_EXPORTER_OTLP_PROTOCOL` | unset | Ignored with a warning. The service exports over gRPC only. |
 
+| `ATTRIBUTION_CONFIG_FILE` | unset | Path to the library configuration file. When unset, the service uses the library defaults. |
+
+#### Library configuration file
+
+The service reads the TOML file that `ATTRIBUTION_CONFIG_FILE` names at startup.
+Restart the service after you change the file. All keys are optional. If you
+omit a key, the service keeps its default. If the file is missing, is not valid
+TOML, has an unknown key, or has an invalid value, the service does not start.
+The startup error names the file and the key.
+
+| Key | Default | Accepted value |
+|---|---|---|
+| `applog_parse_timestamp` | `true` | `true` or `false`. Controls timestamp parsing from the body of structured application log entries. |
+| `ignored_hostname_prefixes` | Empty list | List of hostname prefixes, such as `["scanner-"]`. Use `[]` to clear the list. |
+| `node_mapping_file` | unset | Path to a CSV with `id`, `instanceId`, and optional IPv4 address columns. |
+| `node_domain_regex` | unset | Regular expression with a named `domain` group, such as `'(?P<domain>nvl\d+)-t\d+'`. The service matches the lowercase hostname without its DNS suffix. |
+| `rules_paths` | Bundled rules | List of rule directories in load order. Include the bundled rules directory if you want to load those rules with additional rules. |
+
+A relative path in `node_mapping_file` or `rules_paths` starts at the folder
+that holds the configuration file. Use single quotes for a regular expression,
+because TOML does not process backslashes in single-quoted strings.
+
+```toml
+applog_parse_timestamp = false
+ignored_hostname_prefixes = ["scanner-"]
+node_mapping_file = "nodes.csv"
+node_domain_regex = '(?P<domain>nvl\d+)-t\d+'
+rules_paths = ["/etc/attribution/rules"]
+```
+
+If the configured directories load zero rules, or the node mapping CSV has no `instanceId` column, the service starts with a warning.
+
 With `ATTRIBUTOR_ALLOW_DISK_SPILL` at `false`, an attributor that exceeds
 `ATTRIBUTOR_DUCKDB_MEMORY_LIMIT` fails with an event-storage overflow error
 scoped to that one request, not a generic 500. Enable disk spill only where the

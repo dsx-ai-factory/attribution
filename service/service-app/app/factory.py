@@ -9,7 +9,6 @@ from importlib.metadata import (
 )
 from typing import Union
 
-from attribution_lib.core import setup_rules
 from attribution_lib.exceptions import (
     AttributionError as LibAttributionError,
     InvalidEventStorageSizeError,
@@ -30,6 +29,7 @@ import app.v2.api as v2
 from app import __version__
 from app.attributor import validate_event_storage_configuration
 from app.exceptions import AttributionHTTPException
+from app.library_config import configure_library
 from app.logging_config import setup_logging
 from app.metrics import VERSION_INFO
 
@@ -64,7 +64,7 @@ def _installed_version() -> str:
 def create_app() -> FastAPI:
     """Create the service application, initializing logging and attribution rules."""
     otlp_provider = setup_logging()
-    setup_rules()
+    configure_library()
     global_aim = attributor_manager.AttributorManager(expiration_period_hours=24)
     instrumentator = Instrumentator()
 
