@@ -86,7 +86,41 @@ function ResponsibleNodes({ nodes }: { nodes: string[] }) {
   )
 }
 
-function RunRow({ r }: { r: RunSummary }) {
+function searchHint(r: RunSummary, query = '') {
+  const needle = query.trim()
+  if (!needle) return
+  const pattern = new RegExp(needle.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i')
+  const visible = [r.jobId, r.user, r.rootSymptom.symptom, ...r.responsibleNodes.slice(0, RESPONSIBLE_NODE_INLINE_LIMIT)]
+  if (visible.some(value => pattern.test(value))) return
+
+  const fields: [string, string][] = [
+    ['rule', r.rootSymptom.rule],
+    ...r.responsibleNodes.slice(RESPONSIBLE_NODE_INLINE_LIMIT).map((node): [string, string] => ['responsible node', node]),
+    ...r.nodeIds.map((node): [string, string] => ['allocated node', node]),
+    ['attempt ID', r.attemptUid],
+    ['run details', r.detail],
+    ['log line', r.rootSymptom.line],
+  ]
+  for (const [label, text] of fields) {
+    const match = pattern.exec(text)
+    if (!match) continue
+    const clip = label === 'run details' || label === 'log line'
+    const width = clip ? Math.max(100, needle.length) : text.length
+    const start = Math.max(0, Math.min(match.index - Math.floor((width - needle.length) / 2), text.length - width))
+    const end = start + width
+    return (
+      <>
+        Matched in {label}: {start > 0 && '…'}{text.slice(start, match.index)}
+        <mark className="bg-transparent font-semibold text-foreground">{match[0]}</mark>
+        {text.slice(match.index + match[0].length, end)}{end < text.length && '…'}
+      </>
+    )
+  }
+  return 'Search matched the full run record.'
+}
+
+function RunRow({ r, query }: { r: RunSummary; query?: string }) {
+  const hint = searchHint(r, query)
   const nav = useNav()
   return (
     <TableRow
@@ -104,6 +138,7 @@ function RunRow({ r }: { r: RunSummary }) {
           instead of running past it. */}
       <TableCell wrap>
         <RouterLink to={navigateService.getPath('verdict', { id: r.id })}><Identifier>{r.jobId}</Identifier></RouterLink>
+        {hint && <span className="block break-words text-xs text-foreground-muted">{hint}</span>}
       </TableCell>
       <TableCell wrap>{r.user ? <Identifier>{r.user}</Identifier> : <NoValue />}</TableCell>
       <TableCell className="num text-right">{r.gpuCount}</TableCell>
@@ -292,7 +327,7 @@ export function RunsSection({
                           </TableCell>
                         </TableRow>
                       ))
-                    : g.runs.map((r) => <RunRow key={r.id} r={r} />)}
+                    : g.runs.map((r) => <RunRow key={r.id} r={r} query={filter.q} />)}
                   {/* The pager stays for any group the smallest page size would
                       page, so choosing a size that fits the whole group keeps
                       the select, and the keyboard focus on it, in place. */}

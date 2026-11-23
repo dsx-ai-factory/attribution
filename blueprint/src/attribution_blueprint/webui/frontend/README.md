@@ -24,6 +24,17 @@ scripts/webui.sh dev         # frontend hot-reload dev server (empty data, no ba
 
 Frontend-only commands run from this directory: `pnpm build`, `pnpm test`, `pnpm exec tsc -b`.
 
+## Why a run matched a search
+
+The server searches the full run record. When the search term is hidden from
+the Runs table but appears in the run summary, the row shows where it matched
+and highlights the text. If the summary contains no match, the row says
+“Search matched the full run record.”
+
+A possible follow-up is for the server to return the matching field or a short
+excerpt. For example, if a hardware address appears only in a nested log entry,
+the row could show that line with the address highlighted.
+
 ## Symptom documentation references
 
 Set `VITE_SYMPTOM_DOCS_URL` at build time to explicitly enable the existing symptom
