@@ -270,12 +270,12 @@ describe('RunsSection', () => {
     ['aleatoric', 'uncertainty type', 'Aleatoric'],
     ['infrahw', 'failure domain', 'InfraHW'],
     ['cancelled', 'terminal state', 'Cancelled'],
-    ['scheduler', 'cancellation actor', 'Scheduler'],
-    ['partial', 'evidence status', 'Partial'],
+    ['operator', 'cancellation actor', 'Operator'],
+    ['PARTIAL', 'evidence status', 'partial'],
   ])('labels and highlights the verdict match for %s', (q, label, value) => {
     const sample = run({
       uncertaintyType: 'Aleatoric', failureDomains: ['User', 'InfraHW'],
-      terminalStates: ['Fail', 'Cancelled'], cancellationActors: ['Scheduler'], evidenceStatus: 'Partial',
+      terminalStates: ['Fail', 'Cancelled'], cancellationActors: ['Operator'], evidenceStatus: 'partial',
     })
     renderInRouter(<RunsSection
       groups={[{ outcome: 'hardware', runs: [sample], total: 1, page: 0, pageSize: 10 }]}
