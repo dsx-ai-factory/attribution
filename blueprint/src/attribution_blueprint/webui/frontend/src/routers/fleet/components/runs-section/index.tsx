@@ -93,8 +93,6 @@ function searchHint(r: RunSummary, query = '') {
   const visible = [r.jobId, r.user, r.rootSymptom.symptom, ...r.responsibleNodes.slice(0, RESPONSIBLE_NODE_INLINE_LIMIT)]
   if (visible.some(value => pattern.test(value))) return
 
-  // SQLite searches the serialized JSON, which escapes quotes and backslashes.
-  // The attempt ID is the only hidden candidate also searched as plain text.
   const needsJsonEscaping = needle.includes('"') || needle.includes('\\')
 
   const fields: [string, string][] = [
@@ -111,9 +109,14 @@ function searchHint(r: RunSummary, query = '') {
     ...(r.cancellationActors ?? []).map((actor): [string, string] => ['cancellation actor', actor]),
   ]
   for (const [label, text] of fields) {
-    if (needsJsonEscaping && label !== 'attempt ID') continue
     const match = pattern.exec(text)
     if (!match) continue
+    if (needsJsonEscaping && label !== 'attempt ID') {
+      // Check the matched passage without counting JSON's surrounding quotes.
+      // The SQLite writer also escapes non-ASCII characters, unlike JSON.stringify.
+      const passage = match[0]
+      if (/[^ -~]/.test(passage) || !JSON.stringify(passage).slice(1, -1).includes(passage)) continue
+    }
     const clip = label === 'run details' || label === 'log line'
     const width = clip ? Math.max(100, needle.length) : text.length
     const start = Math.max(0, Math.min(match.index - Math.floor((width - needle.length) / 2), text.length - width))

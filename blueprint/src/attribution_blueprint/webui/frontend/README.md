@@ -30,7 +30,8 @@ The server searches the full run record. When the search term is hidden from
 the Runs table but appears in the run summary, the row shows where it matched
 and highlights the text. The server searches stored JSON, where double quotes
 and backslashes are escaped. For queries containing either character, the row
-can still identify a matching plain-text attempt ID. When the dashboard
+shows a JSON field hint when it can verify that the displayed passage also
+contains the search text after escaping. Attempt IDs are searched as plain text. When the dashboard
 cannot verify a hidden match, the row says
 “Search matched the full run record.”
 

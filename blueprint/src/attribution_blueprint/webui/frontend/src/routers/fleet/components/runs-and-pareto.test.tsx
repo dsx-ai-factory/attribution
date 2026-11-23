@@ -268,11 +268,16 @@ describe('RunsToolbar', () => {
 describe('RunsSection', () => {
   it.each([
     ['"offline"', undefined],
+    ['"/app/train.py', 'Matched in log line: File "/app/train.py", line 42'],
+    ['"/app/train.py"', undefined],
     ['rack\\device', undefined],
     ['offline', 'Matched in run details: device "offline" on rack\\device'],
     ['attempt\\42', 'Matched in attempt ID: attempt\\42'],
   ] as const)('only attributes a verifiable match for %s', (q, expected) => {
-    const sample = run({ detail: 'device "offline" on rack\\device', attemptUid: 'attempt\\42' })
+    const sample = run({
+      detail: 'device "offline" on rack\\device', attemptUid: 'attempt\\42',
+      rootSymptom: { ...run().rootSymptom, line: 'File "/app/train.py", line 42' },
+    })
     renderInRouter(<RunsSection
       groups={[{ outcome: 'hardware', runs: [sample], total: 1, page: 0, pageSize: 10 }]}
       matchingRuns={1} visibleRuns={[sample]} filter={{ ...filter, q }}
