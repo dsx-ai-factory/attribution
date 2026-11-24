@@ -119,9 +119,9 @@ class KubernetesDaemonClient:
                 raise ValueError(
                     "daemon returned history outside the requested namespace"
                 )
-            if not isinstance(history.get("observations"), list):
+            if not isinstance(history.get("snapshots"), list):
                 raise ValueError(
-                    "daemon history response must contain an observations list"
+                    "daemon history response must contain a snapshots list"
                 )
             if "placements" in history and not isinstance(
                 history["placements"],

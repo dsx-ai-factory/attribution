@@ -124,7 +124,7 @@ _FAMILY_KEYS = frozenset(
 
 _PROCESSOR_KEYS = frozenset({"processor", "derived_rules", "derived_event_types"})
 
-_PREFILTER_KEYS = frozenset({"sources", "include", "exclude"})
+_PREFILTER_KEYS = frozenset({"sources", "include", "exclude", "keep"})
 
 
 def _reject_unknown_keys(declared: dict[str, Any], known: Collection[str], *, where: str) -> None:
@@ -937,7 +937,7 @@ def _finalize_family(
 
 
 def _load_prefilter(loader: "RuleLoader", pf_doc: dict[str, Any], ctx: _LoadContext, filepath: str) -> None:
-    """Register a [prefilter] section: include/exclude term lists for each source."""
+    """Register a [prefilter] section: include, exclude and keep term lists for each source."""
     raw_sources = pf_doc.get("sources", ctx.file_sources)
     if not raw_sources:
         raise RegistrationError(
@@ -959,6 +959,7 @@ def _load_prefilter(loader: "RuleLoader", pf_doc: dict[str, Any], ctx: _LoadCont
     spec = PreFilterSpec(
         include_terms=_checked_str_list("include"),
         exclude_terms=_checked_str_list("exclude"),
+        keep_terms=_checked_str_list("keep"),
     )
     for source in sources:
         loader.register_pre_filter(source, spec)

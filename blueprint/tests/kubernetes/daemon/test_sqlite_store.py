@@ -8,18 +8,18 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 from attribution_blueprint.kubernetes.daemon.models import (
-    ObservationEventType,
     OwnerReference,
     PlacementRecord,
     ResourceIdentity,
-    ResourceObservation,
+    ResourceSnapshot,
+    SnapshotEventType,
 )
 from attribution_blueprint.kubernetes.daemon.sqlite_store import SQLitePlacementStore
 from attribution_blueprint.kubernetes.daemon.store import (
     CreateResult,
-    ObservationAppendResult,
-    ObservationConflictError,
     PlacementConflictError,
+    SnapshotAppendResult,
+    SnapshotConflictError,
 )
 
 
@@ -45,14 +45,14 @@ def _record(*, associated: bool) -> PlacementRecord:
     )
 
 
-def _observation(
+def _snapshot(
     *,
     resource_version: str = "1",
-    event_type: ObservationEventType = "SNAPSHOT",
+    event_type: SnapshotEventType = "SNAPSHOT",
     selected_metadata: dict | None = None,
     status: dict | None = None,
-) -> ResourceObservation:
-    return ResourceObservation(
+) -> ResourceSnapshot:
+    return ResourceSnapshot(
         cluster_id="cluster-a",
         api_version="v1",
         kind="Pod",
@@ -77,7 +77,7 @@ def _observation(
     )
 
 
-def _history_observation(
+def _history_snapshot(
     *,
     kind: str,
     name: str,
@@ -87,9 +87,9 @@ def _history_observation(
     owners: tuple[OwnerReference, ...] = (),
     status: dict | None = None,
     source_timestamp: str | None = None,
-    event_type: ObservationEventType = "MODIFIED",
-) -> ResourceObservation:
-    return ResourceObservation(
+    event_type: SnapshotEventType = "MODIFIED",
+) -> ResourceSnapshot:
+    return ResourceSnapshot(
         cluster_id="cluster-a",
         api_version="v1",
         kind=kind,
@@ -105,17 +105,17 @@ def _history_observation(
     )
 
 
-def _capture(store: SQLitePlacementStore, observation: ResourceObservation) -> ObservationAppendResult:
-    return store.capture_observation(
-        observation,
+def _capture(store: SQLitePlacementStore, snapshot: ResourceSnapshot) -> SnapshotAppendResult:
+    return store.capture_snapshot(
+        snapshot,
         source_name="pods",
         placement=None,
         advance_checkpoint=False,
-    ).observation
+    ).snapshot
 
 
-def test_resource_observation_preserves_controller_owner_reference():
-    observation = ResourceObservation.from_resource(
+def test_resource_snapshot_preserves_controller_owner_reference():
+    snapshot = ResourceSnapshot.from_resource(
         {
             "apiVersion": "batch/v1",
             "kind": "Job",
@@ -141,7 +141,7 @@ def test_resource_observation_preserves_controller_owner_reference():
         status={"active": 1},
     )
 
-    assert observation.owner_references == (
+    assert snapshot.owner_references == (
         OwnerReference(
             api_version="jobset.x-k8s.io/v1alpha2",
             kind="JobSet",
@@ -150,7 +150,7 @@ def test_resource_observation_preserves_controller_owner_reference():
             controller=True,
         ),
     )
-    assert observation.status == {"active": 1}
+    assert snapshot.status == {"active": 1}
 
 
 def test_unresolved_placement_can_be_enriched_later(tmp_path):
@@ -220,10 +220,10 @@ def test_deleted_placement_expires_after_retention_window(tmp_path):
     assert reopened.get_by_pod_uid(record.pod_uid) is None
 
 
-def test_deleted_capture_rolls_back_observation_and_placement_with_marker(tmp_path):
+def test_deleted_capture_rolls_back_snapshot_and_placement_with_marker(tmp_path):
     path = tmp_path / "placements.db"
     store = SQLitePlacementStore(str(path))
-    observation = _observation(event_type="DELETED")
+    snapshot = _snapshot(event_type="DELETED")
     record = _record(associated=False)
     with sqlite3.connect(path) as connection:
         connection.execute(
@@ -237,15 +237,15 @@ def test_deleted_capture_rolls_back_observation_and_placement_with_marker(tmp_pa
         )
 
     with pytest.raises(sqlite3.IntegrityError, match="synthetic deletion marker failure"):
-        store.capture_observation(
-            observation,
+        store.capture_snapshot(
+            snapshot,
             source_name="pods",
             placement=record,
             advance_checkpoint=True,
             mark_deleted=True,
         )
 
-    assert store.list_observations_for_uid("cluster-a", "team-a", record.pod_uid) == []
+    assert store.list_snapshots_for_uid("cluster-a", "team-a", record.pod_uid) == []
     assert store.get_by_pod_uid(record.pod_uid) is None
 
 
@@ -300,7 +300,7 @@ def test_store_closes_connection_after_operation(tmp_path, monkeypatch):
 
     monkeypatch.setattr(store, "_connect", connect)
     assert store.get_by_pod_uid("missing") is None
-    assert store.list_latest_observations_for_kind(
+    assert store.list_latest_snapshots_for_kind(
         "cluster-a",
         "team-a",
         "Pod",
@@ -373,26 +373,26 @@ def test_resource_uid_replaces_stale_resource_metadata(tmp_path):
     assert stored.associated_resources == (updated_resource,)
 
 
-def test_observation_journal_is_append_only_and_survives_reopen(tmp_path):
+def test_snapshot_journal_is_append_only_and_survives_reopen(tmp_path):
     path = tmp_path / "placements.db"
     store = SQLitePlacementStore(str(path))
-    initial = _observation(
+    initial = _snapshot(
         selected_metadata={
             "annotations": {"batch.kubernetes.io/job-completion-index": "0"}
         },
         status={"phase": "Pending"},
     )
-    updated = _observation(
+    updated = _snapshot(
         resource_version="2",
         event_type="MODIFIED",
         status={"phase": "Running"},
     )
 
-    assert _capture(store, initial) == ObservationAppendResult.APPENDED
-    assert _capture(store, updated) == ObservationAppendResult.APPENDED
+    assert _capture(store, initial) == SnapshotAppendResult.APPENDED
+    assert _capture(store, updated) == SnapshotAppendResult.APPENDED
 
     reopened = SQLitePlacementStore(str(path))
-    assert reopened.list_observations_for_uid("cluster-a", "team-a", "pod-uid-1") == [
+    assert reopened.list_snapshots_for_uid("cluster-a", "team-a", "pod-uid-1") == [
         initial,
         updated,
     ]
@@ -416,29 +416,29 @@ def test_expired_workload_prunes_its_complete_controller_history(tmp_path):
         uid="job-uid",
         controller=True,
     )
-    observations = [
-        _history_observation(
+    snapshots = [
+        _history_snapshot(
             kind="JobSet",
             name="training",
             uid="jobset-uid",
             observed_at=old,
             event_type="DELETED",
         ),
-        _history_observation(
+        _history_snapshot(
             kind="Job",
             name="worker",
             uid="job-uid",
             observed_at=old,
             owners=(jobset_owner,),
         ),
-        _history_observation(
+        _history_snapshot(
             kind="Pod",
             name="worker-0",
             uid="pod-uid",
             observed_at=old,
             owners=(job_owner,),
         ),
-        _history_observation(
+        _history_snapshot(
             kind="Workload",
             name="training-workload",
             uid="workload-uid",
@@ -455,14 +455,14 @@ def test_expired_workload_prunes_its_complete_controller_history(tmp_path):
             },
         ),
     ]
-    for observation in observations:
-        _capture(store, observation)
+    for snapshot in snapshots:
+        _capture(store, snapshot)
 
     SQLitePlacementStore(str(path), retention_days=1)
 
     with sqlite3.connect(path) as connection:
         assert connection.execute(
-            "SELECT COUNT(*) FROM resource_observation"
+            "SELECT COUNT(*) FROM resource_snapshot"
         ).fetchone()[0] == 0
 
 
@@ -477,13 +477,13 @@ def test_active_root_controller_protects_expired_workload_group(tmp_path):
         uid="jobset-uid",
         controller=True,
     )
-    controller = _history_observation(
+    controller = _history_snapshot(
         kind="JobSet",
         name="training",
         uid="jobset-uid",
         observed_at=old,
     )
-    workload = _history_observation(
+    workload = _history_snapshot(
         kind="Workload",
         name="training-workload",
         uid="workload-uid",
@@ -504,12 +504,12 @@ def test_active_root_controller_protects_expired_workload_group(tmp_path):
 
     reopened = SQLitePlacementStore(str(path), retention_days=1)
 
-    assert reopened.list_observations_for_uid(
+    assert reopened.list_snapshots_for_uid(
         "cluster-a",
         "team-a",
         controller.uid,
     ) == [controller]
-    assert reopened.list_observations_for_uid(
+    assert reopened.list_snapshots_for_uid(
         "cluster-a",
         "team-a",
         workload.uid,
@@ -528,7 +528,7 @@ def test_recently_completed_root_protects_expired_workload_group(tmp_path):
         uid="job-uid",
         controller=True,
     )
-    controller = _history_observation(
+    controller = _history_snapshot(
         kind="Job",
         name="training",
         uid="job-uid",
@@ -543,7 +543,7 @@ def test_recently_completed_root_protects_expired_workload_group(tmp_path):
             ]
         },
     )
-    workload = _history_observation(
+    workload = _history_snapshot(
         kind="Workload",
         name="training-workload",
         uid="workload-uid",
@@ -564,12 +564,12 @@ def test_recently_completed_root_protects_expired_workload_group(tmp_path):
 
     reopened = SQLitePlacementStore(str(path), retention_days=1)
 
-    assert reopened.list_observations_for_uid(
+    assert reopened.list_snapshots_for_uid(
         "cluster-a",
         "team-a",
         controller.uid,
     ) == [controller]
-    assert reopened.list_observations_for_uid(
+    assert reopened.list_snapshots_for_uid(
         "cluster-a",
         "team-a",
         workload.uid,
@@ -595,20 +595,20 @@ def test_expired_owner_preserves_history_reassigned_to_active_owner(tmp_path):
         uid="active-job-uid",
         controller=True,
     )
-    expired_job = _history_observation(
+    expired_job = _history_snapshot(
         kind="Job",
         name="old-job",
         uid=old_owner.uid,
         observed_at=old,
         event_type="DELETED",
     )
-    active_job = _history_observation(
+    active_job = _history_snapshot(
         kind="Job",
         name="active-job",
         uid=active_owner.uid,
         observed_at=current,
     )
-    old_pod = _history_observation(
+    old_pod = _history_snapshot(
         kind="Pod",
         name="worker-0",
         uid="pod-uid",
@@ -616,7 +616,7 @@ def test_expired_owner_preserves_history_reassigned_to_active_owner(tmp_path):
         observed_at=old,
         owners=(old_owner,),
     )
-    reassigned_pod = _history_observation(
+    reassigned_pod = _history_snapshot(
         kind="Pod",
         name="worker-0",
         uid="pod-uid",
@@ -624,27 +624,27 @@ def test_expired_owner_preserves_history_reassigned_to_active_owner(tmp_path):
         observed_at=current,
         owners=(active_owner,),
     )
-    for observation in (
+    for snapshot in (
         expired_job,
         old_pod,
         active_job,
         reassigned_pod,
     ):
-        _capture(store, observation)
+        _capture(store, snapshot)
 
     reopened = SQLitePlacementStore(str(path), retention_days=1)
 
-    assert reopened.list_observations_for_uid(
+    assert reopened.list_snapshots_for_uid(
         "cluster-a",
         "team-a",
         expired_job.uid,
     ) == []
-    assert reopened.list_observations_for_uid(
+    assert reopened.list_snapshots_for_uid(
         "cluster-a",
         "team-a",
         active_job.uid,
     ) == [active_job]
-    assert reopened.list_observations_for_uid(
+    assert reopened.list_snapshots_for_uid(
         "cluster-a",
         "team-a",
         old_pod.uid,
@@ -655,7 +655,7 @@ def test_old_active_workload_history_is_retained(tmp_path):
     path = tmp_path / "placements.db"
     store = SQLitePlacementStore(str(path), retention_days=1)
     old = (datetime.now(timezone.utc) - timedelta(days=2)).isoformat()
-    workload = _history_observation(
+    workload = _history_snapshot(
         kind="Workload",
         name="training-workload",
         uid="workload-uid",
@@ -666,21 +666,21 @@ def test_old_active_workload_history_is_retained(tmp_path):
     _capture(store, workload)
     store.prune_expired()
 
-    assert store.list_observations_for_uid(
+    assert store.list_snapshots_for_uid(
         "cluster-a",
         "team-a",
         "workload-uid",
     ) == [workload]
 
 
-def test_recent_terminal_without_terminal_timestamp_uses_observation_time(
+def test_recent_terminal_without_terminal_timestamp_uses_snapshot_time(
     tmp_path,
 ):
     path = tmp_path / "placements.db"
     store = SQLitePlacementStore(str(path), retention_days=30)
     old_start = (datetime.now(timezone.utc) - timedelta(days=2)).isoformat()
     observed_terminal = datetime.now(timezone.utc).isoformat()
-    pod = _history_observation(
+    pod = _history_snapshot(
         kind="Pod",
         name="worker-0",
         uid="pod-uid",
@@ -695,7 +695,7 @@ def test_recent_terminal_without_terminal_timestamp_uses_observation_time(
 
     reopened = SQLitePlacementStore(str(path), retention_days=1)
 
-    assert reopened.list_observations_for_uid(
+    assert reopened.list_snapshots_for_uid(
         "cluster-a",
         "team-a",
         pod.uid,
@@ -705,7 +705,7 @@ def test_recent_terminal_without_terminal_timestamp_uses_observation_time(
 def test_complete_relist_expires_absent_active_workload_history(tmp_path):
     store = SQLitePlacementStore(str(tmp_path / "placements.db"), retention_days=1)
     old = (datetime.now(timezone.utc) - timedelta(days=2)).isoformat()
-    active = _history_observation(
+    active = _history_snapshot(
         kind="Workload",
         name="active-workload",
         uid="active-workload-uid",
@@ -732,12 +732,12 @@ def test_complete_relist_expires_absent_active_workload_history(tmp_path):
         active_resource_uids={active.uid},
     )
 
-    absent_history = store.list_observations_for_uid(
+    absent_history = store.list_snapshots_for_uid(
         "cluster-a",
         "team-a",
         absent.uid,
     )
-    assert [observation.event_type for observation in absent_history] == [
+    assert [snapshot.event_type for snapshot in absent_history] == [
         "MODIFIED",
         "DELETED",
     ]
@@ -746,12 +746,12 @@ def test_complete_relist_expires_absent_active_workload_history(tmp_path):
 
     store.prune_expired()
 
-    assert store.list_observations_for_uid(
+    assert store.list_snapshots_for_uid(
         "cluster-a",
         "team-a",
         active.uid,
     ) == [active]
-    assert store.list_observations_for_uid(
+    assert store.list_snapshots_for_uid(
         "cluster-a",
         "team-a",
         absent.uid,
@@ -772,7 +772,7 @@ def test_newer_active_workload_protects_owner_group_from_late_old_terminal(
         uid="jobset-uid",
         controller=True,
     )
-    active = _history_observation(
+    active = _history_snapshot(
         kind="Workload",
         name="training-workload",
         uid="workload-new",
@@ -784,7 +784,7 @@ def test_newer_active_workload_protects_owner_group_from_late_old_terminal(
             ]
         },
     )
-    expired = _history_observation(
+    expired = _history_snapshot(
         kind="Workload",
         name="training-workload",
         uid="workload-old",
@@ -807,12 +807,12 @@ def test_newer_active_workload_protects_owner_group_from_late_old_terminal(
 
     reopened = SQLitePlacementStore(str(path), retention_days=1)
 
-    assert reopened.list_observations_for_uid(
+    assert reopened.list_snapshots_for_uid(
         "cluster-a",
         "team-a",
         "workload-new",
     ) == [active]
-    assert reopened.list_observations_for_uid(
+    assert reopened.list_snapshots_for_uid(
         "cluster-a",
         "team-a",
         "workload-old",
@@ -837,15 +837,15 @@ def test_expired_non_workload_histories_are_pruned(tmp_path):
         uid="missing-job-uid",
         controller=True,
     )
-    observations = [
-        _history_observation(
+    snapshots = [
+        _history_snapshot(
             kind="Job",
             name="standalone-job",
             uid="standalone-job-uid",
             observed_at=old,
             event_type="DELETED",
         ),
-        _history_observation(
+        _history_snapshot(
             kind="Pod",
             name="orphaned-pod",
             uid="orphaned-pod-uid",
@@ -853,14 +853,14 @@ def test_expired_non_workload_histories_are_pruned(tmp_path):
             owners=(missing_job,),
             event_type="DELETED",
         ),
-        _history_observation(
+        _history_snapshot(
             kind="Job",
             name="kai-job",
             uid="kai-job-uid",
             observed_at=old,
             event_type="DELETED",
         ),
-        _history_observation(
+        _history_snapshot(
             kind="PodGroup",
             name="kai-group",
             uid="podgroup-uid",
@@ -869,55 +869,56 @@ def test_expired_non_workload_histories_are_pruned(tmp_path):
             event_type="DELETED",
         ),
     ]
-    for observation in observations:
-        _capture(store, observation)
+    for snapshot in snapshots:
+        _capture(store, snapshot)
 
     SQLitePlacementStore(str(path), retention_days=1)
 
     with sqlite3.connect(path) as connection:
         assert connection.execute(
-            "SELECT COUNT(*) FROM resource_observation"
+            "SELECT COUNT(*) FROM resource_snapshot"
         ).fetchone()[0] == 0
 
 
-def test_observation_schema_adds_selected_metadata_to_existing_journal(tmp_path):
+def test_snapshot_schema_sets_user_version(tmp_path):
     path = tmp_path / "placements.db"
+
     SQLitePlacementStore(str(path))
-    with sqlite3.connect(path) as connection:
-        connection.execute("ALTER TABLE resource_observation DROP COLUMN selected_metadata_json")
-        connection.execute("PRAGMA user_version = 3")
 
-    store = SQLitePlacementStore(str(path))
-    observation = _observation(
-        selected_metadata={
-            "labels": {"jobset.sigs.k8s.io/restart-attempt": "1"},
-        }
-    )
-
-    assert _capture(store, observation) == ObservationAppendResult.APPENDED
-    assert store.list_observations_for_uid("cluster-a", "team-a", "pod-uid-1") == [observation]
     with sqlite3.connect(path) as connection:
-        assert connection.execute("PRAGMA user_version").fetchone()[0] == 4
+        assert connection.execute("PRAGMA user_version").fetchone()[0] == 5
+
+
+def test_legacy_resource_observation_schema_requires_database_recreation(tmp_path):
+    path = tmp_path / "placements.db"
+    with sqlite3.connect(path) as connection:
+        connection.execute("CREATE TABLE resource_observation (id INTEGER PRIMARY KEY)")
+
+    with pytest.raises(
+        RuntimeError,
+        match="legacy KubernetesDaemon observation schema detected.*delete and recreate the database",
+    ):
+        SQLitePlacementStore(str(path))
 
 
 def test_replayed_resource_version_is_deduplicated(tmp_path):
     store = SQLitePlacementStore(str(tmp_path / "placements.db"))
-    initial = _observation(status={"phase": "Pending"})
+    initial = _snapshot(status={"phase": "Pending"})
     replayed = replace(
         initial,
         event_type="ADDED",
         observed_at="2026-10-14T00:01:00Z",
     )
 
-    assert _capture(store, initial) == ObservationAppendResult.APPENDED
-    assert _capture(store, replayed) == ObservationAppendResult.DUPLICATE
-    assert store.list_observations_for_uid("cluster-a", "team-a", "pod-uid-1") == [initial]
+    assert _capture(store, initial) == SnapshotAppendResult.APPENDED
+    assert _capture(store, replayed) == SnapshotAppendResult.DUPLICATE
+    assert store.list_snapshots_for_uid("cluster-a", "team-a", "pod-uid-1") == [initial]
 
 
 def test_replayed_resource_version_accepts_additive_projection(tmp_path):
     path = tmp_path / "placements.db"
     store = SQLitePlacementStore(str(path))
-    initial = _observation(
+    initial = _snapshot(
         selected_metadata={"labels": {"existing": "value"}},
         status={"phase": "Running"},
     )
@@ -938,17 +939,17 @@ def test_replayed_resource_version_accepts_additive_projection(tmp_path):
         },
     )
 
-    assert _capture(store, initial) == ObservationAppendResult.APPENDED
+    assert _capture(store, initial) == SnapshotAppendResult.APPENDED
     with sqlite3.connect(path) as connection:
         original = connection.execute(
-            "SELECT id, observed_at FROM resource_observation"
+            "SELECT id, observed_at FROM resource_snapshot"
         ).fetchone()
 
-    assert _capture(store, expanded) == ObservationAppendResult.UPDATED
+    assert _capture(store, expanded) == SnapshotAppendResult.UPDATED
     # Replaying an older projection after upgrade keeps the richer durable row.
-    assert _capture(store, initial) == ObservationAppendResult.DUPLICATE
+    assert _capture(store, initial) == SnapshotAppendResult.DUPLICATE
 
-    [stored] = store.list_observations_for_uid(
+    [stored] = store.list_snapshots_for_uid(
         "cluster-a",
         "team-a",
         "pod-uid-1",
@@ -960,25 +961,25 @@ def test_replayed_resource_version_accepts_additive_projection(tmp_path):
     assert stored.status == expanded.status
     with sqlite3.connect(path) as connection:
         replayed = connection.execute(
-            "SELECT id, observed_at FROM resource_observation"
+            "SELECT id, observed_at FROM resource_snapshot"
         ).fetchone()
     assert replayed == original
 
 
 def test_changed_payload_for_same_resource_version_is_rejected(tmp_path):
     store = SQLitePlacementStore(str(tmp_path / "placements.db"))
-    initial = _observation(status={"phase": "Pending"})
+    initial = _snapshot(status={"phase": "Pending"})
     conflicting = replace(initial, status={"phase": "Running"})
 
     _capture(store, initial)
 
-    with pytest.raises(ObservationConflictError, match="changed during replay"):
+    with pytest.raises(SnapshotConflictError, match="changed during replay"):
         _capture(store, conflicting)
 
 
 def test_changed_owners_for_same_resource_version_are_rejected(tmp_path):
     store = SQLitePlacementStore(str(tmp_path / "placements.db"))
-    initial = _observation(status={"phase": "Running"})
+    initial = _snapshot(status={"phase": "Running"})
     conflicting = replace(
         initial,
         owner_references=(
@@ -995,25 +996,25 @@ def test_changed_owners_for_same_resource_version_are_rejected(tmp_path):
 
     _capture(store, initial)
 
-    with pytest.raises(ObservationConflictError, match="changed during replay"):
+    with pytest.raises(SnapshotConflictError, match="changed during replay"):
         _capture(store, conflicting)
 
 
-def test_observations_are_queryable_by_controller_owner(tmp_path):
+def test_snapshots_are_queryable_by_controller_owner(tmp_path):
     store = SQLitePlacementStore(str(tmp_path / "placements.db"))
-    observation = _observation(status={"phase": "Running"})
+    snapshot = _snapshot(status={"phase": "Running"})
 
-    _capture(store, observation)
+    _capture(store, snapshot)
 
-    assert store.list_observations_for_owner("cluster-a", "team-a", "job-uid-1") == [
-        observation
+    assert store.list_snapshots_for_owner("cluster-a", "team-a", "job-uid-1") == [
+        snapshot
     ]
 
 
-def test_latest_observations_are_queryable_by_resource_kind(tmp_path):
+def test_latest_snapshots_are_queryable_by_resource_kind(tmp_path):
     store = SQLitePlacementStore(str(tmp_path / "placements.db"))
-    initial = _observation(status={"phase": "Pending"})
-    updated = _observation(
+    initial = _snapshot(status={"phase": "Pending"})
+    updated = _snapshot(
         resource_version="2",
         event_type="MODIFIED",
         status={"phase": "Running"},
@@ -1021,7 +1022,7 @@ def test_latest_observations_are_queryable_by_resource_kind(tmp_path):
     _capture(store, initial)
     _capture(store, updated)
 
-    assert store.list_latest_observations_for_kind(
+    assert store.list_latest_snapshots_for_kind(
         "cluster-a",
         "team-a",
         "Pod",
@@ -1031,7 +1032,7 @@ def test_latest_observations_are_queryable_by_resource_kind(tmp_path):
 def test_history_candidates_use_single_noncontroller_owner(tmp_path):
     store = SQLitePlacementStore(str(tmp_path / "placements.db"))
     pod_group = replace(
-        _observation(),
+        _snapshot(),
         api_version="scheduling.run.ai/v2alpha2",
         kind="PodGroup",
         name="training",
@@ -1059,7 +1060,7 @@ def test_history_candidates_use_single_noncontroller_owner(tmp_path):
 def test_controller_history_recursively_includes_descendant_resources(tmp_path):
     store = SQLitePlacementStore(str(tmp_path / "placements.db"))
     jobset = replace(
-        _observation(),
+        _snapshot(),
         api_version="jobset.x-k8s.io/v1alpha2",
         kind="JobSet",
         name="training",
@@ -1067,7 +1068,7 @@ def test_controller_history_recursively_includes_descendant_resources(tmp_path):
         owner_references=(),
     )
     job = replace(
-        _observation(resource_version="2"),
+        _snapshot(resource_version="2"),
         api_version="batch/v1",
         kind="Job",
         name="training-workers-0",
@@ -1083,12 +1084,12 @@ def test_controller_history_recursively_includes_descendant_resources(tmp_path):
         ),
     )
     pod = replace(
-        _observation(resource_version="3"),
+        _snapshot(resource_version="3"),
         name="training-workers-0-abcde",
         uid="pod-uid-1",
     )
     unrelated = replace(
-        _observation(resource_version="4"),
+        _snapshot(resource_version="4"),
         name="other-pod",
         uid="other-pod-uid",
         owner_references=(
@@ -1101,20 +1102,20 @@ def test_controller_history_recursively_includes_descendant_resources(tmp_path):
             ),
         ),
     )
-    for observation in (jobset, job, pod, unrelated):
-        _capture(store, observation)
+    for snapshot in (jobset, job, pod, unrelated):
+        _capture(store, snapshot)
 
-    assert store.list_observations_for_controller(
+    assert store.list_snapshots_for_controller(
         "cluster-a",
         "team-a",
         "jobset-uid-1",
     ) == [jobset, job, pod]
 
 
-def test_observation_journal_does_not_change_placement_view(tmp_path):
+def test_snapshot_journal_does_not_change_placement_view(tmp_path):
     store = SQLitePlacementStore(str(tmp_path / "placements.db"))
 
-    _capture(store, _observation(status={"phase": "Running"}))
+    _capture(store, _snapshot(status={"phase": "Running"}))
 
     assert store.get_by_pod_uid("pod-uid-1") is None
 
@@ -1317,7 +1318,7 @@ def test_coverage_gap_migration_uses_detection_time_for_existing_rows(tmp_path):
     [gap] = store.list_coverage_gaps("cluster-a", "team-a")
     assert gap.started_at == gap.detected_at
     with sqlite3.connect(path) as connection:
-        assert connection.execute("PRAGMA user_version").fetchone()[0] == 4
+        assert connection.execute("PRAGMA user_version").fetchone()[0] == 5
 
 
 def test_atomic_capture_does_not_advance_checkpoint_when_placement_conflicts(tmp_path):
@@ -1333,18 +1334,18 @@ def test_atomic_capture_does_not_advance_checkpoint_when_placement_conflicts(tmp
         gap_id=None,
     )
     store.create(_record(associated=False))
-    observation = _observation(resource_version="11", event_type="MODIFIED")
+    snapshot = _snapshot(resource_version="11", event_type="MODIFIED")
     conflicting_placement = replace(_record(associated=False), node_name="node-b")
 
     with pytest.raises(PlacementConflictError):
-        store.capture_observation(
-            observation,
+        store.capture_snapshot(
+            snapshot,
             source_name="pods",
             placement=conflicting_placement,
             advance_checkpoint=True,
         )
 
-    assert store.list_observations_for_uid("cluster-a", "team-a", "pod-uid-1") == []
+    assert store.list_snapshots_for_uid("cluster-a", "team-a", "pod-uid-1") == []
     coverage = store.get_watch_coverage("cluster-a", "team-a", "pods")
     assert coverage is not None
     assert coverage.resource_version == "10"

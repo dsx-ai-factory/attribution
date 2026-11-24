@@ -26,7 +26,7 @@ from attribution_lib.events import BAD_PAIR_EVENT_TYPES, EventStream, sql_placeh
 from attribution_lib.failed_node_provenance import FailedNodeResolution
 from common.megatron import get_pytorch_timeout_minutes
 from attribution_lib.hooks import multihooks, singlehooks
-from attribution_lib.job_info import NVRX_TAG, JobInfo
+from attribution_lib.job_info import NVRX_TAG, JobInfo, Scheduler
 from attribution_lib.node_not_responding_provenance import NodeNotRespondingProvenance
 from attribution_lib.observation import Context as ObservationContext
 from attribution_lib.observation.inbound import Source as ObsSource
@@ -34,6 +34,21 @@ from attribution_lib.bundled_rules.common.outcome_helpers import (
     KUBERNETES_SCHEDULER_TYPES,
     apply_preemption_pass,
     apply_user_cancellation_reclassification,
+)
+from attribution_lib.bundled_rules.common.scheduler_formatting import (
+    CANCELLED_BY_SOURCES,
+    LAST_RESORT_SOURCE,
+    LAST_RESORT_SOURCES,
+    NODE_FAILURE,
+    NODE_FAILURE_IDS,
+    PREEMPTED_RULES,
+    SHORTER_TIMEOUT_ROOT_CAUSE,
+    SHORTER_TIMEOUT_RULE,
+    SHORTER_TIMEOUT_RULES,
+    STATE_SOURCE,
+    STATE_SOURCES,
+    TIMEOUT_ROOT_CAUSE,
+    render,
 )
 from attribution_lib.outcome import OutcomeAttribution
 from attribution_lib.rules import (
@@ -65,7 +80,7 @@ declare_event_types(
     "Application.megatron-lm.runtime_args",
     "Application.hca.command_failure",
     "Application.mfu",
-    "Node failure reported by slurm",
+    *NODE_FAILURE_IDS,
 )
 
 # Shared derived rule names used in core.py/bundled_rules/ (library code outside rule files).
@@ -74,7 +89,13 @@ declare_rule_names(
     "remap SingleGPU_XID->XID",
     NodeNotRespondingProvenance.SLURM_NODE_REASON.value,
     FailedNodeResolution.SLURM_FAILED_NODE_FIELD.value,
+    FailedNodeResolution.SCHEDULER_FAILED_NODE_FIELD.value,
     FailedNodeResolution.SINGLE_ALLOCATED_NODE_INFERENCE.value,
+    *STATE_SOURCES,
+    *LAST_RESORT_SOURCES,
+    *CANCELLED_BY_SOURCES,
+    *PREEMPTED_RULES,
+    *SHORTER_TIMEOUT_RULES,
 )
 
 _REFINER_BASE = FilterPriority.FINAL
@@ -120,6 +141,8 @@ _REFINER_ORDER = [
     "CspEventPrecedenceAndCascades",
     "CancellationResolution",
     "SimpleSymptomCascades",
+    # Before NvrxFailureUserCauseCascade, which reads "Bad Token" and the verdicts.
+    "MegatronRerunVerdict",
     "MulticastNvErrSuppression",
     "WatchdogTerminateResolution",
     "NodeOfflineComposite",
@@ -302,7 +325,7 @@ _PYXIS_NVIDIA_SPECIFIC_CLI_SYMPTOMS = frozenset(
 _CORROBORATED_NODE_FAILURE = "Corroborated node failure"
 _NODE_FAILURE_SYMPTOMS = frozenset(
     {
-        "Node failure reported by slurm",
+        *NODE_FAILURE_IDS,
         "Node not responding",
         _CORROBORATED_NODE_FAILURE,
         "Node unexpectedly rebooted",
@@ -314,7 +337,7 @@ POTENTIAL_NS_CONNECTION_SYMPTOMS = [
     "Lustre Client Evicted",
     "iSCSI detected conn error",
     "prometheus lost connection",
-    "Node failure reported by slurm",
+    *NODE_FAILURE_IDS,
 ]
 
 
@@ -372,7 +395,7 @@ _NON_IB_ROOT_CAUSE_PATTERNS = [
     "%error running nvidia-smi%",
     "%CE deadlock DETECTED%",
     "%JSONDecodeError%",
-    "%Node failure reported by slurm%",
+    *(f"%{symptom}%" for symptom in NODE_FAILURE_IDS),
     "%Corroborated node failure%",
     "%Power Supply Unit failure%",
     "%System is powering down%",
@@ -380,9 +403,7 @@ _NON_IB_ROOT_CAUSE_PATTERNS = [
     "%http.client.RemoteDisconnected%",
     "%DataLoader Exception%",
     "%S3 Exception%",
-    "%cudaError out of memory%",
     "%Shared memory exhausted%",
-    "%System-out of memory%",
     "%LustreError%",
     "%assert number_image_tags <= number_of_images%",
     "%wandb.errors.CommError: Run initialization has timed out%",
@@ -406,7 +427,7 @@ _CONNECTION_CLOSED_TRIGGERS = [
     "XID-137-NVLINK_PRIV_ERR",
     "XID-145-RLW_SRC_TRACK-8",
     "XID-145-RLW_SRC_TRACK-4",
-    "Node failure reported by slurm",
+    *NODE_FAILURE_IDS,
     "NaN reported by Megatron",
     "cudaError out of memory",
     "Shared memory exhausted",
@@ -421,7 +442,27 @@ _NVRX_FAILURE_USER_CAUSES = (
     "Python Exception: RuntimeError: pinned activation buffer budget exceeded",
     "Python Exception: FileNotFoundError: checkpoint iteration not found",
     "Bad Token",
+    "Unexpected value reproduced on other GPU",
+    "Application error reported by Megatron",
 )
+
+# Megatron rerun verdicts
+_MEGATRON_RERUN_OUTCOME_SYMPTOMS = frozenset(
+    {
+        "Unexpected value reproduced on same GPU",
+        "Unexpected value reproduced on other GPU",
+        "Application error reported by Megatron",
+    }
+)
+_MEGATRON_RERUN_SYMPTOMS = _MEGATRON_RERUN_OUTCOME_SYMPTOMS | {
+    "Unexpected value not reproduced on same GPU",
+    "Transient error reported by Megatron",
+    "Unexpected value not reproduced on other GPU",
+    "Persistent error reported by Megatron",
+}
+# Megatron writes "iteration #N" in the unexpected-result line and in each
+# verdict line that has the rank prefix.
+_MEGATRON_ITERATION = re.compile(r"iteration #(\d+)")
 
 _XID145_RXPIPE_SYMPTOM = "XID-145-RLW_RXPIPE-8"
 # Slurm sends SIGKILL KillWait after SIGTERM, and KillWait was 120 s on every
@@ -487,6 +528,12 @@ _KERNEL_CRASH_SYMPTOMS = frozenset(
     }
 )
 _IB_ERROR_12_PREFIX = "IB Error-12"
+_SYSLOG_OOM_SYMPTOMS = (
+    "System-out of memory",
+    "OOM kill of user task",
+    "OOM kill of system service",
+    "OOM kill of a system pod",
+)
 
 
 # IBSymptomCleanup helpers
@@ -495,6 +542,23 @@ _IB_ERROR_12_PREFIX = "IB Error-12"
 def _is_ib_error_12(symptom: str) -> bool:
     """Match Error-12 as a complete code, including its formatted variants."""
     return symptom == _IB_ERROR_12_PREFIX or symptom.startswith(f"{_IB_ERROR_12_PREFIX} ")
+
+
+def _has_syslog_oom(errors: SymptomSet) -> bool:
+    """Check whether a syslog line reports an OOM in this symptom group.
+
+    Args:
+        errors: The symptoms of one node, or the job-level symptoms.
+
+    Returns:
+        True if a syslog source backs one of the OOM symptoms.
+    """
+    return any(
+        source.source_context.source == ObsSource.SYSLOG
+        for oom in _SYSLOG_OOM_SYMPTOMS
+        if oom in errors
+        for source in errors[oom]
+    )
 
 
 def _deactivate_bad_pairs(event_stream: EventStream, rule_name: str) -> None:
@@ -596,12 +660,12 @@ def _handle_link_down_time_proximity(symptoms, my_bad_nodes, event_stream: Event
 
 @refiner_def(name="SchedulerNodeFailure", author="NVIDIA Attribution team", priority=_priority("SchedulerNodeFailure"))
 def scheduler_node_failure_refiner(context: RefinerContext):
-    """Attribute a slurm NODE_FAIL to the node the scheduler blamed.
+    """Attribute a NODE_FAIL to the node the scheduler blamed.
 
-    When slurm reports a job as NODE_FAIL it names the failed node (or, on a
+    When a scheduler reports a job as NODE_FAIL it can name the failed node (or, on a
     single-node job, the sole allocated node necessarily is the one that failed).
-    Emits "Node failure reported by slurm", a member of _NODE_FAILURE_SYMPTOMS that
-    ScrubBadNodes reads, so this runs earlier in the SCRUB phase.
+    Emits the scheduler-specific node-failure symptom that ScrubBadNodes reads,
+    so this runs earlier in the SCRUB phase.
     """
     job_info = context.job_info
     my_bad_nodes = context.my_bad_nodes
@@ -615,16 +679,20 @@ def scheduler_node_failure_refiner(context: RefinerContext):
         return
 
     failed_node = job_info.failed_node
-    resolution = FailedNodeResolution.SLURM_FAILED_NODE_FIELD
+    resolution = (
+        FailedNodeResolution.SLURM_FAILED_NODE_FIELD
+        if job_info.scheduler is Scheduler.SLURM
+        else FailedNodeResolution.SCHEDULER_FAILED_NODE_FIELD
+    )
     if (failed_node is None or failed_node == "") and len(job_info.nodes) == 1:
-        # slurmdb did not record which node failed; on a single-node job the
+        # The scheduler did not record which node failed; on a single-node job the
         # sole allocated node is necessarily the one that failed.
         failed_node = job_info.nodes[0]
         resolution = FailedNodeResolution.SINGLE_ALLOCATED_NODE_INFERENCE
     # explicit checks so an empty string can't attribute to a node-less key
     if failed_node is not None and failed_node != "":
         source = job_info.source(job_info.state + failed_node, resolution.value)
-        attr = SourceSet.new_one("Node failure reported by slurm", source)
+        attr = SourceSet.new_one(render(NODE_FAILURE, job_info.scheduler), source)
         my_bad_nodes.add([failed_node], attr)
 
 
@@ -711,12 +779,13 @@ def scrub_bad_nodes_refiner(context: RefinerContext):
             group.discard("Node not responding")
             group.discard("Node unexpectedly rebooted")
 
-        # An OOM kill of a system service (slurmd, slurmstepd, munged, etc.) is
-        # the root cause; the node going silent or SLURM declaring NODE_FAIL
+        # An OOM kill of a system service is the root cause; the node going silent
+        # or the scheduler declaring NODE_FAIL
         # are downstream consequences.
         if "OOM kill of system service" in group:
             group.discard("Node not responding")
-            group.discard("Node failure reported by slurm")
+            for symptom in NODE_FAILURE_IDS:
+                group.discard(symptom)
 
         # See cross-node precompute above — discard from every node, not just
         # the one where dataloader crashed.
@@ -761,7 +830,7 @@ def scrub_bad_nodes_refiner(context: RefinerContext):
 def corroborated_node_failure_refiner(context: RefinerContext):
     """Combine independent scheduler and epilog failure evidence on one node.
 
-    A SLURM ``NODE_FAIL`` alone is scheduler evidence and remains InfraSW. When
+    A scheduler ``NODE_FAIL`` alone is scheduler evidence and remains InfraSW. When
     the epilog health check independently reports that the same node did not
     respond, emit the stronger ``Corroborated node failure`` symptom. A
     scheduler-derived node reason is not independent evidence and must not
@@ -771,13 +840,16 @@ def corroborated_node_failure_refiner(context: RefinerContext):
     if my_bad_nodes is None:
         return
 
-    slurm_failure = RegisteredSymptoms.NODE_FAILURE_REPORTED_BY_SLURM.value
     node_not_responding = RegisteredSymptoms.NODE_NOT_RESPONDING.value
     epilog_rule = NodeNotRespondingProvenance.EPILOG_HEALTH_CHECK.value
 
     for _node, node_group in my_bad_nodes.items():
         node_attributions = node_group.attributions
-        if slurm_failure not in node_attributions or node_not_responding not in node_attributions:
+        scheduler_failure = next(
+            (symptom for symptom in NODE_FAILURE_IDS if symptom in node_attributions),
+            None,
+        )
+        if scheduler_failure is None or node_not_responding not in node_attributions:
             continue
 
         epilog_sources = [source for source in node_attributions[node_not_responding] if source.rule == epilog_rule]
@@ -785,7 +857,7 @@ def corroborated_node_failure_refiner(context: RefinerContext):
             continue
 
         combined_sources = SourceSet(_CORROBORATED_NODE_FAILURE)
-        for source in node_attributions[slurm_failure]:
+        for source in node_attributions[scheduler_failure]:
             combined_sources.add(source)
         for source in epilog_sources:
             combined_sources.add(source)
@@ -1327,7 +1399,7 @@ def slurm_state_symptoms(context: RefinerContext):
 
 
 def _add_kueue_scheduler_node_failure(job_info: JobInfo, symptoms: SymptomSet) -> None:
-    """Add Kueue scheduler-level node loss when the exact failed node is unknown.
+    """Add Kubernetes scheduler-level node loss when the exact failed node is unknown.
 
     Args:
         job_info: The record being attributed.
@@ -1341,9 +1413,9 @@ def _add_kueue_scheduler_node_failure(job_info: JobInfo, symptoms: SymptomSet) -
     ):
         symptoms.add(
             job_info.source_value(
-                "Node failure reported by slurm",
+                render(NODE_FAILURE, job_info.scheduler),
                 job_info.state,
-                "slurm state",
+                render(STATE_SOURCE, job_info.scheduler),
             )
         )
 
@@ -1810,6 +1882,63 @@ def simple_symptom_cascades(context: RefinerContext):
         symptoms.discard("No CUDA runtime is found")
 
 
+@refiner_def(name="MegatronRerunVerdict", author="NVIDIA Attribution team", priority=_priority("MegatronRerunVerdict"))
+def megatron_rerun_verdict(context: RefinerContext):
+    """Replace "Bad Token" with the Megatron rerun verdict for the same iteration.
+
+    A verdict stays on the node that logged it as supporting evidence. It does
+    not make that node a bad node, because the second rerun runs on a different
+    GPU from the one that produced the unexpected value.
+
+    A verdict discards each "Bad Token" line that has the same iteration
+    number, on every node and in the job-level symptoms. A "Bad Token" from
+    another iteration, or with no iteration number, stays. The verdicts that
+    set an outcome are added to the job-level symptoms with all of their
+    source lines.
+
+    Args:
+        context: Refiner context with the job-level symptoms and my_bad_nodes.
+    """
+    symptoms = context.symptoms
+    my_bad_nodes = context.my_bad_nodes
+    if symptoms is None or my_bad_nodes is None:
+        return
+
+    groups = [group for _node, group in my_bad_nodes.symptom_groups()]
+    verdicts = [
+        (symptom, sources)
+        for group in groups
+        for symptom, sources in group.all_items()
+        if symptom in _MEGATRON_RERUN_SYMPTOMS
+    ]
+    if len(verdicts) == 0:
+        return
+
+    for symptom, sources in verdicts:
+        if symptom in _MEGATRON_RERUN_OUTCOME_SYMPTOMS:
+            job_sources = SourceSet(symptom)
+            for source in sources.all_sources():
+                job_sources.add(source)
+            symptoms.add(job_sources)
+
+    iterations = {
+        match.group(1)
+        for _symptom, sources in verdicts
+        for source in sources.all_sources()
+        if (match := _MEGATRON_ITERATION.search(source.datum)) is not None
+    }
+    for symptom_set in [symptoms, *groups]:
+        if "Bad Token" not in symptom_set:
+            continue
+        symptom_set["Bad Token"].discard_selected(
+            [
+                source
+                for source in symptom_set["Bad Token"]
+                if (match := _MEGATRON_ITERATION.search(source.datum)) is not None and match.group(1) in iterations
+            ]
+        )
+
+
 @refiner_def(
     name="MulticastNvErrSuppression", author="NVIDIA Attribution team", priority=_priority("MulticastNvErrSuppression")
 )
@@ -1997,7 +2126,7 @@ def ib_symptom_cleanup(context: RefinerContext):
                     break
             if found_root_cause:
                 break
-        if found_root_cause:
+        if found_root_cause or _has_syslog_oom(errors):
             _discard_ib_cascade(symptoms)
             _discard_ib_cascade(errors)
 
@@ -2284,24 +2413,26 @@ def node_failure_nfs_cleanup(context: RefinerContext):
     # If a node failed, the imex service will be restarted
     if any(
         symptom in symptoms
-        for symptom in [
-            "Node failure reported by slurm",
+        for symptom in (
+            *NODE_FAILURE_IDS,
             "Node not responding",
             "Node unexpectedly rebooted",
             "System is powering down",
-        ]
+        )
     ):
         symptoms.discard("Stopping nvidia-imex.service")
 
-    # An NFS not responding failure is recoverable, but if we also see a SLURM node failure it's
+    scheduler_node_failures = [symptom for symptom in NODE_FAILURE_IDS if symptom in symptoms]
+    # An NFS not responding failure is recoverable, but if we also see a scheduler node failure it's
     # likely the NFS server was the root cause of the node failure.
-    if "Node failure reported by slurm" in symptoms and my_bad_nodes is not None:
+    if scheduler_node_failures and my_bad_nodes is not None:
         for _node, group in my_bad_nodes.symptom_groups():
             if "nfs not responding" in group:
                 nfs_source = group["nfs not responding"].one_source()
                 symptoms.add(SourceSet.new_one("nfs server failure", nfs_source))
                 symptoms.discard("nfs not responding")
-                symptoms.discard("Node failure reported by slurm")
+                for symptom in scheduler_node_failures:
+                    symptoms.discard(symptom)
 
     # If there's no node failure, just register this symptom in interesting
     if "nfs not responding" in symptoms:
@@ -2325,21 +2456,21 @@ def last_resort_symptoms(context: RefinerContext):
     #
     # TODO: too messy
     if not symptoms or (len(symptoms) == 1 and ("Cancelled by user" in symptoms or "FalsePositive-XID-64" in symptoms)):
+        fallback_rule = render(LAST_RESORT_SOURCE, job_info.scheduler)
         if job_info.state == "COMPLETED":
-            symptoms.add(job_info.source_value("the process completes", job_info.state, "last resort; slurm status"))
+            symptoms.add(job_info.source_value("the process completes", job_info.state, fallback_rule))
         elif _is_root_cancellation(job_info):
-            symptoms.add(job_info.source_value("Cancelled by root", job_info.state, "last resort; slurm status"))
+            symptoms.add(job_info.source_value("Cancelled by root", job_info.state, fallback_rule))
         elif job_info.state.startswith("CANCELLED"):
-            symptoms.add(job_info.source_value("Cancelled by user", job_info.state, "last resort; slurm status"))
+            symptoms.add(job_info.source_value("Cancelled by user", job_info.state, fallback_rule))
         elif job_info.state == "REQUEUED":
-            symptoms.add(job_info.source_value("Job requeued", job_info.state, "last resort; slurm status"))
+            symptoms.add(job_info.source_value("Job requeued", job_info.state, fallback_rule))
         elif job_info.state == "EVICTED" or (
-            job_info.state == "UNKNOWN"
-            and job_info.scheduler in KUBERNETES_SCHEDULER_TYPES
+            job_info.state == "UNKNOWN" and job_info.scheduler in KUBERNETES_SCHEDULER_TYPES
         ):
             pass
         elif job_info.state != "RUNNING":
-            symptoms.add(job_info.source_value("job failed", job_info.state, "last resort; slurm status"))
+            symptoms.add(job_info.source_value("job failed", job_info.state, fallback_rule))
 
 
 @refiner_def(name="JobFailedState", author="NVIDIA Attribution team", priority=_priority("JobFailedState"))
@@ -2482,7 +2613,7 @@ def xid149_and_nvlink_filtering(context: RefinerContext):
     """XID-149 priority filtering and nvlink symptom cleanup.
 
     Overall Priority: XID-149.4 > XID-149.10 > other XID-149.x > XID-149.0
-    
+
     Exceptions:
     - XID-149.21 survives XID-149.4
     - A lone XID-149.21 also collapses cascaded bad nodes
@@ -2812,10 +2943,10 @@ def filter_fatal_xid_noise_refiner(context: RefinerContext):
     author="NVIDIA Attribution team",
     priority=_priority("OutcomeReclassification"),
     derived_rules=[
-        "slurm state",
-        "reclassified: slurm preempted",
+        *STATE_SOURCES,
+        *PREEMPTED_RULES,
         "reclassified: user cancellation",
-        "reclassified: pytorch timeout < slurm limit",
+        *SHORTER_TIMEOUT_RULES,
         "reclassified: timeout only symptom",
         "reclassified: nvrx exit success",
     ],
@@ -2854,13 +2985,13 @@ def outcome_reclassification_refiner(context: RefinerContext):
         if is_scheduler_timeout and not has_user_cancel_symptom and has_only_timeout_symptoms:
             pytorch_timeout_minutes = get_pytorch_timeout_minutes(event_stream)
             if pytorch_timeout_minutes is not None and pytorch_timeout_minutes.value() < float(job_info.time_limit):
-                root_cause_symptom = "SLURM timeout with shorter user distributed timeout"
-                derived_rule = "reclassified: pytorch timeout < slurm limit"
+                root_cause_symptom = render(SHORTER_TIMEOUT_ROOT_CAUSE, job_info.scheduler)
+                derived_rule = render(SHORTER_TIMEOUT_RULE, job_info.scheduler)
                 fallback_source = pytorch_timeout_minutes.one_source()
             else:
-                root_cause_symptom = "SLURM timeout (no other errors)"
+                root_cause_symptom = render(TIMEOUT_ROOT_CAUSE, job_info.scheduler)
                 derived_rule = "reclassified: timeout only symptom"
-                fallback_source = job_info.source(job_info.state, "slurm state")
+                fallback_source = job_info.source(job_info.state, render(STATE_SOURCE, job_info.scheduler))
 
             previous_source = (
                 attribution_result.outcome_attr.one_source() if attribution_result.outcome_attr is not None else None

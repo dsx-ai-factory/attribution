@@ -170,29 +170,25 @@ def test_joins_against_rules_view_see_both_tiers():
 
 
 class TestSharedLookupTmpdirForkSafety:
-    """`_get_shared_lookup_tmpdir()`'s `Finalize` cleanup is registered once per
-    process and, along with the module globals it reads, inherited by any
+    """The exit finalizer of `_mkdtemp_removed_at_exit()` is inherited by any
     `os.fork()`'d child (e.g. a pre-fork server's worker process). A child
     must not delete the directory on its own exit: it didn't create it, and
     the parent or sibling workers may still have `EventManager`s ATTACHed to
     files inside it.
     """
 
-    def test_forked_child_does_not_delete_shared_tmpdir(self, monkeypatch, tmp_path):
+    def test_forked_child_does_not_delete_shared_tmpdir(self, tmp_path):
         import os
 
         import attribution_lib.events as events_module
 
-        fake_tmpdir = str(tmp_path / "shared_lookup")
-        os.makedirs(fake_tmpdir)
-        monkeypatch.setattr(events_module, "_shared_lookup_tmpdir", fake_tmpdir)
-        monkeypatch.setattr(events_module, "_shared_lookup_tmpdir_owner_pid", os.getpid())
+        tmpdir, finalizer = events_module._mkdtemp_removed_at_exit("shared_lookup_", root=str(tmp_path))
 
         pid = os.fork()
         if pid == 0:
             # Child: simulate its inherited cleanup handler firing on its own exit.
             try:
-                events_module._cleanup_shared_lookup_tmpdir()
+                finalizer()
             finally:
                 os._exit(0)
 
@@ -200,8 +196,8 @@ class TestSharedLookupTmpdirForkSafety:
         assert os.WIFEXITED(status) and os.WEXITSTATUS(status) == 0, f"child exited abnormally: {status}"
 
         # The child must not have deleted the directory the parent still owns.
-        assert os.path.isdir(fake_tmpdir)
+        assert os.path.isdir(tmpdir)
 
         # The actual owning process's cleanup must still work.
-        events_module._cleanup_shared_lookup_tmpdir()
-        assert not os.path.exists(fake_tmpdir)
+        finalizer()
+        assert not os.path.exists(tmpdir)

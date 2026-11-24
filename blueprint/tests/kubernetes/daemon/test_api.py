@@ -10,10 +10,10 @@ from attribution_blueprint.kubernetes.daemon.models import (
     OwnerReference,
     PlacementRecord,
     ResourceIdentity,
-    ResourceObservation,
+    ResourceSnapshot,
 )
 from attribution_blueprint.kubernetes.daemon.server import (
-    _placements_for_observations,
+    _placements_for_snapshots,
     serve_api,
 )
 from attribution_blueprint.kubernetes.daemon.sqlite_store import SQLitePlacementStore
@@ -39,18 +39,18 @@ def _record() -> PlacementRecord:
     )
 
 
-def _capture(store: SQLitePlacementStore, observation: ResourceObservation) -> None:
-    store.capture_observation(
-        observation,
-        source_name=f"{observation.kind.lower()}s",
+def _capture(store: SQLitePlacementStore, snapshot: ResourceSnapshot) -> None:
+    store.capture_snapshot(
+        snapshot,
+        source_name=f"{snapshot.kind.lower()}s",
         placement=None,
         advance_checkpoint=False,
     )
 
 
 def test_history_placement_lookup_deduplicates_pod_versions(mocker):
-    observations = [
-        ResourceObservation(
+    snapshots = [
+        ResourceSnapshot(
             cluster_id="cluster-a",
             api_version="v1",
             kind="Pod",
@@ -63,8 +63,8 @@ def test_history_placement_lookup_deduplicates_pod_versions(mocker):
         )
         for resource_version in ("1", "2")
     ]
-    observations.append(
-        ResourceObservation(
+    snapshots.append(
+        ResourceSnapshot(
             cluster_id="cluster-a",
             api_version="batch/v1",
             kind="Job",
@@ -79,7 +79,7 @@ def test_history_placement_lookup_deduplicates_pod_versions(mocker):
     store = mocker.Mock()
     store.get_by_pod_uid.return_value = _record()
 
-    assert _placements_for_observations(store, observations) == [
+    assert _placements_for_snapshots(store, snapshots) == [
         _record().to_resource()
     ]
     store.get_by_pod_uid.assert_called_once_with("pod-uid-1")
@@ -205,9 +205,9 @@ def test_readiness_reports_disabled_optional_watches(tmp_path):
     }
 
 
-def test_history_endpoint_discovers_controller_observations(tmp_path):
+def test_history_endpoint_discovers_controller_snapshots(tmp_path):
     store = SQLitePlacementStore(str(tmp_path / "placements.db"))
-    job = ResourceObservation(
+    job = ResourceSnapshot(
         cluster_id="cluster-a",
         api_version="batch/v1",
         kind="Job",
@@ -219,7 +219,7 @@ def test_history_endpoint_discovers_controller_observations(tmp_path):
         observed_at="2026-10-14T00:00:00Z",
         status={"active": 1},
     )
-    pod = ResourceObservation(
+    pod = ResourceSnapshot(
         cluster_id="cluster-a",
         api_version="v1",
         kind="Pod",
@@ -300,11 +300,12 @@ def test_history_endpoint_discovers_controller_observations(tmp_path):
     assert response.status_code == 200
     [history] = response.json()["items"]
     assert history["namespace"] == "team-a"
-    assert [observation["metadata"]["uid"] for observation in history["observations"]] == [
+    assert "observations" not in history
+    assert [snapshot["metadata"]["uid"] for snapshot in history["snapshots"]] == [
         "job-uid-1",
         "pod-uid-1",
     ]
-    assert history["observations"][1]["selectedMetadata"] == pod.selected_metadata
+    assert history["snapshots"][1]["selectedMetadata"] == pod.selected_metadata
     assert history["coverage"] == {
         "sources": [
             {
@@ -342,7 +343,7 @@ def test_history_window_keeps_active_and_delayed_complete_histories(tmp_path):
         observed_at,
         conditions,
     ):
-        return ResourceObservation(
+        return ResourceSnapshot(
             cluster_id="cluster-a",
             api_version="kueue.x-k8s.io/v1beta1",
             kind="Workload",
@@ -420,14 +421,14 @@ def test_history_window_keeps_active_and_delayed_complete_histories(tmp_path):
             },
         ],
     )
-    for observation in (
+    for snapshot in (
         active,
         delayed_early,
         delayed_terminal,
         requeued,
         stale,
     ):
-        _capture(store, observation)
+        _capture(store, snapshot)
 
     server = serve_api(
         HealthState(),
@@ -454,7 +455,7 @@ def test_history_window_keeps_active_and_delayed_complete_histories(tmp_path):
     assert response.status_code == 200
     histories = response.json()["items"]
     histories_by_uid = {
-        history["observations"][0]["metadata"]["uid"]: history
+        history["snapshots"][0]["metadata"]["uid"]: history
         for history in histories
     }
     assert set(histories_by_uid) == {
@@ -463,8 +464,8 @@ def test_history_window_keeps_active_and_delayed_complete_histories(tmp_path):
         "requeued-uid",
     }
     assert [
-        observation["metadata"]["resourceVersion"]
-        for observation in histories_by_uid["delayed-uid"]["observations"]
+        snapshot["metadata"]["resourceVersion"]
+        for snapshot in histories_by_uid["delayed-uid"]["snapshots"]
     ] == ["1", "2"]
 
 
@@ -476,7 +477,7 @@ def test_history_endpoint_computes_coverage_once_for_multiple_controllers(tmp_pa
     for index in range(2):
         _capture(
             store,
-            ResourceObservation(
+            ResourceSnapshot(
                 cluster_id="cluster-a",
                 api_version="batch/v1",
                 kind="Job",
@@ -509,7 +510,7 @@ def test_history_endpoint_computes_coverage_once_for_multiple_controllers(tmp_pa
 
 def test_daemon_client_finds_retained_history(tmp_path):
     store = SQLitePlacementStore(str(tmp_path / "placements.db"))
-    observation = ResourceObservation(
+    snapshot = ResourceSnapshot(
         cluster_id="cluster-a",
         api_version="batch/v1",
         kind="Job",
@@ -520,7 +521,7 @@ def test_daemon_client_finds_retained_history(tmp_path):
         event_type="SNAPSHOT",
         observed_at="2026-10-14T00:00:00Z",
     )
-    _capture(store, observation)
+    _capture(store, snapshot)
     server = serve_api(
         HealthState(),
         store,
@@ -539,4 +540,4 @@ def test_daemon_client_finds_retained_history(tmp_path):
         server.shutdown()
         server.server_close()
 
-    assert [item["metadata"]["uid"] for item in history["observations"]] == ["job-uid-1"]
+    assert [item["metadata"]["uid"] for item in history["snapshots"]] == ["job-uid-1"]

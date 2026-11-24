@@ -1037,6 +1037,7 @@ def _node_fail_job_on(hostlist: str, failed_node: str):
             source_name="artifical slurm",
             timezone=tz,
         )
+        .scheduler("slurm")
         .srun_cmd("srun ./test_app")
         .exit_code_signal(1)
         .failed_node(failed_node)

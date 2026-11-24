@@ -114,7 +114,7 @@ failures:
       action: Your remediation system should first attempt nvidia-smi --gpu-reset on the affected GPU (no other process may
         be using it). If the job still fails on this node, contact your cluster administrator or cloud provider. Include the
         NVIDIA Attribution diagnosis (verdict, symptom chain, and source logs).
-      support_details: Include rank/node mapping and any preceding XID, PCIe, or Slurm messages.
+      support_details: Include rank/node mapping and any preceding XID, PCIe, or scheduler messages.
   recommended_action:
     operational_state: drain
     remediation_actions:
@@ -336,8 +336,9 @@ failures:
         or cloud provider to check scheduler accounting and enforced limits if those records are unavailable to you. When asking
         for help, send the evidence available to you and say what is missing; do not delay the request because a diagnostic report
         or restricted logs are unavailable.
-  technical_details: 'A Slurm TIMEOUT records enforcement of a time limit. It is not by itself evidence of an application
-    defect or infrastructure fault. Progress and usable checkpoints determine whether work can safely resume.
+  technical_details: 'A scheduler-enforced timeout records enforcement of the workload''s configured time limit. It is not by
+    itself evidence of an application defect or infrastructure fault. Progress and usable checkpoints determine whether work
+    can safely resume.
 
     '
   severity: low
@@ -345,10 +346,10 @@ failures:
   signals:
   - kind: log
     pattern: DUE TO TIME LIMIT
-    note: Slurm
+    note: Slurm example of scheduler-enforced timeout evidence.
   - kind: log
     pattern: TIMEOUT
-    note: Slurm job state
+    note: Slurm example of a timeout job state.
   - kind: log
     pattern: wall(-| )?time
     note: scheduler accounting
@@ -412,7 +413,7 @@ failures:
   verification: draft
   last_reviewed: 2026-04-24
 - id: slurm-preempted
-  title: slurm-preempted
+  title: Scheduler preemption
   aliases:
   - PREEMPTED
   - requeue
@@ -432,8 +433,9 @@ failures:
         after resume. Share only evidence you can access; redact credentials and private application data. When asking for help,
         send the evidence available to you and say what is missing; do not delay the request because a diagnostic report or restricted
         logs are unavailable.
-  technical_details: 'The response to Slurm preemption depends on configured PreemptMode and the job. A preemption marker
-    alone is not evidence that a node failed, and a requeued job need not resume application state automatically.
+  technical_details: 'Scheduler preemption interrupts, suspends, or requeues work according to scheduler policy. For Slurm,
+    behavior depends on the configured `PreemptMode` and the job. A preemption marker alone is not evidence that a node failed,
+    and a requeued job need not resume application state automatically.
 
     '
   severity: low
@@ -441,7 +443,7 @@ failures:
   signals:
   - kind: log
     pattern: PREEMPTED
-    note: Slurm job state
+    note: Slurm example of a preempted job state.
   - kind: log
     pattern: requeue
     note: scheduler action
@@ -8703,7 +8705,7 @@ failures:
       summary: The expected application start was not observed; distinguish a queued job from a launch failure.
       impact: The workload has not reached its expected startup point and may still be queued.
       action: |-
-        1. Check your submission response and accessible scheduler state/reason using the installed Slurm tools. A normally pending job does not need resubmission; if you control the script, correct a specific invalid resource request or dependency within site policy.
+        1. Check your submission response and accessible scheduler state/reason using the installed scheduler tools. A normally pending job does not need resubmission; if you control the script, correct a specific invalid resource request or dependency within site policy.
 
         2. For a terminated attempt, test one corrected submission and confirm it enters the expected job step; if it still cannot start or you cannot edit the script, contact the person or team responsible for your application.
 
@@ -10923,8 +10925,9 @@ failures:
   verification: verified
   last_reviewed: 2026-04-26
 - id: node-failure-reported-by-slurm
-  title: Node failure reported by slurm
+  title: Node failure reported by scheduler
   aliases:
+  - Node failure reported by
   - slurm node fail
   - FailedNode slurm
   category: scheduler
@@ -10932,30 +10935,32 @@ failures:
   personas:
     tenant_sre:
       title: Scheduler reported a node failure
-      summary: The scheduler recorded NODE_FAIL; the backing node problem still needs provider investigation.
+      summary: The scheduler recorded a node-failure state; the backing node problem still needs provider investigation.
       impact: The affected attempt is interrupted and may require checkpoint recovery after provider confirmation.
-      action: Save the job state, affected nodes reported in accounting, and last application messages you can access, then
-        contact your cluster administrator or cloud provider. Do not reset, reboot, or repeatedly target the reported node
-        yourself. After they confirm a usable allocation and you are authorized, resume once with the installed application's
+      action: Save the scheduler state, affected nodes reported by the scheduler, and last application messages you can access,
+        then contact your cluster administrator or cloud provider. Do not reset, reboot, or repeatedly target the reported
+        node yourself. After they confirm a usable allocation and you are authorized, resume once with the installed application's
         supported checkpoint procedure and confirm restored state and progress. Ask the person or team responsible for your
         application if its state cannot be safely resumed.
       support_details: When asking for help, include the NVIDIA Attribution diagnosis (verdict, symptom chain, and source logs)
-        when available, plus job/step IDs, NODE_FAIL state, affected node data available from the installed Slurm version, timestamps,
-        last application logs, checkpoint state, and any authorized resume result; state when controller logs are unavailable. Share
-        only evidence you can access; redact credentials and private application data. When asking for help, send the evidence available
-        to you and say what is missing; do not delay the request because a diagnostic report or restricted logs are unavailable.
-  technical_details: 'NODE_FAIL is the scheduler''s observation of node failure, not a diagnosis of a GPU, network, power,
-    or host defect. The number of reported nodes alone does not establish a cluster-wide failure.
+        when available, plus the scheduler name and version, workload IDs, scheduler node-failure state, affected-node data from
+        the scheduler's status or accounting interface, timestamps, last application logs, checkpoint state, and any authorized
+        resume result; state when controller logs are unavailable. For Slurm, include job/step IDs, the `NODE_FAIL` state, and
+        affected-node data available from the installed Slurm version. Share only evidence you can access; redact credentials
+        and private application data. Send the evidence available to you and say what is missing; do not delay the request because
+        a diagnostic report or restricted logs are unavailable.
+  technical_details: 'A scheduler node-failure state is the scheduler''s observation of node failure, not a diagnosis of a
+    GPU, network, power, or host defect. The number of reported nodes alone does not establish a cluster-wide failure.
 
     '
-  summary: The scheduler recorded NODE_FAIL; the backing node problem still needs provider investigation.
+  summary: The scheduler recorded a node-failure state; the backing node problem still needs provider investigation.
   signals:
   - kind: log
     pattern: Node .* not responding|state set to FAILED
-    note: slurmctld message marking node down.
+    note: 'Slurm-only example: slurmctld message marking a node down.'
   - kind: metric
     pattern: slurm_job_state="FAILED" AND fail_reason="NodeFailure"
-    note: Job-level attribution surfaced by SLURM accounting.
+    note: 'Slurm-only example: job-level attribution surfaced by Slurm accounting.'
   related:
   - corroborated-node-failure
   - not-responding
@@ -10963,9 +10968,9 @@ failures:
   - node-offline
   - system-is-powering-down
   references:
-  - title: Slurm job states
+  - title: 'Slurm example: job states'
     url: https://slurm.schedmd.com/job_state_codes.html
-  - title: Slurm job accounting
+  - title: 'Slurm example: job accounting'
     url: https://slurm.schedmd.com/sacct.html
   severity: high
   verification: draft
@@ -11028,32 +11033,33 @@ failures:
   personas:
     tenant_sre:
       title: Two independent sources identified the same failed node
-      summary: An epilog health check could not reach a node and SLURM independently reported `NODE_FAIL`, with the same node
-        identified explicitly or by a single-node allocation.
+      summary: An epilog health check could not reach a node and the scheduler independently reported node failure, with the
+        same node identified explicitly or by a single-node allocation.
       impact: Attribution reports a higher-confidence hardware fault and consolidates the two component symptoms.
       action: Contact your cluster administrator or cloud provider. Include the NVIDIA Attribution diagnosis (verdict, symptom
         chain, and source logs).
-      support_details: Include the job ID, host name, epilog health-check output, SLURM state, failed-node resolution source,
+      support_details: Include the job ID, host name, epilog health-check output, scheduler state, failed-node resolution source,
         allocated nodes, and timestamps.
   recommended_action:
     operational_state: drain
     remediation_actions:
     - service_required
   technical_details: '`Corroborated node failure` requires `Node not responding` evidence from the epilog health check and
-    `Node failure reported by slurm` evidence from SLURM `NODE_FAIL` on the same node. The failed node can come from SLURM''s
-    explicit failed-node field or, when that field is absent and the job has exactly one allocated node, unambiguous single-node
-    inference. A health-database observation or a scheduler-derived not-responding reason cannot create this composite.
+    `Node failure reported by {scheduler}` evidence from a scheduler-reported node failure on the same node. The failed node
+    can come from the scheduler''s explicit failed-node field or, when that field is absent and the job has exactly one allocated
+    node, unambiguous single-node inference. A health-database observation or a scheduler-derived not-responding reason cannot
+    create this composite.
 
     '
-  summary: Epilog non-response plus SLURM `NODE_FAIL` for the same explicitly identified or unambiguously inferred node corroborate
-    a higher-confidence hardware fault.
+  summary: Epilog non-response plus a scheduler-reported node failure for the same explicitly identified or unambiguously inferred
+    node corroborate a higher-confidence hardware fault.
   signals:
   - kind: log
     pattern: 'Health check failed: Not responding'
     note: Required epilog health-check evidence.
   - kind: metric
     pattern: slurm_job_state="NODE_FAIL" AND (failed_node="<same node>" OR allocated_node_count=1)
-    note: Required SLURM failure evidence, resolved explicitly or through unambiguous single-node inference.
+    note: Slurm example of the required scheduler node-failure evidence.
   related:
   - not-responding
   - node-failure-reported-by-slurm
@@ -11266,8 +11272,8 @@ failures:
   personas:
     tenant_sre:
       title: Node lost its north-south (management) network
-      summary: A heuristic combining Lustre eviction, iSCSI errors, Prometheus drops, and SLURM failure concluded the node
-        lost its NS network; this often manifests to the user as a SLURM node failure.
+      summary: A heuristic found at least two contributing signals on the node among Lustre eviction, iSCSI errors, Prometheus
+        drops, and a scheduler-reported node failure, suggesting a management-network problem without proving its cause.
       impact: Storage and control-plane operations on the node fail; the job is at risk of termination.
       action: Your remediation system should first restart the affected node's operating system (a VM reboot on a virtualized
         GPU, a host-level reboot on bare metal). If the job still fails on this node, contact your cluster administrator or
@@ -11279,12 +11285,11 @@ failures:
     - restart_os
     - service_required
   technical_details: 'The NS-network-lost composite is raised when at least two of Lustre client eviction, iSCSI connection
-    error, Prometheus loss, and SLURM node failure co-fire on the node. It identifies the management-network outage that is
-    often the actual root behind a generic SLURM node-failure report.
+    error, Prometheus loss, and a scheduler-reported node failure co-fire on the node. This combination suggests a management-network
+    problem but does not prove its cause.
 
     '
-  summary: Composite signal indicating loss of the north-south management network, often the real root behind SLURM node-failure
-    reports.
+  summary: At least two contributing signals suggest a north-south management-network problem without proving its cause.
   signals:
   - kind: log
     pattern: 'Lustre.*evicted|iscsid: conn error|Prometheus.*context deadline'
@@ -17378,7 +17383,7 @@ failures:
     The two signals establish the compound diagnosis without requiring a QP or device-open failure.
     The compound rule preserves QP and ibv_open_device failure symptoms and their source evidence, taking
     precedence over their outcome mappings except for QP failures explicitly attributed to overwritten NCCL parameters.
-    Existing cascade cleanup can still demote generic QP failures to interesting evidence when Slurm node failure,
+    Existing cascade cleanup can still demote generic QP failures to interesting evidence when scheduler-reported node failure,
     unexpected reboot, or Page Retirement is present.
     Independent faults such as unexpected reboot, Page Retirement, and RDMA fabric flap retain precedence.
     Without the compound diagnosis, QP and device-open outcome mappings remain unchanged.

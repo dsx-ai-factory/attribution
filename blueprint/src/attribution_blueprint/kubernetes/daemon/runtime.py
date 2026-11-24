@@ -14,10 +14,10 @@ from loguru import logger
 from attribution_blueprint.kubernetes.daemon.health import HealthState
 from attribution_blueprint.kubernetes.daemon.models import (
     CoverageGapReason,
-    ObservationEventType,
     PlacementRecord,
     ResourceIdentity,
-    ResourceObservation,
+    ResourceSnapshot,
+    SnapshotEventType,
 )
 from attribution_blueprint.kubernetes.daemon.resolvers import (
     AssociatedResourceResolver,
@@ -42,7 +42,7 @@ class RequiredPersistenceError(RuntimeError):
     """A required placement write failed before its watch checkpoint."""
 
 
-class _ObservationPersistenceFailed(RuntimeError):
+class _SnapshotPersistenceFailed(RuntimeError):
     pass
 
 
@@ -211,7 +211,7 @@ class KubernetesDaemon:
                     resources, listed_resource_version = source.list_resources()
                     for resource in resources:
                         if not self._capture(source, resource, "SNAPSHOT"):
-                            raise _ObservationPersistenceFailed
+                            raise _SnapshotPersistenceFailed
                     if source.kind == "Pod":
                         self._reconcile_active_pods(resources)
                     completed_at = _utc_now()
@@ -243,7 +243,7 @@ class KubernetesDaemon:
                     event_type = event.get("type")
                     if event_type in {"ADDED", "MODIFIED", "DELETED"}:
                         if not self._capture(source, resource, event_type):
-                            raise _ObservationPersistenceFailed
+                            raise _SnapshotPersistenceFailed
                         if event_resource_version:
                             resource_version = event_resource_version
                     elif event_type == "BOOKMARK" and event_resource_version:
@@ -252,9 +252,9 @@ class KubernetesDaemon:
                     if self.stop_event.is_set():
                         break
                 backoff = 1.0
-            except _ObservationPersistenceFailed:
+            except _SnapshotPersistenceFailed:
                 logger.warning(
-                    f"{source.name} observation persistence failed; "
+                    f"{source.name} snapshot persistence failed; "
                     f"restarting from resourceVersion {resource_version or 'initial-list'}"
                 )
             except ApiException as error:
@@ -286,11 +286,11 @@ class KubernetesDaemon:
         self,
         source: ResourceWatchSource,
         resource: dict,
-        event_type: ObservationEventType,
+        event_type: SnapshotEventType,
     ) -> bool:
         status = source.selected_status(resource)
         metadata = resource.get("metadata") or {}
-        observation = ResourceObservation.from_resource(
+        snapshot = ResourceSnapshot.from_resource(
             resource,
             cluster_id=self.cluster_id,
             event_type=event_type,
@@ -307,12 +307,12 @@ class KubernetesDaemon:
             ),
         )
         placement = None
-        if observation.kind == "Pod" and (resource.get("spec") or {}).get("nodeName"):
+        if snapshot.kind == "Pod" and (resource.get("spec") or {}).get("nodeName"):
             failure_reason = pod_node_failure_reason(resource) or pod_container_exit_reason(resource)
             placement = PlacementRecord.for_pod(resource, node_failure_reason=failure_reason)
         try:
-            result = self.store.capture_observation(
-                observation,
+            result = self.store.capture_snapshot(
+                snapshot,
                 source_name=source.name,
                 placement=placement,
                 advance_checkpoint=event_type != "SNAPSHOT",
@@ -322,7 +322,7 @@ class KubernetesDaemon:
             self.health.update(persistence_failed=True)
             logger.exception(
                 f"failed to persist {source.name} capture "
-                f"{observation.namespace}/{observation.name}@{observation.resource_version}"
+                f"{snapshot.namespace}/{snapshot.name}@{snapshot.resource_version}"
             )
             return False
         self.health.update(persistence_failed=False)
@@ -334,8 +334,8 @@ class KubernetesDaemon:
                     f"{result.placement.value} placement for Pod "
                     f"{placement.namespace}/{placement.pod_name}"
                 )
-            if observation.uid:
-                self._schedule(observation.uid, resource)
+            if snapshot.uid:
+                self._schedule(snapshot.uid, resource)
         return True
 
     def _mark_initial_list_complete(self, source_name: str) -> None:
@@ -364,7 +364,7 @@ class KubernetesDaemon:
             )
         except Exception as error:
             self.health.update(persistence_failed=True)
-            raise _ObservationPersistenceFailed from error
+            raise _SnapshotPersistenceFailed from error
 
     def stop(self) -> None:
         self.stop_event.set()
@@ -457,7 +457,7 @@ class KubernetesDaemon:
         """Run the retention sweep at most once per `prune_interval_seconds`.
 
         Reuses the already-running retry-loop thread instead of paying the
-        sweep's cost (a full observation-table scan and a recursive
+        sweep's cost (a full snapshot-table scan and a recursive
         owner-graph walk per expired candidate) on every store read/write."""
         now = time.monotonic()
         if now - self._last_pruned_at < self.prune_interval_seconds:
@@ -491,7 +491,7 @@ class KubernetesDaemon:
             try:
                 needs_retry = self._record(pod, generation=generation)
             except Exception:
-                # A malformed observation or an unexpected enrichment bug
+                # A malformed snapshot or an unexpected enrichment bug
                 # must never terminate a recording worker.
                 logger.exception("unexpected KubernetesDaemon recording failure")
             finally:

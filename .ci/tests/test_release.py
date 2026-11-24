@@ -16,6 +16,8 @@ import release_git  # noqa: E402
 import release_rules  # noqa: E402
 import release_tag  # noqa: E402
 
+WORKTREE = Path(__file__).resolve().parents[2]
+
 INTERIM = {
     "attribution-lib": "0.4.0",
     "service-app": "1.0.0",
@@ -68,6 +70,12 @@ class Repo:
     def results(self) -> list[release_rules.RuleResult]:
         return release_rules.check_release(self.path, self.statuses())
 
+    def pr_violations(self, *, light: bool = False) -> list[release_rules.Violation]:
+        results = release_rules.check_release_pr(
+            self.path, self.statuses(), "base", light=light
+        )
+        return release_rules.violations(results)
+
     def violations(self) -> list[release_rules.Violation]:
         return release_rules.violations(self.results())
 
@@ -83,6 +91,7 @@ def repo(tmp_path: Path) -> Repo:
         ("tag.gpgsign", "false"),
     ):
         r.git("config", key, value)
+    shutil.copy(WORKTREE / ".gitattributes", tmp_path / ".gitattributes")
     for component, literal in INTERIM.items():
         r.set_literal(component, literal)
     r.write("docs/x", "")
@@ -167,9 +176,8 @@ def test_blueprint_bump_over_moved_service_app_needs_service_app_release(
     repo.commit("bump blueprint")
 
     violations = repo.violations()
-    assert len(violations) == 1
-    violation = violations[0]
-    assert violation.component == "blueprint"
+    assert [v.component for v in violations] == ["service-app", "blueprint"]
+    violation = violations[1]
     assert (
         "service-app has moved since service-app-v2.0.0 (distance 1)"
         in violation.message
@@ -191,20 +199,29 @@ def test_blueprint_bump_over_moved_lib_needs_whole_closure_released(repo: Repo) 
     repo.commit("bump blueprint")
 
     violations = repo.violations()
-    assert [v.component for v in violations] == ["blueprint", "blueprint"]
+    assert [v.component for v in violations] == [
+        "attribution-lib",
+        "service-app",
+        "blueprint",
+        "blueprint",
+    ]
     assert "attribution-lib has moved since attribution-lib-v0.5.0 (distance 1)" in (
-        violations[0].message
+        violations[2].message
     )
-    assert "service-app has moved since service-app-v2.0.0 (distance 1)" in (
-        violations[1].message
+    assert (
+        "service-app has moved since service-app-v2.0.0 (distance 1)"
+        in violations[3].message
     )
 
     repo.set_literal("service-app", "2.0.1")
     repo.add_changelog("service-app", "2.0.1")
     repo.commit("bump service-app")
     violations = repo.violations()
-    assert [v.component for v in violations] == ["service-app", "blueprint"]
-    assert all("attribution-lib has moved" in v.message for v in violations)
+    assert [v.component for v in violations] == [
+        "attribution-lib",
+        "service-app",
+        "blueprint",
+    ]
 
     repo.set_literal("attribution-lib", "0.5.1")
     repo.add_changelog("attribution-lib", "0.5.1")
@@ -215,6 +232,7 @@ def test_blueprint_bump_over_moved_lib_needs_whole_closure_released(repo: Repo) 
 def test_stable_service_app_cannot_bundle_a_prerelease_lib_tag(repo: Repo) -> None:
     repo.tag("attribution-lib-v0.5.2")
     repo.write("service/attribution-lib/x", "")
+    repo.set_literal("attribution-lib", "0.5.3rc1")
     repo.commit("lib change")
     repo.tag("attribution-lib-v0.5.3-rc.1")
     repo.tag("service-app-v2.0.1")
@@ -235,9 +253,51 @@ def test_stable_service_app_cannot_bundle_a_prerelease_lib_tag(repo: Repo) -> No
     repo.commit("bump service-app to rc")
     assert repo.violations() == []
 
-    latest = release_git.latest_tags(repo.path, "attribution-lib")
+    latest = repo.statuses()["attribution-lib"].latest
     assert (latest.any.tag, latest.any.distance) == ("attribution-lib-v0.5.3-rc.1", 0)
     assert (latest.stable.tag, latest.stable.distance) == ("attribution-lib-v0.5.2", 1)
+
+
+def test_lib_change_requires_service_app_and_blueprint_releases(repo: Repo) -> None:
+    _release_everything_at_distance_zero(repo)
+    repo.write("service/attribution-lib/x", "")
+    repo.commit("touch lib")
+    repo.set_literal("attribution-lib", "0.5.1")
+    repo.add_changelog("attribution-lib", "0.5.1")
+    repo.commit("bump lib")
+
+    assert [v.component for v in repo.violations()] == ["service-app", "blueprint"]
+
+
+def test_release_branch_finds_sibling_branch_tags_and_matches_them_by_content(
+    repo: Repo,
+) -> None:
+    repo.git("checkout", "-b", "release/1")
+    repo.git("checkout", "main")
+    repo.write("service/attribution-lib/fix", "")
+    repo.commit("lib fix")
+    repo.git("checkout", "release/1")
+    repo.git("cherry-pick", "-x", "main")
+    _release_everything_at_distance_zero(repo)
+    repo.git("checkout", "main")
+    repo.git("cherry-pick", "-x", "release/1")
+    repo.write("service/service-app/feature", "")
+    repo.commit("service-app feature")
+    repo.git("checkout", "-b", "release/2")
+    repo.mark_base()
+    for component, literal in (("service-app", "2.1.0"), ("blueprint", "0.2.1")):
+        repo.set_literal(component, literal)
+        repo.add_changelog(component, literal)
+    repo.commit("release service-app and blueprint")
+
+    statuses = repo.statuses()
+    lib = statuses["attribution-lib"].latest.any
+    assert lib is not None and (lib.tag, lib.distance) == ("attribution-lib-v0.5.0", 0)
+    assert repo.violations() == []
+    heading = "### attribution-lib: PRs since "
+    section = release.render_status(repo.path, statuses).partition(heading)[2]
+    assert section.startswith("attribution-lib-v0.5.0")
+    assert "(none)" in section.partition("###")[0]
 
 
 def test_literals_are_compared_at_the_merge_base_not_the_tip_of_base(
@@ -254,6 +314,45 @@ def test_literals_are_compared_at_the_merge_base_not_the_tip_of_base(
     statuses = release_rules.releasing_components(repo.path, "main")
     assert not statuses["attribution-lib"].releasing
     assert not statuses["attribution-lib"].decreased
+
+
+def test_pr_that_changes_no_literal_has_no_release_violations(
+    repo: Repo,
+) -> None:
+    _release_everything_at_distance_zero(repo)
+    repo.write("service/attribution-lib/fix", "")
+    repo.commit("lib fix")
+
+    assert repo.pr_violations() == []
+    assert repo.pr_violations(light=True) == []
+
+
+@pytest.mark.parametrize("light", [False, True], ids=["full", "light"])
+def test_release_pr_touching_a_file_outside_the_release_set_fails(
+    repo: Repo, light: bool
+) -> None:
+    for component, literal in NEW_RELEASE.items():
+        repo.set_literal(component, literal)
+        repo.add_changelog(component, literal)
+    repo.write("service/attribution-lib/fix", "")
+    repo.commit("release with a fix")
+
+    (hit,) = repo.pr_violations(light=light)
+    assert hit.component == "release PR"
+
+
+def test_light_check_keeps_only_the_file_set_and_no_decrease_rules(repo: Repo) -> None:
+    repo.set_literal("blueprint", "0.2.0")
+    repo.commit("release blueprint over unreleased dependencies")
+
+    assert repo.pr_violations(light=True) == []
+    assert repo.pr_violations()
+
+    repo.set_literal("blueprint", "0.0.9")
+    repo.commit("lower blueprint")
+
+    (hit,) = repo.pr_violations(light=True)
+    assert hit.component == "blueprint"
 
 
 def test_only_an_rc_literal_is_a_prerelease(repo: Repo) -> None:
@@ -284,6 +383,53 @@ def test_distance_counts_first_parent_commits_in_the_closure_only(repo: Repo) ->
     assert release_git.distance(repo.path, "service-app", "service-app-v2.0.0") == 1
 
 
+def test_distance_ignores_release_pr_edits_and_paths_outside_the_closure(
+    repo: Repo,
+) -> None:
+    repo.write("service/service-app/openapi.json", "{}\n")
+    repo.write("service/service-app/hand.py", "")
+    repo.commit("openapi")
+    repo.tag("service-app-v2.0.0")
+    repo.set_literal("attribution-lib", "0.5.0")
+    repo.add_changelog("service-app", "2.0.1")
+    repo.write("service/service-app/openapi.json", '{"version": "2.0.1"}\n')
+    repo.write("service/service-app/nvidia_attribution_client/models/m.py", "X = 1\n")
+    repo.write("docs/y", "")
+    repo.write("blueprint/x", "")
+    repo.commit("release-only edits and unrelated paths")
+    assert release_git.distance(repo.path, "service-app", "service-app-v2.0.0") == 0
+
+    repo.git(
+        "mv",
+        "service/service-app/hand.py",
+        "service/service-app/nvidia_attribution_client/hand.py",
+    )
+    repo.commit("hand-written file moved into the generated client")
+    assert release_git.distance(repo.path, "service-app", "service-app-v2.0.0") == 2
+
+    literal_file = release_git.COMPONENTS["attribution-lib"].literal_file
+    repo.write(literal_file, (repo.path / literal_file).read_text() + "X = 1\n")
+    repo.commit("code next to the lib literal")
+    assert release_git.distance(repo.path, "service-app", "service-app-v2.0.0") == 3
+
+
+def test_distance_skips_a_fix_the_tag_has_as_a_cherry_pick_and_is_at_least_one(
+    repo: Repo,
+) -> None:
+    repo.git("checkout", "-b", "release/1")
+    repo.write("service/service-app/fix", "")
+    repo.commit("fix")
+    repo.write("service/service-app/only-on-release", "")
+    repo.commit("release-branch only")
+    repo.tag("service-app-v2.0.0")
+    repo.git("checkout", "main")
+    repo.git("cherry-pick", "-x", "release/1~1")
+    assert release_git.distance(repo.path, "service-app", "service-app-v2.0.0") == 1
+
+    repo.git("cherry-pick", "-x", "release/1")
+    assert release_git.distance(repo.path, "service-app", "service-app-v2.0.0") == 0
+
+
 def test_tag_names_round_trip_and_releasable_shapes() -> None:
     for literal, tag in (
         ("2.0.0", "service-app-v2.0.0"),
@@ -300,7 +446,29 @@ def test_tag_names_round_trip_and_releasable_shapes() -> None:
             release_git.tag_for("service-app", literal)
 
 
-WORKTREE = Path(__file__).resolve().parents[2]
+def test_shortlog_starts_at_the_latest_tag_up_to_the_literal_and_skips_picked_fixes(
+    repo: Repo,
+) -> None:
+    _release_everything_at_distance_zero(repo)
+    repo.git("branch", "release/1")
+    repo.write("service/service-app/fix", "")
+    repo.commit("fix(service-app): patch")
+    repo.git("checkout", "release/1")
+    repo.git("cherry-pick", "-x", "main")
+    repo.tag("service-app-v2.0.1-rc.1")
+    repo.set_literal("service-app", "2.0.1")
+    repo.commit("release service-app 2.0.1")
+    repo.tag("service-app-v2.0.1")
+    repo.tag("service-app-v2.1.0-rc.1")
+    repo.git("checkout", "main")
+    repo.set_literal("service-app", "2.0.2")
+    repo.commit("set service-app literal")
+
+    shortlog = release.render_shortlog(repo.path, "service-app")
+
+    assert shortlog.startswith("## [2.0.2] - ")
+    assert "service-app-v2.0.1...HEAD" in shortlog
+    assert shortlog.partition("-->\n")[2] == "- set service-app literal"
 
 
 @dataclass
@@ -423,23 +591,6 @@ def test_bundle_violation_fails_the_consumer_and_tags_nothing_for_it(
     assert tagging_repo.origin_tags() == {}
 
 
-def test_rejected_dependency_push_fails_its_dependants_too(
-    tagging_repo: TaggingRepo,
-) -> None:
-    origin = Path(tagging_repo.out("remote", "get-url", "origin"))
-    hook = origin / "hooks" / "pre-receive"
-    hook.write_text("#!/bin/sh\ngrep -q refs/tags/attribution-lib- && exit 1\nexit 0\n")
-    hook.chmod(0o755)
-    tagging_repo.bump("attribution-lib", "0.5.0")
-    tagging_repo.bump("service-app", "2.0.0")
-    tagging_repo.commit("release lib and service-app")
-
-    outcomes = tagging_repo.push_outcomes()
-    assert outcomes["attribution-lib"] == "FAIL"
-    assert outcomes["service-app"] == "FAIL"
-    assert tagging_repo.origin_tags() == {}
-
-
 def test_rc_literal_gets_an_rc_tag(tagging_repo: TaggingRepo) -> None:
     tagging_repo.bump("attribution-lib", "0.5.0")
     tagging_repo.bump("service-app", "2.0.0rc1")
@@ -451,3 +602,51 @@ def test_rc_literal_gets_an_rc_tag(tagging_repo: TaggingRepo) -> None:
         "attribution-lib-v0.5.0",
         "service-app-v2.0.0-rc.1",
     }
+
+
+def test_lib_release_with_a_changed_dependant_tags_nothing_and_exits_1(
+    tagging_repo: TaggingRepo,
+) -> None:
+    _release_everything_at_distance_zero(tagging_repo)
+    tagging_repo.write("service/service-app/x", "")
+    tagging_repo.commit("touch service-app")
+    tagging_repo.bump("attribution-lib", "0.5.1")
+    tagging_repo.commit("bump lib only")
+
+    outcomes = tagging_repo.push_outcomes()
+    assert outcomes["attribution-lib"] == outcomes["service-app"] == "FAIL"
+    argv = ["tag", "--repo", str(tagging_repo.path), "--before", "base"]
+    assert release.main(argv) == 1
+    assert tagging_repo.origin_tags() == {}
+
+
+def test_branch_creation_push_is_a_noop_and_tags_nothing(
+    tagging_repo: TaggingRepo,
+) -> None:
+    tagging_repo.bump("attribution-lib", "0.5.0")
+    tagging_repo.commit("bump lib")
+    before = "0" * 40
+
+    rows = release_tag.tag_push(tagging_repo.path, before)
+
+    assert {r.outcome for r in rows} == {"NOOP"}
+    argv = ["tag", "--repo", str(tagging_repo.path), "--before", before]
+    assert release.main(argv) == 0
+    assert tagging_repo.origin_tags() == {}
+
+
+@pytest.mark.parametrize("blueprint_literal", ["0.2.0", "0.2.0.dev1"])
+def test_unreleasable_component_blocks_the_other_tags(
+    tagging_repo: TaggingRepo, blueprint_literal: str
+) -> None:
+    tagging_repo.tag("blueprint-v0.2.0")
+    tagging_repo.git("push", "origin", "blueprint-v0.2.0")
+    tagging_repo.git("tag", "-d", "blueprint-v0.2.0")
+    before = tagging_repo.origin_tags()
+    tagging_repo.bump("attribution-lib", "0.5.0")
+    tagging_repo.bump("service-app", "2.0.0")
+    tagging_repo.bump("blueprint", blueprint_literal)
+    tagging_repo.commit("release everything")
+
+    assert set(tagging_repo.push_outcomes().values()) == {"FAIL"}
+    assert tagging_repo.origin_tags() == before
