@@ -100,6 +100,13 @@ register_source_config(
         requires_job_nodes=True,
     ),
 )
+register_source_config(
+    ObservationSource.SCHEDULER,
+    SourceProcessingConfig(
+        # A scheduler fact is about the job, not one node, and a job that never started has no nodes.
+        fallback_unknown_nodes=True,
+    ),
+)
 
 
 def process_check(
@@ -220,6 +227,7 @@ def calculate_bad_nodes(
     node_metrics_in: Optional[EntrySourceBase] = None,
     nvlink_metrics_in: Optional[EntrySourceBase] = None,
     csp_event_in: Optional[EntrySourceBase] = None,
+    scheduler_in: Optional[EntrySourceBase] = None,
 ) -> CalcBadNodesAttributionResult:
     result = CalcBadNodesAttributionResult()
     if not job_info.job_start_time:
@@ -240,6 +248,7 @@ def calculate_bad_nodes(
         node_metrics_in,
         nvlink_metrics_in,
         csp_event_in,
+        scheduler_in,
     ]
     for obs_source in observation_sources:
         if obs_source is None:
