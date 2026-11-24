@@ -17675,7 +17675,7 @@ failures:
       impact: A worker can stop before producing expected results even when a wrapper or overall job reports successful
         completion.
       action: |
-        1. Match the kill time and affected task or container to your workload using logs and status records you can access. Compare the memory requested, effective workload limit if visible, and recorded usage. A workload memory limit can be reached without exhausting the node's physical memory.
+        1. Match the kill time and affected task or container to your workload using logs and status records you can access. A Ray memory-monitor message names the IP address of the node that ran low on memory and can appear in another node's log, such as the Ray head node's. Compare the memory requested, effective workload limit if visible, and recorded usage. A workload memory limit can be reached without exhausting the node's physical memory.
         2. If the record belongs to your task, reduce host-memory demand using supported application settings you control, or request more workload memory within your permitted quota when the evidence supports it. Do not change host or shared control-group settings. This guidance concerns host or container memory, not a CUDA device-memory allocation error.
         3. After a justified change, retry once if restarting is safe. Confirm that the failed task completes without another OOM kill and produces its expected outputs. Stop retries if the failure returns.
         4. Contact the person or team responsible for your application if code or configuration changes are outside your control. Contact your cluster administrator or cloud provider if the victim does not match your task, effective limits are unclear, or the failure persists. You can ask for help with incomplete evidence.
@@ -17696,9 +17696,17 @@ failures:
   - kind: log
     pattern: 'kubepods[\w\-]*-pod[0-9a-f_]+\.slice: A process of this unit has been killed by the OOM killer'
     note: Kubernetes pod-slice OOM message; correlate the affected pod with the workload.
+  - kind: log
+    pattern: 'Memory on the node \(IP: [0-9.]+, ID: [0-9a-fA-F]+\) (?:where the (?:task|lease) \(.*?\) was running )?was \d+(?:\.\d+)?GB (?:used )?/ \d+(?:\.\d+)?GB'
+    note: Ray memory-monitor kill details; the IP address names the node that ran low on memory.
+  - kind: log
+    pattern: 'Workers \(tasks / actors\) killed due to memory pressure \(OOM\), \d+ Workers crashed due to other reasons at node \(ID: [0-9a-fA-F]+, IP: [0-9.]+\)'
+    note: Periodic Ray raylet summary of memory-monitor kills on the node with the named IP address.
   references:
   - title: Linux control-group memory controls and events
     url: https://www.kernel.org/doc/html/latest/admin-guide/cgroup-v2.html
+  - title: Ray out-of-memory prevention
+    url: https://docs.ray.io/en/latest/ray-core/scheduling/ray-oom-prevention.html
   - title: Slurm job and step exit codes
     url: https://slurm.schedmd.com/job_exit_code.html
   severity: medium
