@@ -3,8 +3,20 @@
 
 """Regression tests for bundled symptom defaults."""
 
+from datetime import datetime
+from zoneinfo import ZoneInfo
+
+import pytest
+
+from attribution_lib.attr_types import JobNodeAttributions
+from attribution_lib.bundled_rules.tests._shared import default_job_info
 from attribution_lib.core import get_bundled_rules_path
+from attribution_lib.observation import Context as ObservationContext
+from attribution_lib.observation.inbound import Format as ObsFormat, Id, Source as ObsSource, TimeInterval
+from attribution_lib.resources import AllJobResources
 from attribution_lib.rules_engine import RuleLoader
+from attribution_lib.sources import Source, SourceSet
+from attribution_lib.symptoms import translate_and_prune_node_attributions
 from attribution_lib.symptoms.declarations import DagDiscardBehavior
 from attribution_lib.symptoms.registry_generation import registry_from_declarations
 
@@ -17,6 +29,46 @@ def test_row_remap_does_not_drive_outcome():
 
     assert registry.contains("Row Remap")
     assert registry.outcome_for(["Row Remap"]) is None
+
+
+@pytest.mark.parametrize(
+    ("other_checks", "expected_remaining"),
+    [
+        ((), set()),
+        (("NVRx node health check failed: example_check",), {"NVRx node health check failed: example_check"}),
+    ],
+)
+def test_nvrx_remapped_rows_health_check_is_pruned_with_unhealthy_node(other_checks, expected_remaining):
+    """Prune the pending row-remap health check and the unhealthy-node symptom it causes.
+
+    Args:
+        other_checks: Other failed health-check symptoms on the same node.
+        expected_remaining: Symptom ids that must survive pruning.
+    """
+    start = datetime(2024, 1, 1, 10, 0, 0, tzinfo=ZoneInfo("UTC"))
+    obs_ctx = ObservationContext(
+        time_interval=TimeInterval(start, start),
+        source=ObsSource.APPLOG,
+        format=ObsFormat.ENTRY_TIMESERIES,
+        timezone=ZoneInfo("UTC"),
+        id=Id(999),
+    )
+    source = Source(
+        source_context=obs_ctx, line_num=1, datum="test", time=start, resources=AllJobResources, rule="test"
+    )
+    job_attributions = JobNodeAttributions()
+    for symptom_id in (
+        "NVRx node health check failed: hw_drv_gpu_ecc_remapped_rows",
+        "NVRx unhealthy node",
+        *other_checks,
+    ):
+        job_attributions.add(["node01"], SourceSet(symptom_id).add(source))
+
+    pruned, skipped = translate_and_prune_node_attributions(job_attributions, default_job_info())
+
+    remaining_ids = {s.symptom_id for s in pruned["node01"].symptoms()} if "node01" in pruned else set()
+    assert remaining_ids == expected_remaining
+    assert skipped == set()
 
 
 def test_corroborated_node_failure_has_dedicated_documentation():
