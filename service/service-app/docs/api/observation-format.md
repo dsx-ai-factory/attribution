@@ -131,7 +131,7 @@ workload, the same as `"AllJobResources"`.
 
 A `scheduler` observation carries facts that the scheduler or the job launcher
 reports about the workload. Each entry `body` holds one fact in one of these
-forms. A value contains no whitespace.
+forms. A value contains no whitespace, but a job script line can.
 
 | Entry `body` | Meaning | `ts` |
 |---|---|---|
@@ -140,6 +140,7 @@ forms. A value contains no whitespace.
 | `job gpu count: <count>` | The number of GPUs that the scheduler allocated. | not used |
 | `allocation failure: allocation=<id> state=<state> node=<node>` | A failure of the allocation that contains this execution. | The time the scheduler reported the failure. |
 | `execution cancellation: execution=<id> cancelled_by=<identity>` | A cancellation of this execution. `<id>` must be the workload ID. | The cancellation time. Required. |
+| `job script: <line>` | One line of the job script. Send one entry for each line. | not used |
 
 An entry in another form is ignored. If two entries give the same fact, the
 later entry applies. The declared `time_interval` must cover each `ts`.

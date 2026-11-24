@@ -7,7 +7,15 @@ from dataclasses import asdict
 from datetime import datetime
 from typing import Optional
 
+from common.hca import (
+    MODIFY_QP_RULE,
+    MODIFY_QP_TIMEOUT_ERRNO,
+    MODIFY_QP_TIMEOUT_SYMPTOM,
+    NCCL_PARAMETER_OVERWRITE_SUFFIX,
+    command_symptom,
+)
 from common.nccl_watchdog import NcclWatchdogParseState, infer_process_group
+from common.scheduler_evidence import JOB_SCRIPT_NCCL_OVERWRITE_EVENT
 from common.syslog_helpers import XidParserInfo
 from common.xid_errors import parse_syslog_events
 from loguru import logger
@@ -31,7 +39,14 @@ _DEMOTION_KEYS = frozenset(e.value for e in DemotionTypes)
 _BAD_TYPES = ["Attribution.node.bad", "Attribution.node.bad_peers"]
 _INTERESTING_TYPES = ["Attribution.node.interesting", "Attribution.node.interesting_peers"]
 
-declare_event_types(*_BAD_TYPES, *_INTERESTING_TYPES, "XID_parser.info", "XID_parser.burst")
+declare_event_types(
+    *_BAD_TYPES,
+    *_INTERESTING_TYPES,
+    "XID_parser.info",
+    "XID_parser.burst",
+    "Application.hca.command_failure",
+    JOB_SCRIPT_NCCL_OVERWRITE_EVENT,
+)
 
 # Demotion provenance rule names recorded on replacement events by
 # `_sql_demote_events()` below. Not registered rules, just names, so they
@@ -265,6 +280,65 @@ def _demote_bad_by_symptom_prefix(event_stream: EventStream, prefixes: list[str]
 
 
 # Filter rules (registered as plugins via @filter_def)
+
+
+@filter_def(name="NcclParameterOverwrite", author="NVIDIA Attribution team", priority=FilterPriority.EARLY)
+def nccl_parameter_overwrite(context: FilterContext):
+    """Blame the job configuration for a queue-pair timeout when the job script overwrites an NCCL parameter.
+
+    The extractor makes this decision from ``JobInfo.job_script_content``. A client of the
+    Attribution Service sends the job script in a SCHEDULER observation, and an extractor
+    cannot read events. This filter applies the same decision to the events of the
+    extractor, so the result is the same for the two inputs.
+    """
+    event_stream = context.event_stream
+    event_stream.flush()
+    types = event_stream.mgr.types
+    overwrite = event_stream.query_raw(
+        "SELECT 1 FROM events WHERE context_id=? AND event_type=? AND status=1 LIMIT 1",
+        [event_stream.ctx_id, types.get_id(JOB_SCRIPT_NCCL_OVERWRITE_EVENT)],
+    )
+    if overwrite == []:
+        return
+    symptom = MODIFY_QP_TIMEOUT_SYMPTOM + NCCL_PARAMETER_OVERWRITE_SUFFIX
+    rule_id = event_stream.mgr.rules.get_id(MODIFY_QP_RULE)
+    scope = [event_stream.ctx_id, rule_id]
+    # The extractor reports a timeout with an unresolved peer as a local command failure.
+    # With the overwrite it blames the node for the configuration and reports no command failure.
+    event_stream.execute(
+        """
+        UPDATE events
+        SET event_type=?, payload=json_merge_patch(payload, json_object('symptom', ?, ?, ?))
+        WHERE context_id=? AND source_rule=? AND status=1
+          AND json_extract_string(payload, '$.symptom')=?
+        """,
+        [
+            types.get_id("Attribution.node.bad"),
+            symptom,
+            DemotionTypes.AFTER_MFU_DEMOTION,
+            MODIFY_QP_RULE,
+            *scope,
+            command_symptom("ibv_modify_qp", MODIFY_QP_TIMEOUT_ERRNO),
+        ],
+    )
+    event_stream.execute(
+        """
+        UPDATE events
+        SET status=0
+        WHERE context_id=? AND source_rule=? AND status=1 AND event_type=?
+          AND CAST(json_extract(payload, '$.errno') AS INTEGER)=?
+        """,
+        [*scope, types.get_id("Application.hca.command_failure"), MODIFY_QP_TIMEOUT_ERRNO],
+    )
+    event_stream.execute(
+        """
+        UPDATE events
+        SET payload=json_merge_patch(payload, json_object('symptom', ?))
+        WHERE context_id=? AND source_rule=? AND status=1
+          AND json_extract_string(payload, '$.symptom')=?
+        """,
+        [symptom, *scope, MODIFY_QP_TIMEOUT_SYMPTOM],
+    )
 
 
 @filter_def(name="DemoteTflopsSymptoms", author="NVIDIA Attribution team")

@@ -18,7 +18,12 @@ from ipaddress import ip_address
 from pathlib import Path
 from typing import Dict, List, Literal, Optional
 
-from common.hca import command_failure_events, command_source_node, parse_command_errno
+from common.hca import (
+    NCCL_PARAMETER_OVERWRITE_SUFFIX,
+    command_failure_events,
+    command_source_node,
+    parse_command_errno,
+)
 from common.nccl_helpers import get_status_name
 from common.nccl_watchdog import NcclWatchdogData, NcclWatchdogParseState
 from common.rankpulse import RankpulseParseState
@@ -501,6 +506,12 @@ def _qp_gid_addresses(local_gid: str, remote_gid: str) -> tuple[dict[str, str], 
     return pair_ips, mapped_gids
 
 
+@expr_helper("overwrites_forbidden_nccl_parameter")
+def _overwrites_forbidden_nccl_parameter(script: str) -> bool:
+    """Whether a job script, or one line of it, sets an NCCL parameter that a user must not overwrite."""
+    return any(param in script for param in NCCL_PARAMS_OVERWRITE_FORBIDDEN)
+
+
 def _qp_failure_symptom(error_code: int, mapped_gids: bool, job_script: str | None) -> str:
     """Preserve the existing errno, GID mismatch and user-configuration symptoms."""
     msg = f"Call to ibv_modify_qp failed: eno {error_code}"
@@ -513,8 +524,8 @@ def _qp_failure_symptom(error_code: int, mapped_gids: bool, job_script: str | No
     elif error_code == 110:
         msg += " timeout"
         # Check if job script contains forbidden NCCL parameters
-        if job_script and any(param in job_script for param in NCCL_PARAMS_OVERWRITE_FORBIDDEN):
-            msg += "(Overwrite NCCL parameters)"
+        if job_script and _overwrites_forbidden_nccl_parameter(job_script):
+            msg += NCCL_PARAMETER_OVERWRITE_SUFFIX
 
     return msg
 
@@ -534,7 +545,7 @@ def _qp_failure_attributions(
     local_argument_error = error_code == 22 and mapped_gids
     unresolved_peer = peer_node is None
     local_command_error = error_code in {11, 110, 125} and unresolved_peer
-    configuration_error = "(Overwrite NCCL parameters)" in msg
+    configuration_error = NCCL_PARAMETER_OVERWRITE_SUFFIX in msg
     if configuration_error:
         events = [
             _bad_peers(node, peer_node, msg, source, demotion="Call to ibv_modify_qp failed")

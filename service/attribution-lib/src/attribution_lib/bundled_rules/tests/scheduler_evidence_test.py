@@ -9,6 +9,7 @@ from test_support.helpers import make_applog_entry, make_syslog_entry
 from attribution_lib.attributor import Attributor
 from attribution_lib.bundled_rules.common.scheduler_evidence import job_with_scheduler_evidence
 from attribution_lib.observation.inbound import Context, Format, Observation, Source, TimeInterval
+from attribution_lib.utils import hostname_mapping
 
 JOB_ID = "execution"
 NVRX_TAG_ENTRY = {"body": "job tag: nvrx"}
@@ -16,6 +17,11 @@ EVICTION = (
     "LustreError: 167-0: testfs-OST001c-osc-ffff94dc5684f800: This client was evicted by testfs-OST001c; "
     "in progress operations using this service will fail."
 )
+QP_TIMEOUT = (
+    "node-a:123:456 [0] NCCL WARN Call to ibv_modify_qp failed with 110 error, on dev mlx5_4:1, "
+    "curr state RTR, next state RTS, local GID index -1, local GID ::ffff:192.0.2.1, remote GID {remote}"
+)
+NCCL_OVERWRITE = "Call to ibv_modify_qp failed: eno 110 timeout(Overwrite NCCL parameters)"
 CUDA_DEVICE_COUNT = (
     "RuntimeError: Unexpected error from cudaGetDeviceCount(). Did you run some cuda functions before calling "
     "NumCudaDevices() that might have already set an error? Error 804: forward compatibility was attempted on "
@@ -248,3 +254,53 @@ def test_observed_cancellation_without_a_timestamp_is_rejected(simple_job_factor
 
     with pytest.raises(ValueError, match="timestamp"):
         attribute(job, scheduler=[entry])
+
+
+@pytest.mark.parametrize(
+    ("remote", "bad_nodes"),
+    [
+        ("N/A", ["node-a"]),
+        ("::ffff:198.51.100.7", ["node-a"]),
+        ("::ffff:192.0.2.2", ["node-a", "node-b"]),
+    ],
+    ids=["no-peer", "peer-outside-the-job", "peer-in-the-job"],
+)
+def test_job_script_that_overwrites_an_nccl_parameter_makes_a_queue_pair_timeout_a_user_error(
+    remote, bad_nodes, simple_job_factory, attribute
+):
+    """A forbidden NCCL parameter in the observed job script gives the same result as the JobInfo input."""
+    job = simple_job_factory(job_id=JOB_ID, nodes=["node-a", "node-b"], state="FAILED", ranks_per_node=1)
+    applog = [
+        {
+            "body": QP_TIMEOUT.format(remote=remote),
+            "ts": _end_ns(job) - 10**9,
+            "resources": [{"kind": "node", "hostname": "node-a"}],
+        }
+    ]
+    script = [{"body": "job script: #!/bin/bash"}, {"body": "job script: export NCCL_IB_TC=128"}]
+
+    with hostname_mapping({"192.0.2.1": "node-a", "192.0.2.2": "node-b"}):
+        result = attribute(job, applog=applog, scheduler=script)
+
+    assert result.outcome_attr.value().outcome == "Fail User"
+    assert result.outcome_attr.value().root_cause_symptom == NCCL_OVERWRITE
+    assert sorted(result.bad_nodes_attr.my_bad_nodes) == bad_nodes
+    assert sorted(result.symptoms.symptoms()) == [NCCL_OVERWRITE]
+
+
+def test_job_script_without_a_forbidden_nccl_parameter_keeps_the_local_command_failure(simple_job_factory, attribute):
+    """Other lines of the job script do not change a queue-pair timeout."""
+    job = simple_job_factory(job_id=JOB_ID, nodes=["node-a", "node-b"], state="FAILED", ranks_per_node=1)
+    applog = [
+        {
+            "body": QP_TIMEOUT.format(remote="N/A"),
+            "ts": _end_ns(job) - 10**9,
+            "resources": [{"kind": "node", "hostname": "node-a"}],
+        }
+    ]
+
+    with hostname_mapping({"192.0.2.1": "node-a", "192.0.2.2": "node-b"}):
+        result = attribute(job, applog=applog, scheduler=[{"body": "job script: export NCCL_DEBUG=INFO"}])
+
+    assert result.outcome_attr.value().outcome == "Fail InfraHW"
+    assert sorted(result.symptoms.symptoms()) == ["Local HCA command failure (ibv_modify_qp eno 110)"]
