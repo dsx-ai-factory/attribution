@@ -13,11 +13,11 @@ from datetime import datetime
 from attribution_blueprint.kubernetes.attempts import (
     RESTART_LABEL as _RESTART_LABEL,
     controller_owner as _controller_owner,
-    latest_pod_observations as _pod_events,
-    observations_by_uid as _by_uid,
+    latest_pod_snapshots as _pod_events,
     parse_time as _parse_time,
     restart_attempt as _restart_attempt,
     restart_starts as _restart_starts,
+    snapshots_by_uid as _by_uid,
     within as _within,
 )
 
@@ -74,21 +74,21 @@ def attempts_from_workload_history(
     retain_requeued_evictions: bool = True,
 ) -> list[WorkloadAttempt]:
     """Split retained Workload/JobSet history into attributable executions."""
-    observations = history.get("observations") or []
+    snapshots = history.get("snapshots") or []
     workloads = _by_uid(
         item
-        for item in observations
+        for item in snapshots
         if item.get("kind") == "Workload" and (item.get("metadata") or {}).get("name") == workload_name
     )
-    restart_starts = _restart_starts(observations)
+    restart_starts = _restart_starts(snapshots)
     terminals = _terminal_events(
-        observations,
+        snapshots,
         retain_requeued_evictions=retain_requeued_evictions,
     )
-    pod_events = _pod_events(observations)
+    pod_events = _pod_events(snapshots)
     job_events = {
         uid: timeline[-1]
-        for uid, timeline in _by_uid(item for item in observations if item.get("kind") == "Job").items()
+        for uid, timeline in _by_uid(item for item in snapshots if item.get("kind") == "Job").items()
     }
     workload_boundaries = _workload_boundaries(workloads)
     attempts = []
@@ -230,7 +230,7 @@ def attempts_from_live_resources(
     )
     resource_fallback = admissions[-1]["time"] if admissions else observed_at
 
-    def observation(resource: dict, kind: str) -> dict:
+    def snapshot(resource: dict, kind: str) -> dict:
         metadata = resource.get("metadata") or {}
         selected_metadata = {
             field: dict(values) for field in ("annotations", "labels") if (values := metadata.get(field) or {})
@@ -258,10 +258,10 @@ def attempts_from_live_resources(
         }
 
     history = {
-        "observations": [
-            observation(workload, "Workload"),
-            *(observation(job, "Job") for job in jobs),
-            *(observation(pod, "Pod") for pod in pods),
+        "snapshots": [
+            snapshot(workload, "Workload"),
+            *(snapshot(job, "Job") for job in jobs),
+            *(snapshot(pod, "Pod") for pod in pods),
         ]
     }
     attempts = attempts_from_workload_history(
@@ -323,8 +323,8 @@ class _WorkloadBoundary:
 
 def _admissions(timeline: list[dict]) -> list[dict]:
     boundaries = {}
-    for observation in timeline:
-        for condition in (observation.get("status") or {}).get("conditions") or []:
+    for snapshot in timeline:
+        for condition in (snapshot.get("status") or {}).get("conditions") or []:
             transition = condition.get("lastTransitionTime")
             if condition.get("type") == "Admitted" and condition.get("status") == "True" and transition:
                 key = str(condition.get("transitionID") or transition)
@@ -354,12 +354,12 @@ def _workload_boundaries(
     incarnations.sort()
     boundaries = {}
     for index, (_first_seen, workload_uid, timeline, _admitted_at) in enumerate(incarnations):
-        deletion_observations = [observation for observation in timeline if observation.get("eventType") == "DELETED"]
+        deletion_snapshots = [snapshot for snapshot in timeline if snapshot.get("eventType") == "DELETED"]
         deletion = min(
             (
                 selected_metadata["deletionTimestamp"]
-                for observation in deletion_observations
-                if (selected_metadata := observation.get("selectedMetadata") or {}).get("deletionTimestamp")
+                for snapshot in deletion_snapshots
+                if (selected_metadata := snapshot.get("selectedMetadata") or {}).get("deletionTimestamp")
             ),
             key=_parse_time,
             default=None,
@@ -367,8 +367,8 @@ def _workload_boundaries(
         terminal = min(
             (
                 condition["lastTransitionTime"]
-                for observation in timeline
-                for condition in ((observation.get("status") or {}).get("conditions") or [])
+                for snapshot in timeline
+                for condition in ((snapshot.get("status") or {}).get("conditions") or [])
                 if condition.get("status") == "True"
                 and condition.get("type") == "Finished"
                 and condition.get("lastTransitionTime")
@@ -390,7 +390,7 @@ def _workload_boundaries(
             default=None,
         )
         has_successor = index + 1 < len(incarnations)
-        retired = bool(deletion_observations) or has_successor
+        retired = bool(deletion_snapshots) or has_successor
         boundaries[workload_uid] = _WorkloadBoundary(
             end=end,
             retired=retired,
@@ -450,16 +450,16 @@ def _starts(admissions: list[dict], restarts: dict[str, str]) -> list[dict]:
 
 
 def _terminal_events(
-    observations: list[dict],
+    snapshots: list[dict],
     *,
     retain_requeued_evictions: bool,
 ) -> list[dict]:
     events = []
-    for observation in observations:
-        kind = observation.get("kind")
+    for snapshot in snapshots:
+        kind = snapshot.get("kind")
         if kind not in {"Workload", "Job", "JobSet"}:
             continue
-        status = observation.get("status") or {}
+        status = snapshot.get("status") or {}
         requeued_at = max(
             (
                 condition["lastTransitionTime"]
@@ -501,12 +501,12 @@ def _terminal_events(
             events.append(
                 {
                     "kind": kind,
-                    "uid": (observation.get("metadata") or {}).get("uid"),
+                    "uid": (snapshot.get("metadata") or {}).get("uid"),
                     "owner_uid": (
                         owner["uid"]
                         if (
                             owner := _controller_owner(
-                                observation.get("metadata") or {}
+                                snapshot.get("metadata") or {}
                             )
                         )
                         else None
@@ -515,7 +515,7 @@ def _terminal_events(
                     "reason": condition.get("reason"),
                     "time": transition,
                     "restart_attempt": (
-                        _restart_attempt(observation)
+                        _restart_attempt(snapshot)
                         if kind == "Job"
                         else str(max(int(status.get("restarts") or 0) - 1, 0))
                         if kind == "JobSet" and condition_type == "RestartingJobSet"
@@ -608,14 +608,14 @@ def _terminal_priority(terminal: dict) -> int:
 
 
 def _resource_in_attempt(
-    observation: dict,
+    snapshot: dict,
     restart_attempt: str,
     start: str,
     end: str | None,
 ) -> bool:
-    observed_restart = _restart_attempt(observation)
+    observed_restart = _restart_attempt(snapshot)
     if observed_restart is not None and observed_restart != restart_attempt:
         return False
-    status = observation.get("status") or {}
-    timestamp = status.get("startTime") or observation.get("observedAt")
+    status = snapshot.get("status") or {}
+    timestamp = status.get("startTime") or snapshot.get("observedAt")
     return bool(timestamp and _within(timestamp, start, end))

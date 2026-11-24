@@ -6,10 +6,10 @@ import pytest
 from attribution_blueprint.connectors.execution_contexts.kai.helpers import resolve_owner
 from attribution_blueprint.connectors.execution_contexts.kai.resource_resolver import KaiResourceResolver
 from attribution_blueprint.kubernetes.daemon.models import (
-    ObservationEventType,
     OwnerReference,
     ResourceIdentity,
-    ResourceObservation,
+    ResourceSnapshot,
+    SnapshotEventType,
 )
 from attribution_blueprint.kubernetes.daemon.resolvers import UnsupportedOwner
 
@@ -57,9 +57,9 @@ def _retained_pod_group(
     uid: str,
     *,
     owner_uid: str = "job-uid",
-    event_type: ObservationEventType = "DELETED",
-) -> ResourceObservation:
-    return ResourceObservation(
+    event_type: SnapshotEventType = "DELETED",
+) -> ResourceSnapshot:
+    return ResourceSnapshot(
         cluster_id="cluster-a",
         api_version="scheduling.run.ai/v2alpha2",
         kind="PodGroup",
@@ -80,16 +80,16 @@ def _retained_pod_group(
 
 
 class _Journal:
-    def __init__(self, observations):
-        self.observations = observations
+    def __init__(self, snapshots):
+        self.snapshots = snapshots
 
-    def list_latest_observations_for_kind(self, cluster_id, namespace, kind):
+    def list_latest_snapshots_for_kind(self, cluster_id, namespace, kind):
         assert (cluster_id, namespace, kind) == (
             "cluster-a",
             "team-a",
             "PodGroup",
         )
-        return self.observations
+        return self.snapshots
 
 
 def test_resolves_uid_verified_pod_group_from_top_owner_annotation(mocker):
@@ -169,7 +169,7 @@ def test_partial_top_owner_identity_matches_live_pod_group(mocker):
 
 def test_partial_top_owner_identity_matches_retained_pod_group(mocker):
     custom_api = mocker.Mock()
-    observation = ResourceObservation(
+    snapshot = ResourceSnapshot(
         cluster_id="cluster-a",
         api_version="scheduling.run.ai/v2alpha2",
         kind="PodGroup",
@@ -195,7 +195,7 @@ def test_partial_top_owner_identity_matches_retained_pod_group(mocker):
 
     assert KaiResourceResolver(
         custom_api,
-        journal=_Journal([observation]),
+        journal=_Journal([snapshot]),
         cluster_id="cluster-a",
     ).resolve(_pod(), _jobset_owner()) == (
         ResourceIdentity(
@@ -217,11 +217,11 @@ def test_complete_owner_resolution_still_requires_top_owner_name():
 
 def test_resolves_deleted_pod_group_from_uid_verified_journal(mocker):
     custom_api = mocker.Mock()
-    observation = _retained_pod_group("original-pg-uid")
+    snapshot = _retained_pod_group("original-pg-uid")
 
     result = KaiResourceResolver(
         custom_api,
-        journal=_Journal([observation]),
+        journal=_Journal([snapshot]),
         cluster_id="cluster-a",
     ).resolve(_pod(), _owner())
 

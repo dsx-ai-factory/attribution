@@ -72,7 +72,7 @@ from attribution_blueprint.connectors.execution_contexts.kai.helpers import (
 )
 from attribution_blueprint.kubernetes.attempts import (
     kai_podgroup_start_timestamp,
-    resource_from_observation,
+    resource_from_snapshot,
     retained_history_covers_window,
 )
 from attribution_blueprint.kubernetes.client import (
@@ -243,7 +243,7 @@ class _WorkloadEvidence:
     owner_object: dict | None = None
     placements: dict[str, PlacementRecord] = field(default_factory=dict)
     retained_coverage: list[dict] = field(default_factory=list)
-    observations: list[dict] = field(default_factory=list)
+    snapshots: list[dict] = field(default_factory=list)
 
 
 class _PodEvidence(NamedTuple):
@@ -281,7 +281,7 @@ def _parse_dt(value: str | None) -> datetime | None:
 
 
 def _latest_resources_by_uid(
-    observations: list[dict],
+    snapshots: list[dict],
 ) -> dict[str, dict]:
     """Restore the latest resource version, preferring full live data on ties.
 
@@ -291,10 +291,10 @@ def _latest_resources_by_uid(
     """
     selected: dict[str, tuple[tuple, dict]] = {}
     full: dict[str, tuple[tuple, dict]] = {}
-    for observation in observations:
-        metadata = observation.get("metadata", {})
+    for snapshot in snapshots:
+        metadata = snapshot.get("metadata", {})
         uid = metadata.get("uid")
-        observed_at = _parse_dt(observation.get("observedAt"))
+        observed_at = _parse_dt(snapshot.get("observedAt"))
         if not uid or observed_at is None:
             continue
         resource_version = metadata.get("resourceVersion")
@@ -305,27 +305,27 @@ def _latest_resources_by_uid(
             bool(resource_version),
             (int(resource_version) if resource_version.isdigit() else -1),
             resource_version,
-            "spec" in observation,
+            "spec" in snapshot,
             observed_at,
             json.dumps(
-                observation,
+                snapshot,
                 sort_keys=True,
                 separators=(",", ":"),
                 default=str,
             ),
         )
-        if "spec" in observation and (uid not in full or key > full[uid][0]):
-            full[uid] = (key, observation)
+        if "spec" in snapshot and (uid not in full or key > full[uid][0]):
+            full[uid] = (key, snapshot)
         if uid not in selected or key > selected[uid][0]:
-            selected[uid] = (key, observation)
+            selected[uid] = (key, snapshot)
     return {
-        uid: resource_from_observation(
+        uid: resource_from_snapshot(
             {
-                **observation,
+                **snapshot,
                 **({"spec": full[uid][1]["spec"]} if uid in full else {}),
             }
         )
-        for uid, (_key, observation) in selected.items()
+        for uid, (_key, snapshot) in selected.items()
     }
 
 
@@ -1353,28 +1353,28 @@ class KaiExecutionContextAdapter:
         return self._finalize(podgroups, retained_evidence)
 
     @staticmethod
-    def _deduplicate_observations(items: list[_WorkloadEvidence]) -> list[dict]:
-        """Return unique observations across `items` in first-seen order."""
-        observations: list[dict] = []
-        seen_observations: set[str] = set()
+    def _deduplicate_snapshots(items: list[_WorkloadEvidence]) -> list[dict]:
+        """Return unique snapshots across `items` in first-seen order."""
+        snapshots: list[dict] = []
+        seen_snapshots: set[str] = set()
         for item in items:
-            for observation in item.observations:
+            for snapshot in item.snapshots:
                 key = json.dumps(
-                    observation,
+                    snapshot,
                     sort_keys=True,
                     separators=(",", ":"),
                     default=str,
                 )
-                if key not in seen_observations:
-                    seen_observations.add(key)
-                    observations.append(observation)
-        return observations
+                if key not in seen_snapshots:
+                    seen_snapshots.add(key)
+                    snapshots.append(snapshot)
+        return snapshots
 
     @staticmethod
     def _combine_attempt_evidence(
         evidence_items: list[_WorkloadEvidence],
     ) -> list[_AttemptEvidence]:
-        """Combine observations by namespace/name before deriving canonical attempt IDs.
+        """Combine snapshots by namespace/name before deriving canonical attempt IDs.
 
         Reconstruct once, filter resources by attempt membership, and attach live
         owner state only to the latest attempt for each PodGroup UID."""
@@ -1393,10 +1393,10 @@ class KaiExecutionContextAdapter:
 
         combined: list[_AttemptEvidence] = []
         for (_namespace, pod_group_name), items in workload_groups.items():
-            observations = KaiExecutionContextAdapter._deduplicate_observations(items)
+            snapshots = KaiExecutionContextAdapter._deduplicate_snapshots(items)
             attempts = attempts_from_podgroup_history(
                 {
-                    "observations": observations,
+                    "snapshots": snapshots,
                     "coverages": [coverage for item in items for coverage in item.retained_coverage],
                 },
                 pod_group_name=pod_group_name,
@@ -1405,7 +1405,7 @@ class KaiExecutionContextAdapter:
             if not attempts:
                 continue
 
-            resources_by_uid = _latest_resources_by_uid(observations)
+            resources_by_uid = _latest_resources_by_uid(snapshots)
             pods = {uid: resource for uid, resource in resources_by_uid.items() if resource.get("kind") == "Pod"}
             jobs = {uid: resource for uid, resource in resources_by_uid.items() if resource.get("kind") == "Job"}
             placements: dict[str, PlacementRecord] = {}
@@ -1466,9 +1466,9 @@ class KaiExecutionContextAdapter:
                     (metadata.get("namespace") or history.get("namespace") or ""),
                     metadata["name"],
                 )
-                for observation in history.get("observations", [])
-                if observation.get("kind") == "PodGroup"
-                and (metadata := observation.get("metadata", {})).get("uid")
+                for snapshot in history.get("snapshots", [])
+                if snapshot.get("kind") == "PodGroup"
+                and (metadata := snapshot.get("metadata", {})).get("uid")
                 and metadata.get("name")
                 and (pod_group_name is None or metadata["name"] == pod_group_name)
             }
@@ -1484,7 +1484,7 @@ class KaiExecutionContextAdapter:
                         observed_until=now,
                         placements=dict(placements),
                         retained_coverage=[history.get("coverage", {})],
-                        observations=list(history.get("observations", [])),
+                        snapshots=list(history.get("snapshots", [])),
                     )
                 )
         return evidence_items
@@ -1628,7 +1628,7 @@ class KaiExecutionContextAdapter:
             return None, None
         owner_job_uids = {uid for job in owner_jobs if (uid := (job.get("metadata") or {}).get("uid")) is not None}
         members = _member_pods(owner, owner_job_uids, pods, owner_object or {})
-        live_observations = (
+        live_snapshots = (
             snapshots_from_live_resources(
                 podgroup,
                 members,
@@ -1641,7 +1641,7 @@ class KaiExecutionContextAdapter:
             and owner_object is not None
             else []
         )
-        if live_observations and kai_podgroup_start_timestamp(podgroup):
+        if live_snapshots and kai_podgroup_start_timestamp(podgroup):
             records = self._fetch_placement_records(
                 {
                     "namespace": namespace,
@@ -1656,7 +1656,7 @@ class KaiExecutionContextAdapter:
                     podgroup=podgroup,
                     owner_object=owner_object,
                     placements={record.pod_uid: record for record in records},
-                    observations=live_observations,
+                    snapshots=live_snapshots,
                 ),
                 None,
             )
