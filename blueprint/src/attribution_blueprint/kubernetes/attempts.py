@@ -10,20 +10,20 @@ from datetime import datetime, timezone
 RESTART_LABEL = "jobset.sigs.k8s.io/restart-attempt"
 
 
-def _selected_metadata(observation: dict) -> dict:
+def _selected_metadata(snapshot: dict) -> dict:
     """Normalize Kueue live snapshots that intentionally emit explicit null."""
-    selected = observation.get("selectedMetadata")
+    selected = snapshot.get("selectedMetadata")
     return {} if selected is None else selected
 
 
 def restart_starts(
-    observations: list[dict],
+    snapshots: list[dict],
     inferred_job_restarts: dict[str, str] | None = None,
 ) -> dict[str, str]:
     """Return earliest restart starts, optionally resolving unlabeled Jobs."""
     starts = {}
-    for _observation, restart, timestamp in restart_start_candidates(
-        observations,
+    for _snapshot, restart, timestamp in restart_start_candidates(
+        snapshots,
         inferred_job_restarts,
     ):
         if (
@@ -35,60 +35,60 @@ def restart_starts(
 
 
 def restart_start_candidates(
-    observations: list[dict],
+    snapshots: list[dict],
     inferred_job_restarts: dict[str, str] | None = None,
 ) -> list[tuple[dict, str, str]]:
     """Preserve restart starts until callers apply workload-specific scope."""
     candidates = []
-    for observation in observations:
-        kind = observation.get("kind")
+    for snapshot in snapshots:
+        kind = snapshot.get("kind")
         if kind not in {"Job", "Pod"}:
             continue
-        restart = restart_attempt(observation)
+        restart = restart_attempt(snapshot)
         if (
             restart is None
             and kind == "Job"
             and inferred_job_restarts
         ):
             restart = inferred_job_restarts.get(
-                observation.get("metadata", {}).get("uid")
+                snapshot.get("metadata", {}).get("uid")
             )
         if restart is None:
             continue
-        status = observation.get("status", {})
+        status = snapshot.get("status", {})
         timestamp = (
             status.get("startTime")
-            or observation.get("sourceTimestamp")
-            or observation.get("observedAt")
+            or snapshot.get("sourceTimestamp")
+            or snapshot.get("observedAt")
         )
         if timestamp:
-            candidates.append((observation, restart, timestamp))
+            candidates.append((snapshot, restart, timestamp))
     return candidates
 
 
-def restart_attempt(observation: dict) -> str | None:
-    labels = _selected_metadata(observation).get("labels", {})
+def restart_attempt(snapshot: dict) -> str | None:
+    labels = _selected_metadata(snapshot).get("labels", {})
     value = labels.get(RESTART_LABEL)
     return str(value) if value is not None else None
 
 
-def observations_by_uid(observations) -> dict[str, list[dict]]:
+def snapshots_by_uid(snapshots) -> dict[str, list[dict]]:
     grouped = {}
-    for observation in observations:
-        uid = observation.get("metadata", {}).get("uid")
+    for snapshot in snapshots:
+        uid = snapshot.get("metadata", {}).get("uid")
         if uid:
-            grouped.setdefault(uid, []).append(observation)
+            grouped.setdefault(uid, []).append(snapshot)
     for timeline in grouped.values():
         timeline.sort(key=lambda item: parse_time(item["observedAt"]))
     return grouped
 
 
-def latest_pod_observations(observations: list[dict]) -> dict[str, dict]:
+def latest_pod_snapshots(snapshots: list[dict]) -> dict[str, dict]:
     return {
         uid: timeline[-1]
-        for uid, timeline in observations_by_uid(
+        for uid, timeline in snapshots_by_uid(
             item
-            for item in observations
+            for item in snapshots
             if item.get("kind") == "Pod"
         ).items()
     }
@@ -131,19 +131,19 @@ def parse_time(value: str) -> datetime:
     )
 
 
-def resource_from_observation(observation: dict) -> dict:
-    """Restore the Kubernetes fields selected into a retained observation."""
-    metadata = dict(observation.get("metadata", {}))
-    selected = _selected_metadata(observation)
+def resource_from_snapshot(snapshot: dict) -> dict:
+    """Restore the Kubernetes fields selected into a retained snapshot."""
+    metadata = dict(snapshot.get("metadata", {}))
+    selected = _selected_metadata(snapshot)
     for field in ("labels", "annotations", "deletionTimestamp"):
         if selected.get(field):
             metadata[field] = selected[field]
     return {
-        "apiVersion": observation.get("apiVersion", ""),
-        "kind": observation.get("kind", ""),
+        "apiVersion": snapshot.get("apiVersion", ""),
+        "kind": snapshot.get("kind", ""),
         "metadata": metadata,
-        "spec": observation.get("spec", {}),
-        "status": observation.get("status", {}),
+        "spec": snapshot.get("spec", {}),
+        "status": snapshot.get("status", {}),
     }
 
 

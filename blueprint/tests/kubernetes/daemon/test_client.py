@@ -90,3 +90,35 @@ def test_list_for_resource_rejects_unrelated_record(mocker):
 
     with pytest.raises(ValueError, match="outside the requested resource"):
         client.list_for_resource("team-a", "other-uid")
+
+def test_find_histories_accepts_snapshots_only_payload(mocker):
+    client = KubernetesDaemonClient("http://daemon")
+    history = {
+        "namespace": "team-a",
+        "snapshots": [],
+        "placements": [],
+        "coverage": {},
+    }
+    response = mocker.Mock()
+    response.json.return_value = {"items": [history]}
+    request = mocker.patch.object(client.session, "get", return_value=response)
+
+    assert client.find_histories("team-a", "Job", name="trainer") == [history]
+    request.assert_called_once_with(
+        "http://daemon/v1/history",
+        params={"namespace": "team-a", "kind": "Job", "name": "trainer"},
+        timeout=10,
+    )
+    response.raise_for_status.assert_called_once_with()
+
+
+def test_find_histories_rejects_observations_only_payload(mocker):
+    client = KubernetesDaemonClient("http://daemon")
+    response = mocker.Mock()
+    response.json.return_value = {
+        "items": [{"namespace": "team-a", "observations": []}]
+    }
+    mocker.patch.object(client.session, "get", return_value=response)
+
+    with pytest.raises(ValueError, match="snapshots list"):
+        client.find_histories("team-a", "Job")

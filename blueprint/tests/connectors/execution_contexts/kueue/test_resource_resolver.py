@@ -7,9 +7,9 @@ from attribution_blueprint.connectors.execution_contexts.kueue.resource_resolver
     KueueResourceResolver,
 )
 from attribution_blueprint.kubernetes.daemon.models import (
-    ObservationEventType,
     ResourceIdentity,
-    ResourceObservation,
+    ResourceSnapshot,
+    SnapshotEventType,
 )
 from attribution_blueprint.kubernetes.daemon.resolvers import UnsupportedOwner
 
@@ -37,9 +37,9 @@ def _retained_workload(
     uid: str,
     *,
     owner_uid: str = "job-uid",
-    event_type: ObservationEventType = "DELETED",
-) -> ResourceObservation:
-    return ResourceObservation(
+    event_type: SnapshotEventType = "DELETED",
+) -> ResourceSnapshot:
+    return ResourceSnapshot(
         cluster_id="cluster-a",
         api_version="kueue.x-k8s.io/v1beta1",
         kind="Workload",
@@ -56,25 +56,25 @@ def _retained_workload(
 
 
 class _Journal:
-    def __init__(self, observations):
-        self.observations = observations
+    def __init__(self, snapshots):
+        self.snapshots = snapshots
 
-    def list_latest_observations_for_kind(self, cluster_id, namespace, kind):
+    def list_latest_snapshots_for_kind(self, cluster_id, namespace, kind):
         assert (cluster_id, namespace, kind) == (
             "cluster-a",
             "team-a",
             "Workload",
         )
-        return self.observations
+        return self.snapshots
 
 
 def test_resolves_deleted_workload_from_uid_verified_journal(mocker):
     custom_api = mocker.Mock()
-    observation = _retained_workload("original-workload-uid")
+    snapshot = _retained_workload("original-workload-uid")
 
     result = KueueResourceResolver(
         custom_api,
-        journal=_Journal([observation]),
+        journal=_Journal([snapshot]),
         cluster_id="cluster-a",
     ).resolve(_pod(), _owner())
 
