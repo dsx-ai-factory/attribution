@@ -13,13 +13,13 @@ writes Pod identity, node, owner references, and observed `NodeLost`,
 Within configured capacity, it retries enabled scheduler associations and
 enrichment writes without requiring another Pod event. Required base,
 deletion, and reconciliation write failures replay from the last accepted
-watch resource version. Per-Pod enrichment is serialized, newer observations
+watch resource version. Per-Pod enrichment is serialized, newer snapshots
 reject stale writes, and successful associations remain queryable after Pod
 deletion until retention expires.
 
 ```text
 Pod, Job, and optional controller/scheduler LIST/WATCH
-  -> journal selected lifecycle transitions and owner references immediately
+  -> snapshot selected lifecycle transitions and owner references immediately
   -> derive namespace, Pod UID, and node placement
   -> resolve the Job or JobSet owner (Kubernetes-native, no scheduler required)
   -> resolve optional scheduler-specific associations (Kueue Workload, KAI
@@ -48,7 +48,7 @@ after `retentionDays`; active histories are retained. The default is 30 days.
 Cleanup runs at startup and periodically, every five minutes by default.
 
 The daemon captures placement plus `NodeLost`, PodGC `DeletionByPodGC`, and
-non-zero container exit evidence. Its lifecycle journal retains selected
+non-zero container exit evidence. Its snapshot journal retains selected
 status and attempt-identity metadata, not logs or complete resource
 specifications.
 
@@ -110,6 +110,11 @@ The PVC uses the cluster's default StorageClass unless
 `storage.sqlite.storageClassName` is set. Without either, the StatefulSet
 remains pending.
 
+The snapshot schema is version 5 and is intentionally incompatible with the
+earlier observation-named schema. Before upgrading, delete the old local
+database or PVC. The daemon rejects a legacy database with guidance to
+recreate it instead of silently serving empty history.
+
 Run the daemon on a system node outside the workload failure domain. JobSet
 watching is enabled by default. If the JobSet API is not installed, the daemon
 disables that optional watch, reports it through `/readyz`, and remains ready
@@ -170,7 +175,8 @@ The service exposes `/livez`, `/readyz`, and two namespace-scoped read
 endpoints. `/v1/placements` requires `resource_uid`, which matches a resource
 associated with a Pod by a configured integration. `/v1/history` requires a
 resource `kind`, accepts an optional `name`, and returns matching retained
-controller histories with observations, Pod placements, and watch coverage.
+controller histories with resource snapshots, Pod placements, and watch
+coverage. Each history item exposes snapshots under the `snapshots` key.
 
 ## Troubleshooting
 

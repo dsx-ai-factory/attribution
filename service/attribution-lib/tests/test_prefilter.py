@@ -164,6 +164,18 @@ class TestTomlPrefilterLoading:
         assert "debug" in result.exclude_terms
         assert "info" in result.exclude_terms
 
+    def test_keep_terms_registered_and_merged(self):
+        loader = self._load("""
+            sources = ["APPLOG"]
+            [prefilter]
+            exclude = ["INFO:megatron"]
+            keep = ["Etpt(TF):"]
+        """)
+        loader.register_pre_filter(ObservationSource.APPLOG, PreFilterSpec(keep_terms=["other"]))
+        result = loader.build().get_pre_filter(ObservationSource.APPLOG)
+        assert result.keep_terms == ["Etpt(TF):", "other"]
+        assert result.exclude_terms == ["INFO:megatron"]
+
     def test_prefilter_inherits_file_sources(self):
         loader = self._load("""
             sources = ["UFMLOG"]

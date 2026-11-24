@@ -88,6 +88,24 @@ def test_yearless_line_is_not_dated_past_a_window_end_in_another_year():
     assert dated == datetime(2025, 1, 1, 4, 0, 0, tzinfo=timezone.utc)
 
 
+def test_yearless_line_after_end_time_keeps_its_year_with_a_later_window_end():
+    """A line from after the job, read against a window that reaches past the job, keeps its year.
+
+    Dated against `end_time` alone, a health check logged four minutes after the job
+    ends is placed a year early and falls outside every window.
+    """
+    context = {"id": "1", "end_time": datetime(2026, 5, 1, 1, 0, 0, tzinfo=timezone.utc)}
+    line = "May  1 01:04:00 node-a health-check[42]: drained\n"
+
+    early = syslog_entries_from_text(line, context)
+    later = syslog_entries_from_text(line, context, window_end=datetime(2026, 5, 1, 1, 10, 0, tzinfo=timezone.utc))
+
+    assert datetime.fromtimestamp(early[0]["ts"] / 1e9, tz=timezone.utc).year == 2025
+    assert datetime.fromtimestamp(later[0]["ts"] / 1e9, tz=timezone.utc) == datetime(
+        2026, 5, 1, 1, 4, 0, tzinfo=timezone.utc
+    )
+
+
 def test_lines_without_a_parseable_timestamp_are_dropped_with_one_warning():
     warnings: list[str] = []
     sink_id = logger.add(lambda msg: warnings.append(str(msg)), level="WARNING")

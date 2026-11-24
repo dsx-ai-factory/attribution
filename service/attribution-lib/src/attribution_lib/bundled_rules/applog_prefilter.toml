@@ -72,6 +72,11 @@ exclude = [
     "DrafterBench evaluation will not be available",
     "nemo_skills.inference.generate",
 ]
+# Megatron-Core logs its straggler report through the "megatron.core.utils" logger. In Python's default
+# log format, the two report lines contain "INFO:megatron.core.utils:", which "INFO:megatron" excludes.
+keep = [
+    "Etpt(TF):",
+]
 include = [
     "CANCELLED AT",
     "error",

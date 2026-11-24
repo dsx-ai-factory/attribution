@@ -10,6 +10,13 @@ author  = "NVIDIA Attribution team"
 sources = ["APPLOG"]
 
 [[extractor]]
+name                = "MegatronStragglerBottom"
+match_re            = 'Bottom\s+(?P<count>\d+)\s+Ranks\s+with\s+lowest\s+Etpt\(TF\):\s*(?P<ranks>.*)'
+processor           = "straggler:MegatronStragglerBottom"
+derived_rules       = ["Megatron Straggler Bottom Ranks", "Megatron Straggler Score Type", "Megatron Straggler Qualifier Type"]
+derived_event_types = ["Application.MegatronStraggler.bottom"]
+
+[[extractor]]
 name                = "MegatronStragglerTop"
 match_re            = 'Top\s+(?P<count>\d+)\s+Ranks\s+with\s+highest\s+Etpt\(TF\):\s*(?P<ranks>.*)'
 processor           = "straggler:MegatronStragglerTop"
