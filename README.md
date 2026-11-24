@@ -201,7 +201,7 @@ proposal, testing, sign-off, and review process, and follow the
 * Usage questions and feature requests: [GitHub Discussions](https://github.com/dsx-ai-factory/attribution/discussions).
 * Support scope, response targets, and compatibility: [SUPPORT.md](SUPPORT.md).
 * Security vulnerabilities: use the private reporting route in [SECURITY.md](SECURITY.md).
-* Versions and release process: [RELEASE.md](RELEASE.md).
+* Versions, release branches, which release to use, and the release process: [RELEASE.md](RELEASE.md).
 
 ## License
 

@@ -280,6 +280,7 @@ class RuleLoader:
             include_terms=[*existing.include_terms, *spec.include_terms],
             exclude_terms=[*existing.exclude_terms, *spec.exclude_terms],
             callables=[*existing.callables, *spec.callables],
+            keep_terms=[*existing.keep_terms, *spec.keep_terms],
         )
 
     def register_metric_spec(self, source: ObservationSource, spec: MetricSpec) -> None:
@@ -477,6 +478,8 @@ def _apply_pre_filter(
     exclude_set: Optional[set[str]],
     include_set: Optional[set[str]],
     callables: Optional[list[PreFilterCallable]],
+    *,
+    keep_set: Optional[set[str]] = None,
 ) -> tuple[bool, list[str]]:
     """Apply pre-filter logic to a single entry.
 
@@ -504,11 +507,10 @@ def _apply_pre_filter(
     if skip:
         return True, keywords
 
-    # 2. Keyword exclude
-    if exclude_set:
-        for term in exclude_set:
-            if term in body:
-                return True, keywords
+    # 2. Keyword exclude. A keep term exempts the entry from every exclude term.
+    if exclude_set and any(term in body for term in exclude_set):
+        if not (keep_set and any(term in body for term in keep_set)):
+            return True, keywords
 
     # 3. Keyword include — collect matched terms
     if include_set:
@@ -577,6 +579,7 @@ def process_observation_source(
     pre_filter_spec = None if pre_filtered else rules_engine.pre_filters.get(source_type)
     exclude_set = set(pre_filter_spec.exclude_terms) if pre_filter_spec else None
     include_set = set(pre_filter_spec.include_terms) if pre_filter_spec else None
+    keep_set = set(pre_filter_spec.keep_terms) if pre_filter_spec else None
     pf_callables = pre_filter_spec.callables if pre_filter_spec else None
 
     processor = rules_engine.observation_processor(source_type, job_info, event_stream)
@@ -584,7 +587,9 @@ def process_observation_source(
     for entry in iter(observation_source):
         # Pre-filter phase (when not pre_filtered)
         if pre_filter_spec is not None:
-            skip, entry_keywords = _apply_pre_filter(entry, job_info, exclude_set, include_set, pf_callables)
+            skip, entry_keywords = _apply_pre_filter(
+                entry, job_info, exclude_set, include_set, pf_callables, keep_set=keep_set
+            )
             raw_keywords.update(entry_keywords)
             if skip:
                 dropped[DropReason.PRE_FILTERED] += 1

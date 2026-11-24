@@ -40,21 +40,31 @@ _MONTH_ABBREVS = {
 }
 
 
-def syslog_entries_from_text(text: str, context: ExecutionContext, node: Optional[str] = None) -> list[TimeseriesEntry]:
+def syslog_entries_from_text(
+    text: str,
+    context: ExecutionContext,
+    node: Optional[str] = None,
+    window_end: Optional[datetime] = None,
+) -> list[TimeseriesEntry]:
     """One `entry_timeseries` entry per dated, non-empty syslog line.
 
     Args:
         text: Raw syslog text, one record per line.
-        context: Execution context. `end_time` supplies the year for yearless
-            lines; `timezone`, when set, is the zone of offsetless timestamps.
+        context: Execution context. `timezone`, when set, is the zone of
+            offsetless timestamps.
         node: Hostname the whole text belongs to, declared on every entry. When
             None the entry declares no resources and the service reads the
             hostname out of the line.
+        window_end: Latest time a line can carry; it supplies the year for
+            yearless lines. Defaults to `end_time`. A source read past the end
+            of the job, such as a health check that runs after it, must pass its
+            own window end, or its yearless lines are dated a year early.
 
     Raises:
         ZoneInfoNotFoundError: If `context["timezone"]` is not a known IANA key.
     """
-    window_end = context["end_time"]
+    if window_end is None:
+        window_end = context["end_time"]
     # Offsetless lines are host-local, and the window may be in another zone.
     line_tz = _line_timezone(context.get("timezone"), window_end)
     entries: list[TimeseriesEntry] = []
