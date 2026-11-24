@@ -17,14 +17,40 @@ from attribution_blueprint.connectors.execution_contexts.kafka import (
 )
 from attribution_blueprint.connectors.execution_contexts.kafka.connector import KafkaConsumerError
 from attribution_blueprint.exceptions import MCAError
+from attribution_blueprint.orchestrator import _context_with_workload_gpu_defaults
 
 FIXTURE = Path(__file__).parents[3] / "fixtures" / "kafka_completion_events.json"
 EVENT_TYPE = "com.example.job.completed.v1"
+EVENT_TYPE_V2 = "com.example.job.completed.v2"
 TOPIC = "job-events"
+ALLOCATION = {"node": "gpu-n01", "cluster": "cluster-b", "gpus": 8, "replicas": [{"name": "job-a1-worker-0"}]}
 
 
 def _events() -> list[dict]:
     return json.loads(FIXTURE.read_text())
+
+
+def _allocations_event() -> dict:
+    """Return the first fixture event with its placement sent as per-node allocations."""
+    event = _events()[0]
+    event["type"] = EVENT_TYPE_V2
+    for key in ("nodes", "gpu_count", "pod_names", "pod_nodes"):
+        del event["data"][key]
+    event["data"]["allocations"] = [
+        {
+            "node": "cpu-n07",
+            "cluster": "cluster-a",
+            "gpus": 0,
+            "replicas": [{"name": "job-a1-head-0", "ip": "192.0.2.10"}],
+        },
+        {**ALLOCATION, "replicas": [{"name": "job-a1-worker-0", "ip": "2001:db8::1"}, {"name": "job-a1-worker-1"}]},
+    ]
+    return event
+
+
+def _with_allocation(**fields):
+    """Replace the event's placement with one allocation that differs from a valid one by `fields`."""
+    return lambda e: e["data"].update(allocations=[{**ALLOCATION, **fields}])
 
 
 class TP:
@@ -410,6 +436,13 @@ def test_discover_accepts_every_type_when_unfiltered():
         ),
         lambda e: e["data"].update(gpu_count=-1),
         lambda e: e["data"].update(pod_nodes=["not", "a", "map"]),
+        lambda e: e["data"].update(allocations=[]),
+        lambda e: e["data"].update(allocations=["gpu-n01"]),
+        _with_allocation(node=""),
+        _with_allocation(cluster=None),
+        _with_allocation(gpus=True),
+        _with_allocation(replicas="job-a1-worker-0"),
+        _with_allocation(replicas=[{"ip": "192.0.2.10"}]),
         lambda e: e.update(specversion="0.3"),
         lambda e: e.pop("id"),
         lambda e: e.update(data="not-an-object"),
@@ -987,3 +1020,73 @@ def test_uncommitted_resend_cannot_supersede_a_committed_event():
     assert eca.last_discovery_stats["superseded"] == 0
     assert eca.last_discovery_stats["redeliveries"] == 0
     assert consumer.commits == [{0: 1}, {1: 1}]
+
+
+def test_flat_and_allocation_events_share_one_consumer():
+    flat, allocated = _events()[1], _allocations_event()
+    eca, _ = _make_eca(_structured([flat, allocated]), event_types=[EVENT_TYPE, EVENT_TYPE_V2])
+
+    contexts = eca.discover()
+
+    assert [ctx["id"] for ctx in contexts] == ["job-b7", "job-a1"]
+    assert "allocations" not in contexts[0]
+    ctx = contexts[1]
+    assert ctx["nodes"] == ["cpu-n07", "gpu-n01"]
+    assert ctx["gpu_count"] == 8
+    assert ctx["pod_names"] == ["job-a1-head-0", "job-a1-worker-0", "job-a1-worker-1"]
+    assert ctx["pod_nodes"] == {"job-a1-head-0": "cpu-n07", "job-a1-worker-0": "gpu-n01", "job-a1-worker-1": "gpu-n01"}
+    assert "cluster" not in ctx
+    assert ctx["namespace"] == "example-team"
+    assert ctx["allocations"] == allocated["data"]["allocations"]
+
+
+def test_allocations_replace_flat_placement_fields():
+    event = _events()[0]
+    event["data"]["cluster"] = "cluster-z"
+    event["data"]["allocations"] = [{"node": "cpu-n07", "cluster": "cluster-a", "gpus": 0, "replicas": None}]
+    eca, _ = _make_eca(_structured([event]))
+
+    [ctx] = eca.discover()
+
+    assert ctx["nodes"] == ["cpu-n07"]
+    assert ctx["cluster"] == "cluster-a"
+    assert ctx["allocations"][0]["replicas"] == []
+    assert "pod_names" not in ctx
+    assert "pod_nodes" not in ctx
+    # Set even when 0, so outputs do not estimate it from gpus_per_node.
+    assert _context_with_workload_gpu_defaults(ctx, 8)["gpu_count"] == 0
+
+
+@pytest.mark.parametrize("ip, expected", [("2001:DB8:0:0::1", "2001:db8::1"), ("", None), (None, None)])
+def test_replica_ip_is_canonical_and_empty_means_unknown(ip, expected):
+    event = _allocations_event()
+    event["data"]["allocations"][0]["replicas"][0]["ip"] = ip
+    eca, _ = _make_eca(_structured([event]), event_types=[EVENT_TYPE_V2])
+
+    [ctx] = eca.discover()
+
+    assert ctx["allocations"][0]["replicas"][0].get("ip") == expected
+
+
+def test_invalid_replica_ips_are_dropped_with_one_warning(monkeypatch):
+    warnings = []
+    monkeypatch.setattr(
+        "attribution_blueprint.connectors.execution_contexts.kafka.events.logger.warning", warnings.append
+    )
+    event = _allocations_event()
+    event["data"]["allocations"][0]["replicas"][0]["ip"] = "192.0.2.300"
+    event["data"]["allocations"][1]["replicas"][1]["ip"] = 3_221_225_994
+    eca, _ = _make_eca(_structured([event]), event_types=[EVENT_TYPE_V2])
+
+    [ctx] = eca.discover()
+
+    assert [replica for item in ctx["allocations"] for replica in item["replicas"]] == [
+        {"name": "job-a1-head-0"},
+        {"name": "job-a1-worker-0", "ip": "2001:db8::1"},
+        {"name": "job-a1-worker-1"},
+    ]
+    assert ctx["pod_names"] == ["job-a1-head-0", "job-a1-worker-0", "job-a1-worker-1"]
+    assert len(warnings) == 1
+    assert "dropped 2 invalid replica IP(s)" in warnings[0]
+    assert event["id"] in warnings[0]
+    assert "job-a1" in warnings[0]

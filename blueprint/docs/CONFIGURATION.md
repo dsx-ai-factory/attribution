@@ -570,8 +570,8 @@ batch incomplete without discarding committed contexts or hiding a read error.
 Unexpected exceptions propagate; they are not classified as invalid events.
 
 The event `data` object uses ExecutionContext field names: `id`, `start_time`,
-`end_time` (with UTC offset) and a non-empty `nodes` list are required;
-`job_id`, `attempt_id`, `scheduler`, `state`, `name`, `user_name`,
+`end_time` (with UTC offset) and a non-empty `nodes` (or `allocations`) list
+are required; `job_id`, `attempt_id`, `scheduler`, `state`, `name`, `user_name`,
 `workload_framework`, `timezone`, `time_limit`, `gpu_count`, `cancelled_by`,
 `failed_nodes`, `failed_node`, `std_out`, `std_err`, `namespace`, `pod_names`,
 `pod_nodes`, and `cluster` are optional. `failed_node` is used when `failed_nodes`
@@ -594,6 +594,30 @@ is attributed. Events in earlier runs are not deduplicated. The input preserves
 the winning CloudEvent ID and source as `event_id` and `event_source` for
 correlation by the output connector. CloudEvent `source` is required and must
 be a non-empty string without whitespace.
+
+Instead of the flat `nodes`, `gpu_count`, `cluster`, `pod_names`, and
+`pod_nodes` fields, `data` can describe placement as a non-empty `allocations`
+list with one object per node:
+
+```json
+"allocations": [
+  {"node": "cpu-n07", "cluster": "cluster-a", "gpus": 0,
+   "replicas": [{"name": "job-1234-head-0", "ip": "192.0.2.10"}]},
+  {"node": "gpu-n01", "cluster": "cluster-b", "gpus": 8,
+   "replicas": [{"name": "job-1234-worker-0", "ip": "2001:db8::1"}]}
+]
+```
+
+`node`, `cluster`, and each replica `name` are required non-empty strings, and
+`gpus` is a required non-negative integer. `replicas` and `ip` are optional. A
+valid `ip` (IPv4 or IPv6) is stored in canonical form; an invalid one is dropped
+from its replica with a warning, and the event is still accepted. A non-null
+`allocations` selects this shape whatever the CloudEvent type, so `event_types`
+can list an old and a new type during a producer migration. The adapter derives
+`nodes`, `gpu_count` (the sum of `gpus`, set even when 0), `pod_names`,
+`pod_nodes`, and `cluster` (only when every allocation names the same cluster)
+from the list, replacing any of those fields sent alongside it, and keeps the
+list on the context as `allocations`.
 
 Deduplication runs after offset commits, on the successfully committed contexts.
 Within a partition, latest means highest offset. Across partitions, the last
@@ -1216,7 +1240,8 @@ workload context; adjust its nodes and time window to match your data.
 The VictoriaLogs and PromQL connectors accept `cluster_from_context`. It is off
 by default because only some execution-context adapters set `cluster`, and the
 value must equal the field or label value in your telemetry. The Kafka adapter
-copies `data.cluster` unchanged, and a static `contexts_path` file passes
+copies `data.cluster` unchanged or, for per-node `allocations`, the cluster they
+all share (none when they span clusters). A static `contexts_path` file passes
 through any `cluster` key. The Slurm, Kueue, and KAI adapters do not set it, so
 their contexts always use the configured value. A context `cluster` that
 contains a quote, backslash, or control character is rejected: the connector
