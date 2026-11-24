@@ -160,13 +160,19 @@ If `ATTRIBUTION_DB` already exists, the command appends a new attribution run fo
 
 Open `http://127.0.0.1:8080`, or the port you set in `ATTRIBUTION_WEB_PORT`.
 
-To run the web UI from a source checkout without Docker, use [blueprint/scripts/webui.sh](blueprint/scripts/webui.sh). It builds the React assets and serves them from the FastAPI backend against a SQLite database. Pass your own database and port:
+To run the web UI from a source checkout without Docker, use [blueprint/scripts/webui.sh](blueprint/scripts/webui.sh). It builds the React assets and serves them from the FastAPI backend against a SQLite database. Pass your own database and port. If the quick-start container is still running, it already uses `$ATTRIBUTION_WEB_PORT`. Stop the container first, or pass a different `--port`:
 
 ```None
 blueprint/scripts/webui.sh --db "$ATTRIBUTION_DB" --port "$ATTRIBUTION_WEB_PORT"
 ```
 
 Without `--db`, the helper seeds and serves a demo database. Run it with `--help` for all options, and see [Web UI Flags](blueprint/docs/CONFIGURATION.md#web-ui-flags) for the underlying `nvidia-attribution-blueprint-web` command.
+
+The build step needs pnpm and Node.js 20.19 or later within version 20, 22.13 or later within version 22, or 24 or later. Git does not track the built assets in `blueprint/src/attribution_blueprint/webui/static/`. On a host without Node.js, build the assets one time on a different host and copy the `static/` directory to the same path. Build the assets from the same Git revision as the server, and build and copy them again each time you update the checkout. Then serve the assets with `--no-build`:
+
+```None
+blueprint/scripts/webui.sh --no-build --db "$ATTRIBUTION_DB" --port "$ATTRIBUTION_WEB_PORT"
+```
 
 ## Where to go for more
 
