@@ -29,7 +29,7 @@ from attribution_blueprint.kubernetes.daemon.models import (
     OwnerReference,
     PlacementRecord,
     ResourceIdentity,
-    ResourceObservation,
+    ResourceSnapshot,
 )
 from attribution_blueprint.kubernetes.daemon.server import serve_api
 from attribution_blueprint.kubernetes.daemon.sqlite_store import SQLitePlacementStore
@@ -102,7 +102,7 @@ def _owner(kind: str, name: str, uid: str) -> OwnerReference:
     )
 
 
-def _observation(
+def _snapshot(
     *,
     kind: str,
     name: str,
@@ -113,9 +113,9 @@ def _observation(
     status: dict | None = None,
     restart_attempt: str | None = None,
     event_type: str = "MODIFIED",
-) -> ResourceObservation:
+) -> ResourceSnapshot:
     selected_metadata = {"labels": {_RESTART_LABEL: restart_attempt}} if restart_attempt is not None else None
-    return ResourceObservation(
+    return ResourceSnapshot(
         cluster_id="cluster-a",
         api_version={
             "JobSet": "jobset.x-k8s.io/v1alpha2",
@@ -172,7 +172,7 @@ def _condition(
     return condition
 
 
-def _workload_history_observation(
+def _workload_history_snapshot(
     resource_version: str,
     observed_at: str,
     conditions: list[dict],
@@ -195,10 +195,10 @@ def _workload_history_observation(
     }
 
 
-def _capture(store: SQLitePlacementStore, observation: ResourceObservation) -> None:
-    store.capture_observation(
-        observation,
-        source_name=f"{observation.kind.lower()}s",
+def _capture(store: SQLitePlacementStore, snapshot: ResourceSnapshot) -> None:
+    store.capture_snapshot(
+        snapshot,
+        source_name=f"{snapshot.kind.lower()}s",
         placement=None,
         advance_checkpoint=False,
     )
@@ -208,15 +208,15 @@ def _seed_jobset_retry_history(store: SQLitePlacementStore) -> None:
     jobset_owner = _owner("JobSet", "training", "jobset-uid")
     job0_owner = _owner("Job", "training-workers-0", "job-uid-0")
     job1_owner = _owner("Job", "training-workers-1", "job-uid-1")
-    observations = [
-        _observation(
+    snapshots = [
+        _snapshot(
             kind="JobSet",
             name="training",
             uid="jobset-uid",
             resource_version="1",
             observed_at="2026-10-14T09:59:00Z",
         ),
-        _observation(
+        _snapshot(
             kind="Workload",
             name="training-workload",
             uid="workload-uid",
@@ -225,7 +225,7 @@ def _seed_jobset_retry_history(store: SQLitePlacementStore) -> None:
             owners=(jobset_owner,),
             status={"conditions": [_condition("Admitted", "2026-10-14T10:00:00Z")]},
         ),
-        _observation(
+        _snapshot(
             kind="Job",
             name="training-workers-0",
             uid="job-uid-0",
@@ -244,7 +244,7 @@ def _seed_jobset_retry_history(store: SQLitePlacementStore) -> None:
                 ],
             },
         ),
-        _observation(
+        _snapshot(
             kind="Pod",
             name="training-workers-0-pod",
             uid="pod-uid-0",
@@ -254,7 +254,7 @@ def _seed_jobset_retry_history(store: SQLitePlacementStore) -> None:
             restart_attempt="0",
             status={"startTime": "2026-10-14T10:01:00Z"},
         ),
-        _observation(
+        _snapshot(
             kind="JobSet",
             name="training",
             uid="jobset-uid",
@@ -271,7 +271,7 @@ def _seed_jobset_retry_history(store: SQLitePlacementStore) -> None:
                 ],
             },
         ),
-        _observation(
+        _snapshot(
             kind="Job",
             name="training-workers-1",
             uid="job-uid-1",
@@ -284,7 +284,7 @@ def _seed_jobset_retry_history(store: SQLitePlacementStore) -> None:
                 "conditions": [_condition("Complete", "2026-10-14T11:00:00Z")],
             },
         ),
-        _observation(
+        _snapshot(
             kind="Pod",
             name="training-workers-1-pod",
             uid="pod-uid-1",
@@ -294,7 +294,7 @@ def _seed_jobset_retry_history(store: SQLitePlacementStore) -> None:
             restart_attempt="1",
             status={"startTime": "2026-10-14T10:32:00Z"},
         ),
-        _observation(
+        _snapshot(
             kind="Workload",
             name="training-workload",
             uid="workload-uid",
@@ -313,8 +313,8 @@ def _seed_jobset_retry_history(store: SQLitePlacementStore) -> None:
             event_type="DELETED",
         ),
     ]
-    for observation in observations:
-        _capture(store, observation)
+    for snapshot in snapshots:
+        _capture(store, snapshot)
 
     workload = ResourceIdentity(
         "kueue.x-k8s.io/v1beta1",
@@ -406,7 +406,7 @@ def test_retained_jobset_retries_flow_as_distinct_execution_contexts(
             name="training-workload",
         )[0]
         late_history = deepcopy(history)
-        late_history["observations"].reverse()
+        late_history["snapshots"].reverse()
         late_reconstruction = attempts_from_workload_history(
             late_history,
             now=datetime(2026, 10, 14, 12, 0, tzinfo=timezone.utc),
@@ -491,13 +491,13 @@ def test_retained_jobset_retries_flow_as_distinct_execution_contexts(
 def test_requeued_workload_preserves_preemption_while_waiting_for_readmission():
     history = {
         "namespace": "team-a",
-        "observations": [
-            _workload_history_observation(
+        "snapshots": [
+            _workload_history_snapshot(
                 "1",
                 "2026-10-14T10:00:00Z",
                 [_condition("Admitted", "2026-10-14T10:00:00Z")],
             ),
-            _workload_history_observation(
+            _workload_history_snapshot(
                 "2",
                 "2026-10-14T10:31:00Z",
                 [
@@ -541,14 +541,14 @@ def test_scheduler_readmission_creates_a_new_attempt():
 
     history = {
         "namespace": "team-a",
-        "observations": [
-            _workload_history_observation(
+        "snapshots": [
+            _workload_history_snapshot(
                 "1",
                 "2026-10-14T10:00:00Z",
                 [_condition("Admitted", "2026-10-14T10:00:00Z")],
                 owner_references=[owner_reference],
             ),
-            _workload_history_observation(
+            _workload_history_snapshot(
                 "2",
                 "2026-10-14T10:30:00Z",
                 [
@@ -561,13 +561,13 @@ def test_scheduler_readmission_creates_a_new_attempt():
                 ],
                 owner_references=[owner_reference],
             ),
-            _workload_history_observation(
+            _workload_history_snapshot(
                 "3",
                 "2026-10-14T11:00:00Z",
                 [_condition("Admitted", "2026-10-14T11:00:00Z")],
                 owner_references=[owner_reference],
             ),
-            _workload_history_observation(
+            _workload_history_snapshot(
                 "4",
                 "2026-10-14T12:00:00Z",
                 [
@@ -693,8 +693,8 @@ def test_initial_jobset_generation_start_is_anchored_conservatively(
     expected_start,
 ):
     history = {
-        "observations": [
-            _workload_history_observation(
+        "snapshots": [
+            _workload_history_snapshot(
                 "1",
                 "2026-10-14T10:00:00Z",
                 [_condition("Admitted", "2026-10-14T10:00:00Z")],
@@ -730,7 +730,7 @@ def test_jobset_restart_generation_carries_across_readmission():
         "controller": True,
     }
 
-    def workload_observation(
+    def workload_snapshot(
         resource_version: str,
         observed_at: str,
         conditions: list[dict],
@@ -749,8 +749,8 @@ def test_jobset_restart_generation_carries_across_readmission():
         }
 
     history = {
-        "observations": [
-            workload_observation(
+        "snapshots": [
+            workload_snapshot(
                 "1",
                 "2026-10-14T10:00:00Z",
                 [_condition("Admitted", "2026-10-14T10:00:00Z")],
@@ -791,7 +791,7 @@ def test_jobset_restart_generation_carries_across_readmission():
                 "observedAt": "2026-10-14T10:31:00Z",
                 "status": {"startTime": "2026-10-14T10:31:00Z"},
             },
-            workload_observation(
+            workload_snapshot(
                 "2",
                 "2026-10-14T11:00:00Z",
                 [_condition("Admitted", "2026-10-14T11:00:00Z")],
@@ -842,7 +842,7 @@ def test_recreated_workloads_bound_pods_and_owner_terminal_by_incarnation():
         "controller": True,
     }
     history = {
-        "observations": [
+        "snapshots": [
             {
                 "kind": "Workload",
                 "metadata": {
@@ -948,7 +948,7 @@ def test_recreated_workloads_bound_pods_and_owner_terminal_by_incarnation():
 
 def test_deletion_request_timestamp_does_not_reuse_generic_source_timestamp():
     history = {
-        "observations": [
+        "snapshots": [
             {
                 "kind": "Workload",
                 "metadata": {
@@ -998,7 +998,7 @@ def test_deletion_request_timestamp_does_not_reuse_generic_source_timestamp():
 def test_replacement_without_source_boundary_preserves_uncertainty():
     now = datetime(2026, 10, 14, 12, 0, tzinfo=timezone.utc)
     history = {
-        "observations": [
+        "snapshots": [
             {
                 "kind": "Workload",
                 "metadata": {
@@ -1061,7 +1061,7 @@ def test_replacement_without_source_boundary_preserves_uncertainty():
 
 def test_deadline_exceeded_outranks_generic_workload_failure():
     history = {
-        "observations": [
+        "snapshots": [
             {
                 "kind": "Workload",
                 "metadata": {
@@ -1122,7 +1122,7 @@ def test_deadline_exceeded_outranks_generic_workload_failure():
 
 def test_child_job_completion_does_not_finish_jobset_attempt():
     history = {
-        "observations": [
+        "snapshots": [
             {
                 "kind": "Workload",
                 "metadata": {
@@ -1187,7 +1187,7 @@ def test_child_job_completion_does_not_finish_jobset_attempt():
 
 def test_never_admitted_history_does_not_invent_running_attempt():
     history = {
-        "observations": [
+        "snapshots": [
             {
                 "kind": "Workload",
                 "metadata": {
@@ -1310,7 +1310,7 @@ def test_live_then_retained_discovery_writes_one_execution_context(tmp_path):
     assert live is not None
 
     history = {
-        "observations": [
+        "snapshots": [
             {
                 "kind": "Workload",
                 "metadata": workload["metadata"],
@@ -1482,7 +1482,7 @@ def test_retained_node_loss_outranks_exit_code_node():
 @pytest.mark.parametrize("retained", [False, True], ids=["live", "retained"])
 def test_node_loss_without_a_resolvable_node_name_reports_node_fail(retained):
     """Regression: a verified member Pod can report NodeLost with no
-    resolvable `spec.nodeName` (a relevant case for retained observations
+    resolvable `spec.nodeName` (a relevant case for retained snapshots
     that selected the failure reason but not the node binding). That must
     still produce NODE_FAIL, not RUNNING — the state check cannot depend
     on a node name being available."""
