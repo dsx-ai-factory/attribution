@@ -241,18 +241,43 @@ class TestLogIgnoredNodeLine:
         assert "rank 200 not found in job info" in call_args
         assert "rank 200 cannot be processed (job has 2 nodes with ranks, max rank: 15)" in call_args
 
-    def test_invalid_rank_error_message_ignores_rankless_nodes(self, simple_job_factory, mock_entry):
-        """A node with no ranks does not change the node count or max rank in the message."""
-        job_info = simple_job_factory(
-            node_to_ranks={"coordinator": [], "worker-a": list(range(8)), "worker-b": list(range(8, 16))}
-        )
+    @pytest.mark.parametrize(
+        ("node_to_ranks", "expected_detail"),
+        [
+            pytest.param(
+                {"coordinator": [], "worker-a": list(range(8)), "worker-b": list(range(8, 16))},
+                "rank 200 cannot be processed (job has 2 nodes with ranks, max rank: 15)",
+                id="rankless-coordinator",
+            ),
+            pytest.param(
+                {"worker-a": [0, 2], "worker-b": [10, 12]},
+                "rank 200 cannot be processed (job has 2 nodes with ranks, max rank: 12)",
+                id="sparse-ranks",
+            ),
+            pytest.param(
+                {"node-a": [], "node-b": []},
+                "rank 200 cannot be processed (job has 0 nodes with ranks, max rank: -1)",
+                id="no-node-ranked",
+            ),
+            pytest.param(
+                {},
+                "rank 200 cannot be processed (job has 0 nodes with ranks, max rank: -1)",
+                id="empty-mapping",
+            ),
+        ],
+    )
+    def test_invalid_rank_error_message_reports_ranked_nodes_and_max_rank(
+        self, simple_job_factory, mock_entry, node_to_ranks, expected_detail
+    ):
+        """The message counts only nodes that run ranks and gives the highest mapped rank."""
+        job_info = simple_job_factory(node_to_ranks=node_to_ranks)
         exception = InvalidRankError(200)
 
         with patch("attribution_lib.logline_filtering.logger.logger") as mock_logger:
             log_ignored_node_line(exception, mock_entry, job_info, Source.APPLOG)
 
         call_args = mock_logger.debug.call_args[0][0]
-        assert "rank 200 cannot be processed (job has 2 nodes with ranks, max rank: 15)" in call_args
+        assert expected_detail in call_args
 
     def test_unknown_node_error_message(self, logline_jobinfo, mock_entry):
         """Test specific message for UnknownNodeError uses node from exception."""

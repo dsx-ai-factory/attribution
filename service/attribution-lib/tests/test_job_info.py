@@ -290,6 +290,7 @@ class TestNodeToRanksBuilder:
             pytest.param(
                 {"coordinator": [], "node-a": [0, 1, 2, 3], "node-b": [4, 5, 6, 7]}, 7, 2, id="rankless-coordinator"
             ),
+            pytest.param({"node-a": [0, 2], "node-b": [10, 12]}, 12, 2, id="sparse-ranks"),
             pytest.param({"node-a": [], "node-b": []}, -1, 0, id="no-node-ranked"),
             pytest.param({}, -1, 0, id="empty-mapping"),
         ],
