@@ -229,12 +229,60 @@ bash .ci/run-tests.sh frontend
 | `attribution-lib`, `blueprint` | uv and Python 3.11+; use the pinned runtime above to match CI |
 | `service-app`, `service-app-client-drift` | uv and the pinned Service Python runtime |
 | `license-compliance`, `ci-tests` | uv and Python; use the pinned runtime above to match CI |
+| `symptom-docs` | uv, Python 3.11+, Git history and `origin/main`; checks real rule/catalog mappings |
 | `frontend` | Node.js 22 and pnpm 10.11.0; no host Python or Docker required |
 | `end-to-end` | uv, host Python, Git, `curl`, and a running Docker daemon; use the pinned runtime above |
 
 Python-only suites do not require Docker or frontend tools. A focused suite
 does not replace the full gate before review; state which checks you ran and
 which you could not run in the pull request.
+
+### Check symptom documentation
+
+Run `bash .ci/run-tests.sh symptom-docs` when changing symptoms or the failure
+catalog. The check loads the real registry and verifies document IDs, exact
+names/aliases for all documentable declarations in the loaded rules. It compares
+against the merge base with `origin/main`, so existing unrelated gaps do not block
+a change.
+Set `SYMPTOM_DOC_BASE` to a full commit SHA to select another baseline. Removing
+a document or alias that previously resolved is a regression too.
+Rule documentation mappings must use canonical catalog IDs. A documentation-site
+redirect alone does not resolve a verdict's catalog ID in the UI.
+
+Changing a symptom's outcome, name or document mapping rechecks its coverage,
+even if the previous declaration had a grandfathered gap. The baseline is
+evaluated with the same checker as the candidate. Specific runtime mapping
+examples belong in attribution-lib tests, so the coverage checker does not
+require particular rules to be loaded. A green comparison means no new coverage
+gaps; it does not mean the baseline has complete documentation.
+
+CI shows `Tests / Documentation coverage` on repository branch pushes. It runs validation
+when the library, catalog, checker, or its CI configuration changes.
+Unrelated changes report a successful skip, without installing dependencies or
+running validation. Manual workflow runs always run validation. Fork PRs need
+the existing repository branch/mirror process to run these self-hosted jobs.
+The check reports missing coverage as warning annotations and a summary with the
+affected symptoms and document IDs. It is advisory: coverage warnings do not
+fail the job or block merging. Ask a maintainer to coordinate a reviewed update
+if you cannot provide the documentation yourself. Operational errors still fail
+visibly and are not a clean coverage result. No Slack access is required.
+Local runs remain strict by default; set `SYMPTOM_DOC_ADVISORY=true` to reproduce
+the advisory CI behavior. New pushes rerun the comparison for the new commit.
+
+On a push to `main`, CI compares against the previous push commit. A manual run
+on `main` compares it with itself: it validates the snapshots and runs the tests,
+but cannot detect a commit-to-commit regression. Use `SYMPTOM_DOC_BASE` locally
+for a specific comparison. Rebase very old branches if their baseline predates
+the validation helpers; a baseline that cannot load is an error, not a pass.
+
+Fix new gaps in `blueprint/src/attribution_blueprint/data/failures.yml` or the
+rule's documentation mapping. Do not add an unrelated alias just to pass CI.
+The check verifies coverage in the failure catalog, not the technical accuracy or
+publication approval of guidance. Human review is still required.
+Symptom metadata and results are saved under `.symptom-doc-check/` and attached
+to the workflow run. The branch controls the checker and its output; these
+artifacts are diagnostic data, not an approval record. Configuring this job as
+a required merge check is a separate repository setting.
 
 ## Install the pre-commit hook
 
