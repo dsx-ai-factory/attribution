@@ -30,6 +30,7 @@ from test_support.helpers import (
     AttributionTestResult,
     UnknownAttr,
     create_simple_job_info,
+    interesting_nodes,
     line_entries,
     make_applog_entry,
     make_node_to_ranks,
@@ -1698,3 +1699,58 @@ class TestNCCLLateArrival:
         node_attr = result.get_node_attributions()
 
         match_interesting(node_attr, "node-003", "NCCL Late Arrival", "NCCLLateArrivalNodes")
+
+    @pytest.mark.parametrize(
+        "node_to_ranks",
+        [
+            pytest.param(
+                {"worker-a": list(range(8)), "worker-b": list(range(8, 16))},
+                id="gpu-workers-only",
+            ),
+            pytest.param(
+                {"coordinator": [], "worker-a": list(range(8)), "worker-b": list(range(8, 16))},
+                id="with-rankless-coordinator",
+            ),
+        ],
+    )
+    def test_nccl_late_arrival_blames_straggler_when_job_has_rankless_node(self, request, app_tst_bldr, node_to_ranks):
+        """A node that runs no ranks, such as a Ray head node, does not change which node is late."""
+        job_info = create_simple_job_info(request=request, node_to_ranks=node_to_ranks)
+        # Rank 11 on worker-b is stuck, so every other rank logs a watchdog timeout.
+        watchdog_lines = [
+            f"{r}: [rank{r}]:[E222 18:24:56.341356226 ProcessGroupNCCL.cpp:697] [Rank {r}] "
+            "Watchdog caught collective operation timeout: WorkNCCL(SeqNum=506, OpType=ALLREDUCE, "
+            "NumelIn=1, NumelOut=1, Timeout(ms)=600000) ran for 600087 milliseconds before timing out."
+            for r in range(16)
+            if r != 11
+        ]
+
+        result = app_tst_bldr(job_info, watchdog_lines)
+        node_attr = result.get_node_attributions()
+
+        match_interesting(node_attr, "worker-b", "NCCL Late Arrival", "NCCLLateArrivalNodes")
+
+    def test_nccl_late_arrival_reporting_limit_ignores_rankless_nodes(self, request, app_tst_bldr):
+        """The limit on late nodes counts only nodes that run ranks."""
+        node_to_ranks = {
+            "worker-a": list(range(8)),
+            "worker-b": list(range(8, 16)),
+            "worker-c": list(range(16, 24)),
+            **{f"rankless-{i:03d}": [] for i in range(197)},
+        }
+        job_info = create_simple_job_info(request=request, node_to_ranks=node_to_ranks)
+        # Rank 3 on worker-a and rank 11 on worker-b are stuck, so every other rank logs a watchdog timeout.
+        watchdog_lines = [
+            f"{r}: [rank{r}]:[E222 18:24:56.341356226 ProcessGroupNCCL.cpp:697] [Rank {r}] "
+            "Watchdog caught collective operation timeout: WorkNCCL(SeqNum=506, OpType=ALLREDUCE, "
+            "NumelIn=1, NumelOut=1, Timeout(ms)=600000) ran for 600087 milliseconds before timing out."
+            for r in range(24)
+            if r not in (3, 11)
+        ]
+
+        result = app_tst_bldr(job_info, watchdog_lines)
+        node_attr = result.get_node_attributions()
+
+        # The watchdog lines were parsed, so no blamed node means the limit held.
+        assert len(NcclWatchdogParseState.collect(result.event_stream)) == 1
+        assert interesting_nodes(node_attr, "NCCL Late Arrival", "NCCLLateArrivalNodes") == []
