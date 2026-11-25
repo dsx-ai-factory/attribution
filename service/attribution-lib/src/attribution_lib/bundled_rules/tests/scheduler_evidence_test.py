@@ -3,6 +3,8 @@
 
 """Attribution of jobs whose scheduler facts arrive in a SCHEDULER observation."""
 
+import itertools
+
 import pytest
 from test_support.helpers import make_applog_entry, make_syslog_entry
 
@@ -73,14 +75,17 @@ def attribute(event_manager, timezone, request):
     Args:
         event_manager: Event manager with the bundled rules.
         timezone: Timezone of the observations.
-        request: Test request, which names the event stream.
+        request: Test request, which names the event streams.
 
     Returns:
         Function that ingests the entries of each source and returns the attribution result.
     """
 
+    calls = itertools.count()
+
     def _attribute(job, **entries_by_source):
-        attributor = Attributor.new(event_manager.create_stream(request.node.name), job)
+        stream = event_manager.create_stream(f"{request.node.name}-{next(calls)}")
+        attributor = Attributor.new(stream, job)
         for source_name, entries in entries_by_source.items():
             context = Context(
                 time_interval=TimeInterval(job.job_start_time, None),
@@ -304,3 +309,20 @@ def test_job_script_without_a_forbidden_nccl_parameter_keeps_the_local_command_f
 
     assert result.outcome_attr.value().outcome == "Fail InfraHW"
     assert sorted(result.symptoms.symptoms()) == ["Local HCA command failure (ibv_modify_qp eno 110)"]
+
+
+def test_observed_job_script_matches_job_info_for_a_timeout_from_an_unknown_node(simple_job_factory, attribute):
+    """With an unknown emitter and a known peer, the observed job script gives the JobInfo result."""
+    job = simple_job_factory(job_id=JOB_ID, nodes=["node-a", "node-b"], state="FAILED", ranks_per_node=1)
+    line = QP_TIMEOUT.format(remote="::ffff:192.0.2.2").removeprefix("node-a:123:456 ")
+    applog = [{"body": line, "ts": _end_ns(job) - 10**9}]
+
+    with hostname_mapping({"192.0.2.2": "node-b"}):
+        observed = attribute(job, applog=applog, scheduler=[{"body": "job script: export NCCL_IB_TC=128"}])
+    with hostname_mapping({"192.0.2.2": "node-b"}):
+        expected = attribute(job._replace(job_script_content="export NCCL_IB_TC=128"), applog=applog)
+
+    assert expected.outcome_attr.value().outcome == "Fail User"
+    assert observed.outcome_attr.value().outcome == expected.outcome_attr.value().outcome
+    assert sorted(observed.symptoms.symptoms()) == sorted(expected.symptoms.symptoms())
+    assert sorted(observed.bad_nodes_attr.my_bad_nodes) == sorted(expected.bad_nodes_attr.my_bad_nodes)

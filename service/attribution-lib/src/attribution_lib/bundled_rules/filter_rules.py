@@ -330,6 +330,25 @@ def nccl_parameter_overwrite(context: FilterContext):
         """,
         [*scope, types.get_id("Application.hca.command_failure"), MODIFY_QP_TIMEOUT_ERRNO],
     )
+    # The extractor reports a timeout from an unknown node with a resolved peer as interesting.
+    # With the overwrite it reports the timeout as bad, the same as for a known node.
+    event_stream.execute(
+        """
+        UPDATE events
+        SET event_type=?, payload=json_merge_patch(payload, json_object('symptom', ?, ?, ?))
+        WHERE context_id=? AND source_rule=? AND status=1 AND event_type=?
+          AND json_extract_string(payload, '$.symptom')=?
+        """,
+        [
+            types.get_id("Attribution.node.bad"),
+            symptom,
+            DemotionTypes.AFTER_MFU_DEMOTION,
+            MODIFY_QP_RULE,
+            *scope,
+            types.get_id("Attribution.node.interesting"),
+            MODIFY_QP_TIMEOUT_SYMPTOM,
+        ],
+    )
     event_stream.execute(
         """
         UPDATE events
