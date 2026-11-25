@@ -73,6 +73,12 @@ class Source(str, Enum):
        CSP event events indicating infrastructure-level host failures,
        repairs, or maintenance actions reported by the cloud service provider.
 
+    - `scheduler`
+
+       Facts that the scheduler or the job launcher reports about the job, such
+       as a job tag, the launcher exit code, the GPU count, a failure of the
+       containing allocation, or a cancellation of this execution.
+
     """
 
     UNDEFINED = ""
@@ -88,6 +94,7 @@ class Source(str, Enum):
     NETWORK_SYSLOG = "network_syslog"
     UFMLOG = "ufmlog"
     CSP_EVENT = "csp_event"
+    SCHEDULER = "scheduler"
 
 
 class Format(str, Enum):

@@ -35,6 +35,7 @@ from attribution_lib.bundled_rules.common.outcome_helpers import (
     apply_preemption_pass,
     apply_user_cancellation_reclassification,
 )
+from attribution_lib.bundled_rules.common.scheduler_evidence import SCHEDULER_EVENT_TYPES, scheduler_job_info
 from attribution_lib.bundled_rules.common.scheduler_formatting import (
     CANCELLED_BY_SOURCES,
     LAST_RESORT_SOURCE,
@@ -81,6 +82,7 @@ declare_event_types(
     "Application.hca.command_failure",
     "Application.mfu",
     *NODE_FAILURE_IDS,
+    *SCHEDULER_EVENT_TYPES,
 )
 
 # Shared derived rule names used in core.py/bundled_rules/ (library code outside rule files).
@@ -667,7 +669,7 @@ def scheduler_node_failure_refiner(context: RefinerContext):
     Emits the scheduler-specific node-failure symptom that ScrubBadNodes reads,
     so this runs earlier in the SCRUB phase.
     """
-    job_info = context.job_info
+    job_info = scheduler_job_info(context)
     my_bad_nodes = context.my_bad_nodes
     if job_info is None or my_bad_nodes is None:
         return
@@ -743,7 +745,7 @@ def scrub_bad_nodes_refiner(context: RefinerContext):
     once in core.py after all scrubbers finish.
     """
     my_bad_nodes = context.my_bad_nodes
-    job_info = context.job_info
+    job_info = scheduler_job_info(context)
 
     # Cross-node precompute: a node going down mid-job crashes DataLoader workers
     # on its peers, so the dataloader attribution typically lands on a DIFFERENT
@@ -1178,7 +1180,7 @@ def job_state_fallback(context: RefinerContext):
     evidence added by another refiner.
     """
     symptoms = context.symptoms
-    job_info = context.job_info
+    job_info = scheduler_job_info(context)
     if symptoms is None or job_info is None:
         return
     if len(job_info.nodes) == 0 and job_info.attributed_cancellation is None:
@@ -1306,7 +1308,7 @@ def empty_symptoms_fallback(context: RefinerContext):
     """If the outcome is still empty, try to explain why from raw_keywords."""
     raw_keywords = context.raw_keywords
     symptoms = context.symptoms
-    job_info = context.job_info
+    job_info = scheduler_job_info(context)
     if raw_keywords is None or symptoms is None or job_info is None:
         return
     if job_info.attributed_cancellation is not None:
@@ -1367,7 +1369,7 @@ def slurm_state_symptoms(context: RefinerContext):
     cascades and decision traces use these identifiers as string contracts.
     """
     symptoms = context.symptoms
-    job_info = context.job_info
+    job_info = scheduler_job_info(context)
     if symptoms is None or job_info is None:
         return
 
@@ -1514,7 +1516,7 @@ def cancellation_resolution(context: RefinerContext):
     """Resolve cancellation source: terminate called, cleanup hook, or timeout."""
     symptoms = context.symptoms
     my_bad_nodes = context.my_bad_nodes
-    job_info = context.job_info
+    job_info = scheduler_job_info(context)
     if symptoms is None or job_info is None:
         return
 
@@ -1651,7 +1653,7 @@ def external_termination_cascade(context: RefinerContext):
     """
     symptoms = context.symptoms
     my_bad_nodes = context.my_bad_nodes
-    job_info = context.job_info
+    job_info = scheduler_job_info(context)
 
     if (
         symptoms is None
@@ -2446,7 +2448,7 @@ def node_failure_nfs_cleanup(context: RefinerContext):
 def last_resort_symptoms(context: RefinerContext):
     """When no meaningful symptoms remain, fall back to scheduler job state."""
     symptoms = context.symptoms
-    job_info = context.job_info
+    job_info = scheduler_job_info(context)
     if symptoms is None or job_info is None:
         return
     if job_info.attributed_cancellation is not None:
@@ -2779,7 +2781,7 @@ def dag_cascade_pruning(context: RefinerContext):
 def post_process_symptoms_refiner(context: RefinerContext):
     """Post-outcome symptom cleanup: extract cancelled_by, discard low-priority symptoms."""
     symptoms = context.symptoms
-    job_info = context.job_info
+    job_info = scheduler_job_info(context)
     outcome = context.outcome
     cancelled_by = (
         job_info.attributed_cancelled_by
@@ -2956,7 +2958,7 @@ def outcome_reclassification_refiner(context: RefinerContext):
     if context.attribution_result is None or context.job_info is None:
         return
     attribution_result = context.attribution_result
-    job_info = context.job_info
+    job_info = scheduler_job_info(context)
     event_stream = context.event_stream
 
     # NVRx ft_launcher exit code: job-level result only, NVRx jobs only.

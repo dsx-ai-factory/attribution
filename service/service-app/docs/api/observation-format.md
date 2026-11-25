@@ -93,6 +93,7 @@ them in.
 | `node_metrics` | no | kept untimed |
 | `nvlink_metrics` | no | kept untimed |
 | `csp_event` | yes | dropped |
+| `scheduler` | no | kept untimed |
 
 Only `applog` attempts to parse a timestamp from the body if one is not given, recognizing
 `[EMMDD HH:MM:SS` (year taken from the workload end time) or `[YYYY-MM-DD HH:MM:SS]`.
@@ -108,6 +109,7 @@ Only `applog` attempts to parse a timestamp from the body if one is not given, r
 | `node_metrics` | dropped | dropped | yes |
 | `nvlink_metrics` | dropped | dropped | yes |
 | `csp_event` | dropped | dropped | yes |
+| `scheduler` | all job nodes | all job nodes | no |
 
 Sources that parse a node from the body shape differ in what they recognize as well:
 
@@ -124,6 +126,25 @@ Sources that parse a node from the body shape differ in what they recognize as w
 when the attributor's workload lists no nodes, because node checks would pass
 anything. "All job nodes" means the entry is counted against every node of the
 workload, the same as `"AllJobResources"`.
+
+### Scheduler facts
+
+A `scheduler` observation carries facts that the scheduler or the job launcher
+reports about the workload. Each entry `body` holds one fact in one of these
+forms. A value contains no whitespace.
+
+| Entry `body` | Meaning | `ts` |
+|---|---|---|
+| `job tag: <tag>` | A tag of the workload, such as `nvrx` for a workload that NVRx manages. | not used |
+| `job exit code: <code>` | The exit code of the job launcher. | not used |
+| `job gpu count: <count>` | The number of GPUs that the scheduler allocated. | not used |
+| `allocation failure: allocation=<id> state=<state> node=<node>` | A failure of the allocation that contains this execution. | The time the scheduler reported the failure. |
+| `execution cancellation: execution=<id> cancelled_by=<identity>` | A cancellation of this execution. `<id>` must be the workload ID. | The cancellation time. Required. |
+
+An entry in another form is ignored. A cancellation entry for another
+execution or without `ts` is ignored, and the service logs a warning. If two
+entries give the same fact, the later entry applies. This also applies to
+entries in different observations. The declared `time_interval` must cover each `ts`.
 
 ## Examples
 

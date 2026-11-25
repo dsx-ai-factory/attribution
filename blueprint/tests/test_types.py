@@ -20,6 +20,7 @@ def test_source_enum_matches_attribution_service_contract_values():
         "network_syslog",
         "ufmlog",
         "csp_event",
+        "scheduler",
     }
 
 
@@ -39,6 +40,7 @@ def test_source_enum_matches_attribution_service_contract_names():
         "NETWORK_SYSLOG",
         "UFMLOG",
         "CSP_EVENT",
+        "SCHEDULER",
     }
 
 

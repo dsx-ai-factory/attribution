@@ -74,6 +74,7 @@ class Source(str, Enum):
     NETWORK_SYSLOG = "network_syslog"
     UFMLOG = "ufmlog"
     CSP_EVENT = "csp_event"
+    SCHEDULER = "scheduler"
 
 
 class TimeInterval(TypedDict):

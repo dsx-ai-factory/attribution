@@ -233,6 +233,7 @@ def test_source_format_job_keywords_mismatch(request, event_manager, job_info):
         ObservationSource.NODE_METRICS,
         ObservationSource.NVLINK_METRICS,
         ObservationSource.CSP_EVENT,
+        ObservationSource.SCHEDULER,
     ],
 )
 def test_source_format_entry_timeseries_sources_reject_string_list(request, event_manager, job_info, source):
@@ -255,6 +256,7 @@ def test_unhandled_sources(request, event_manager, job_info):
             ObservationSource.JOB_KEYWORDS,
             ObservationSource.UFMLOG,
             ObservationSource.CSP_EVENT,
+            ObservationSource.SCHEDULER,
         ]
     )
     for source in unhandled_sources:

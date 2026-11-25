@@ -62,6 +62,7 @@ export type ObservationSource =
   | 'network_syslog'
   | 'ufmlog'
   | 'csp_event'
+  | 'scheduler'
 
 export interface AttributionSource {
   observation_id: string
