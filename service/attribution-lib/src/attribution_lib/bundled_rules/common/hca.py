@@ -67,6 +67,13 @@ def command_symptom(verb: str, errno: int) -> str:
     return f"Local HCA command failure ({verb} eno {errno})"
 
 
+MODIFY_QP_RULE = "Call to ibv_modify_qp failed"
+MODIFY_QP_TIMEOUT_ERRNO = 110
+MODIFY_QP_TIMEOUT_SYMPTOM = f"{MODIFY_QP_RULE}: eno {MODIFY_QP_TIMEOUT_ERRNO} timeout"
+# Appended to the timeout symptom when the job script sets an NCCL parameter that a user must not overwrite.
+NCCL_PARAMETER_OVERWRITE_SUFFIX = "(Overwrite NCCL parameters)"
+
+
 def command_failure_events(
     verb: str, errno: int, node: str | None, source: Source, device: str | None = None
 ) -> list[EventTriple]:

@@ -14,6 +14,7 @@
 #   job gpu count: <count>
 #   allocation failure: allocation=<id> state=<state> node=<node>
 #   execution cancellation: execution=<id> cancelled_by=<identity>
+#   job script: <one line of the job script>
 #
 # The entry `ts` of an execution cancellation is the cancellation time, and it is required.
 
@@ -108,3 +109,19 @@ line   = "execution cancellation: execution=1234.0 cancelled_by=user-a"
 [[extractor.cases]]
 expect = "no_match"
 line   = "execution cancellation: execution=1234.0 cancelled_by="
+
+
+# A client sends one entry for each line of the job script. Only a line that sets
+# an NCCL parameter that a user must not overwrite gives an event. The filter
+# NcclParameterOverwrite reads the event.
+[[extractor]]
+name     = "SchedulerJobScriptNcclParameter"
+match_re = '^job script: (?P<script_line>.*)$'
+emit     = { type = "generic_event", when = "overwrites_forbidden_nccl_parameter(script_line)", event_type = "Scheduler.job_script.nccl_parameter_overwrite" }
+
+[[extractor.cases]]
+expect = "generic"
+line   = "job script: export NCCL_IB_TC=128"
+[[extractor.cases]]
+expect = "none"
+line   = "job script: export NCCL_DEBUG=INFO"

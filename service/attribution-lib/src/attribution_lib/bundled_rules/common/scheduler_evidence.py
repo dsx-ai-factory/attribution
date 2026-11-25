@@ -20,6 +20,8 @@ JOB_EXIT_CODE_EVENT = "Scheduler.job.exit_code"
 JOB_GPU_COUNT_EVENT = "Scheduler.job.gpu_count"
 ALLOCATION_FAILURE_EVENT = "Scheduler.allocation.failure"
 EXECUTION_CANCELLATION_EVENT = "Scheduler.execution.cancellation"
+# Read by the filter NcclParameterOverwrite, not as a job fact.
+JOB_SCRIPT_NCCL_OVERWRITE_EVENT = "Scheduler.job_script.nccl_parameter_overwrite"
 SCHEDULER_EVENT_TYPES = (
     JOB_TAG_EVENT,
     JOB_EXIT_CODE_EVENT,

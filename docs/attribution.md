@@ -36,7 +36,7 @@ Primary data for attribution comes from logs, metrics, and telemetry. It is impo
 
 A supplied cancellation provides the record's cancellation symptom, regardless of the record's raw scheduler state. Independent faults still take precedence. `allocation_failure` changes attribution only together with a cancellation. When the record's state is `NODE_FAIL` and the allocation's failed node is not among the record's nodes, the inherited node failure is not attributed to the record, unless the record's own `failed_node` names a different node that is among its nodes. Omitting both inputs keeps existing behavior.
 
-A client of the Attribution Service sends these facts in a `scheduler` observation, because the service request has no field for them. The same observation carries the job tags, the launcher exit code and the GPU count. A fact in the observation replaces the `JobInfo` input of the same name. See [Scheduler facts](https://github.com/dsx-ai-factory/attribution/blob/main/service/service-app/docs/api/observation-format.md#scheduler-facts) for the entry forms.
+A client of the Attribution Service sends these facts in a `scheduler` observation, because the service request has no field for them. The same observation carries the job tags, the launcher exit code, the GPU count and the job script. A fact in the observation replaces the `JobInfo` input of the same name. See [Scheduler facts](https://github.com/dsx-ai-factory/attribution/blob/main/service/service-app/docs/api/observation-format.md#scheduler-facts) for the entry forms.
 
 ## Attribution Process Overview
 

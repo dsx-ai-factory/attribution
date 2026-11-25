@@ -77,7 +77,8 @@ class Source(str, Enum):
 
        Facts that the scheduler or the job launcher reports about the job, such
        as a job tag, the launcher exit code, the GPU count, a failure of the
-       containing allocation, or a cancellation of this execution.
+       containing allocation, a cancellation of this execution, or the lines
+       of the job script.
 
     """
 
