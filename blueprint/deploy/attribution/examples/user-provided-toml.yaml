@@ -1,0 +1,26 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+# The runner reads a complete Blueprint configuration file that you provide in
+# an existing ConfigMap (a Secret works the same way, under config.existing.secret).
+# The chart then generates no TOML and rejects extraConfig. Create the ConfigMap
+# first, in the release namespace, for example with
+# kubectl -n <release-namespace> apply -f user-provided-toml-configmap.yaml.
+#
+# The runner still adds the namespace and the time window of each pass on the
+# command line, so eca.component must name the adapter that your file configures.
+image:
+  repository: registry.example/attribution
+  tag: "1.0.0"
+
+config:
+  existing:
+    configMap:
+      name: attribution-blueprint
+      key: blueprint.toml
+
+namespaces:
+  - team-a
+
+eca:
+  component: kueue

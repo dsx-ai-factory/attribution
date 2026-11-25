@@ -1,0 +1,90 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+{{- /*
+Read-only access for the Blueprint's discovery and pod-log reads, nothing else.
+The rules per adapter match the prerequisites in blueprint/docs/use-cases.
+*/ -}}
+{{- define "attribution.rules" }}
+{{- if eq .Values.eca.component "kai" }}
+- apiGroups: [scheduling.run.ai]
+  resources: [podgroups]
+  verbs: [get, list]
+{{- else }}
+- apiGroups: [kueue.x-k8s.io]
+  resources: [workloads]
+  verbs: [get, list]
+{{- end }}
+- apiGroups: [batch]
+  resources: [jobs]
+  verbs: [get, list]
+- apiGroups: [jobset.x-k8s.io]
+  resources: [jobsets]
+  verbs: [get, list]
+- apiGroups: [""]
+  resources: [pods, events]
+  verbs: [get, list]
+- apiGroups: [""]
+  resources: [pods/log]
+  verbs: [get]
+{{- end }}
+{{- $name := include "attribution.fullname" . }}
+{{- if and .Values.runner.enabled .Values.rbac.create }}
+{{- if eq .Values.rbac.scope "cluster" }}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "attribution.labels" . | nindent 4 }}
+rules:
+{{- include "attribution.rules" . | nindent 2 }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "attribution.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ $name }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ $name }}
+    namespace: {{ .Release.Namespace }}
+{{- else }}
+{{- $root := . }}
+{{- range $i, $ns := .Values.namespaces }}
+{{- if $i }}
+---
+{{- end }}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ $name }}
+  namespace: {{ $ns }}
+  labels:
+    {{- include "attribution.labels" $root | nindent 4 }}
+rules:
+{{- include "attribution.rules" $root | nindent 2 }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ $name }}
+  namespace: {{ $ns }}
+  labels:
+    {{- include "attribution.labels" $root | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ $name }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ $name }}
+    namespace: {{ $root.Release.Namespace }}
+{{- end }}
+{{- end }}
+{{- end }}

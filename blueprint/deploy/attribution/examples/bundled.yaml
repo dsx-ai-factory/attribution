@@ -1,0 +1,19 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+# The bundled deployment: the Service, the runner and the dashboard in one pod.
+# This is what the chart does with only an image and the namespaces set.
+#
+#   helm install attribution blueprint/deploy/attribution \
+#     --namespace attribution --create-namespace \
+#     --values blueprint/deploy/attribution/examples/bundled.yaml
+image:
+  repository: registry.example/attribution
+  tag: "1.0.0"
+
+namespaces:
+  - team-a
+  - team-b
+
+eca:
+  component: kai # or kueue

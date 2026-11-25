@@ -1,0 +1,29 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+# The Service only: no runner, no dashboard, no namespaces, no Kubernetes API
+# access and no volume. Other installations call the API at
+# http://<release>-attribution-api.<namespace>.svc:8000, so the API is exposed
+# and the NetworkPolicy names who may call it.
+image:
+  repository: registry.example/attribution
+  tag: "1.0.0"
+
+runner:
+  enabled: false
+dashboard:
+  enabled: false
+
+service:
+  api:
+    enabled: true
+  # Optional Service settings: plain values or references to an existing Secret.
+  env:
+    - {name: ATTRIBUTOR_DUCKDB_MEMORY_LIMIT, value: 512MB}
+
+networkPolicy:
+  service:
+    from:
+      - namespaceSelector:
+          matchLabels:
+            kubernetes.io/metadata.name: attribution-runners

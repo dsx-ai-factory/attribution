@@ -1,0 +1,30 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+{{- if .Values.networkPolicy.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "attribution.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "attribution.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "attribution.selectorLabels" . | nindent 6 }}
+  policyTypes: [Ingress]
+  ingress:
+    {{- if and .Values.service.enabled .Values.service.api.enabled .Values.networkPolicy.service.from }}
+    - from:
+        {{- toYaml .Values.networkPolicy.service.from | nindent 8 }}
+      ports:
+        - {port: {{ .Values.service.port }}, protocol: TCP}
+    {{- end }}
+    {{- if and .Values.dashboard.enabled .Values.networkPolicy.dashboard.from }}
+    - from:
+        {{- toYaml .Values.networkPolicy.dashboard.from | nindent 8 }}
+      ports:
+        - {port: {{ .Values.dashboard.port }}, protocol: TCP}
+    {{- end }}
+{{- end }}

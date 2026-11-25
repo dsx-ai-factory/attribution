@@ -13,6 +13,9 @@ The files for this use case are:
 - [kueue-sample-output.md](./kueue-sample-output.md), representative healthy
   and unhealthy results
 
+To run the Blueprint inside the cluster instead of from an operator host, see
+[Run the Blueprint in a cluster](./in-cluster.md).
+
 ## Prerequisites
 
 The blueprint host must have:
