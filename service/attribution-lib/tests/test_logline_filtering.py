@@ -239,7 +239,20 @@ class TestLogIgnoredNodeLine:
         call_args = mock_logger.debug.call_args[0][0]
         assert "Source.APPLOG ignored" in call_args
         assert "rank 200 not found in job info" in call_args
-        assert "rank 200 cannot be processed (job has 2 nodes, max rank: 15)" in call_args  # 2 * 8 - 1 = 15
+        assert "rank 200 cannot be processed (job has 2 nodes with ranks, max rank: 15)" in call_args
+
+    def test_invalid_rank_error_message_ignores_rankless_nodes(self, simple_job_factory, mock_entry):
+        """A node with no ranks does not change the node count or max rank in the message."""
+        job_info = simple_job_factory(
+            node_to_ranks={"coordinator": [], "worker-a": list(range(8)), "worker-b": list(range(8, 16))}
+        )
+        exception = InvalidRankError(200)
+
+        with patch("attribution_lib.logline_filtering.logger.logger") as mock_logger:
+            log_ignored_node_line(exception, mock_entry, job_info, Source.APPLOG)
+
+        call_args = mock_logger.debug.call_args[0][0]
+        assert "rank 200 cannot be processed (job has 2 nodes with ranks, max rank: 15)" in call_args
 
     def test_unknown_node_error_message(self, logline_jobinfo, mock_entry):
         """Test specific message for UnknownNodeError uses node from exception."""
