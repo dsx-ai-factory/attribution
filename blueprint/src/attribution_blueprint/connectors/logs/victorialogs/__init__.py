@@ -1,6 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
+import math
 from typing import Any
 
 from attribution_blueprint import mca_registry as _registry
@@ -8,6 +9,7 @@ from attribution_blueprint.connectors.auth import Auth, build_auth
 from attribution_blueprint.connectors.logs.victorialogs.connector import (
     DEFAULT_LIMIT,
     DEFAULT_NODE_FIELD,
+    DEFAULT_QUERY_CONCURRENCY,
     MAX_PAGES,
     VictoriaLogsConnector,
 )
@@ -34,6 +36,14 @@ def _build(spec: dict, ctx: dict) -> VictoriaLogsConnector:
         raise MCAError("limit must be greater than 0")
     if max_pages <= 0:
         raise MCAError("max_pages must be greater than 0")
+    query_concurrency = _coerce_int(spec.get("query_concurrency", DEFAULT_QUERY_CONCURRENCY), "query_concurrency")
+    if query_concurrency <= 0:
+        raise MCAError("query_concurrency must be greater than 0")
+    window_slice_seconds = spec.get("window_slice_seconds")
+    if window_slice_seconds is not None:
+        window_slice_seconds = _coerce_float(window_slice_seconds, "window_slice_seconds")
+        if not math.isfinite(window_slice_seconds) or window_slice_seconds <= 0:
+            raise MCAError("window_slice_seconds must be a finite number greater than 0")
     queries = spec.get("queries")
     if queries is None and "query" in spec:
         queries = [spec["query"]]
@@ -56,6 +66,8 @@ def _build(spec: dict, ctx: dict) -> VictoriaLogsConnector:
         max_pages=max_pages,
         node_field=node_field,
         cluster_from_context=cluster_from_context,
+        query_concurrency=query_concurrency,
+        window_slice_seconds=window_slice_seconds,
     )
     if queries is not None:
         kwargs["templates"] = {source: list(queries)}
@@ -74,6 +86,8 @@ _registry.register_component(
         "queries": _PARAM,
         "node_field": _PARAM,
         "cluster_from_context": _PARAM,
+        "query_concurrency": _PARAM,
+        "window_slice_seconds": _PARAM,
         "auth": {
             "type": _PARAM,
             "cert_path": _PARAM,

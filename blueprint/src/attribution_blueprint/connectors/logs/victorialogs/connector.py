@@ -3,13 +3,17 @@
 
 from __future__ import annotations
 
+import contextvars
 import json
+import math
 import re
+from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Mapping
 
 from loguru import logger
-from requests.adapters import HTTPAdapter
+from requests.adapters import DEFAULT_POOLSIZE, HTTPAdapter
 from requests.exceptions import RequestException
 from urllib3.util.retry import Retry
 
@@ -33,8 +37,10 @@ from attribution_blueprint.types import (
 
 DEFAULT_LIMIT = 5000
 DEFAULT_NODE_FIELD = "host_name"
+DEFAULT_QUERY_CONCURRENCY = 1
 MAX_PAGES = 20
 QUERY_PATH = "/select/logsql/query"
+_NS_PER_SECOND = 1_000_000_000
 
 _EPOCH = datetime(1970, 1, 1, tzinfo=UTC)
 _TIMESTAMP = re.compile(r"^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})(?:\.(\d{1,9}))?(Z|[+-]\d{2}:\d{2})$")
@@ -64,8 +70,18 @@ def _datetime_ns(value: datetime) -> int:
     return (delta // timedelta(microseconds=1)) * 1000
 
 
+@dataclass(frozen=True, slots=True)
+class _WindowRead:
+    """One rendered query over one slice of the collection window."""
+
+    label: str
+    query: str
+    start_ns: int
+    end_ns_excl: int
+
+
 class VictoriaLogsConnector:
-    """Collect timestamped LogsQL rows under a finite per-query page budget."""
+    """Collect timestamped LogsQL rows under a finite page budget per query and window slice."""
 
     def __init__(
         self,
@@ -80,14 +96,39 @@ class VictoriaLogsConnector:
         max_pages: int = MAX_PAGES,
         node_field: str | None = DEFAULT_NODE_FIELD,
         cluster_from_context: bool = False,
+        query_concurrency: int = DEFAULT_QUERY_CONCURRENCY,
+        window_slice_seconds: float | None = None,
     ):
-        """Configure queries, connection security, row limits and the maximum pages per query."""
+        """Configure queries, connection security, row limits, page budgets and request concurrency.
+
+        Args:
+            endpoint: VictoriaLogs base URL.
+            source: Evidence source the templates collect.
+            auth: Optional request authentication.
+            query_kwargs: Values for template placeholders.
+            templates: LogsQL templates by source.
+            timeout_seconds: HTTP timeout per request.
+            limit: Maximum rows per response.
+            max_pages: Maximum responses per query, or per slice when the window is sliced.
+            node_field: Row field holding the node name, or None to skip node filtering.
+            cluster_from_context: Take `cluster` from each context when it has one.
+            query_concurrency: Maximum requests one collection runs at the same time.
+            window_slice_seconds: Split the collection window into slices of this length,
+                each read and paged on its own, or None to read the window as one range.
+
+        Raises:
+            ValueError: A setting is out of range.
+        """
         if source not in templates:
             raise ValueError(f"no templates registered for source {source}")
         if limit <= 0:
             raise ValueError("limit must be greater than 0")
         if type(max_pages) is not int or max_pages <= 0:
             raise ValueError("max_pages must be a positive integer")
+        if type(query_concurrency) is not int or query_concurrency <= 0:
+            raise ValueError("query_concurrency must be a positive integer")
+        self._window_slice_ns = _window_slice_ns(window_slice_seconds)
+        self._query_concurrency = query_concurrency
         self._max_pages = max_pages
         self._source = source
         self._templates = list(templates[source])
@@ -109,7 +150,8 @@ class VictoriaLogsConnector:
             status_forcelist=(429, 502, 503, 504),
             allowed_methods=frozenset({"GET", "POST"}),
         )
-        adapter = HTTPAdapter(max_retries=retry)
+        # Keep a connection per concurrent request so parallel reads reuse TLS sessions.
+        adapter = HTTPAdapter(max_retries=retry, pool_maxsize=max(DEFAULT_POOLSIZE, query_concurrency))
         self._session.mount("https://", adapter)
         self._session.mount("http://", adapter)
         if auth is not None:
@@ -175,6 +217,8 @@ class VictoriaLogsConnector:
         issues: list[str] = []
         request_error: RequestException | None = None
         received_response = False
+        slices = self._window_slices(start_ns, end_ns_excl)
+        reads: list[_WindowRead] = []
         for index, template in enumerate(self._templates, start=1):
             try:
                 query = template.format(
@@ -186,15 +230,19 @@ class VictoriaLogsConnector:
                 logger.warning(f"victorialogs template missing kwarg {error}; skipping query")
                 continue
             query = self._inject_node_filter(query, nodes)
-            try:
-                query_rows, query_issues = self._query_window(query, start_ns, end_ns_excl)
-            except RequestException as error:
+            for number, (slice_start, slice_end) in enumerate(slices, start=1):
+                label = f"query {index}" if len(slices) == 1 else f"query {index} slice {number}/{len(slices)}"
+                reads.append(_WindowRead(label, query, slice_start, slice_end))
+        # Results come back in read order, so the first error and the row order do not depend on timing.
+        for read, result in zip(reads, self._run_reads(reads), strict=True):
+            if isinstance(result, RequestException):
                 if request_error is None:
-                    request_error = error
-                issues.append(f"query {index}: {_request_failure_reason(error)}")
+                    request_error = result
+                issues.append(f"{read.label}: {_request_failure_reason(result)}")
                 continue
+            query_rows, query_issues = result
             received_response = True
-            issues.extend(f"query {index}: {issue}" for issue in query_issues)
+            issues.extend(f"{read.label}: {issue}" for issue in query_issues)
             for row in query_rows:
                 key = json.dumps(row, sort_keys=True)
                 if key not in seen:
@@ -204,6 +252,60 @@ class VictoriaLogsConnector:
         if request_error is not None and not received_response:
             raise request_error
         return rows, issues
+
+    def _window_slices(self, start_ns: int, end_ns_excl: int) -> list[tuple[int, int]]:
+        """Split the collection window into the fewest equal contiguous slices, newest first.
+
+        Equal slices avoid a sliver at one end: the exclusive end is one nanosecond past the
+        inclusive window, which would otherwise cost a request for a one-nanosecond slice.
+
+        Args:
+            start_ns: Inclusive collection start.
+            end_ns_excl: Exclusive collection end.
+
+        Returns:
+            Inclusive-start, exclusive-end bounds, none longer than the inclusive window
+            divided by the slice count.
+        """
+        span = end_ns_excl - start_ns
+        if self._window_slice_ns is None or span - 1 <= self._window_slice_ns:
+            return [(start_ns, end_ns_excl)]
+        count = -(-(span - 1) // self._window_slice_ns)
+        bounds = [start_ns + span * index // count for index in range(count + 1)]
+        return [(bounds[index], bounds[index + 1]) for index in reversed(range(count))]
+
+    def _run_reads(self, reads: list[_WindowRead]) -> list[tuple[list[dict], list[str]] | RequestException]:
+        """Read every query slice, up to `query_concurrency` at a time.
+
+        Args:
+            reads: Query slices in reporting order.
+
+        Returns:
+            Each read's rows and issues, or the request error that left it without rows, in read order.
+        """
+        if self._query_concurrency == 1 or len(reads) <= 1:
+            return [self._read_window(read) for read in reads]
+        workers = min(self._query_concurrency, len(reads))
+        with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="victorialogs") as pool:
+            # Each read runs in a copy of the caller's context, so context-bound log fields reach its log lines.
+            futures = [pool.submit(contextvars.copy_context().run, self._read_window, read) for read in reads]
+            return [future.result() for future in futures]
+
+    def _read_window(self, read: _WindowRead) -> tuple[list[dict], list[str]] | RequestException:
+        """Read one query slice, returning a first-request failure instead of raising it.
+
+        The caller reports a failed slice and keeps the others, so the failure is a result here.
+
+        Args:
+            read: Query slice to read.
+
+        Returns:
+            Rows and issues, or the request error that left the slice without rows.
+        """
+        try:
+            return self._query_window(read.query, read.start_ns, read.end_ns_excl)
+        except RequestException as error:
+            return error
 
     def _context_query_kwargs(self, context: ExecutionContext) -> dict[str, str]:
         """Return query_kwargs with `cluster` taken from the context when enabled and present."""
@@ -354,6 +456,28 @@ def _split_top_level_pipe(query: str) -> tuple[str, str]:
             return query[:index], query[index:].strip()
         index += 1
     return query, ""
+
+
+def _window_slice_ns(window_slice_seconds: float | None) -> int | None:
+    """Validate the slice length and convert it to nanoseconds.
+
+    Args:
+        window_slice_seconds: Slice length in seconds, or None for no slicing.
+
+    Returns:
+        Slice length in nanoseconds, or None.
+
+    Raises:
+        ValueError: The length is not a finite positive number of at least one nanosecond.
+    """
+    if window_slice_seconds is None:
+        return None
+    if isinstance(window_slice_seconds, bool) or not isinstance(window_slice_seconds, int | float):
+        raise ValueError("window_slice_seconds must be a positive number")
+    slice_ns = round(window_slice_seconds * _NS_PER_SECOND) if math.isfinite(window_slice_seconds) else 0
+    if slice_ns <= 0:
+        raise ValueError("window_slice_seconds must be a positive number")
+    return slice_ns
 
 
 def _format_timestamp_ns(timestamp_ns: int) -> str:
