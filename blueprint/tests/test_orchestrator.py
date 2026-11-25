@@ -985,3 +985,142 @@ def test_dump_observations_tolerates_missing_context(tmp_path):
     pipeline.analyze(ids=["dumpme"])
 
     assert (tmp_path / "dumpme.unknown.json").exists()
+
+
+def test_explicit_nvl_membership_is_forwarded_through_client_serialization():
+    ctx = _make_ctx("1")
+    ctx["node_to_nvl_domain"] = {"node-1-1": "fabric-a"}
+    pipeline = _make_pipeline(eca=MagicMock(), log_collectors=[])
+    wire = _wire(pipeline._build_attributor_info(ctx))
+    assert wire["workload"]["node_to_nvl_domain"] == {"node-1-1": "fabric-a"}
+    assert wire["workload"]["nodes"] == {"node-1-1": [0, 1, 2, 3], "node-1-2": [4, 5, 6, 7]}
+
+
+def test_missing_nvl_membership_preserves_legacy_wire_payload():
+    pipeline = _make_pipeline(eca=MagicMock(), log_collectors=[])
+    assert "node_to_nvl_domain" not in _wire(pipeline._build_attributor_info(_make_ctx("1")))["workload"]
+
+
+@pytest.mark.parametrize(
+    "override, expected",
+    [
+        (None, {"node-1-1": "fabric-a", "node-1-2": "fabric-a"}),
+        ({}, {}),
+        ({"node-1-1": "workload-domain"}, {"node-1-1": "workload-domain"}),
+    ],
+)
+def test_nvl_inventory_enriches_only_allocated_hosts_and_preserves_snapshots(override, expected):
+    ctx = _make_ctx("1")
+    ctx["nodes"] = ["NODE-1-1", "node-1-2"]
+    if override is not None:
+        ctx["node_to_nvl_domain"] = override
+    eca = MagicMock()
+    eca.discover.return_value = [ctx]
+    output = _ListOutput()
+    inventory = {"NODE-1-1.example.test": "fabric-a", "node-1-2": "fabric-a", "outside": "fabric-b"}
+    pipeline = AttributionOrchestrator(
+        execution_context_adapters=[eca],
+        log_connectors=[],
+        metrics_connectors=[],
+        attribution=_make_attribution_mock(),
+        outputs=[output],
+        node_to_nvl_domain=inventory,
+    )
+    pipeline.analyze()
+    saved_context, result = output.entries[0]
+    assert saved_context["nodes"] == ["NODE-1-1", "node-1-2"]
+    assert saved_context["node_to_nvl_domain"] == expected
+    assert result["node_to_nvl_domain"] == expected
+    if override is None:
+        assert "node_to_nvl_domain" not in ctx
+    inventory.clear()
+    assert result["node_to_nvl_domain"] == expected
+
+
+def test_explicit_null_membership_bypasses_inventory_and_preserves_legacy_wire_payload():
+    ctx = _make_ctx("1")
+    ctx["node_to_nvl_domain"] = None
+    eca = MagicMock()
+    eca.discover.return_value = [ctx]
+    output = _ListOutput()
+    attribution = _make_attribution_mock()
+    pipeline = AttributionOrchestrator(
+        execution_context_adapters=[eca],
+        log_connectors=[],
+        metrics_connectors=[],
+        attribution=attribution,
+        outputs=[output],
+        node_to_nvl_domain={"node-1-1": "fabric-a", "node-1-2": "fabric-a"},
+    )
+
+    pipeline.analyze()
+
+    saved_context, result = output.entries[0]
+    assert saved_context["node_to_nvl_domain"] is None
+    assert "node_to_nvl_domain" not in result
+    wire = _wire(attribution.create_attributor.call_args.args[0])
+    assert "node_to_nvl_domain" not in wire["workload"]
+
+
+def test_nvl_inventory_rejects_conflicting_fqdn_aliases():
+    eca = MagicMock()
+    eca.discover.return_value = [_make_ctx("1")]
+    pipeline = AttributionOrchestrator(
+        execution_context_adapters=[eca],
+        log_connectors=[],
+        metrics_connectors=[],
+        attribution=_make_attribution_mock(),
+        outputs=[_ListOutput()],
+        node_to_nvl_domain={"node-1-1": "fabric-a", "node-1-1.example.test": "fabric-b"},
+    )
+    assert pipeline.analyze() == []
+    assert pipeline.last_run_stats == {"attempted": 1, "succeeded": 0, "conflicted": 0}
+
+
+def test_nvl_inventory_does_not_shorten_ip_addresses_into_hostnames():
+    ctx = _make_ctx("1")
+    ctx["nodes"] = ["192"]
+    eca = MagicMock()
+    eca.discover.return_value = [ctx]
+    output = _ListOutput()
+    pipeline = AttributionOrchestrator(
+        execution_context_adapters=[eca],
+        log_connectors=[],
+        metrics_connectors=[],
+        attribution=_make_attribution_mock(),
+        outputs=[output],
+        node_to_nvl_domain={"192.0.2.1": "fabric-a"},
+    )
+    pipeline.analyze()
+    assert output.entries[0][0]["node_to_nvl_domain"] == {}
+
+
+
+def test_nvl_inventory_matches_unique_short_name_to_fqdn_allocation():
+    ctx = _make_ctx("1")
+    ctx["nodes"] = ["node-a.example.test"]
+    eca = MagicMock()
+    eca.discover.return_value = [ctx]
+    output = _ListOutput()
+    pipeline = AttributionOrchestrator(
+        execution_context_adapters=[eca], log_connectors=[], metrics_connectors=[],
+        attribution=_make_attribution_mock(), outputs=[output],
+        node_to_nvl_domain={"node-a": "fabric-a"},
+    )
+    pipeline.analyze()
+    assert output.entries[0][0]["node_to_nvl_domain"] == {"node-a.example.test": "fabric-a"}
+
+
+
+def test_nvl_inventory_rejects_ambiguous_short_name_for_fqdn_allocation():
+    ctx = _make_ctx("1")
+    ctx["nodes"] = ["node-a.one.test", "node-a.two.test"]
+    eca = MagicMock()
+    eca.discover.return_value = [ctx]
+    pipeline = AttributionOrchestrator(
+        execution_context_adapters=[eca], log_connectors=[], metrics_connectors=[],
+        attribution=_make_attribution_mock(), outputs=[_ListOutput()],
+        node_to_nvl_domain={"node-a": "fabric-a"},
+    )
+    assert pipeline.analyze() == []
+    assert pipeline.last_run_stats == {"attempted": 1, "succeeded": 0, "conflicted": 0}

@@ -2066,3 +2066,63 @@ class TestSingleNodeNodeFail:
         source = next(iter(my_bad_nodes["node-b"].attributions[symptom]))
         assert source.rule == "scheduler_failed_node_field"
         assert self._NODE_FAILURE_SYMPTOM not in my_bad_nodes["node-b"]
+
+
+@pytest.mark.parametrize(
+    "domains, prune",
+    [
+        ({"alpha": "fabric-1", "omega": "fabric-1"}, True),
+        ({"alpha": "fabric-1", "omega": "fabric-2"}, False),
+        ({"alpha": "fabric-1"}, False),
+        ({}, False),
+    ],
+)
+def test_workload_nvl_membership_overrides_global_resolver(
+    core_test_job_info, source_set_factory, monkeypatch, domains, prune
+):
+    monkeypatch.setattr(attribution_lib, "node_domain_resolver", lambda node: "global-domain")
+    job = core_test_job_info._replace(nodes=["alpha", "omega"], node_to_nvl_domain=domains)
+    bad_nodes = JobNodeAttributions()
+    bad_nodes.add(["alpha"], source_set_factory("Node failure reported by slurm"))
+    bad_nodes.add(["omega"], source_set_factory("XID-45-PREEMPTIVE_REMOVAL"))
+    symptoms, _ = translate_and_prune_node_attributions(bad_nodes, job)
+    kept = "omega" in symptoms and "XID-45-PREEMPTIVE_REMOVAL" in symptoms["omega"].symptoms()
+    assert kept is not prune
+
+
+def test_workloads_with_identical_hosts_do_not_share_nvl_membership(core_test_job_info, source_set_factory):
+    def attribute(domains):
+        bad_nodes = JobNodeAttributions()
+        bad_nodes.add(["alpha"], source_set_factory("Node failure reported by slurm"))
+        bad_nodes.add(["omega"], source_set_factory("XID-45-PREEMPTIVE_REMOVAL"))
+        return translate_and_prune_node_attributions(
+            bad_nodes, core_test_job_info._replace(nodes=["alpha", "omega"], node_to_nvl_domain=domains)
+        )[0]
+
+    shared = {"alpha": "fabric-1", "omega": "fabric-1"}
+    separate = {"alpha": "fabric-1", "omega": "fabric-2"}
+    assert "omega" not in attribute(shared)
+    assert "omega" in attribute(separate)
+    assert "omega" not in attribute(shared)
+
+
+@pytest.mark.parametrize(
+    "primary, target, kept",
+    [
+        ("ALPHA.example.test", "omega", False),
+        ("alpha", "omega", False),
+        ("ALPHA.example.test", "alpha", True),
+        ("unallocated.example.test", "omega", True),
+    ],
+)
+def test_explicit_nvl_membership_uses_canonical_host_identity(
+    core_test_job_info, source_set_factory, primary, target, kept
+):
+    job = core_test_job_info._replace(
+        nodes=["alpha", "omega"], node_to_nvl_domain={"alpha": "fabric-a", "omega": "fabric-a"}
+    )
+    bad_nodes = JobNodeAttributions()
+    bad_nodes.add([primary], source_set_factory("Node failure reported by slurm"))
+    bad_nodes.add([target], source_set_factory("XID-45-PREEMPTIVE_REMOVAL"))
+    symptoms, _ = translate_and_prune_node_attributions(bad_nodes, job)
+    assert (target in symptoms and "XID-45-PREEMPTIVE_REMOVAL" in symptoms[target].symptoms()) is kept

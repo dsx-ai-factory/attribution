@@ -256,4 +256,4 @@ def test_built_schema_has_expected_shape():
     assert set(schema["output"]["_instances"]) == {"stdout", "sqlite", "kafka"}
     assert set(schema["output"]["_instances"]["sqlite"]) == {"path"}
     assert set(schema["attribution"]) == {"service_url", "timeout_seconds"}
-    assert set(schema["workload"]) == {"gpus_per_node"}
+    assert set(schema["workload"]) == {"gpus_per_node", "nvl_domain_mapping_path"}

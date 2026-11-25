@@ -75,8 +75,10 @@ no automatic migration or schema-version change is applied.
 example `["node-a", "node-b"]`. It is distinct from the Attribution Service v2
 `workload.nodes` payload, which the Blueprint builds as a node-to-ranks map
 from this node list and the configured GPUs per node (ranks per node).
-`raw_scheduler_json` preserves the connector-supplied scheduler payload for
-debugging and downstream inspection.
+`raw_scheduler_json` preserves the execution context for debugging and
+downstream inspection. It starts from the connector-supplied scheduler payload
+and includes fields that Blueprint adds before output, such as
+`node_to_nvl_domain` when explicit NVLink membership applies.
 
 ## `attribution_run`
 
@@ -220,3 +222,13 @@ succeeds; SQLite success can therefore coexist with Kafka failure. This sink
 does not change input offset commits or provide durable application retries.
 Required-output policy, acknowledgement, and recovery belong to Runtime
 integration.
+
+
+
+## Optional NVLink topology snapshot
+
+When a run submits explicit NVLink membership, its enriched result includes
+`node_to_nvl_domain`, a hostname-to-physical-domain object. SQLite preserves it
+in that run's `raw_result_json`; the context also carries it in
+`raw_scheduler_json`. An empty object means explicitly unknown membership.
+Legacy runs omit the field. No SQL schema migration is required.

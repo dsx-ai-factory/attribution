@@ -1590,6 +1590,21 @@
             "type": "object",
             "title": "Nodes"
           },
+          "node_to_nvl_domain": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "type": "string"
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Node To Nvl Domain",
+            "description": "Optional hostname-to-physical-NVLink-domain mapping, independent of hostname conventions. Use fabric cluster UUIDs or inventory domain IDs, not bare clique IDs. Keys must identify allocated nodes; unambiguous short/FQDN and case normalization follow node verification. Blank and all-zero domain IDs are invalid: omit unknown nodes. An explicit empty or partial map is authoritative. Null or absent retains the library resolver."
+          },
           "name": {
             "type": "string",
             "title": "Name"

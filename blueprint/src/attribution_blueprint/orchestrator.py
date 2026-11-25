@@ -3,6 +3,7 @@
 
 import json
 from datetime import datetime
+from ipaddress import ip_address
 from pathlib import Path
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
@@ -28,6 +29,15 @@ _SUPPORTED_WORKLOAD_SCHEDULERS = frozenset(s.value for s in Scheduler if s is no
 
 # Bounds persisted ingestion reasons; non-HTTP errors such as validation failures can be long.
 _MAX_REASON_CHARS = 500
+
+
+def _short_hostname(hostname: str) -> str:
+    """Shorten DNS names while preserving IP literals."""
+    try:
+        ip_address(hostname)
+    except ValueError:
+        return hostname.split(".", 1)[0]
+    return hostname
 
 
 def _service_timezone_name(start: datetime, end: datetime, configured: str | None = None) -> str:
@@ -99,6 +109,7 @@ class AttributionOrchestrator:
         outputs: list[OutputConnector],
         dump_observations_dir: Path | None = None,
         gpus_per_node: int | None = None,
+        node_to_nvl_domain: dict[str, str] | None = None,
     ):
         self.execution_context_adapters = execution_context_adapters
         self.log_connectors = log_connectors
@@ -107,6 +118,7 @@ class AttributionOrchestrator:
         self.outputs = outputs
         self.dump_observations_dir = dump_observations_dir
         self.gpus_per_node = gpus_per_node
+        self.node_to_nvl_domain = dict(node_to_nvl_domain) if node_to_nvl_domain is not None else None
         # Per-run counters surfaced via `last_run_stats` so callers can decide
         # whether to exit non-zero. `succeeded` counts contexts whose verdict
         # reached at least one output sink. `conflicted` counts contexts rejected
@@ -172,6 +184,33 @@ class AttributionOrchestrator:
         """Collect available evidence, report coverage, attribute it and deliver the result to outputs."""
         # Collect before opening a session so collection/dump failures cannot
         # strand a newly created handle. A duplicate may still do this work.
+        ctx = dict(ctx)
+        if "node_to_nvl_domain" not in ctx and self.node_to_nvl_domain is not None:
+            nodes = {node.lower() for node in ctx.get("nodes", [])}
+            qualified_nodes: dict[str, list[str]] = {}
+            for allocated in nodes:
+                short_node = _short_hostname(allocated)
+                if short_node != allocated:
+                    qualified_nodes.setdefault(short_node, []).append(allocated)
+            membership: dict[str, str] = {}
+            for hostname, domain in self.node_to_nvl_domain.items():
+                node = hostname.lower()
+                if node not in nodes:
+                    short_node = _short_hostname(node)
+                    if short_node in nodes:
+                        node = short_node
+                    elif short_node == node:
+                        matches = qualified_nodes.get(short_node, [])
+                        if len(matches) > 1:
+                            raise ValueError(f"NVL inventory hostname matches multiple allocated nodes: {node!r}")
+                        if len(matches) == 1:
+                            node = matches[0]
+                if node not in nodes:
+                    continue
+                if node in membership and membership[node] != domain:
+                    raise ValueError(f"NVL inventory contains conflicting domains for {node!r}")
+                membership[node] = domain
+            ctx["node_to_nvl_domain"] = membership
         connector_reports: list[ConnectorReport] = []
         batches: list[tuple[ConnectorReport, list[dict]]] = []
         for collector in collectors:
@@ -258,6 +297,10 @@ class AttributionOrchestrator:
             return None
 
         result = enrich_attribution_result(result, connector_reports, ingestion_reports)
+        if ctx.get("node_to_nvl_domain") is not None:
+            # Save the submitted topology with each run, even when a later run
+            # of the same job replaces its execution-context metadata.
+            result["node_to_nvl_domain"] = dict(ctx["node_to_nvl_domain"])
 
         # Per-sink try/except: a broken sqlite write must not skip the
         # other sinks for the same ctx.
@@ -362,6 +405,8 @@ class AttributionOrchestrator:
             scheduler = ctx.get("workload_type")
         if scheduler in _SUPPORTED_WORKLOAD_SCHEDULERS:
             workload["scheduler"] = scheduler
+        if ctx.get("node_to_nvl_domain") is not None:
+            workload["node_to_nvl_domain"] = dict(ctx["node_to_nvl_domain"])
         if "failed_node" in ctx:
             workload["failed_node"] = ctx["failed_node"].lower()
         if "cancelled_by" in ctx:
