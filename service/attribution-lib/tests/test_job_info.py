@@ -283,6 +283,26 @@ class TestNodeToRanksBuilder:
         assert job_info.num_gpus == 0
         assert job_info.node_from_rank == {}
 
+    @pytest.mark.parametrize(
+        ("node_to_ranks", "max_rank", "num_ranked_nodes"),
+        [
+            pytest.param({"node-a": [0, 1, 2, 3], "node-b": [4, 5, 6, 7]}, 7, 2, id="every-node-ranked"),
+            pytest.param(
+                {"coordinator": [], "node-a": [0, 1, 2, 3], "node-b": [4, 5, 6, 7]}, 7, 2, id="rankless-coordinator"
+            ),
+            pytest.param({"node-a": [], "node-b": []}, -1, 0, id="no-node-ranked"),
+            pytest.param({}, -1, 0, id="empty-mapping"),
+        ],
+    )
+    def test_rank_summary_counts_only_nodes_with_ranks(
+        self, simple_job_factory, node_to_ranks, max_rank, num_ranked_nodes
+    ):
+        """build() stores the highest rank and the number of nodes that run ranks."""
+        job_info = simple_job_factory(node_to_ranks=node_to_ranks)
+
+        assert job_info.max_rank == max_rank
+        assert job_info.num_ranked_nodes == num_ranked_nodes
+
 
 class TestUniformNodeToRanks:
     """The JobInfoBuilder.uniform_node_to_ranks helper for callers that have
