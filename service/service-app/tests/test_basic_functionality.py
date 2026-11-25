@@ -652,6 +652,25 @@ class TestV2AttributionShape:
 
         assert "decision_graph" not in body["verdict"]
 
+    @pytest.mark.parametrize(
+        ("status", "workload_cancelled_by", "expected"),
+        [
+            ("CANCELED", "user-a", "user-a"),
+            ("TIMEOUT", None, "Timeout"),
+            ("FAILED", None, None),
+        ],
+        ids=["scheduler-names-the-canceller", "rules-name-the-time-limit", "no-canceller-is-json-null"],
+    )
+    def test_verdict_reports_the_canceller_that_the_rules_name(self, client, status, workload_cancelled_by, expected):
+        """The verdict always has cancelled_by: the workload's value, the rules' value, or JSON null."""
+        info = make_up_attributor_info("v2", status=status, cancelled_by=workload_cancelled_by)
+        att_id = post_attributor(client, info)
+
+        verdict = client.get(f"/v2/attributor/{att_id}/attribution").json()["verdict"]
+
+        assert "cancelled_by" in verdict
+        assert verdict["cancelled_by"] == expected
+
     def test_decision_graph_is_included_when_requested(self, client):
         att_id = post_attributor(client, make_up_attributor_info("v2"))
 

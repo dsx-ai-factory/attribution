@@ -264,6 +264,16 @@ class TestV2Models:
         assert verdict.cancellation_actors == [CancellationActor.USER]
         assert verdict.failure_domains == []
 
+    @pytest.mark.parametrize("cancelled_by", ["Timeout", None], ids=["named", "not-named"])
+    def test_verdict_reports_the_canceller_of_the_lib_result(self, cancelled_by):
+        """The verdict carries the lib's cancelled_by, and null when the lib names no canceller."""
+        result = _empty_result()
+        result.cancelled_by = cancelled_by
+
+        verdict = AttributionResponseV2.from_lib_attribution(set(), result).verdict
+
+        assert verdict.cancelled_by == cancelled_by
+
     def test_compound_outcome_fields_for_incomplete_info(self):
         """Incomplete Info (the no-match default) -> all four terminal states, Aleatoric uncertainty."""
         verdict = AttributionResponseV2.from_lib_attribution(set(), _empty_result()).verdict

@@ -397,6 +397,14 @@ class Verdict(BaseModel):
             "consult terminal_states to distinguish these cases."
         ),
     )
+    cancelled_by: str | None = Field(
+        default=None,
+        description=(
+            "Identity that the rules name as the canceller of the workload. The value starts as the "
+            "workload's `cancelled_by`. The rules can replace it, for example with `Timeout` when the "
+            "workload reached its time limit. Null means that the rules name no canceller."
+        ),
+    )
     uncertainty_type: Optional[UncertaintyType] = Field(
         default=None,
         description=(
@@ -550,6 +558,7 @@ class AttributionResponseV2(ResponseModel):
             "terminal_states": sorted(compound.terminal_states),
             "failure_domains": sorted(compound.failure_domains),
             "cancellation_actors": sorted(compound.cancellation_actors),
+            "cancelled_by": result.cancelled_by,
             "uncertainty_type": compound.uncertainty,
         }
         if decision_graph_requested:

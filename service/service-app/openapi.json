@@ -2855,6 +2855,18 @@
             "description": "Plausible initiators, conditional on Cancelled. Values express alternatives without ranking or probabilities. Empty means cancellation is absent or its actor is unspecified; consult terminal_states to distinguish these cases.",
             "default": []
           },
+          "cancelled_by": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cancelled By",
+            "description": "Identity that the rules name as the canceller of the workload. The value starts as the workload's `cancelled_by`. The rules can replace it, for example with `Timeout` when the workload reached its time limit. Null means that the rules name no canceller."
+          },
           "uncertainty_type": {
             "anyOf": [
               {
