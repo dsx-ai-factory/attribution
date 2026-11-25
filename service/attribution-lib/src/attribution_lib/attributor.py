@@ -494,6 +494,7 @@ def _validate_source_format(context: ObservationContext) -> None:
             | ObservationSource.NODE_METRICS
             | ObservationSource.NVLINK_METRICS
             | ObservationSource.CSP_EVENT
+            | ObservationSource.SCHEDULER
         ):
             if context.format is not ObservationFormat.ENTRY_TIMESERIES:
                 raise MismatchedSourceAndFormatError(context.source, context.format)

@@ -1,0 +1,110 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Extractors for the SCHEDULER observation source.
+#
+# A client sends one entry for each fact that its scheduler or job launcher
+# reports about the job. Each extractor turns one entry into a generic event.
+# The refiners read these events through bundled_rules/common/scheduler_evidence.py,
+# so a fact that only one scheduler or launcher can provide needs no JobInfo field.
+#
+# Entry forms (a value contains no whitespace):
+#   job tag: <tag>
+#   job exit code: <code>
+#   job gpu count: <count>
+#   allocation failure: allocation=<id> state=<state> node=<node>
+#   execution cancellation: execution=<id> cancelled_by=<identity>
+#
+# The entry `ts` of an execution cancellation is the cancellation time, and it is required.
+
+author  = "NVIDIA Attribution team"
+sources = ["SCHEDULER"]
+
+
+[[extractor]]
+name     = "SchedulerJobTag"
+match_re = '^job tag: (?P<tag>\S+)$'
+
+[extractor.emit]
+type       = "generic_event"
+event_type = "Scheduler.job.tag"
+payload    = { tag = "{tag}" }
+
+[[extractor.cases]]
+expect = "generic"
+line   = "job tag: nvrx"
+[[extractor.cases]]
+expect = "no_match"
+line   = "job tag: two words"
+
+
+[[extractor]]
+name     = "SchedulerJobExitCode"
+match_re = '^job exit code: (?P<exit_code>-?\d+)$'
+
+[extractor.emit]
+type       = "generic_event"
+event_type = "Scheduler.job.exit_code"
+payload    = { exit_code = "{exit_code}" }
+
+[[extractor.cases]]
+expect = "generic"
+line   = "job exit code: 0"
+[[extractor.cases]]
+expect = "no_match"
+line   = "job exit code: unknown"
+
+
+[[extractor]]
+name     = "SchedulerJobGpuCount"
+match_re = '^job gpu count: (?P<gpu_count>\d+)$'
+
+[extractor.emit]
+type       = "generic_event"
+event_type = "Scheduler.job.gpu_count"
+payload    = { gpu_count = "{gpu_count}" }
+
+[[extractor.cases]]
+expect = "generic"
+line   = "job gpu count: 0"
+[[extractor.cases]]
+expect = "no_match"
+line   = "job gpu count: -1"
+
+
+# The failure belongs to the allocation that contains this execution. The rules
+# decide from the job nodes if this execution inherits it.
+[[extractor]]
+name     = "SchedulerAllocationFailure"
+match_re = '^allocation failure: allocation=(?P<allocation_id>\S+) state=(?P<state>\S+) node=(?P<failed_node>\S+)$'
+
+[extractor.emit]
+type       = "generic_event"
+event_type = "Scheduler.allocation.failure"
+payload    = { allocation_id = "{allocation_id}", state = "{state}", node = "{failed_node}" }
+
+[[extractor.cases]]
+expect = "generic"
+line   = "allocation failure: allocation=1234 state=NODE_FAIL node=node-a"
+[[extractor.cases]]
+expect = "no_match"
+line   = "allocation failure: allocation=1234 state=NODE_FAIL"
+
+
+# The client must establish that the cancellation describes this execution.
+# The final state of the containing allocation alone does not establish it.
+[[extractor]]
+name     = "SchedulerExecutionCancellation"
+match_re = '^execution cancellation: execution=(?P<execution_id>\S+) cancelled_by=(?P<cancelled_by>\S+)$'
+
+[extractor.emit]
+type       = "generic_event"
+event_type = "Scheduler.execution.cancellation"
+payload    = { execution_id = "{execution_id}", cancelled_by = "{cancelled_by}" }
+
+[[extractor.cases]]
+expect = "generic"
+line   = "execution cancellation: execution=1234.0 cancelled_by=user-a"
+[[extractor.cases]]
+expect = "no_match"
+line   = "execution cancellation: execution=1234.0 cancelled_by="

@@ -2441,10 +2441,11 @@
           "eth_metrics",
           "network_syslog",
           "ufmlog",
-          "csp_event"
+          "csp_event",
+          "scheduler"
         ],
         "title": "Source",
-        "description": "The classes of observations that can be ingested.\n\n`job_keywords` takes the `string_list` format; every other implemented source takes `entry_timeseries`.\nSee `Format` for how each source reads its entries.\n\n- `slurm_info`\n\n    Automatically attached to JobInfo objects; not supported for other Observations. No relevant Format.\n\n- `job_keywords`\n\n    Keywords extracted from preprocessing some logs.\n\n- `applog`\n\n    Application's stdout/stderr.\n\n- `syslog`\n\n    Data from dmesg/syslog.\n\n- `health_check`\n\n    Data from health checks.\n\n- `ufmlog`\n\n    Fabric manager events.\n\n- `node_metrics`\n\n   Prometheus metrics data for node attribution.\n\n- `nvlink_metrics`\n\n   Prometheus metrics data for nvlink attribution.\n\n- `ib_metrics`\n\n   Not implemented.\n\n- `eth_metrics`\n\n   Not implemented.\n\n- `network_syslog`\n\n   Not implemented.\n\n- `csp_event`\n\n   CSP event events indicating infrastructure-level host failures,\n   repairs, or maintenance actions reported by the cloud service provider."
+        "description": "The classes of observations that can be ingested.\n\n`job_keywords` takes the `string_list` format; every other implemented source takes `entry_timeseries`.\nSee `Format` for how each source reads its entries.\n\n- `slurm_info`\n\n    Automatically attached to JobInfo objects; not supported for other Observations. No relevant Format.\n\n- `job_keywords`\n\n    Keywords extracted from preprocessing some logs.\n\n- `applog`\n\n    Application's stdout/stderr.\n\n- `syslog`\n\n    Data from dmesg/syslog.\n\n- `health_check`\n\n    Data from health checks.\n\n- `ufmlog`\n\n    Fabric manager events.\n\n- `node_metrics`\n\n   Prometheus metrics data for node attribution.\n\n- `nvlink_metrics`\n\n   Prometheus metrics data for nvlink attribution.\n\n- `ib_metrics`\n\n   Not implemented.\n\n- `eth_metrics`\n\n   Not implemented.\n\n- `network_syslog`\n\n   Not implemented.\n\n- `csp_event`\n\n   CSP event events indicating infrastructure-level host failures,\n   repairs, or maintenance actions reported by the cloud service provider.\n\n- `scheduler`\n\n   Facts that the scheduler or the job launcher reports about the job, such\n   as a job tag, the launcher exit code, the GPU count, a failure of the\n   containing allocation, or a cancellation of this execution."
       },
       "SourcedSymptom": {
         "properties": {
