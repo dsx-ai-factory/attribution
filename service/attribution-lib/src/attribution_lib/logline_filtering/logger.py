@@ -51,8 +51,12 @@ def _log_ignored_node_line(
             detail = "unable to extract node information from content"
         case InvalidRankError():
             rank = getattr(exception, "rank", "unknown")
+            ranked_nodes_count = len(set(job_info.node_from_rank.values()))
+            max_rank = max(job_info.node_from_rank, default=-1)
             reason = f"rank {rank} not found in job info"
-            detail = f"rank {rank} cannot be processed (job has {job_nodes_count} nodes, max rank: {int(job_nodes_count * job_info.RANKS_PER_NODE - 1)})"
+            detail = (
+                f"rank {rank} cannot be processed (job has {ranked_nodes_count} nodes with ranks, max rank: {max_rank})"
+            )
         case UnknownNodeError():
             node = getattr(exception, "node", "unknown")
             reason = f"node '{node}' not in job nodelist"
