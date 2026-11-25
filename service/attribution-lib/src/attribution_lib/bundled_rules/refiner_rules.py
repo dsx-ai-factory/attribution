@@ -2863,6 +2863,9 @@ def post_process_symptoms_refiner(context: RefinerContext):
         "ncclRemoteError",
         "ncclTimeout",
     ]:
+        # Keep the selected root's evidence consistent with the outcome.
+        if outcome is not None and nccl_error == outcome.value().root_cause_symptom:
+            continue
         # TODO: should still keep them for debugging purpose
         if nccl_error in symptoms and len(symptoms) > 1:
             symptoms.discard(nccl_error)
