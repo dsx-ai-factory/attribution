@@ -7,6 +7,8 @@ The extractors in ``scheduler_leaf_rules.toml`` turn each entry of the observati
 into a generic event. The refiners read the events through this module.
 """
 
+import logging
+
 from attribution_lib.event_helpers import query_events_with_source
 from attribution_lib.events import EventStream
 from attribution_lib.execution_cancellation import ExecutionCancellation
@@ -28,6 +30,12 @@ SCHEDULER_EVENT_TYPES = (
     EXECUTION_CANCELLATION_EVENT,
 )
 
+# Observations in the order that they arrived, then entries in the order of each observation.
+# The observation ID is a hash, so the first event ID of each observation gives its arrival.
+_ARRIVAL_ORDER = "MIN(e.id) OVER (PARTITION BY e.obs_context_id), e.line_num, e.id"
+
+logger = logging.getLogger(__name__)
+
 
 def scheduler_job_info(context: RefinerContext) -> JobInfo | None:
     """Return the job of a refiner context with its scheduler observation applied.
@@ -47,7 +55,9 @@ def job_with_scheduler_evidence(job_info: JobInfo, event_stream: EventStream | N
     """Return the job with the facts from its scheduler observation.
 
     A fact in the observation replaces the JobInfo input of the same name. Tags are
-    added to the JobInfo tags. A later entry of the same kind replaces an earlier entry.
+    added to the JobInfo tags. A later entry of the same kind replaces an earlier entry,
+    also when the entries arrive in different observations. A cancellation entry for
+    another execution or without a timestamp is ignored with a warning.
     A client that calls the library directly can still fill the JobInfo inputs, so a
     job without a scheduler observation is returned unchanged.
 
@@ -62,7 +72,7 @@ def job_with_scheduler_evidence(job_info: JobInfo, event_stream: EventStream | N
     if event_stream is None:
         return job_info
     names = {event_stream.mgr.types.get_id(name): name for name in SCHEDULER_EVENT_TYPES}
-    events = query_events_with_source(event_stream, list(names), order_by="e.line_num ASC")
+    events = query_events_with_source(event_stream, list(names), order_by=_ARRIVAL_ORDER)
     for _event_id, event_type, payload, source in events:
         job_info = _with_fact(job_info, names[event_type], payload, source)
     return job_info
@@ -89,5 +99,14 @@ def _with_fact(job_info: JobInfo, event: str, payload: dict[str, str], source: S
     if event == ALLOCATION_FAILURE_EVENT:
         failure = SchedulerFailure(payload["allocation_id"], payload["state"], payload["node"], source)
         return job_info._replace(allocation_failure=failure)
-    cancellation = ExecutionCancellation(payload["execution_id"], payload["cancelled_by"], source)
+    if payload["execution_id"] != job_info.id:
+        logger.warning(
+            "Ignoring a cancellation of execution %s in the observation of %s", payload["execution_id"], job_info.id
+        )
+        return job_info
+    try:
+        cancellation = ExecutionCancellation(payload["execution_id"], payload["cancelled_by"], source)
+    except ValueError as error:
+        logger.warning("Ignoring a cancellation entry of %s: %s", job_info.id, error)
+        return job_info
     return job_info._replace(execution_cancellation=cancellation)

@@ -141,8 +141,10 @@ forms. A value contains no whitespace.
 | `allocation failure: allocation=<id> state=<state> node=<node>` | A failure of the allocation that contains this execution. | The time the scheduler reported the failure. |
 | `execution cancellation: execution=<id> cancelled_by=<identity>` | A cancellation of this execution. `<id>` must be the workload ID. | The cancellation time. Required. |
 
-An entry in another form is ignored. If two entries give the same fact, the
-later entry applies. The declared `time_interval` must cover each `ts`.
+An entry in another form is ignored. A cancellation entry for another
+execution or without `ts` is ignored, and the service logs a warning. If two
+entries give the same fact, the later entry applies. This also applies to
+entries in different observations. The declared `time_interval` must cover each `ts`.
 
 ## Examples
 

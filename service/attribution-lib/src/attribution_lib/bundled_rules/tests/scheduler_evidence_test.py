@@ -232,19 +232,34 @@ def test_job_without_scheduler_observation_is_unchanged(simple_job_factory, even
     assert job_with_scheduler_evidence(job, None) is job
 
 
-def test_observed_cancellation_of_another_execution_is_rejected(simple_job_factory, attribute):
-    """The client must establish that the cancellation describes this execution."""
+def test_later_observation_replaces_a_fact_of_an_earlier_observation(simple_job_factory, event_manager, timezone):
+    """Entries of a later observation apply after the entries of an earlier one, whatever their line numbers."""
     job = simple_job_factory(job_id=JOB_ID, nodes=["node-b"], state="FAILED")
-    entry = {"body": "execution cancellation: execution=another-execution cancelled_by=user-a", "ts": _end_ns(job)}
+    stream = event_manager.create_stream("two-observations")
+    context = Context(
+        time_interval=TimeInterval(job.job_start_time, None),
+        source=Source.SCHEDULER,
+        format=Format.ENTRY_TIMESERIES,
+        timezone=timezone,
+    )
+    attributor = Attributor.new(stream, job)
+    attributor.ingest(Observation(context=context, lines=[NVRX_TAG_ENTRY, {"body": "job exit code: 1"}]))
+    attributor.ingest(Observation(context=context, lines=[{"body": "job exit code: 0"}]))
 
-    with pytest.raises(ValueError, match="different execution"):
-        attribute(job, scheduler=[entry])
+    assert job_with_scheduler_evidence(job, stream).exit_code == 0
 
 
-def test_observed_cancellation_without_a_timestamp_is_rejected(simple_job_factory, attribute):
-    """A cancellation entry needs the cancellation time in ``ts``."""
+@pytest.mark.parametrize(
+    ("execution", "has_ts"), [("another-execution", True), (JOB_ID, False)], ids=["another-execution", "no-timestamp"]
+)
+def test_invalid_observed_cancellation_is_ignored(execution, has_ts, simple_job_factory, attribute, caplog):
+    """A cancellation for another execution or without ``ts`` does not fail the attribution."""
     job = simple_job_factory(job_id=JOB_ID, nodes=["node-b"], state="FAILED")
-    entry = {"body": f"execution cancellation: execution={JOB_ID} cancelled_by=user-a"}
+    entry = {"body": f"execution cancellation: execution={execution} cancelled_by=user-a"}
+    if has_ts is True:
+        entry["ts"] = _end_ns(job)
 
-    with pytest.raises(ValueError, match="timestamp"):
-        attribute(job, scheduler=[entry])
+    result = attribute(job, scheduler=[entry])
+
+    assert result.outcome_attr.value().outcome != "Cancelled by User"
+    assert "Ignoring a cancellation" in caplog.text
