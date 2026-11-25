@@ -79,7 +79,7 @@ def completion_event():
     """Build a unique RFC-shaped completion with distinct run and job identities."""
     path = Path(__file__).parents[3] / "fixtures" / "kafka_completion_events.json"
     event = json.loads(path.read_text())[0]
-    event.update(id=str(uuid4()), type="com.nvidia.mfn.job.completed.v1", source="/mfn/runapi")
+    event.update(id=str(uuid4()))
     event["data"].update(
         id=f"run-{uuid4().hex}", job_id=f"job-{uuid4().hex}", scheduler="runapi", cluster="example-cluster"
     )
