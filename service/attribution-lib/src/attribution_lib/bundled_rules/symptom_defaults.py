@@ -1401,6 +1401,10 @@ outcome_symptom(
     doc="ce-deadlock-detected",
 )
 
+# The job-level rename leaves the extractor's original name on node evidence.
+# Keep it recognizable when the final DAG pass translates that evidence.
+known_symptom("pushrecv")
+
 outcome_symptom(
     "UserBuffer timeout",
     outcome="Fail MultiCategory",
