@@ -26,6 +26,7 @@
       "terminal_states": ["Fail"],
       "failure_domains": ["InfraHW"],
       "cancellation_actors": [],
+      "cancelled_by": null,
       "uncertainty_type": null
     },
     "symptoms": {
