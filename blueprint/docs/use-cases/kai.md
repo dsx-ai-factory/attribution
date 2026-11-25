@@ -118,6 +118,6 @@ defines retention and recovery limits.
 
 With retained history enabled, deleted `Job` and `JobSet` PodGroup attempts
 can be discovered while the required Pod, Job, JobSet, and PodGroup
-observations remain within the daemon retention and continuous-watch coverage
+snapshots remain within the daemon retention and continuous-watch coverage
 windows. Other owner kinds require the PodGroup and its owning workload
 resource to exist when discovery runs.

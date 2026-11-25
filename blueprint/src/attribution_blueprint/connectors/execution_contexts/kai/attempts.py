@@ -17,8 +17,8 @@ from attribution_blueprint.connectors.execution_contexts.kai.helpers import (
 from attribution_blueprint.kubernetes.attempts import (
     controller_owner,
     kai_podgroup_start_timestamp,
-    latest_pod_observations,
-    observations_by_uid,
+    latest_pod_snapshots,
+    snapshots_by_uid,
     parse_time,
     restart_attempt,
     restart_start_candidates,
@@ -263,10 +263,10 @@ def attempts_from_podgroup_history(
     """
     snapshots = [
         _normalize_snapshot(snapshot)
-        for snapshot in history.get("observations", [])
+        for snapshot in history.get("snapshots", [])
     ]
     resolved = _resolve_evidence(snapshots)
-    podgroups = observations_by_uid(
+    podgroups = snapshots_by_uid(
         item
         for item in snapshots
         if item["kind"] == "PodGroup"
@@ -514,7 +514,7 @@ def _podgroup_boundaries(
     for index, (_first_seen, pod_group_uid, timeline, _started_at) in enumerate(
         incarnations
     ):
-        deletion_observations = [
+        deletion_snapshots = [
             snapshot
             for snapshot in timeline
             if snapshot["eventType"] == "DELETED"
@@ -522,7 +522,7 @@ def _podgroup_boundaries(
         deletion = min(
             (
                 snapshot["selectedMetadata"]["deletionTimestamp"]
-                for snapshot in deletion_observations
+                for snapshot in deletion_snapshots
                 if snapshot["selectedMetadata"]["deletionTimestamp"]
             ),
             key=parse_time,
@@ -548,13 +548,13 @@ def _podgroup_boundaries(
             default=None,
         )
         has_successor = index + 1 < len(incarnations)
-        retired = bool(deletion_observations) or has_successor
+        retired = bool(deletion_snapshots) or has_successor
         boundaries[pod_group_uid] = _PodGroupBoundary(
             end=end,
             # Collection time bounds a retired interval but cannot prove the
             # exact execution or membership boundary.
             observed_end=min(
-                [item["observedAt"] for item in deletion_observations]
+                [item["observedAt"] for item in deletion_snapshots]
                 + ([incarnations[index + 1][2][0]["observedAt"]] if has_successor else []),
                 key=parse_time, default=None,
             ),
@@ -1051,10 +1051,10 @@ def _resolve_evidence(snapshots: list[dict]) -> _ResolvedEvidence:
             job_restarts,
         ),
         terminals=_terminal_events(snapshots, job_restarts),
-        pods=latest_pod_observations(snapshots),
+        pods=latest_pod_snapshots(snapshots),
         jobs={
             uid: timeline[-1]
-            for uid, timeline in observations_by_uid(
+            for uid, timeline in snapshots_by_uid(
                 snapshot
                 for snapshot in snapshots
                 if snapshot["kind"] == "Job"
@@ -1105,7 +1105,7 @@ def _assign_terminals(
                 if assigned[index] is None:
                     assigned[index] = terminal
                 # This interval owns the transition even when another
-                # observation already supplied its terminal details.
+                # snapshot already supplied its terminal details.
                 break
     return assigned
 

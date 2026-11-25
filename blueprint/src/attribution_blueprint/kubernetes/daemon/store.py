@@ -12,7 +12,7 @@ from attribution_blueprint.kubernetes.daemon.models import (
     CoverageGap,
     CoverageGapReason,
     PlacementRecord,
-    ResourceObservation,
+    ResourceSnapshot,
     WatchCoverage,
 )
 
@@ -27,26 +27,26 @@ class PlacementConflictError(RuntimeError):
     pass
 
 
-class ObservationAppendResult(str, Enum):
+class SnapshotAppendResult(str, Enum):
     APPENDED = "appended"
     DUPLICATE = "duplicate"
     UPDATED = "updated"
 
 
-class ObservationConflictError(RuntimeError):
+class SnapshotConflictError(RuntimeError):
     pass
 
 
 @dataclass(frozen=True)
 class CaptureResult:
-    observation: ObservationAppendResult
+    snapshot: SnapshotAppendResult
     placement: CreateResult | None
 
 
-class ObservationJournal(Protocol):
-    def capture_observation(
+class SnapshotJournal(Protocol):
+    def capture_snapshot(
         self,
-        observation: ResourceObservation,
+        snapshot: ResourceSnapshot,
         *,
         source_name: str,
         placement: PlacementRecord | None,
@@ -54,19 +54,19 @@ class ObservationJournal(Protocol):
         mark_deleted: bool = False,
     ) -> CaptureResult: ...
 
-    def list_observations_for_uid(
+    def list_snapshots_for_uid(
         self,
         cluster_id: str,
         namespace: str,
         uid: str,
-    ) -> list[ResourceObservation]: ...
+    ) -> list[ResourceSnapshot]: ...
 
-    def list_latest_observations_for_kind(
+    def list_latest_snapshots_for_kind(
         self,
         cluster_id: str,
         namespace: str,
         kind: str,
-    ) -> list[ResourceObservation]: ...
+    ) -> list[ResourceSnapshot]: ...
 
     def list_history_controller_uids(
         self,
@@ -136,18 +136,18 @@ class ObservationJournal(Protocol):
         namespace: str,
     ) -> list[CoverageGap]: ...
 
-    def list_observations_for_controller(
+    def list_snapshots_for_controller(
         self,
         cluster_id: str,
         namespace: str,
         controller_uid: str,
-    ) -> list[ResourceObservation]: ...
+    ) -> list[ResourceSnapshot]: ...
 
 class PlacementReader(Protocol):
     def list_for_resource(self, namespace: str, resource_uid: str) -> list[PlacementRecord]: ...
 
 
-class PlacementStore(PlacementReader, ObservationJournal, Protocol):
+class PlacementStore(PlacementReader, SnapshotJournal, Protocol):
     def prune_expired(self) -> None: ...
 
     def get_by_pod_uid(self, pod_uid: str) -> PlacementRecord | None: ...

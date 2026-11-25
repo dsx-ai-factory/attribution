@@ -2175,7 +2175,7 @@ def test_started_live_and_retained_resources_share_canonical_attempt(mocker):
     history_reader = mocker.Mock()
     history_reader.find_histories.return_value = [
         {
-            "observations": snapshots_from_live_resources(
+            "snapshots": snapshots_from_live_resources(
                 podgroup,
                 [retained_pod],
                 [retained_owner],
@@ -2232,7 +2232,7 @@ def test_live_restart_evidence_corrects_provisional_retained_identity(
     history_reader = mocker.Mock()
     history_reader.find_histories.return_value = [
         {
-            "observations": [
+            "snapshots": [
                 {
                     "kind": "PodGroup",
                     "metadata": {
