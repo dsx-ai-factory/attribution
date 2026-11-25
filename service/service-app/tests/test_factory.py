@@ -4,8 +4,10 @@
 import asyncio
 import subprocess
 import sys
+from pathlib import Path
 from unittest.mock import MagicMock
 
+import pytest
 from fastapi import Request, Response
 from loguru import logger
 
@@ -25,6 +27,138 @@ assert attribution_lib.initialized is False
     subprocess.run([sys.executable, "-c", code], check=True, timeout=30)
 
 
+def _write_config(tmp_path: Path, text: str) -> Path:
+    """Write a library TOML file.
+
+    Args:
+        tmp_path: Directory for the file.
+        text: TOML content.
+
+    Returns:
+        Path to the written file.
+    """
+    config = tmp_path / "attribution.toml"
+    config.write_text(text)
+    return config
+
+
+def test_factory_reads_library_settings_from_config_file(monkeypatch, tmp_path):
+    """Load all five library settings through the normal service factory.
+
+    Args:
+        monkeypatch: Pytest fixture for setting process variables.
+        tmp_path: Directory for the test configuration, mapping, and additional rules.
+    """
+    (tmp_path / "nodes.csv").write_text("id,instanceId,ip\nnode-a,instance-a,127.0.0.1\n")
+    (tmp_path / "rules").mkdir()
+    (tmp_path / "rules" / "extra.py").write_text(
+        'from attribution_lib.rules import declare_event_types\ndeclare_event_types("test.additional")\n'
+    )
+    config = _write_config(
+        tmp_path,
+        """
+applog_parse_timestamp = false
+ignored_hostname_prefixes = ["scanner-"]
+node_mapping_file = "nodes.csv"
+node_domain_regex = '(?P<domain>rack\\d+)-node\\d+$'
+rules_paths = ["rules"]
+""",
+    )
+    monkeypatch.setenv("ATTRIBUTION_CONFIG_FILE", str(config))
+    code = """
+import attribution_lib
+from app.factory import create_app
+from attribution_lib.observation.inbound import Source
+from attribution_lib.rules_engine import SOURCE_CONFIGS
+
+create_app()
+assert SOURCE_CONFIGS[Source.APPLOG].body_fallbacks.parse_timestamp is False
+assert attribution_lib.ignored_hostname_prefixes == ["scanner-"]
+assert attribution_lib.ip_to_nodenames == {"127.0.0.1": "node-a"}
+assert attribution_lib.node_domain_resolver("RACK12-NODE1.example.org") == "rack12"
+assert attribution_lib.node_domain_resolver("node-a") is None
+assert attribution_lib.get_rules_engine().declared_event_types == {"test.additional"}
+"""
+    subprocess.run([sys.executable, "-c", code], check=True, timeout=30)
+
+
+def test_factory_warns_and_starts_with_empty_rules_and_ip_only_mapping(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Warn about missing rules and instance IDs while keeping IP lookup available.
+
+    Args:
+        monkeypatch: Pytest fixture for setting process variables.
+        tmp_path: Directory for the test configuration, rule directory, and node mapping.
+    """
+    rules_path = tmp_path / "rules"
+    rules_path.mkdir()
+    mapping_file = tmp_path / "nodes.csv"
+    mapping_file.write_text("id,ip\nnode-a,192.0.2.1\n")
+    config = _write_config(
+        tmp_path, f"rules_paths = [{str(rules_path)!r}]\nnode_mapping_file = {str(mapping_file)!r}\n"
+    )
+    monkeypatch.setenv("ATTRIBUTION_CONFIG_FILE", str(config))
+    monkeypatch.setenv("LOG_LEVEL", "WARNING")
+    code = """
+import attribution_lib
+from app.factory import create_app
+from fastapi.testclient import TestClient
+
+with TestClient(create_app()) as client:
+    assert client.get("/v2/healthz").status_code == 200
+    assert attribution_lib.get_rules_engine().all_rule_names == set()
+    assert attribution_lib.ip_to_nodenames == {"192.0.2.1": "node-a"}
+"""
+    result = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, check=True, timeout=30)
+    assert "WARNING" in result.stdout
+    assert "rules_paths loaded no attribution rules" in result.stdout
+    assert "node_mapping_file has no instanceId column" in result.stdout
+
+
+@pytest.mark.parametrize(
+    ("text", "error"),
+    [
+        ('applog_parse_timestamp = "yes"', "applog_parse_timestamp"),
+        ('ignored_hostname_prefixes = "scanner-"', "ignored_hostname_prefixes"),
+        ('ignored_hostname_prefixes = [" "]', "ignored_hostname_prefixes"),
+        ('node_mapping_file = ""', "node_mapping_file"),
+        ('node_domain_regex = "("', "node_domain_regex"),
+        ('node_domain_regex = "rack"', "node_domain_regex"),
+        ("rules_paths = [1]", "rules_paths"),
+        ('rules_paths = ["missing"]', "rules_paths"),
+        ("rules_path = []", "rules_path"),
+        ("not toml", "ATTRIBUTION_CONFIG_FILE"),
+    ],
+)
+def test_factory_rejects_invalid_library_config(monkeypatch, tmp_path, text, error):
+    """Name the invalid key when the service cannot start.
+
+    Args:
+        monkeypatch: Pytest fixture for setting process variables.
+        tmp_path: Directory for the test configuration.
+        text: Invalid TOML content.
+        error: Text that the startup error must contain.
+    """
+    monkeypatch.setenv("ATTRIBUTION_CONFIG_FILE", str(_write_config(tmp_path, text)))
+    monkeypatch.setattr(factory, "setup_logging", lambda: None)
+    with pytest.raises(ValueError, match=error):
+        factory.create_app()
+
+
+def test_factory_rejects_missing_config_file(monkeypatch, tmp_path):
+    """Fail startup when ATTRIBUTION_CONFIG_FILE names a file that does not exist.
+
+    Args:
+        monkeypatch: Pytest fixture for setting process variables.
+        tmp_path: Directory without the configuration file.
+    """
+    monkeypatch.setenv("ATTRIBUTION_CONFIG_FILE", str(tmp_path / "missing.toml"))
+    monkeypatch.setattr(factory, "setup_logging", lambda: None)
+    with pytest.raises(ValueError, match="ATTRIBUTION_CONFIG_FILE"):
+        factory.create_app()
+
+
 def test_lifespan_cancels_and_awaits_cleanup_task(monkeypatch):
     """Verify application shutdown stops the background cleanup task.
 
@@ -33,7 +167,6 @@ def test_lifespan_cancels_and_awaits_cleanup_task(monkeypatch):
     """
     provider = MagicMock()
     monkeypatch.setattr(factory, "setup_logging", lambda: provider)
-    monkeypatch.setattr(factory, "setup_rules", lambda: None)
     app = factory.create_app()
 
     async def exercise_lifespan():
