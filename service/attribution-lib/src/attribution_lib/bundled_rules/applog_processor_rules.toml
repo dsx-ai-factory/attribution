@@ -175,3 +175,22 @@ name = "LocalHcaCommandFailure"
 match_re = 'Call to (?P<verb>ibv_query_qp|ibv_create_cq|ibv_reg_mr|ibv_dereg_mr) failed with (?P<error>[^\r\n]+)'
 processor = "applog:LocalHcaCommandFailure"
 derived_event_types = ["Application.hca.command_failure", "Attribution.node.bad", "Attribution.node.interesting"]
+
+# Ray memory-monitor OOM kills. Ray names the node that ran low on memory only by
+# IP and usually logs the kill on the head node, so applog:RayHostOomKill resolves
+# the IP instead of using the logging node. The first stanza matches the kill
+# details: on the error's first line from Ray 2.55 ("used" and "limit" from 2.59),
+# and through 2.54 on the line after "Task was killed ...", which names no node and
+# is not matched ("where the lease" from 2.50). The second matches the raylet's
+# periodic kill summary.
+[[extractor]]
+name                = "RayMemoryMonitorOomKill"
+match_re            = 'Memory on the node \(IP: (?P<ip>\d+(?:\.\d+){3}), ID: [0-9a-fA-F]+\) (?:where the (?:task|lease) \(.*?\) was running )?was \d+(?:\.\d+)?GB (?:used )?/ \d+(?:\.\d+)?GB'
+processor           = "applog:RayHostOomKill"
+derived_event_types = ["Attribution.node.bad"]
+
+[[extractor]]
+name                = "RayletOomKillSummary"
+match_re            = '\d+ Workers \(tasks / actors\) killed due to memory pressure \(OOM\), \d+ Workers crashed due to other reasons at node \(ID: [0-9a-fA-F]+, IP: (?P<ip>\d+(?:\.\d+){3})\b'
+processor           = "applog:RayHostOomKill"
+derived_event_types = ["Attribution.node.bad"]

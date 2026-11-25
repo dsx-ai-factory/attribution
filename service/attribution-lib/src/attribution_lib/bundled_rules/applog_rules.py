@@ -29,6 +29,7 @@ import attribution_lib
 from attribution_lib.attr_types import BadPairInfo
 from attribution_lib.event_helpers import query_events_with_source
 from attribution_lib.events import BAD_PAIR_EVENT_TYPES, DemotionTypes, sql_placeholders
+from attribution_lib.exceptions import UnknownNodeError
 from attribution_lib.network_identity import NetworkSourceIdentity, network_source_identity, normalize_network_hostname
 from attribution_lib.observation.inbound import Source as ObsSource
 from attribution_lib.rule_helpers import _bad, _interesting
@@ -617,6 +618,22 @@ def connection_closed_by_remote_peer_event(
     if matches_ignored_hostname_prefix(peer_node) or matches_ignored_hostname_prefix(raw_peer):
         return []
     return [_bad(peer_node, "Connection closed", source, demotion="Connection closed by remote peer")]
+
+
+@rule_processor("applog:RayHostOomKill")
+def ray_host_oom_kill_event(groups: dict[str, str], source: Source, ctx: RuleContext) -> list[EventTriple]:
+    """Emit a user-task OOM kill on the job node at the IP that Ray reported.
+
+    Ray usually logs the kill on the head node, so the logging node is never used.
+    An IP that maps to no job node gives a job-level symptom.
+    """
+    # get_hostname returns an unmapped IP unchanged, so a job node named by its IP
+    # still matches. verify_node compares an IP whole, never as a short name.
+    try:
+        node = ctx.job_info.verify_node(get_hostname(groups["ip"])) if ctx.job_info else None
+    except UnknownNodeError:
+        node = None
+    return [_bad(node, "OOM kill of user task", source)]
 
 
 # BusErrorSignal, BusErrorKeyword, and AddressAlreadyInUse ported to
