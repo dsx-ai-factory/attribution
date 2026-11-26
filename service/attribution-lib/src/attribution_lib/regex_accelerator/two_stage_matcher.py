@@ -76,6 +76,9 @@ class TwoStageMatcher:
 
         def add_literal(literal: str, key: Hashable) -> None:
             """Helper to add a literal->pattern mapping"""
+            # Fold literal so case-insensitive patterns pass the candidate check
+            # Stage 2 runs the full regex, so case-sensitive patterns stay as before
+            literal = literal.casefold()
             if literal not in literal_to_patterns:
                 literal_to_patterns[literal] = []
             if key not in literal_to_patterns[literal]:
@@ -177,7 +180,8 @@ class TwoStageMatcher:
         """
         result: set[Hashable] = set()
         if self.has_automaton:
-            for _, (_literal, pattern_keys) in self.automaton.iter(line):
+            # casefold to keep line case-insensitive
+            for _, (_literal, pattern_keys) in self.automaton.iter(line.casefold()):
                 result.update(pattern_keys)
         result.update(self.always_check)
         return result
