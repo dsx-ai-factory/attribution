@@ -20,6 +20,7 @@ from release_git import (
     LatestTags,
     ReleaseError,
     TagInfo,
+    changes_beyond_release_edits,
     closure_paths,
     git,
     latest_tags,
@@ -131,7 +132,6 @@ def _log_since(repo: Path, name: str, tag: Optional[str]) -> str:
     ).rstrip()
 
 
-# TODO(pforderique): Call this once first official literals land.
 def _rule_no_decrease(status: ComponentStatus) -> RuleResult:
     """A literal must not go below the base literal; versions only move forward."""
     if not status.decreased:
@@ -142,6 +142,19 @@ def _rule_no_decrease(status: ComponentStatus) -> RuleResult:
     return Violation(
         status.name,
         f'literal "{status.literal}" is below base "{status.base_literal}"',
+    )
+
+
+def _rule_release_files_only(repo: Path, base: str) -> RuleResult:
+    """A release PR changes nothing beyond release edits; see `changes_beyond_release_edits`."""
+    merge_base = git(repo, "merge-base", base, "HEAD").strip()
+    other = changes_beyond_release_edits(repo, merge_base, ["."])
+    if not other:
+        return Pass("release PR", "changes only release files")
+    return Violation(
+        "release PR",
+        "a release PR may change only version literals, CHANGELOG.md files and "
+        "generated files; move these changes to their own PR: " + ", ".join(other),
     )
 
 
@@ -296,4 +309,21 @@ def check_release(repo: Path, statuses: dict[str, ComponentStatus]) -> list[Rule
         for dep in COMPONENTS[name].closure:
             results.extend(_check_dependency(repo, status, statuses[dep], stable))
         results.append(_rule_changelog_entry(repo, status))
+    return results
+
+
+def check_release_pr(
+    repo: Path, statuses: dict[str, ComponentStatus], base: str, *, light: bool
+) -> list[RuleResult]:
+    """Rule outcomes for a PR into `base`; empty unless some literal changed.
+
+    `light` is for the PR that syncs a release back into the default branch (main), which
+    can carry later content than the tag; only the file set and no-decrease rules apply.
+    """
+    if not is_release_pr(statuses):
+        return []
+    results = [_rule_release_files_only(repo, base)]
+    results.extend(_rule_no_decrease(s) for s in statuses.values())
+    if not light:
+        results.extend(check_release(repo, statuses))
     return results

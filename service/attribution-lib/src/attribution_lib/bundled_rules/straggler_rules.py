@@ -10,6 +10,7 @@ Megatron rules parse ranks inline and emit completed group events.
 import re
 
 from attribution_lib.bundled_rules.common.megatron import (
+    MEGATRON_STRAGGLER_BOTTOM_RANKS,
     MEGATRON_STRAGGLER_QUALIFIER_TYPE,
     MEGATRON_STRAGGLER_SCORE_TYPE,
     MEGATRON_STRAGGLER_TOP_RANKS,
@@ -54,26 +55,60 @@ def _parse_megatron_ranks(
     return items
 
 
-@rule_processor("straggler:MegatronStragglerTop")
-def megatron_top(groups: dict[str, str], node: str, source: Source, ctx: RuleContext) -> list[EventTriple]:
-    ranks = _parse_megatron_ranks(groups["ranks"], source, ctx, MEGATRON_STRAGGLER_TOP_RANKS)
+def _megatron_group_event(
+    ranks_str: str,
+    source: Source,
+    ctx: RuleContext,
+    *,
+    rule_name: str,
+    qualifier: StragglerQualifier,
+    event_type: str,
+) -> list[EventTriple]:
+    """Emit one Megatron straggler group event for a "Bottom" or "Top" report line."""
+    ranks = _parse_megatron_ranks(ranks_str, source, ctx, rule_name)
     if not ranks:
         return []
 
     score_type_set = SourceSet(StragglerScoreType.INDIVIDUAL)
     score_type_set.add(source.derived(rule=MEGATRON_STRAGGLER_SCORE_TYPE))
 
-    qual_set = SourceSet(StragglerQualifier.BEST)
+    qual_set = SourceSet(qualifier)
     qual_set.add(source.derived(rule=MEGATRON_STRAGGLER_QUALIFIER_TYPE))
 
     group = MegatronStragglerGroup(ranks, qual_set, score_type_set)
     return [
         EventTriple(
-            type="Application.MegatronStraggler.top",
+            type=event_type,
             payload={"data": group},
             source=ranks[0].source,
         )
     ]
+
+
+@rule_processor("straggler:MegatronStragglerBottom")
+def megatron_bottom(groups: dict[str, str], node: str, source: Source, ctx: RuleContext) -> list[EventTriple]:
+    """Emit the lowest-throughput ranks. ``Collect.MegatronStraggler`` flags straggler ranks from this group."""
+    return _megatron_group_event(
+        groups["ranks"],
+        source,
+        ctx,
+        rule_name=MEGATRON_STRAGGLER_BOTTOM_RANKS,
+        qualifier=StragglerQualifier.WORST,
+        event_type="Application.MegatronStraggler.bottom",
+    )
+
+
+@rule_processor("straggler:MegatronStragglerTop")
+def megatron_top(groups: dict[str, str], node: str, source: Source, ctx: RuleContext) -> list[EventTriple]:
+    """Emit the highest-throughput ranks. ``Collect.MegatronStraggler`` infers its threshold from this group."""
+    return _megatron_group_event(
+        groups["ranks"],
+        source,
+        ctx,
+        rule_name=MEGATRON_STRAGGLER_TOP_RANKS,
+        qualifier=StragglerQualifier.BEST,
+        event_type="Application.MegatronStraggler.top",
+    )
 
 
 @collector_def(

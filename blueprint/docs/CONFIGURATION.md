@@ -388,9 +388,18 @@ For a complete runnable configuration, see
 
 ### `[eca.kai]`
 
-Use the KAI adapter for Kubernetes batch workloads scheduled by the KAI
-scheduler. It reads KAI `PodGroup` objects, follows owner references to Job
-or JobSet pods, and normalizes the result into execution contexts. See
+Use the KAI adapter for Kubernetes workloads scheduled by the KAI scheduler.
+It reads KAI `PodGroup` objects, resolves owning `Job`, `JobSet`,
+`LeaderWorkerSet`, `PyTorchJob`, `RayJob`, `Deployment`, or
+`DynamoGraphDeployment` resources, joins verified member Pods, and normalizes
+the result into execution contexts. Batch owners supply terminal `COMPLETED`,
+`FAILED`, `TIMEOUT` (for `DeadlineExceeded`, `PreRunningDeadlineExceeded`, or
+a `PyTorchJob` whose `Failed` condition reports an exceeded deadline), and
+`CANCELLED` (for a stopped `RayJob`) states and end times, while active or
+long-running serving workloads (`Deployment`, `LeaderWorkerSet` without a
+`Failed` condition, and `DynamoGraphDeployment`) keep an open `RUNNING` window
+ending at `now()` (or `NODE_FAIL` when a member Pod reports node loss) while
+preserving native rollout or reconciliation status in `owner_state`. See
 [Attribute KAI PodGroups](./use-cases/kai.md) for the full use case.
 
 Example:
@@ -428,7 +437,9 @@ can have missing `nodes` or `pod_names`.
 The KAI adapter reads from the same `kubernetes-daemon` installation used for
 Kueue (see [Kubernetes daemon](#kubernetes-daemon) above), scoped by KAI
 PodGroup UID instead of Kueue Workload UID; enable the KAI integration on
-that installation. Point the adapter at the Service:
+that installation. Retained placement recovery through `kubernetes-daemon`
+currently covers `Job` and `JobSet` owners; other owner kinds use live Pods
+only. Point the adapter at the Service:
 
 ```toml
 [eca.kai]
@@ -1017,6 +1028,40 @@ A context without a `cluster`, or with an empty one, uses `query_kwargs.cluster`
 Enable the setting only when the context's `cluster` values match the values in
 your log fields; see [Cluster From The Execution Context](#cluster-from-the-execution-context).
 
+### HEALTH_CHECK
+
+Use `[log.health_check]` for output from a node health check, such as a Slurm `HealthCheckProgram` or an epilog hook, that reports a node fault after the workload on it has ended. The service's `HEALTH_CHECK` source accepts these lines. The bundled rule set currently has no `HEALTH_CHECK` extractors, so the source only changes a verdict once rules exist for the messages your health check emits.
+
+The source accepts the same `local_file` and `loki` components as `syslog`, with two differences:
+
+- The default collection window is the execution context's interval plus ten minutes, matching the service's own `HEALTH_CHECK` window. A health check that logs a drain a few minutes after the job ends is still collected, and a yearless `Mon DD HH:MM:SS` timestamp on such a line is dated against that extended window rather than the job end.
+- Collection runs once, when the context is attributed, and does not wait for the window to close. A line is collected only if it exists by then, so with [`[eca.kafka]`](#ecakafka), where a job-completion event can be attributed seconds after the job ends, run discovery late enough after job end for the health check to have logged. The Blueprint does not reprocess a context later.
+- There are no bundled LogQL templates for this source. With `loki`, set `query` or `queries` to the selector your health check logs under; omitting both, setting an empty `queries` list, or giving a blank query is a configuration error.
+
+```toml
+[log.health_check]
+component = "loki"
+
+[log.health_check.loki]
+endpoint = "https://loki.example"
+query = '{{service_name="slurm-cluster", syslog_identifier="node-health-check"}}'
+node_label = "host_name"
+
+[log.health_check.loki.auth]
+type = "token"
+token_env = "LOKI_TOKEN"
+```
+
+With `local_file`, the layout is the same as [Local File SYSLOG](#local-file-syslog): each configured path is a base directory with one child directory per execution-context node, and every entry is tagged with that directory's node. The service can read a hostname only out of an RFC 3164 line, so this keeps ISO 8601 and RFC 5424 lines. Each line must carry its own timestamp; the service drops an undated `HEALTH_CHECK` entry.
+
+```toml
+[log.health_check]
+component = "local_file"
+
+[log.health_check.local_file]
+paths = ["/path/to/health-check"]   # reads /path/to/health-check/<node>/*
+```
+
 ### Kubectl Pod Logs
 
 Use `kubectl_logs` to collect pod stdout as APPLOG or SYSLOG observations. It
@@ -1447,3 +1492,20 @@ To run the binary directly once the front-end is built:
 ```bash
 uv run --project blueprint --extra web nvidia-attribution-blueprint-web --db ./attributions.db
 ```
+
+The front-end build needs pnpm (or `corepack pnpm`) and Node.js 20.19 or later
+within version 20, 22.13 or later within version 22, or 24 or later. The build
+writes the bundle to `blueprint/src/attribution_blueprint/webui/static/`, and
+Git does not track that directory. To build only the bundle, run these commands
+on a host that has Node.js and pnpm:
+
+```bash
+pnpm --dir blueprint/src/attribution_blueprint/webui/frontend install --frozen-lockfile
+pnpm --dir blueprint/src/attribution_blueprint/webui/frontend build
+```
+
+On a host without Node.js, copy the built `static/` directory to the same path.
+Build the assets from the same Git revision as the server, and build and copy
+them again each time you update the checkout.
+Then start the server with `blueprint/scripts/webui.sh --no-build`, or run the
+binary directly with the `uv run` command above.

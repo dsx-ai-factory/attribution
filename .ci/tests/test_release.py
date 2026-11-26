@@ -70,6 +70,12 @@ class Repo:
     def results(self) -> list[release_rules.RuleResult]:
         return release_rules.check_release(self.path, self.statuses())
 
+    def pr_violations(self, *, light: bool = False) -> list[release_rules.Violation]:
+        results = release_rules.check_release_pr(
+            self.path, self.statuses(), "base", light=light
+        )
+        return release_rules.violations(results)
+
     def violations(self) -> list[release_rules.Violation]:
         return release_rules.violations(self.results())
 
@@ -310,6 +316,45 @@ def test_literals_are_compared_at_the_merge_base_not_the_tip_of_base(
     assert not statuses["attribution-lib"].decreased
 
 
+def test_pr_that_changes_no_literal_has_no_release_violations(
+    repo: Repo,
+) -> None:
+    _release_everything_at_distance_zero(repo)
+    repo.write("service/attribution-lib/fix", "")
+    repo.commit("lib fix")
+
+    assert repo.pr_violations() == []
+    assert repo.pr_violations(light=True) == []
+
+
+@pytest.mark.parametrize("light", [False, True], ids=["full", "light"])
+def test_release_pr_touching_a_file_outside_the_release_set_fails(
+    repo: Repo, light: bool
+) -> None:
+    for component, literal in NEW_RELEASE.items():
+        repo.set_literal(component, literal)
+        repo.add_changelog(component, literal)
+    repo.write("service/attribution-lib/fix", "")
+    repo.commit("release with a fix")
+
+    (hit,) = repo.pr_violations(light=light)
+    assert hit.component == "release PR"
+
+
+def test_light_check_keeps_only_the_file_set_and_no_decrease_rules(repo: Repo) -> None:
+    repo.set_literal("blueprint", "0.2.0")
+    repo.commit("release blueprint over unreleased dependencies")
+
+    assert repo.pr_violations(light=True) == []
+    assert repo.pr_violations()
+
+    repo.set_literal("blueprint", "0.0.9")
+    repo.commit("lower blueprint")
+
+    (hit,) = repo.pr_violations(light=True)
+    assert hit.component == "blueprint"
+
+
 def test_only_an_rc_literal_is_a_prerelease(repo: Repo) -> None:
     repo.set_literal("service-app", "2.0.0.dev0")
     repo.set_literal("blueprint", "0.2.0rc1")
@@ -546,25 +591,6 @@ def test_bundle_violation_fails_the_consumer_and_tags_nothing_for_it(
     assert tagging_repo.origin_tags() == {}
 
 
-def test_rejected_dependency_push_fails_its_dependants_too(
-    tagging_repo: TaggingRepo,
-) -> None:
-    origin = Path(tagging_repo.out("remote", "get-url", "origin"))
-    hook = origin / "hooks" / "pre-receive"
-    hook.write_text("#!/bin/sh\ngrep -q refs/tags/attribution-lib- && exit 1\nexit 0\n")
-    hook.chmod(0o755)
-    tagging_repo.tag("attribution-lib-v0.4.0")
-    tagging_repo.write("service/attribution-lib/x", "")
-    tagging_repo.bump("attribution-lib", "0.5.0")
-    tagging_repo.bump("service-app", "2.0.0")
-    tagging_repo.commit("release lib and service-app")
-
-    outcomes = tagging_repo.push_outcomes()
-    assert outcomes["attribution-lib"] == "FAIL"
-    assert outcomes["service-app"] == "FAIL"
-    assert tagging_repo.origin_tags() == {}
-
-
 def test_rc_literal_gets_an_rc_tag(tagging_repo: TaggingRepo) -> None:
     tagging_repo.bump("attribution-lib", "0.5.0")
     tagging_repo.bump("service-app", "2.0.0rc1")
@@ -576,3 +602,51 @@ def test_rc_literal_gets_an_rc_tag(tagging_repo: TaggingRepo) -> None:
         "attribution-lib-v0.5.0",
         "service-app-v2.0.0-rc.1",
     }
+
+
+def test_lib_release_with_a_changed_dependant_tags_nothing_and_exits_1(
+    tagging_repo: TaggingRepo,
+) -> None:
+    _release_everything_at_distance_zero(tagging_repo)
+    tagging_repo.write("service/service-app/x", "")
+    tagging_repo.commit("touch service-app")
+    tagging_repo.bump("attribution-lib", "0.5.1")
+    tagging_repo.commit("bump lib only")
+
+    outcomes = tagging_repo.push_outcomes()
+    assert outcomes["attribution-lib"] == outcomes["service-app"] == "FAIL"
+    argv = ["tag", "--repo", str(tagging_repo.path), "--before", "base"]
+    assert release.main(argv) == 1
+    assert tagging_repo.origin_tags() == {}
+
+
+def test_branch_creation_push_is_a_noop_and_tags_nothing(
+    tagging_repo: TaggingRepo,
+) -> None:
+    tagging_repo.bump("attribution-lib", "0.5.0")
+    tagging_repo.commit("bump lib")
+    before = "0" * 40
+
+    rows = release_tag.tag_push(tagging_repo.path, before)
+
+    assert {r.outcome for r in rows} == {"NOOP"}
+    argv = ["tag", "--repo", str(tagging_repo.path), "--before", before]
+    assert release.main(argv) == 0
+    assert tagging_repo.origin_tags() == {}
+
+
+@pytest.mark.parametrize("blueprint_literal", ["0.2.0", "0.2.0.dev1"])
+def test_unreleasable_component_blocks_the_other_tags(
+    tagging_repo: TaggingRepo, blueprint_literal: str
+) -> None:
+    tagging_repo.tag("blueprint-v0.2.0")
+    tagging_repo.git("push", "origin", "blueprint-v0.2.0")
+    tagging_repo.git("tag", "-d", "blueprint-v0.2.0")
+    before = tagging_repo.origin_tags()
+    tagging_repo.bump("attribution-lib", "0.5.0")
+    tagging_repo.bump("service-app", "2.0.0")
+    tagging_repo.bump("blueprint", blueprint_literal)
+    tagging_repo.commit("release everything")
+
+    assert set(tagging_repo.push_outcomes().values()) == {"FAIL"}
+    assert tagging_repo.origin_tags() == before

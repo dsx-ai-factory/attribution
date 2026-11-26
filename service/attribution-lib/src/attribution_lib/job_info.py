@@ -160,6 +160,10 @@ class JobInfo(NamedTuple):
     num_gpus: int
     # Derived from node_to_ranks at build() time. Stored here so clients can read ranks-per-node in constant time .
     RANKS_PER_NODE: float
+    # Derived from node_from_rank at build() time, so code that runs per log line doesn't scan the rank map.
+    # max_rank is -1 and num_ranked_nodes is 0 when no node runs ranks.
+    max_rank: int
+    num_ranked_nodes: int
     framework: str
     timezone: ZoneInfo
 
@@ -657,6 +661,8 @@ class JobInfoBuilder:
         )
 
         node_from_rank: dict[int, str] = {r: n for n, ranks in self._node_to_ranks.items() for r in ranks}
+        derived_max_rank = max(node_from_rank, default=-1)
+        derived_num_ranked_nodes = len(set(node_from_rank.values()))
 
         scheduler = normalize_scheduler_identity(self._scheduler)
 
@@ -686,6 +692,8 @@ class JobInfoBuilder:
             last_tflops_time=self._last_tflops_time,
             num_gpus=derived_num_gpus,
             RANKS_PER_NODE=derived_rpn,
+            max_rank=derived_max_rank,
+            num_ranked_nodes=derived_num_ranked_nodes,
             framework=self._framework,
             l_context=context,
             job_script_content=self._job_script_content,

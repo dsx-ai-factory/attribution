@@ -35,20 +35,22 @@ def _build(spec: dict, ctx: dict) -> KaiExecutionContextAdapter:
         raise MCAError("eca.kai.placement_records_enabled requires eca.kai.kubernetes_daemon")
     if placement_records_enabled and not spec.get("namespace"):
         raise MCAError("eca.kai.placement_records_enabled requires eca.kai.namespace")
+    daemon_client = (
+        build_kubernetes_daemon_client(
+            daemon_spec,
+            config_path="eca.kai.kubernetes_daemon",
+        )
+        if placement_records_enabled
+        else None
+    )
     return KaiExecutionContextAdapter(
         kubeconfig=spec.get("kubeconfig"),
         context=spec.get("context"),
         namespace=spec.get("namespace"),
         timeout_seconds=timeout,
         placement_records_enabled=placement_records_enabled,
-        placement_reader=(
-            build_kubernetes_daemon_client(
-                daemon_spec,
-                config_path="eca.kai.kubernetes_daemon",
-            )
-            if placement_records_enabled
-            else None
-        ),
+        placement_reader=daemon_client,
+        history_reader=daemon_client,
     )
 
 

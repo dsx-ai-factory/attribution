@@ -70,6 +70,10 @@ from attribution_blueprint.connectors.execution_contexts.kueue.prometheus_placem
     PlacementQuery,
     PlacementResolver,
 )
+from attribution_blueprint.kubernetes.attempts import (
+    resource_from_snapshot,
+    retained_history_covers_window,
+)
 from attribution_blueprint.kubernetes.client import (
     KubernetesClient,
     KubernetesClientError,
@@ -852,33 +856,12 @@ def _history_complete(
     required_sources = {"kueue-workloads", "jobs", "pods"}
     if attempt.owner_kind == "JobSet":
         required_sources.add("jobsets")
-    disabled = coverage.get("disabledWatches") or {}
-    sources = {item.get("sourceName"): item for item in coverage.get("sources") or []}
-    for source_name in required_sources:
-        if source_name in disabled:
-            return False
-        source = sources.get(source_name)
-        if source is None:
-            return False
-        coverage_start = _parse_dt(source.get("coverageStartedAt"))
-        checkpoint = _parse_dt(source.get("checkpointedAt"))
-        if (
-            coverage_start is None
-            or checkpoint is None
-            or coverage_start > attempt.start_time
-            or checkpoint < attempt.end_time
-        ):
-            return False
-    for gap in coverage.get("gaps") or []:
-        if gap.get("sourceName") not in required_sources:
-            continue
-        gap_start = _parse_dt(gap.get("startedAt"))
-        gap_end = _parse_dt(gap.get("recoveredAt"))
-        if gap_start is None:
-            return False
-        if gap_start <= attempt.end_time and (gap_end is None or gap_end >= attempt.start_time):
-            return False
-    return True
+    return retained_history_covers_window(
+        coverage,
+        required_sources,
+        attempt.start_time,
+        attempt.end_time,
+    )
 
 
 class KueueExecutionContextAdapter:
@@ -993,21 +976,6 @@ class KueueExecutionContextAdapter:
                 workloads.append(obj)
         return self._finalize(workloads, retained_evidence)
 
-    @staticmethod
-    def _resource_from_observation(observation: dict) -> dict:
-        metadata = dict(observation.get("metadata") or {})
-        selected = observation.get("selectedMetadata") or {}
-        for metadata_field in ("labels", "annotations"):
-            if selected.get(metadata_field):
-                metadata[metadata_field] = selected[metadata_field]
-        return {
-            "apiVersion": observation.get("apiVersion") or "",
-            "kind": observation.get("kind") or "",
-            "metadata": metadata,
-            "spec": observation.get("spec") or {},
-            "status": observation.get("status") or {},
-        }
-
     def _evidence_from_histories(
         self,
         histories: list[dict],
@@ -1020,9 +988,9 @@ class KueueExecutionContextAdapter:
         for history in histories:
             workloads = {
                 metadata["uid"]: metadata["name"]
-                for observation in history.get("observations") or []
-                if observation.get("kind") == "Workload"
-                and (metadata := observation.get("metadata") or {}).get("uid")
+                for snapshot in history.get("snapshots") or []
+                if snapshot.get("kind") == "Workload"
+                and (metadata := snapshot.get("metadata") or {}).get("uid")
                 and metadata.get("name")
                 and (workload_name is None or metadata["name"] == workload_name)
             }
@@ -1031,9 +999,9 @@ class KueueExecutionContextAdapter:
                 placement = PlacementRecord.from_resource(resource)
                 history_placements[placement.pod_uid] = placement
             resources_by_uid = {
-                metadata["uid"]: self._resource_from_observation(observation)
-                for observation in history.get("observations") or []
-                if (metadata := observation.get("metadata") or {}).get("uid")
+                metadata["uid"]: resource_from_snapshot(snapshot)
+                for snapshot in history.get("snapshots") or []
+                if (metadata := snapshot.get("metadata") or {}).get("uid")
             }
             for retained_name in sorted(set(workloads.values())):
                 for attempt in attempts_from_workload_history(
