@@ -19,7 +19,29 @@ The blueprint host must have:
 
 - network access to a running Attribution Service
 - `kubectl` access to the target cluster
-- permission to read Kueue Workloads, their Job or JobSet owners, pods
+- `get` access to Kueue Workloads and Jobs, `list` access to Pods, and, for
+  JobSet-owned Workloads, `list` access to Jobs. Time-range discovery also
+  needs `list` access to Workloads, across all namespaces when
+  `eca.kueue.namespace` is unset.
+
+Confirm the served Workload API version and access:
+
+```bash
+kubectl api-versions | grep '^kueue.x-k8s.io/'
+kubectl auth can-i get workloads.kueue.x-k8s.io -n team-a
+kubectl auth can-i get jobs.batch -n team-a
+kubectl auth can-i list pods -n team-a
+# JobSet-owned Workloads or time-range discovery:
+kubectl auth can-i list jobs.batch -n team-a
+kubectl auth can-i list workloads.kueue.x-k8s.io -n team-a
+# Time-range discovery without eca.kueue.namespace:
+kubectl auth can-i list workloads.kueue.x-k8s.io --all-namespaces
+```
+
+The adapter reads `kueue.x-k8s.io/v1beta1` by default. If the cluster does not
+serve `v1beta1`, set `eca.kueue.workload_api_version` to
+`kueue.x-k8s.io/<version>`, and set `integrations.kueue.workloadVersion` to the
+bare `<version>` when you deploy `kubernetes-daemon`.
 
 Optional capabilities require:
 
@@ -27,10 +49,12 @@ Optional capabilities require:
 - network access and credentials for Loki when collecting node syslogs
 - network access to `kubernetes-daemon` or Prometheus when either
   fallback placement source is configured
-- permission to read Kubernetes Events for the best-effort placement
-  fallback
+- `list` access to Kubernetes Events for the best-effort placement fallback
 
-The Kueue Workload must still exist when attribution runs. Run attribution
+Without `kubernetes-daemon`, the Kueue Workload must still exist when
+attribution runs. With the daemon's Kueue integration and
+`placement_records_enabled = true`, the adapter can also attribute a deleted
+Workload from the daemon's retained history. In either case, run attribution
 before its owned Pods are deleted when application logs are required:
 Pod and node identity can be recovered, but no source can restore `kubectl logs`
 for a deleted Pod.
@@ -144,9 +168,21 @@ source.
 
 #### Kubernetes daemon
 
-Install the namespace-scoped daemon as described in the
-[daemon reference](../../src/attribution_blueprint/kubernetes/daemon/docs/README.md),
-with `integrations.kueue.enabled=true`, before submitting workloads.
+Build and publish the daemon image as described in the
+[daemon reference](../../src/attribution_blueprint/kubernetes/daemon/docs/README.md).
+Then, before submitting workloads, install one daemon in the workload
+namespace with the Kueue integration enabled:
+
+```bash
+helm upgrade --install attribution blueprint/deploy/kubernetes-daemon \
+  --namespace team-a \
+  --set image.repository=registry.example/kubernetes-daemon \
+  --set image.tag=VERSION \
+  --set integrations.kueue.enabled=true \
+  --set integrations.kueue.workloadVersion=v1beta1
+```
+
+Then configure the adapter:
 
 ```toml
 [eca.kueue]
@@ -217,8 +253,9 @@ pod labels to confirm which pods belong to the workload. For a Job, Kubernetes
 uses `batch.kubernetes.io/controller-uid`. For a JobSet, the adapter uses
 `jobset.sigs.k8s.io/jobset-name`.
 
-To verify daemon recovery, query `kubernetes-daemon` with the exact Workload UID.
-Run `port-forward` in its own terminal (it stays in the foreground), then query it from another:
+To verify daemon recovery, query `kubernetes-daemon` with the exact Workload UID
+and name. Run `port-forward` in its own terminal (it stays in the foreground),
+then query it from another:
 
 ```bash
 kubectl -n "${NAMESPACE}" port-forward \
@@ -226,9 +263,22 @@ kubectl -n "${NAMESPACE}" port-forward \
 ```
 
 ```bash
+WORKLOAD_UID="$(kubectl --kubeconfig "${KUBECONFIG_PATH}" \
+  --context "${KUBE_CONTEXT}" \
+  --namespace "${NAMESPACE}" \
+  get workload "${WORKLOAD}" \
+  --output jsonpath='{.metadata.uid}')"
+
 curl -fsS \
-  "http://127.0.0.1:18080/v1/placements?namespace=${NAMESPACE}&resource_uid=WORKLOAD_UID"
+  "http://127.0.0.1:18080/v1/placements?namespace=${NAMESPACE}&resource_uid=${WORKLOAD_UID}"
+curl -fsS \
+  "http://127.0.0.1:18080/v1/history?namespace=${NAMESPACE}&kind=Workload&name=${WORKLOAD}"
 ```
+
+`/v1/placements` returns retained Pod placement. `/v1/history` returns the
+retained Workload history that discovery uses when the live Workload is gone.
+The UID lookup needs the live Workload, so save the UID before deletion; after
+deletion, use the `/v1/history` query, which takes the name.
 
 To verify Prometheus recovery, confirm this query returns the target Job UID
 after at least one kube-state-metrics scrape:
@@ -273,7 +323,8 @@ uv run --project blueprint --frozen nvidia-attribution-blueprint \
   "${NAMESPACE}/workload-a,${NAMESPACE}/workload-b"
 ```
 
-Missing Workload names are skipped. If no supplied names resolve, the CLI
+Missing Workload names are skipped unless `kubernetes-daemon` retained their
+history. If no supplied names resolve, the CLI
 reports `0 execution contexts discovered`.
 
 For time-range discovery with optional node filtering, see
@@ -292,6 +343,19 @@ examples. A successful CLI run and a healthy workload are different concepts:
   service-facing `COMPLETED` state.
 - `terminal_state=fail`, `sub_domain=hardware`, and an XID root symptom indicate an unhealthy workload
   even when the attribution pipeline itself completed successfully.
+
+With `kubernetes-daemon` retained history, each admission of a Workload, and
+each JobSet restart, is a separate execution context with its own result. A
+Workload that was preempted or requeued and then admitted again can therefore
+report `2/2` or more. Without retained history, only the latest attempt is
+reported. The `attempt=` value
+in the summary is `kueue:v1:<workload-uid>:<digest>`, or
+`kueue:pre:v1:<workload-uid>` for a Workload that was never admitted.
+
+When the CLI warns that verdicts "may have incomplete scheduler history",
+`kubernetes-daemon` did not observe the whole attempt. For example, it was
+installed after the attempt started or a watch had a gap. Attempt boundaries
+and placement for that result can be incomplete.
 
 Kueue derives `FINISHED_SUCCEEDED` from a `Finished=True` condition with reason
 `Succeeded`. The adapter normalizes it to the service-facing state `COMPLETED`

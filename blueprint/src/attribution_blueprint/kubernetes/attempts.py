@@ -10,21 +10,23 @@ from datetime import datetime, timezone
 RESTART_LABEL = "jobset.sigs.k8s.io/restart-attempt"
 
 
-def restart_starts(observations: list[dict]) -> dict[str, str]:
+def _selected_metadata(snapshot: dict) -> dict:
+    """Normalize Kueue live snapshots that intentionally emit explicit null."""
+    selected = snapshot.get("selectedMetadata")
+    return {} if selected is None else selected
+
+
+def restart_starts(
+    snapshots: list[dict],
+    inferred_job_restarts: dict[str, str] | None = None,
+) -> dict[str, str]:
+    """Return earliest restart starts, optionally resolving unlabeled Jobs."""
     starts = {}
-    for observation in observations:
-        if observation.get("kind") not in {"Job", "Pod"}:
-            continue
-        restart = restart_attempt(observation)
-        if restart is None:
-            continue
-        status = observation.get("status") or {}
-        timestamp = (
-            status.get("startTime")
-            or observation.get("sourceTimestamp")
-            or observation.get("observedAt")
-        )
-        if timestamp and (
+    for _snapshot, restart, timestamp in restart_start_candidates(
+        snapshots,
+        inferred_job_restarts,
+    ):
+        if (
             restart not in starts
             or parse_time(timestamp) < parse_time(starts[restart])
         ):
@@ -32,29 +34,61 @@ def restart_starts(observations: list[dict]) -> dict[str, str]:
     return starts
 
 
-def restart_attempt(observation: dict) -> str | None:
-    labels = (observation.get("selectedMetadata") or {}).get("labels") or {}
+def restart_start_candidates(
+    snapshots: list[dict],
+    inferred_job_restarts: dict[str, str] | None = None,
+) -> list[tuple[dict, str, str]]:
+    """Preserve restart starts until callers apply workload-specific scope."""
+    candidates = []
+    for snapshot in snapshots:
+        kind = snapshot.get("kind")
+        if kind not in {"Job", "Pod"}:
+            continue
+        restart = restart_attempt(snapshot)
+        if (
+            restart is None
+            and kind == "Job"
+            and inferred_job_restarts
+        ):
+            restart = inferred_job_restarts.get(
+                snapshot.get("metadata", {}).get("uid")
+            )
+        if restart is None:
+            continue
+        status = snapshot.get("status", {})
+        timestamp = (
+            status.get("startTime")
+            or snapshot.get("sourceTimestamp")
+            or snapshot.get("observedAt")
+        )
+        if timestamp:
+            candidates.append((snapshot, restart, timestamp))
+    return candidates
+
+
+def restart_attempt(snapshot: dict) -> str | None:
+    labels = _selected_metadata(snapshot).get("labels", {})
     value = labels.get(RESTART_LABEL)
     return str(value) if value is not None else None
 
 
-def observations_by_uid(observations) -> dict[str, list[dict]]:
+def snapshots_by_uid(snapshots) -> dict[str, list[dict]]:
     grouped = {}
-    for observation in observations:
-        uid = (observation.get("metadata") or {}).get("uid")
+    for snapshot in snapshots:
+        uid = snapshot.get("metadata", {}).get("uid")
         if uid:
-            grouped.setdefault(uid, []).append(observation)
+            grouped.setdefault(uid, []).append(snapshot)
     for timeline in grouped.values():
         timeline.sort(key=lambda item: parse_time(item["observedAt"]))
     return grouped
 
 
-def latest_pod_observations(observations: list[dict]) -> dict[str, dict]:
+def latest_pod_snapshots(snapshots: list[dict]) -> dict[str, dict]:
     return {
         uid: timeline[-1]
-        for uid, timeline in observations_by_uid(
+        for uid, timeline in snapshots_by_uid(
             item
-            for item in observations
+            for item in snapshots
             if item.get("kind") == "Pod"
         ).items()
     }
@@ -63,7 +97,7 @@ def latest_pod_observations(observations: list[dict]) -> dict[str, dict]:
 def controller_owner(metadata: dict) -> dict | None:
     controllers = [
         owner
-        for owner in metadata.get("ownerReferences") or []
+        for owner in metadata.get("ownerReferences", [])
         if owner.get("controller") is True
         and owner.get("uid")
         and owner.get("kind")
@@ -95,3 +129,85 @@ def parse_time(value: str) -> datetime:
         if parsed.tzinfo is None
         else parsed.astimezone(timezone.utc)
     )
+
+
+def resource_from_snapshot(snapshot: dict) -> dict:
+    """Restore the Kubernetes fields selected into a retained snapshot."""
+    metadata = dict(snapshot.get("metadata", {}))
+    selected = _selected_metadata(snapshot)
+    for field in ("labels", "annotations", "deletionTimestamp"):
+        if selected.get(field):
+            metadata[field] = selected[field]
+    return {
+        "apiVersion": snapshot.get("apiVersion", ""),
+        "kind": snapshot.get("kind", ""),
+        "metadata": metadata,
+        "spec": snapshot.get("spec", {}),
+        "status": snapshot.get("status", {}),
+    }
+
+
+def kai_podgroup_start_timestamp(resource: dict) -> str | None:
+    """Read KAI's PodGroup start from projected status or source metadata."""
+    status_value = resource.get("status", {}).get(
+        "lastStartTimestamp"
+    )
+    if status_value:
+        return str(status_value)
+    metadata_annotations = (
+        resource.get("metadata", {}).get("annotations", {})
+    )
+    retained_annotations = (
+        _selected_metadata(resource).get("annotations", {})
+    )
+    value = metadata_annotations.get(
+        "kai.scheduler/last-start-timestamp",
+    ) or retained_annotations.get(
+        "kai.scheduler/last-start-timestamp"
+    )
+    return str(value) if value else None
+
+
+def retained_history_covers_window(
+    coverage: dict,
+    required_sources: set[str],
+    start: datetime,
+    end: datetime,
+) -> bool:
+    """Return whether retained watches continuously cover a time window."""
+    disabled = coverage.get("disabledWatches", {})
+    sources = {
+        item.get("sourceName"): item
+        for item in coverage.get("sources", [])
+    }
+    for source_name in required_sources:
+        if source_name in disabled:
+            return False
+        source = sources.get(source_name)
+        if source is None:
+            return False
+        try:
+            coverage_start = parse_time(source["coverageStartedAt"])
+            checkpoint = parse_time(source["checkpointedAt"])
+        except (KeyError, TypeError, ValueError):
+            return False
+        if coverage_start > start or checkpoint < end:
+            return False
+
+    for gap in coverage.get("gaps", []):
+        if gap.get("sourceName") not in required_sources:
+            continue
+        try:
+            gap_start = parse_time(gap["startedAt"])
+            gap_end = (
+                parse_time(gap["recoveredAt"])
+                if gap.get("recoveredAt")
+                else None
+            )
+        except (KeyError, TypeError, ValueError):
+            return False
+        if gap_start <= end and (
+            gap_end is None or gap_end >= start
+        ):
+            return False
+    return True

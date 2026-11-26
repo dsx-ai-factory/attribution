@@ -49,18 +49,22 @@ class FakeError:
 
 
 class FakeMessage:
-    def __init__(self, value, offset, partition=0, headers=None, error=None):
+    def __init__(self, value, offset, partition=0, headers=None, error=None, key=None):
         self._value = value
         self._offset = offset
         self._partition = partition
         self._headers = headers
         self._error = error
+        self._key = key
 
     def error(self):
         return self._error
 
     def value(self):
         return self._value
+
+    def key(self):
+        return self._key
 
     def headers(self):
         return self._headers

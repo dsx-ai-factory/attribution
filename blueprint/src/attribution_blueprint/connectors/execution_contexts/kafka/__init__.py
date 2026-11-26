@@ -8,7 +8,7 @@ from attribution_blueprint.connectors.execution_contexts.kafka.connector import 
     KafkaExecutionContext,
     KafkaExecutionContextAdapter,
 )
-from attribution_blueprint.connectors.execution_contexts.kafka.receipts import KafkaReceipt
+from attribution_blueprint.connectors.execution_contexts.kafka.receipts import KafkaRawReceipt, KafkaReceipt
 from attribution_blueprint.connectors.kafka_client import SECURITY_SCHEMA_KEYS, security_config
 from attribution_blueprint.exceptions import MCAError
 from attribution_blueprint.mca_registry import _PARAM
@@ -99,4 +99,4 @@ _registry.register_component(
 )
 
 
-__all__ = ["KafkaExecutionContext", "KafkaExecutionContextAdapter", "KafkaReceipt"]
+__all__ = ["KafkaExecutionContext", "KafkaExecutionContextAdapter", "KafkaRawReceipt", "KafkaReceipt"]

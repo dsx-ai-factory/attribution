@@ -3,9 +3,11 @@
 
 """Tag-on-merge: tag and push every component whose literal moved, once the rules pass.
 
-`tag_push` compares each literal against the push's `before` SHA, then for every
-candidate: name the tag, dedupe against origin, run the bundle rules, tag, verify,
-push. A rerun finds its tags on origin and reports DONE.
+`tag_push` compares each literal against the push's `before` SHA, names each
+candidate's tag and dedupes it against origin, and runs the bundle rules. It then
+creates and checks the tags one at a time, stopping at the first problem, and
+pushes them in one atomic push. A rule violation or a FAIL in any component blocks
+every tag. A rerun finds its tags on origin and reports DONE.
 """
 
 from __future__ import annotations
@@ -97,21 +99,58 @@ def _build_version(repo: Path, name: str) -> str:
     return module.build_version()
 
 
-def _tag_and_push(repo: Path, status: ComponentStatus, tag: str) -> TagRow:
-    git(repo, "tag", "-a", tag, "-m", f"{status.name} {status.literal}", "HEAD")
-    built = _build_version(repo, status.name)
-    if built != status.literal:
-        git(repo, "tag", "-d", tag)
-        return _row(
-            status, tag, "FAIL", f"helper returned {built}, literal is {status.literal}"
-        )
+def _tag_and_push(
+    repo: Path, statuses: dict[str, ComponentStatus], tags: dict[str, str]
+) -> dict[str, TagRow]:
+    """Create every tag and check it, then push them all at once or none at all."""
+    created: list[str] = []
+    pushed = False
     try:
-        # Push only this tag; `--tags` would ship every local tag.
-        git(repo, "push", "origin", f"refs/tags/{tag}")
-    except ReleaseError as exc:
-        git(repo, "tag", "-d", tag)
-        return _row(status, tag, "FAIL", str(exc))
-    return _row(status, tag, "TAGGED", f"pushed {tag}")
+        for name, tag in tags.items():
+            literal = statuses[name].literal
+            git(repo, "tag", "-a", tag, "-m", f"{name} {literal}", "HEAD")
+            created.append(tag)
+            built = _build_version(repo, name)
+            if built != literal:
+                problem = f"helper returned {built}, literal is {literal}"
+                return _blocked(statuses, {}, tags, {name: [problem]})
+        try:
+            # Push only these tags, atomically; `--tags` would ship every local tag.
+            git(
+                repo,
+                "push",
+                "--atomic",
+                "origin",
+                *(f"refs/tags/{t}" for t in tags.values()),
+            )
+        except ReleaseError as exc:
+            # One line: git's multi-line stderr would break the summary table.
+            error = f"atomic push rejected: {' '.join(str(exc).split())}"
+            return {n: _row(statuses[n], t, "FAIL", error) for n, t in tags.items()}
+        pushed = True
+        return {
+            n: _row(statuses[n], t, "TAGGED", f"pushed {t}") for n, t in tags.items()
+        }
+    finally:
+        if not pushed and created:
+            git(repo, "tag", "-d", *created)
+
+
+def _blocked(
+    statuses: dict[str, ComponentStatus],
+    rows: dict[str, TagRow],
+    tags: dict[str, str],
+    reasons: dict[str, list[str]],
+) -> dict[str, TagRow]:
+    """FAIL rows for a run that tags nothing: each component's own reasons, else its blockers."""
+    cause = f"release blocked by {', '.join(reasons)}"
+    for name, own in reasons.items():
+        rows.setdefault(
+            name, _row(statuses[name], tags.get(name), "FAIL", "; ".join(own))
+        )
+    for name, tag in tags.items():
+        rows.setdefault(name, _row(statuses[name], tag, "FAIL", f"not tagged, {cause}"))
+    return rows
 
 
 def _tag_candidates(
@@ -142,32 +181,31 @@ def _tag_candidates(
         name: dataclasses.replace(status, releasing=name in tags)
         for name, status in statuses.items()
     }
-    for name, tag in tags.items():
-        problems = [
-            v
-            for v in violations(check_release(repo, check_statuses))
-            if v.component == name
-        ]
-        if problems:
-            rows[name] = _row(
-                statuses[name], tag, "FAIL", "; ".join(v.message for v in problems)
-            )
-        else:
-            rows[name] = _tag_and_push(repo, statuses[name], tag)
-        if rows[name].outcome == "FAIL":
-            # Dependants must see this one as unreleased, so check them against its old tag.
-            check_statuses[name] = dataclasses.replace(
-                check_statuses[name], releasing=False
-            )
+    reasons: dict[str, list[str]] = {}
+    for row in rows.values():
+        if row.outcome == "FAIL":
+            reasons.setdefault(row.component, []).append(row.detail)
+    for v in violations(check_release(repo, check_statuses)):
+        reasons.setdefault(v.component, []).append(v.message)
+    if reasons:
+        return _blocked(statuses, rows, tags, reasons)
+    if tags:
+        rows.update(_tag_and_push(repo, statuses, tags))
     return rows
 
 
 def tag_push(repo: Path, before: str) -> list[TagRow]:
     """Tag the components whose literal moved between `before` and HEAD.
 
-    `before` is trusted: main only takes squash merges, never a force push, so
-    the push event's previous tip is always an ancestor of HEAD.
+    `before` is trusted: release branches block force pushes, so the push event's
+    previous tip is always an ancestor of HEAD. A branch-creation push has no
+    previous tip (all zeros) and tags nothing.
     """
+    if set(before) == {"0"}:
+        return [
+            _row(s, None, "NOOP", "branch creation push, nothing tagged")
+            for s in releasing_components(repo, None).values()
+        ]
     statuses = releasing_components(repo, before)
     if not is_release_pr(statuses):
         return [

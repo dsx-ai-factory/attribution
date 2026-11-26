@@ -147,6 +147,16 @@ def match_interesting(node_attr, node, symptom, rule, allow_bad=False):
         assert not sources.has_bad()
 
 
+def interesting_nodes(node_attr, symptom, rule) -> list[str]:
+    """Return, the nodes that `rule` marked interesting for `symptom` in sorted order."""
+    return sorted(
+        node
+        for node, node_group in node_attr.items()
+        if symptom in node_group.attributions._data
+        and any(source.rule == rule for source in node_group.attributions[symptom]._interesting)
+    )
+
+
 def line_entries(lines: Iterable[str]) -> list[dict]:
     """`entry_timeseries` entries declaring neither `ts` nor `resources`, so both are parsed from the body."""
     return [{"body": line} for line in lines]

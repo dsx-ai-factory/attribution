@@ -35,7 +35,7 @@ def test_separate_participating_node_failure_is_not_masked_by_cancellation(
     assert not job.inherited_node_failure
     assert not job.suppress_inherited_node_failure
     assert result.outcome_attr.value().outcome == "Fail InfraSW"
-    assert "Node failure reported by slurm" in result.bad_nodes_attr.my_bad_nodes[failed_node.casefold()]
+    assert "Node failure reported by unknown" in result.bad_nodes_attr.my_bad_nodes[failed_node.casefold()]
     assert "node-a" not in result.bad_nodes_attr.my_bad_nodes
     assert job.execution_cancellation is cancellation
     assert job.allocation_failure is failure
@@ -88,7 +88,7 @@ def test_excluded_node_suppression_requires_associated_cancellation(
     if associated_cancellation:
         assert "node-a" not in result.bad_nodes_attr.my_bad_nodes
     else:
-        assert "Node failure reported by slurm" in result.bad_nodes_attr.my_bad_nodes["node-a"]
+        assert "Node failure reported by unknown" in result.bad_nodes_attr.my_bad_nodes["node-a"]
     assert job.state == "NODE_FAIL"
     assert job.failed_node == "node-a"
     assert job.allocation_failure is failure
@@ -107,7 +107,7 @@ def test_in_set_allocation_failure_preserves_existing_cycle_attribution(
     assert not job.inherited_node_failure
     assert result.outcome_attr.value() == baseline.outcome_attr.value()
     assert result.outcome_attr.value().outcome == "Fail InfraSW"
-    assert "Node failure reported by slurm" in result.bad_nodes_attr.my_bad_nodes["node-a"]
+    assert "Node failure reported by unknown" in result.bad_nodes_attr.my_bad_nodes["node-a"]
 
 
 @pytest.mark.parametrize(
@@ -155,7 +155,7 @@ def test_allocation_itself_keeps_node_failure(failure, simple_job_factory, event
     job = simple_job_factory(job_id="allocation", nodes=["node-a", "node-b"], state="NODE_FAIL", failed_node="node-a")
     job = job._replace(allocation_failure=failure if explicit else None)
     result = Attributor.new(event_manager.create_stream(job.id), job).attribute()
-    assert "Node failure reported by slurm" in result.bad_nodes_attr.my_bad_nodes["node-a"]
+    assert "Node failure reported by unknown" in result.bad_nodes_attr.my_bad_nodes["node-a"]
     assert result.outcome_attr.value().outcome == "Fail InfraSW"
 
 

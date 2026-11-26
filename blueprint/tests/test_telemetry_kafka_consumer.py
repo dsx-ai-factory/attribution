@@ -121,6 +121,7 @@ def test_poll_and_ack_count_consumed_skipped_accepted_acknowledged_and_committed
     assert consumer.commits == [{0: 1}, {0: 4}]
     assert by_partition(reader, "consumed", group) == {0: 4}
     assert by_partition(reader, "accepted", group) == {0: 2}
+    assert points(reader, "raw.delivered", group) == []
     assert {point.attributes["reason"]: point.value for point in points(reader, "skipped", group)} == {
         "filtered": 1,
         "malformed": 1,
@@ -130,6 +131,28 @@ def test_poll_and_ack_count_consumed_skipped_accepted_acknowledged_and_committed
     assert points(reader, "commit.errors", group) == []
     (commit,) = points(reader, "commits", group)
     assert commit.attributes == {"topic": TOPIC, "partition": 0, "consumer_group": group}
+
+
+def test_raw_delivery_counts_original_records_without_accepting_decoded_contexts(reader, stream):
+    """Raw JSON, malformed bytes and tombstones share delivery and custody metrics."""
+    group = "raw-counts"
+    adapter, consumer = stream(
+        [FakeMessage(b'{"native_id":1}', 0), FakeMessage(b"not JSON", 1), FakeMessage(None, 2)],
+        group_id=group,
+    )
+    first, middle, last = adapter.poll_raw(3, 0)
+    assert by_partition(reader, "consumed", group) == {0: 3}
+    assert by_partition(reader, "raw.delivered", group) == {0: 3}
+    assert points(reader, "accepted", group) == []
+    assert points(reader, "skipped", group) == []
+    assert by_partition(reader, "unacknowledged", group) == {0: 3}
+    adapter.ack(last)
+    assert consumer.commits == []
+    adapter.ack(first)
+    adapter.ack(middle)
+    assert consumer.commits == [{0: 1}, {0: 3}]
+    assert by_partition(reader, "acknowledged", group) == {0: 3}
+    assert by_partition(reader, "unacknowledged", group) == {0: 0}
 
 
 def test_discovery_counts_records_and_commits(reader):
@@ -346,6 +369,7 @@ consumer.partitions_changed(PartitionChange.ASSIGNED, [key])
 consumer.consumed(key)
 consumer.group_offset(key, 5)
 consumer.accepted(key)
+consumer.raw_delivered(key)
 consumer.skipped(key, SkipReason.MALFORMED)
 consumer.acknowledged(key)
 consumer.committed(key, 6)
@@ -364,6 +388,7 @@ with urlopen(f"http://127.0.0.1:{port}/metrics", timeout=5) as response:
     for name in (
         "attribution_kafka_consumer_consumed_total",
         "attribution_kafka_consumer_accepted_total",
+        "attribution_kafka_consumer_raw_delivered_total",
         "attribution_kafka_consumer_skipped_total",
         "attribution_kafka_consumer_acknowledged_total",
         "attribution_kafka_consumer_commits_total",

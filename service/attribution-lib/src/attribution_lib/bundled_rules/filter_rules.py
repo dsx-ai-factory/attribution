@@ -809,13 +809,11 @@ def nccl_late_arrival_nodes(context: FilterContext) -> None:
     All of these cases would cause the straggler(s) to be ignored by the size guard.
     """
     event_stream, job_info = context.event_stream, context.job_info
-    if job_info is None or not job_info.nodes or job_info.RANKS_PER_NODE <= 0:
+    if job_info is None or not job_info.node_from_rank:
         return
 
-    ranks_per_node = int(job_info.RANKS_PER_NODE)
-    world_size = len(job_info.nodes) * ranks_per_node
-    if world_size == 0:
-        return
+    # Size the job from its rank map. Nodes with no ranks, such as a Ray head node, add no ranks.
+    world_size = job_info.max_rank + 1
 
     watchdog_reports = NcclWatchdogParseState.collect(event_stream)
     if len(watchdog_reports) == 0:
@@ -843,7 +841,7 @@ def nccl_late_arrival_nodes(context: FilterContext) -> None:
     # The straggler pattern (one slow/dead node blocking a collective) only makes sense when a small fraction of nodes are missing.
     #   i.e. bulk cancellations or hardware failures across many nodes should not be treated as stragglers.
     # Threshold: max(1, 1% of nodes). The 1% value helps scale for larger jobs.
-    num_nodes_reporting_threshold = max(1, int(0.01 * len(job_info.nodes)))
+    num_nodes_reporting_threshold = max(1, int(0.01 * job_info.num_ranked_nodes))
     if len(missing_nodes) > num_nodes_reporting_threshold:
         logger.debug(
             f"NCCLLateArrivalNodes: skipping - {len(missing_nodes)} missing nodes"

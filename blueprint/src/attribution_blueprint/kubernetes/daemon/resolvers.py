@@ -8,14 +8,14 @@ from typing import Protocol
 from attribution_blueprint.kubernetes.daemon.models import (
     OwnerReference,
     ResourceIdentity,
-    ResourceObservation,
+    ResourceSnapshot,
 )
-from attribution_blueprint.kubernetes.daemon.observation_queries import (
+from attribution_blueprint.kubernetes.daemon.snapshot_queries import (
     controller_owner_reference,
-    latest_observation_for_uid,
-    observation_identity,
+    latest_snapshot_for_uid,
+    snapshot_identity,
 )
-from attribution_blueprint.kubernetes.daemon.store import ObservationJournal
+from attribution_blueprint.kubernetes.daemon.store import SnapshotJournal
 
 
 class ResolutionPending(RuntimeError):
@@ -47,7 +47,7 @@ class KubernetesOwnershipResolver:
         custom_api,
         *,
         jobset_version: str = "v1alpha2",
-        journal: ObservationJournal | None = None,
+        journal: SnapshotJournal | None = None,
         cluster_id: str = "default",
     ):
         self.batch_api = batch_api
@@ -107,7 +107,7 @@ class KubernetesOwnershipResolver:
     ) -> ResourceIdentity | None:
         if self.journal is None:
             return None
-        job = latest_observation_for_uid(
+        job = latest_snapshot_for_uid(
             self.journal,
             self.cluster_id,
             namespace,
@@ -115,21 +115,21 @@ class KubernetesOwnershipResolver:
         )
         if job is None:
             return None
-        _verify_observation("Job", namespace, pod_owner, job)
-        job_identity = observation_identity(job)
+        _verify_snapshot("Job", namespace, pod_owner, job)
+        job_identity = snapshot_identity(job)
 
         jobset_ref = controller_owner_reference(job, "JobSet")
         if jobset_ref is None:
             return job_identity
-        jobset = latest_observation_for_uid(
+        jobset = latest_snapshot_for_uid(
             self.journal,
             self.cluster_id,
             namespace,
             jobset_ref.uid,
         )
         if jobset is not None:
-            _verify_observation("JobSet", namespace, jobset_ref, jobset)
-            return observation_identity(jobset)
+            _verify_snapshot("JobSet", namespace, jobset_ref, jobset)
+            return snapshot_identity(jobset)
 
         if self.custom_api is None:
             raise ResolutionPending("JobSet owner is not retained or visible")
@@ -173,23 +173,23 @@ def _verify_uid(kind: str, namespace: str, reference: dict, resource: dict) -> N
         )
 
 
-def _verify_observation(
+def _verify_snapshot(
     kind: str,
     namespace: str,
     reference: dict | OwnerReference,
-    observation: ResourceObservation,
+    snapshot: ResourceSnapshot,
 ) -> None:
     expected_uid = reference.uid if isinstance(reference, OwnerReference) else reference.get("uid")
     expected_name = reference.name if isinstance(reference, OwnerReference) else reference.get("name")
     if (
-        observation.uid != expected_uid
-        or observation.kind != kind
-        or observation.namespace != namespace
-        or observation.name != expected_name
+        snapshot.uid != expected_uid
+        or snapshot.kind != kind
+        or snapshot.namespace != namespace
+        or snapshot.name != expected_name
     ):
         raise StaleOwnerReference(
             f"{kind} {namespace}/{expected_name} journal identity mismatch "
-            f"(reference uid={expected_uid!r}, observed uid={observation.uid!r})"
+            f"(reference uid={expected_uid!r}, snapshot uid={snapshot.uid!r})"
         )
 
 
