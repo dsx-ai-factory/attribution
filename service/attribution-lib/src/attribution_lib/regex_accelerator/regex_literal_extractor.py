@@ -15,7 +15,7 @@ import sre_constants
 import sre_parse
 from collections import Counter
 from collections.abc import Iterator
-from typing import Any, Optional
+from typing import Any, Optional, cast
 
 LiteralScore = tuple[Optional[str], float]
 
@@ -198,16 +198,20 @@ def pattern_ignores_case(pattern: str) -> bool:
     return _has_scoped_ignorecase(parsed)
 
 
-def _has_scoped_ignorecase(parsed: Any) -> bool:
-    for op, av in parsed:
-        if op == sre_constants.SUBPATTERN and av[1] & re.IGNORECASE:
-            return True
+def _has_scoped_ignorecase(parsed: sre_parse.SubPattern) -> bool:
+    """Return whether a group nested anywhere in the parsed pattern turns on case-insensitive matching."""
+    for op, av in parsed.data:
+        if op == sre_constants.SUBPATTERN:
+            # A group's argument is (group number, flags it adds, flags it removes, body).
+            _group, add_flags, _del_flags, _body = cast("tuple[int | None, int, int, sre_parse.SubPattern]", av)
+            if add_flags & re.IGNORECASE:
+                return True
         if any(_has_scoped_ignorecase(child) for child in _child_subpatterns(av)):
             return True
     return False
 
 
-def _child_subpatterns(av: Any) -> Iterator[Any]:
+def _child_subpatterns(av: object) -> Iterator[sre_parse.SubPattern]:
     """Yield the parsed subpatterns nested in a node's argument (group's body, branch, etc.)"""
     if isinstance(av, sre_parse.SubPattern):
         yield av
