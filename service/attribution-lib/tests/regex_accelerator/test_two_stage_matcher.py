@@ -4,6 +4,8 @@
 
 import re
 
+import pytest
+
 from attribution_lib.regex_accelerator import TwoStageMatcher
 
 
@@ -567,3 +569,94 @@ class TestCorrectness:
 
             # Should have same patterns matching
             assert ts_keys == naive_keys, f"Mismatch for line: {line!r}"
+
+
+class TestCaseFolding:
+    """Test that case folding match patterns in two stage matcher"""
+
+    @pytest.mark.parametrize("strategy", ["uniqueness", "length"])
+    @pytest.mark.parametrize(
+        ("pattern", "line"),
+        [
+            pytest.param(r"(?i)nccl.*error", "NCCL ERROR", id="lowercase-literals"),
+            pytest.param(r"(?i)NCCL WARN", "nccl warn: retrying", id="uppercase-literal"),
+            pytest.param(r"(?i:fatal) error", "FATAL error", id="scoped-flag"),
+            pytest.param(r"(?i:CUDA error)", "cuda error: out of memory", id="scoped-flag-only-literal"),
+            pytest.param(r"(?i)status", "ſtatus ok", id="long-s"),  # test that it's casefold{ed}, not lowered
+            # re treats "ı" (dotless) and "İ" (dotted capital) as "i"; casefold() alone does not.
+            pytest.param(r"(?i)warning", "WARNıNG", id="dotless-i-in-line"),
+            pytest.param(r"(?i)warning", "WARNİNG", id="dotted-capital-i-in-line"),
+            pytest.param(r"(?i)wıll", "WILL", id="dotless-i-in-pattern"),
+        ],
+    )
+    def test_ignorecase_pattern_matches_line_in_other_case(self, strategy, pattern, line):
+        """An inline (?i) flag works through the matcher, as it does in re.search"""
+        matcher = TwoStageMatcher({"qa": pattern}, uniqueness_strategy=strategy)
+
+        assert [key for key, _ in matcher.match_line(line)] == ["qa"]
+
+    @pytest.mark.parametrize("strategy", ["uniqueness", "length"])
+    @pytest.mark.parametrize(
+        ("pattern", "line"),
+        [
+            pytest.param(
+                r"Watchdog caught collective",
+                "[Rank 3] Watchdog caught collective operation timeout",
+                id="capitalized-literal",
+            ),
+            pytest.param(r"ProcessGroupNCCL\.cpp", "ProcessGroupNCCL.cpp:697", id="mixed-case-literal"),
+            pytest.param(r"ΚΟΣΜΟΣ", "ΚΟΣΜΟΣΑΒ", id="greek-final-sigma"),
+            pytest.param(r"Kırıkkale", "node Kırıkkale-07 down", id="dotless-i-literal"),
+        ],
+    )
+    def test_case_sensitive_pattern_matches_line_in_same_case(self, strategy, pattern, line):
+        """Folding case in the prefilter never drops an exact-case match"""
+        matcher = TwoStageMatcher({"exact": pattern}, uniqueness_strategy=strategy)
+
+        assert [key for key, _ in matcher.match_line(line)] == ["exact"]
+
+    @pytest.mark.parametrize("strategy", ["uniqueness", "length"])
+    def test_case_sensitive_pattern_rejects_line_in_other_case(self, strategy):
+        """The full regex still applies a case-sensitive pattern's case rule"""
+        matcher = TwoStageMatcher({"exact": r"Fatal Error"}, uniqueness_strategy=strategy)
+
+        assert matcher.match_line("FATAL ERROR here") == []
+
+    @pytest.mark.parametrize(
+        ("line", "expected_keys"),
+        [
+            pytest.param("Fatal Error here", ["any_case", "exact"], id="exact-case-line"),
+            pytest.param("FATAL ERROR here", ["any_case"], id="other-case-line"),
+        ],
+    )
+    def test_literals_differing_only_in_case_keep_both_patterns(self, line, expected_keys):
+        """A case-sensitive and a case-insensitive pattern whose literals differ only in case both keep their matches"""
+        matcher = TwoStageMatcher({"exact": r"Fatal Error", "any_case": r"(?i)fatal error"})
+
+        assert sorted(key for key, _ in matcher.match_line(line)) == expected_keys
+
+    @pytest.mark.parametrize("strategy", ["uniqueness", "length"])
+    @pytest.mark.parametrize(
+        ("patterns", "line", "expected_candidates"),
+        [
+            pytest.param(
+                {"exact": r"Irrecoverable communicator error", "any_case": r"(?i)fatal error"},
+                "x" * 8192 + " IRRECOVERABLE COMMUNICATOR ERROR ",
+                set(),
+                id="long-line-in-other-case",
+            ),
+            pytest.param(
+                {"exact": r"Fatal Error", "any_case": r"(?i)fatal error"},
+                "FATAL ERROR here",
+                {"any_case"},
+                id="shared-literal-in-other-case",
+            ),
+        ],
+    )
+    def test_case_sensitive_pattern_is_not_a_candidate_for_line_in_other_case(
+        self, strategy, patterns, line, expected_candidates
+    ):
+        """Wholly case-sensitive patterns keep exact-case filtering, even when the matcher also folds case"""
+        matcher = TwoStageMatcher(patterns, uniqueness_strategy=strategy)
+
+        assert matcher.candidates(line) == expected_candidates

@@ -56,7 +56,7 @@ from attribution_lib.symptoms.predicate_registry import SymptomPredicate
 
 # Bump when extraction output changes without an extractor rule change, such as a
 # fix to timestamp parsing, so that cached events are extracted again.
-_EXTRACTION_VERSION = "2"
+_EXTRACTION_VERSION = "3"
 
 
 @dataclass(frozen=True, slots=True)

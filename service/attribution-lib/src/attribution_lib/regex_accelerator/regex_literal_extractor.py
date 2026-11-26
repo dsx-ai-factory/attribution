@@ -14,7 +14,8 @@ import re
 import sre_constants
 import sre_parse
 from collections import Counter
-from typing import Any, Optional
+from collections.abc import Iterator
+from typing import Any, Optional, cast
 
 LiteralScore = tuple[Optional[str], float]
 
@@ -179,6 +180,44 @@ def _fallback_literal_extraction(pattern: str) -> list[str]:
         literals.append(current)
 
     return literals
+
+
+def pattern_ignores_case(pattern: str) -> bool:
+    """
+    Covers global flags such as ``(?i)`` or ``(?im)`` and scoped groups such as
+    `(?i:...)`, at any depth.
+
+    Returns:
+        true: if any part of the pattern has ignorecase rule
+    Raises:
+        re.error: If the pattern is not a valid regex (from regex lib)
+    """
+    parsed = sre_parse.parse(pattern)
+    if parsed.state.flags & re.IGNORECASE:
+        return True
+    return _has_scoped_ignorecase(parsed)
+
+
+def _has_scoped_ignorecase(parsed: sre_parse.SubPattern) -> bool:
+    """Return whether a group nested anywhere in the parsed pattern turns on case-insensitive matching."""
+    for op, av in parsed.data:
+        if op == sre_constants.SUBPATTERN:
+            # A group's argument is (group number, flags it adds, flags it removes, body).
+            _group, add_flags, _del_flags, _body = cast("tuple[int | None, int, int, sre_parse.SubPattern]", av)
+            if add_flags & re.IGNORECASE:
+                return True
+        if any(_has_scoped_ignorecase(child) for child in _child_subpatterns(av)):
+            return True
+    return False
+
+
+def _child_subpatterns(av: object) -> Iterator[sre_parse.SubPattern]:
+    """Yield the parsed subpatterns nested in a node's argument (group's body, branch, etc.)"""
+    if isinstance(av, sre_parse.SubPattern):
+        yield av
+    elif isinstance(av, (tuple, list)):
+        for item in av:
+            yield from _child_subpatterns(item)
 
 
 def score_literals_by_length(literals: list[str]) -> list[tuple[str, float]]:
