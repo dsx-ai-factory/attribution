@@ -14,6 +14,7 @@ import re
 import sre_constants
 import sre_parse
 from collections import Counter
+from collections.abc import Iterator
 from typing import Any, Optional
 
 LiteralScore = tuple[Optional[str], float]
@@ -179,6 +180,40 @@ def _fallback_literal_extraction(pattern: str) -> list[str]:
         literals.append(current)
 
     return literals
+
+
+def pattern_ignores_case(pattern: str) -> bool:
+    """
+    Covers global flags such as ``(?i)`` or ``(?im)`` and scoped groups such as
+    `(?i:...)`, at any depth.
+
+    Returns:
+        true: if any part of the pattern has ignorecase rule
+    Raises:
+        re.error: If the pattern is not a valid regex (from regex lib)
+    """
+    parsed = sre_parse.parse(pattern)
+    if parsed.state.flags & re.IGNORECASE:
+        return True
+    return _has_scoped_ignorecase(parsed)
+
+
+def _has_scoped_ignorecase(parsed: Any) -> bool:
+    for op, av in parsed:
+        if op == sre_constants.SUBPATTERN and av[1] & re.IGNORECASE:
+            return True
+        if any(_has_scoped_ignorecase(child) for child in _child_subpatterns(av)):
+            return True
+    return False
+
+
+def _child_subpatterns(av: Any) -> Iterator[Any]:
+    """Yield the parsed subpatterns nested in a node's argument (group's body, branch, etc.)"""
+    if isinstance(av, sre_parse.SubPattern):
+        yield av
+    elif isinstance(av, (tuple, list)):
+        for item in av:
+            yield from _child_subpatterns(item)
 
 
 def score_literals_by_length(literals: list[str]) -> list[tuple[str, float]]:

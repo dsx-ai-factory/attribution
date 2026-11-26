@@ -19,6 +19,7 @@ import ahocorasick
 from .regex_literal_extractor import (
     extract_best_literals_from_corpus,
     extract_literals_from_regex,
+    pattern_ignores_case,
 )
 
 AutomatonValue = tuple[str, list[Hashable]]
@@ -42,6 +43,7 @@ class RegexPattern:
     regex_str: str
     compiled: re.Pattern[str]
     literal: Optional[str]
+    ignores_case: bool = False
 
 
 class TwoStageMatcher:
@@ -73,6 +75,8 @@ class TwoStageMatcher:
         self.patterns: dict[Hashable, RegexPattern] = {}
         self.automaton: ahocorasick.Automaton[AutomatonValue] = ahocorasick.Automaton()
         self.has_automaton = False
+        self.folded_automaton: ahocorasick.Automaton[AutomatonValue] = ahocorasick.Automaton()
+        self.has_folded_automaton = False
 
         # Extract just the pattern strings for corpus analysis
         pattern_strings = list(patterns.values())
@@ -83,16 +87,30 @@ class TwoStageMatcher:
 
         # Build patterns and Aho-Corasick automaton
         literal_to_patterns: dict[str, list[Hashable]] = {}
+        folded_literal_to_patterns: dict[str, list[Hashable]] = {}
 
         def add_literal(literal: str, key: Hashable) -> None:
             """Helper to add a literal->pattern mapping"""
-            # Fold literal so case-insensitive patterns pass the candidate check
-            # Stage 2 runs the full regex, so case-sensitive patterns stay as before
-            literal = _fold_case(literal)
-            if literal not in literal_to_patterns:
-                literal_to_patterns[literal] = []
-            if key not in literal_to_patterns[literal]:
-                literal_to_patterns[literal].append(key)
+            target = literal_to_patterns
+            if self.patterns[key].ignores_case:
+                # Stage 2 runs the full regex, so folding only widens the candidates for this pattern.
+                literal = _fold_case(literal)
+                target = folded_literal_to_patterns
+            if literal not in target:
+                target[literal] = []
+            if key not in target[literal]:
+                target[literal].append(key)
+
+        def add_words(automaton: "ahocorasick.Automaton[AutomatonValue]", literals: dict[str, list[Hashable]]) -> bool:
+            """Helper to add literals to an automaton and finalize it. Returns True if any literal was added."""
+            for literal, pattern_keys in literals.items():
+                # Store the pattern keys that use this literal
+                automaton.add_word(literal, (literal, pattern_keys))
+            # Finalize the automaton (only if we added any words)
+            if not literals:
+                return False
+            automaton.make_automaton()
+            return True
 
         for idx, (key, pattern_str) in enumerate(patterns.items()):
             # Get the best literal from corpus analysis (indexed by position in list)
@@ -109,6 +127,7 @@ class TwoStageMatcher:
                 regex_str=pattern_str,
                 compiled=compiled,
                 literal=best_literal,
+                ignores_case=pattern_ignores_case(pattern_str),
             )
             self.patterns[key] = regex_pattern
 
@@ -161,15 +180,9 @@ class TwoStageMatcher:
                     for literal in good_literals:
                         add_literal(literal, key)
 
-        # Add literals to Aho-Corasick automaton
-        for literal, pattern_keys in literal_to_patterns.items():
-            # Store the pattern keys that use this literal
-            self.automaton.add_word(literal, (literal, pattern_keys))
-
-        # Finalize the automaton (only if we added any words)
-        if literal_to_patterns:
-            self.automaton.make_automaton()
-            self.has_automaton = True
+        # Add literals to the Aho-Corasick automatons and finalize the ones that have words
+        self.has_automaton = add_words(self.automaton, literal_to_patterns)
+        self.has_folded_automaton = add_words(self.folded_automaton, folded_literal_to_patterns)
 
         # Patterns with no literal need to be checked on every line
         self.always_check = [p.key for p in self.patterns.values() if p.literal is None]
@@ -190,8 +203,11 @@ class TwoStageMatcher:
         """
         result: set[Hashable] = set()
         if self.has_automaton:
-            # Literals are folded in add_literal, so fold the line the same way before the lookup.
-            for _, (_literal, pattern_keys) in self.automaton.iter(_fold_case(line)):
+            for _, (_literal, pattern_keys) in self.automaton.iter(line):
+                result.update(pattern_keys)
+        if self.has_folded_automaton:
+            # These literals are folded in add_literal, so fold the line the same way before the lookup.
+            for _, (_literal, pattern_keys) in self.folded_automaton.iter(_fold_case(line)):
                 result.update(pattern_keys)
         result.update(self.always_check)
         return result
@@ -261,10 +277,15 @@ class TwoStageMatcher:
         patterns_with_literals = sum(1 for p in self.patterns.values() if p.literal)
         patterns_without_literals = len(self.patterns) - patterns_with_literals
 
-        # Get what's actually in the automaton (not just pattern.literal)
+        # Get automatons values (not just pattern.literal); folded literals are casefolded
         automaton_literals: dict[str, list[Hashable]] = {}
-        if self.has_automaton:
-            for _, (literal, pattern_keys) in self.automaton.items():
+        for automaton, has_words in (
+            (self.automaton, self.has_automaton),
+            (self.folded_automaton, self.has_folded_automaton),
+        ):
+            if not has_words:
+                continue
+            for _, (literal, pattern_keys) in automaton.items():
                 if literal not in automaton_literals:
                     automaton_literals[literal] = []
                 automaton_literals[literal].extend(pattern_keys)
