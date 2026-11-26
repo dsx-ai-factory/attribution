@@ -581,6 +581,7 @@ class TestCaseFolding:
             pytest.param(r"(?i)nccl.*error", "NCCL ERROR", id="lowercase-literals"),
             pytest.param(r"(?i)NCCL WARN", "nccl warn: retrying", id="uppercase-literal"),
             pytest.param(r"(?i:fatal) error", "FATAL error", id="scoped-flag"),
+            pytest.param(r"(?i:CUDA error)", "cuda error: out of memory", id="scoped-flag-only-literal"),
             pytest.param(r"(?i)status", "ſtatus ok", id="long-s"),  # test that it's casefold{ed}, not lowered
             # re treats "ı" (dotless) and "İ" (dotted capital) as "i"; casefold() alone does not.
             pytest.param(r"(?i)warning", "WARNıNG", id="dotless-i-in-line"),
@@ -629,7 +630,33 @@ class TestCaseFolding:
         ],
     )
     def test_literals_differing_only_in_case_keep_both_patterns(self, line, expected_keys):
-        """Literals that fold to the same text share one automaton entry and keep both pattern keys"""
+        """A case-sensitive and a case-insensitive pattern whose literals differ only in case both keep their matches"""
         matcher = TwoStageMatcher({"exact": r"Fatal Error", "any_case": r"(?i)fatal error"})
 
         assert sorted(key for key, _ in matcher.match_line(line)) == expected_keys
+
+    @pytest.mark.parametrize("strategy", ["uniqueness", "length"])
+    @pytest.mark.parametrize(
+        ("patterns", "line", "expected_candidates"),
+        [
+            pytest.param(
+                {"exact": r"Irrecoverable communicator error", "any_case": r"(?i)fatal error"},
+                "x" * 8192 + " IRRECOVERABLE COMMUNICATOR ERROR ",
+                set(),
+                id="long-line-in-other-case",
+            ),
+            pytest.param(
+                {"exact": r"Fatal Error", "any_case": r"(?i)fatal error"},
+                "FATAL ERROR here",
+                {"any_case"},
+                id="shared-literal-in-other-case",
+            ),
+        ],
+    )
+    def test_case_sensitive_pattern_is_not_a_candidate_for_line_in_other_case(
+        self, strategy, patterns, line, expected_candidates
+    ):
+        """Wholly case-sensitive patterns keep exact-case filtering, even when the matcher also folds case"""
+        matcher = TwoStageMatcher(patterns, uniqueness_strategy=strategy)
+
+        assert matcher.candidates(line) == expected_candidates

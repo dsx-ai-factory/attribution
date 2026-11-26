@@ -2,11 +2,14 @@
 # SPDX-License-Identifier: Apache-2.0
 """Tests for regex literal extraction"""
 
+import pytest
+
 from attribution_lib.regex_accelerator import (
     extract_best_literal,
     extract_best_literals_from_corpus,
     extract_literals_from_regex,
 )
+from attribution_lib.regex_accelerator.regex_literal_extractor import pattern_ignores_case
 
 
 class TestLiteralExtraction:
@@ -228,3 +231,23 @@ class TestEdgeCases:
         literals = extract_literals_from_regex(r"(word)\s+\1")
         # Should extract 'word'
         assert "word" in literals
+
+
+class TestPatternIgnoresCase:
+    """pattern_ignores_case finds case-insensitive flags the way re reads them"""
+
+    @pytest.mark.parametrize(
+        ("pattern", "expected"),
+        [
+            pytest.param(r"(?i)nccl error", True, id="global-flag"),
+            pytest.param(r"(?im)^nccl error", True, id="combined-global-flags"),
+            pytest.param(r"(?i:nccl) error", True, id="scoped-flag"),
+            pytest.param(r"rank \d+: (?:timeout|(?:CUDA (?i:error))+)", True, id="nested-scoped-flag"),
+            pytest.param(r"nccl error", False, id="case-sensitive"),
+            pytest.param(r"\(\?i\)nccl error", False, id="escaped-flag-text"),
+            pytest.param(r"[(?i)]nccl error", False, id="flag-text-in-class"),
+            pytest.param(r"(?-i:nccl) error", False, id="scoped-flag-removed"),
+        ],
+    )
+    def test_detects_global_and_scoped_ignorecase(self, pattern, expected):
+        assert pattern_ignores_case(pattern) is expected

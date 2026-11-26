@@ -6,7 +6,11 @@ These patterns are extracted from applog_rules.py which analyzes
 GPU training job failures in HPC clusters.
 """
 
+import attribution_lib
+from attribution_lib.observation.inbound import Source
 from attribution_lib.regex_accelerator import TwoStageMatcher
+from attribution_lib.rule_types.definitions import ExtractorAccumulatorRule, ExtractorRule
+from attribution_lib.rule_types.extractor import ExtractorEngine
 
 # Real-world patterns from NVIDIA Attribution applog_rules.py
 ATTRIBUTION_PATTERNS = {
@@ -293,3 +297,28 @@ class TestAttributionMatchCorrectness:
             assert ts_pattern_ids == naive_pattern_ids, (
                 f"Mismatch for line: {line!r}\n  Two-stage: {ts_pattern_ids}\n  Naive: {naive_pattern_ids}"
             )
+
+
+class TestBundledRulePrefilter:
+    """The prefilter built from the bundled rules, the way the extractor engine builds it"""
+
+    def test_case_sensitive_rule_is_not_a_candidate_for_its_literal_in_other_case(self):
+        """The Irrecoverable NET/IB rule's regex is slow to reject this long line, so the prefilter must stop it"""
+        rules = attribution_lib.get_rules_engine().rules
+        engine = ExtractorEngine(
+            rules={rule_id: rule for rule_id, rule in rules.items() if isinstance(rule, ExtractorRule)},
+            accumulator_rules={
+                rule_id: rule for rule_id, rule in rules.items() if isinstance(rule, ExtractorAccumulatorRule)
+            },
+        )
+        engine.build_matcher()
+        assert engine.matcher is not None
+        rule_name = "Irrecoverable NET/IB communicator error"
+        # The rule is in the matcher, so the check below can't pass just because the rule is missing.
+        assert rule_name in engine.matcher.get_candidates(
+            Source.APPLOG, "Irrecoverable send communicator error on device 0"
+        )
+
+        candidates = engine.matcher.get_candidates(Source.APPLOG, "x" * 8192 + " IRRECOVERABLE ")
+
+        assert rule_name not in candidates
