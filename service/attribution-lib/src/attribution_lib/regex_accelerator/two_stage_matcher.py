@@ -23,6 +23,16 @@ from .regex_literal_extractor import (
 
 AutomatonValue = tuple[str, list[Hashable]]
 
+# special cases for case-insensitive mode
+_DOTLESS_AND_DOTTED_I = str.maketrans({"ı": "i", "İ": "i"})
+
+
+def _fold_case(text: str) -> str:
+    """<str>.casefold() with special case handling"""
+    if "ı" in text or "İ" in text:
+        text = text.translate(_DOTLESS_AND_DOTTED_I)
+    return text.casefold()
+
 
 @dataclass
 class RegexPattern:
@@ -78,7 +88,7 @@ class TwoStageMatcher:
             """Helper to add a literal->pattern mapping"""
             # Fold literal so case-insensitive patterns pass the candidate check
             # Stage 2 runs the full regex, so case-sensitive patterns stay as before
-            literal = literal.casefold()
+            literal = _fold_case(literal)
             if literal not in literal_to_patterns:
                 literal_to_patterns[literal] = []
             if key not in literal_to_patterns[literal]:
@@ -180,8 +190,8 @@ class TwoStageMatcher:
         """
         result: set[Hashable] = set()
         if self.has_automaton:
-            # casefold to keep line case-insensitive
-            for _, (_literal, pattern_keys) in self.automaton.iter(line.casefold()):
+            # Literals are folded in add_literal, so fold the line the same way before the lookup.
+            for _, (_literal, pattern_keys) in self.automaton.iter(_fold_case(line)):
                 result.update(pattern_keys)
         result.update(self.always_check)
         return result
