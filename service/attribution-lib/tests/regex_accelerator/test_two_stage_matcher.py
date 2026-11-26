@@ -581,7 +581,11 @@ class TestCaseFolding:
             pytest.param(r"(?i)nccl.*error", "NCCL ERROR", id="lowercase-literals"),
             pytest.param(r"(?i)NCCL WARN", "nccl warn: retrying", id="uppercase-literal"),
             pytest.param(r"(?i:fatal) error", "FATAL error", id="scoped-flag"),
-            pytest.param(r"(?i)status", "ſtatus ok", id="long-s"), # test that it's casefold{ed}, not lowered
+            pytest.param(r"(?i)status", "ſtatus ok", id="long-s"),  # test that it's casefold{ed}, not lowered
+            # re treats "ı" (dotless) and "İ" (dotted capital) as "i"; casefold() alone does not.
+            pytest.param(r"(?i)warning", "WARNıNG", id="dotless-i-in-line"),
+            pytest.param(r"(?i)warning", "WARNİNG", id="dotted-capital-i-in-line"),
+            pytest.param(r"(?i)wıll", "WILL", id="dotless-i-in-pattern"),
         ],
     )
     def test_ignorecase_pattern_matches_line_in_other_case(self, strategy, pattern, line):
@@ -601,6 +605,7 @@ class TestCaseFolding:
             ),
             pytest.param(r"ProcessGroupNCCL\.cpp", "ProcessGroupNCCL.cpp:697", id="mixed-case-literal"),
             pytest.param(r"ΚΟΣΜΟΣ", "ΚΟΣΜΟΣΑΒ", id="greek-final-sigma"),
+            pytest.param(r"Kırıkkale", "node Kırıkkale-07 down", id="dotless-i-literal"),
         ],
     )
     def test_case_sensitive_pattern_matches_line_in_same_case(self, strategy, pattern, line):
