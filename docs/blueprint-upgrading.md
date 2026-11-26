@@ -5,6 +5,34 @@ SPDX-License-Identifier: Apache-2.0
 
 # Blueprint upgrade guide
 
+## Local file APPLOG missing input reporting
+
+This change affects callers upgrading from versions where `LocalFileLogConnector`
+skipped a missing APPLOG path silently and returned what it found as a normal list.
+
+### Direct connector callers
+
+For APPLOG, `LocalFileLogConnector.collect()` raises when a configured path does
+not exist:
+
+- `MCAError`, naming the missing paths, when no other configured path exists and
+  can be inspected and listed. Before, it returned an empty list.
+- `PartialCollectionError` when another configured path exists and can be
+  inspected and listed. The exception carries the observations read from that
+  path, which may be an empty list, and a reason naming the missing paths. Retain
+  both, as shown for VictoriaLogs below.
+
+A path that cannot be inspected, such as one below a parent directory that denies
+access or a symlink loop, still warns and is skipped. SYSLOG and HEALTH_CHECK
+collection is unchanged. The Blueprint orchestrator handles both exceptions and
+records the result automatically.
+
+### Report consumers
+
+For missing APPLOG input, the `LocalFileLogConnector` connector report now has
+status `"error"` or `"partial"` instead of `"ok"`. For the conditions, refer to
+[Local File APPLOG configuration](https://github.com/dsx-ai-factory/attribution/blob/main/blueprint/docs/CONFIGURATION.md#local-file-applog).
+
 ## VictoriaLogs partial collection reporting
 
 This change affects callers upgrading from versions where VictoriaLogs returned
