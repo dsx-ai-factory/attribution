@@ -380,6 +380,30 @@ def test_analyze_skips_failing_collector_other_contexts_unaffected():
     ]
 
 
+def test_local_applog_with_present_and_missing_paths_reports_partial(tmp_path):
+    """A missing APPLOG path next to a present one keeps the present file's evidence and reports partial coverage."""
+    from attribution_blueprint.connectors.logs.local_file import LocalFileLogConnector
+
+    eca = MagicMock()
+    eca.discover_by_ids.return_value = [_make_ctx("1")]
+    present = tmp_path / "job.out"
+    present.write_text("NCCL error: unhandled system error\n")
+    missing = tmp_path / "job.err"
+    applog = LocalFileLogConnector(log_path_templates=[str(present), str(missing)])
+    attr = _make_attribution_mock()
+    pipeline = _make_pipeline(eca, [applog], attribution=attr)
+
+    results = pipeline.analyze(ids=["1"])
+
+    (applog_report,) = results[0]["connector_reports"]
+    assert applog_report["status"] == "partial"
+    assert str(missing) in applog_report["reason"]
+    assert str(present) not in applog_report["reason"]
+    assert applog_report["observation_count"] == 1
+    assert attr.ingest_observation.call_count == 1
+    assert results[0]["evidence_status"] == "partial"
+
+
 def test_missing_local_applog_reports_error_and_keeps_other_sources(tmp_path):
     """A missing configured APPLOG file is reported with its path while SYSLOG evidence still ingests."""
     from attribution_blueprint.connectors.logs.local_file import LocalFileLogConnector

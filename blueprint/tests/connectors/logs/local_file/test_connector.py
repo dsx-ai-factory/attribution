@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 
 from attribution_blueprint.connectors.logs.local_file import LocalFileLogConnector, parse_size
-from attribution_blueprint.exceptions import MCAError
+from attribution_blueprint.exceptions import MCAError, PartialCollectionError
 from attribution_blueprint.types import Source
 
 
@@ -56,6 +56,22 @@ def _collection_error_with_warnings(conn: LocalFileLogConnector, ctx: dict) -> t
     return excinfo.value, warnings
 
 
+def _partial_collection_with_warnings(
+    conn: LocalFileLogConnector, ctx: dict
+) -> tuple[PartialCollectionError, list[str]]:
+    """Collect expecting PartialCollectionError while capturing WARNING log lines."""
+    from loguru import logger
+
+    warnings: list[str] = []
+    sink_id = logger.add(lambda msg: warnings.append(str(msg)), level="WARNING")
+    try:
+        with pytest.raises(PartialCollectionError) as excinfo:
+            conn.collect(ctx)
+    finally:
+        logger.remove(sink_id)
+    return excinfo.value, warnings
+
+
 def test_raises_and_warns_when_every_configured_path_is_missing(tmp_path):
     """A configured APPLOG input that does not exist is an evidence gap, not a successful empty read."""
     missing = tmp_path / "absent.log"
@@ -67,15 +83,21 @@ def test_raises_and_warns_when_every_configured_path_is_missing(tmp_path):
     assert any(str(missing) in warning for warning in warnings)
 
 
-def test_missing_path_next_to_present_path_keeps_evidence_and_warns(tmp_path):
+@pytest.mark.parametrize("present_first", [True, False])
+def test_missing_path_next_to_present_path_reports_partial_collection(tmp_path, present_first):
+    """A present file keeps its evidence, and the missing sibling is reported as partial coverage."""
     present = tmp_path / "present.log"
     present.write_text("line\n")
     missing = tmp_path / "absent.log"
-    conn = LocalFileLogConnector(log_path_templates=[str(present), str(missing)])
+    templates = [str(present), str(missing)] if present_first else [str(missing), str(present)]
+    conn = LocalFileLogConnector(log_path_templates=templates)
 
-    obs, warnings = _collect_with_warnings(conn, _ctx(tmp_path, ""))
+    error, warnings = _partial_collection_with_warnings(conn, _ctx(tmp_path, ""))
 
-    assert len(obs) == 1
+    assert len(error.observations) == 1
+    assert _text(error.observations[0]).strip() == "line"
+    assert str(missing) in str(error)
+    assert str(present) not in str(error)
     assert any(str(missing) in warning for warning in warnings)
 
 
@@ -98,17 +120,18 @@ def test_existing_empty_directory_is_not_reported_missing(tmp_path):
 
 
 @pytest.mark.parametrize("empty_dir_first", [True, False])
-def test_existing_empty_directory_next_to_missing_path_does_not_raise(tmp_path, empty_dir_first):
-    """An existing empty directory is configured input, so a missing sibling path only warns."""
+def test_existing_empty_directory_next_to_missing_path_reports_partial_collection(tmp_path, empty_dir_first):
+    """An existing empty directory is configured input, so a missing sibling path is partial coverage, not an error."""
     empty_dir = tmp_path / "job-empty"
     empty_dir.mkdir()
     missing = tmp_path / "absent.log"
     templates = [str(empty_dir), str(missing)] if empty_dir_first else [str(missing), str(empty_dir)]
     conn = LocalFileLogConnector(log_path_templates=templates)
 
-    obs, warnings = _collect_with_warnings(conn, _ctx(tmp_path, ""))
+    error, warnings = _partial_collection_with_warnings(conn, _ctx(tmp_path, ""))
 
-    assert obs == []
+    assert error.observations == []
+    assert str(missing) in str(error)
     assert len(warnings) == 1
     assert str(missing) in warnings[0]
 
@@ -167,6 +190,22 @@ def test_path_under_inaccessible_parent_does_not_hide_missing_path(tmp_path, ina
     assert str(missing) in str(error)
     assert str(inaccessible) not in str(error)
     assert any("permission denied" in warning and str(inaccessible) in warning for warning in warnings)
+
+
+@pytest.mark.parametrize("loop_first", [True, False])
+def test_uninspectable_path_does_not_hide_missing_path(tmp_path, loop_first):
+    """A path whose stat() fails for a reason other than absence yields no evidence, so it is not input."""
+    loop = tmp_path / "job.out"
+    loop.symlink_to(loop)
+    missing = tmp_path / "job.err"
+    templates = [str(loop), str(missing)] if loop_first else [str(missing), str(loop)]
+    conn = LocalFileLogConnector(log_path_templates=templates)
+
+    error, warnings = _collection_error_with_warnings(conn, _ctx(tmp_path, ""))
+
+    assert str(missing) in str(error)
+    assert str(loop) not in str(error)
+    assert any("cannot inspect" in warning and str(loop) in warning for warning in warnings)
 
 
 def test_dangling_symlinks_to_one_target_are_each_reported_missing(tmp_path):

@@ -12,7 +12,7 @@ from loguru import logger
 
 from attribution_blueprint.connectors.logs import DEFAULT_TIME_INTERVAL, entries_from_text, log_observation
 from attribution_blueprint.connectors.logs.syslog import syslog_entries_from_text
-from attribution_blueprint.exceptions import MCAError
+from attribution_blueprint.exceptions import MCAError, PartialCollectionError
 from attribution_blueprint.types import (
     ExecutionContext,
     Observation,
@@ -72,10 +72,12 @@ class LocalFileLogConnector:
     regular file directly inside the directory is read (non-recursive); if it
     resolves to a file, that file is read. For SYSLOG and HEALTH_CHECK, each path is a base
     directory containing one child directory per context node. Missing APPLOG
-    paths warn, and when no other configured APPLOG path exists and can be
-    accessed and listed ``collect`` raises :class:`MCAError` naming them so the
-    run reports the evidence gap. A path that cannot be accessed, such as one
-    below a parent directory that denies access, warns and is skipped. Missing
+    paths warn. When no other configured APPLOG path exists and can be
+    inspected and listed, ``collect`` raises :class:`MCAError` naming them so the
+    run reports the evidence gap; when another path does, it raises
+    :class:`PartialCollectionError` with the evidence read and the missing
+    paths. A path that cannot be inspected, such as one below a parent directory
+    that denies access or a symlink loop, warns and is skipped. Missing
     SYSLOG and HEALTH_CHECK node directories warn.
     A file whose name ends in ``.jsonl`` is read as one JSON entry per line
     and sent unchanged; for SYSLOG and HEALTH_CHECK such a path names the file directly
@@ -119,7 +121,10 @@ class LocalFileLogConnector:
 
         Raises:
             MCAError: For APPLOG, when a rendered path is missing and no
-                other rendered path exists and can be accessed and listed.
+                other rendered path exists and can be inspected and listed.
+            PartialCollectionError: For APPLOG, when a rendered path is missing
+                and another one exists and can be inspected and listed. It
+                carries the observations read from the paths that exist.
         """
         # Reject naive datetimes at the boundary; the service rejects them and
         # attribution_lib has paths that crash on them.
@@ -158,6 +163,9 @@ class LocalFileLogConnector:
                     f"local_file: permission denied inspecting {configured} for ctx {context.get('id')}: {e}"
                 )
                 continue
+            except OSError as e:
+                logger.warning(f"local_file: cannot inspect {configured} for ctx {context.get('id')}: {e}")
+                continue
             found_input = True
             for path in paths:
                 resolved = path.resolve()
@@ -167,10 +175,13 @@ class LocalFileLogConnector:
                 observation = self._file_observation(path, context)
                 if observation is not None:
                     observations.append(observation)
-        if missing and found_input is False:
-            paths = ", ".join(str(path) for path in missing)
-            raise MCAError(f"local_file {self._source.name}: configured input not found: {paths}")
-        return observations
+        if not missing:
+            return observations
+        paths = ", ".join(str(path) for path in missing)
+        reason = f"local_file {self._source.name}: configured input not found: {paths}"
+        if not found_input:
+            raise MCAError(reason)
+        raise PartialCollectionError(reason, observations)
 
     def _file_observation(self, path: Path, context: ExecutionContext) -> Optional[Observation]:
         """Read one file into an observation, or ``None`` when there is nothing to send."""
@@ -454,22 +465,18 @@ def _is_missing(path: Path) -> bool:
         path: Rendered configured path to stat.
 
     Returns:
-        ``True`` only for a missing path. Other stat errors return ``False``
-        so the reader reports them with their own warning.
+        ``True`` only for a missing path.
 
     Raises:
-        PermissionError: When ``path`` or one of its parent directories denies
-            access, so the caller can warn and skip it without counting it as
-            input.
+        OSError: When ``path`` cannot be inspected for another reason, such as
+            a parent directory that denies access (:class:`PermissionError`) or
+            a symlink loop, so the caller can warn and skip it without counting
+            it as input.
     """
     try:
         path.stat()
     except (FileNotFoundError, NotADirectoryError):
         return True
-    except PermissionError:
-        raise
-    except OSError:
-        return False
     return False
 
 
