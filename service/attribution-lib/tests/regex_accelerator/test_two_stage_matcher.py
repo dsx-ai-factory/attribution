@@ -4,6 +4,8 @@
 
 import re
 
+import pytest
+
 from attribution_lib.regex_accelerator import TwoStageMatcher
 
 
@@ -567,3 +569,35 @@ class TestCorrectness:
 
             # Should have same patterns matching
             assert ts_keys == naive_keys, f"Mismatch for line: {line!r}"
+
+
+class TestAlternationPrefilter:
+    """The pre-filter must not drop a line that matches another alternative of a branch"""
+
+    @pytest.mark.parametrize(
+        ("pattern", "line"),
+        [
+            pytest.param(r"error: (?:timeout|connection reset by peer)", "error: timeout", id="required-prefix"),
+            pytest.param(r"(?:GPU has fallen off the bus|Xid)", "NVRM: Xid (PCI:0000:3b:00): 79", id="short-branch"),
+            pytest.param(r"(?:ERROR|WARNING): disk (?:full|quota exceeded)", "WARNING: disk full", id="two-branches"),
+        ],
+    )
+    def test_matches_other_alternative(self, pattern, line):
+        assert re.search(pattern, line) is not None
+        matcher = TwoStageMatcher({"rule": pattern})
+        assert [key for key, _ in matcher.match_line(line)] == ["rule"]
+
+    def test_short_branch_is_checked_on_every_line(self):
+        matcher = TwoStageMatcher({"rule": r"(?:GPU has fallen off the bus|Xid)"})
+        assert matcher.always_check == ["rule"]
+
+    def test_required_literal_replaces_partial_selection(self):
+        matcher = TwoStageMatcher({"rule": r"error: (?:timeout|connection reset by peer)"})
+        assert matcher.always_check == []
+        assert matcher.debug_info()["automaton_literal_usage"] == {"error: ": ["rule"]}
+
+    def test_sound_selection_is_kept(self):
+        # "connection" is in every match, so the strategy's own choice stays as it is.
+        patterns = {"rule": r"connection\s+(?:established|failed|timeout)"}
+        usage = TwoStageMatcher(patterns).debug_info()["automaton_literal_usage"]
+        assert usage == {"connection": ["rule"], "established": ["rule"]}

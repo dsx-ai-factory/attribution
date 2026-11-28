@@ -125,6 +125,63 @@ def _extract_from_parsed(parsed: Any, literals: list[str], current: str = "") ->
     return literals
 
 
+def required_literal_covers(pattern: str) -> list[frozenset[str]]:
+    """
+    Find sets of literals such that every match contains at least one literal of each set.
+
+    Unlike extract_literals_from_regex, this keeps the structure of an
+    alternation: a branch only yields a set when every alternative has a
+    literal, and the set then holds one literal per alternative. Optional
+    parts, lookarounds, and conditional groups yield nothing.
+
+    Args:
+        pattern: The regex pattern string
+
+    Returns:
+        list of literal sets, strongest first (longest shortest literal, then
+        fewest literals); empty when no literal is guaranteed or the pattern
+        cannot be parsed
+    """
+    try:
+        parsed = sre_parse.parse(pattern)
+    except re.error:
+        return []
+    return sorted(_covers_from_parsed(parsed), key=_cover_strength, reverse=True)
+
+
+def _covers_from_parsed(parsed: Any) -> list[frozenset[str]]:
+    """Return the literal sets that a match of this parsed sequence must hit."""
+    covers: list[frozenset[str]] = []
+    current = ""
+    for op, av in parsed:
+        if op == sre_constants.LITERAL:
+            current += chr(av)
+            continue
+        if current:
+            covers.append(frozenset({current}))
+            current = ""
+        if op == sre_constants.SUBPATTERN:
+            covers.extend(_covers_from_parsed(av[-1]))
+        elif op == sre_constants.BRANCH:
+            branch_covers = [_covers_from_parsed(branch) for branch in av[1]]
+            if all(branch_covers):
+                # Each alternative contributes its own strongest set, so the
+                # union is hit by whichever alternative matched.
+                covers.append(frozenset().union(*(max(bc, key=_cover_strength) for bc in branch_covers)))
+        elif op in (sre_constants.MAX_REPEAT, sre_constants.MIN_REPEAT):
+            min_count, _max_count, subpattern = av
+            if min_count > 0:
+                covers.extend(_covers_from_parsed(subpattern))
+    if current:
+        covers.append(frozenset({current}))
+    return covers
+
+
+def _cover_strength(cover: frozenset[str]) -> tuple[int, int]:
+    """Rank a literal set: a longer shortest literal first, then fewer literals."""
+    return (min(len(lit) for lit in cover), -len(cover))
+
+
 def _fallback_literal_extraction(pattern: str) -> list[str]:
     """
     Fallback: extract simple literal sequences if parsing fails.

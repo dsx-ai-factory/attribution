@@ -7,6 +7,7 @@ from attribution_lib.regex_accelerator import (
     extract_best_literals_from_corpus,
     extract_literals_from_regex,
 )
+from attribution_lib.regex_accelerator.regex_literal_extractor import required_literal_covers
 
 
 class TestLiteralExtraction:
@@ -228,3 +229,25 @@ class TestEdgeCases:
         literals = extract_literals_from_regex(r"(word)\s+\1")
         # Should extract 'word'
         assert "word" in literals
+
+
+class TestRequiredLiteralCovers:
+    """required_literal_covers keeps alternatives apart from required literals"""
+
+    def test_literal_runs_are_single_sets(self):
+        assert required_literal_covers(r"error:\s+\d+ failed") == [frozenset({" failed"}), frozenset({"error:"})]
+
+    def test_branch_yields_one_literal_per_alternative(self):
+        assert required_literal_covers(r"(?:timeout|connection reset)") == [frozenset({"timeout", "connection reset"})]
+
+    def test_branch_without_literal_in_an_alternative_yields_nothing(self):
+        assert required_literal_covers(r"(?:timeout|\d+)") == []
+
+    def test_optional_and_lookaround_parts_yield_nothing(self):
+        assert required_literal_covers(r"(?:prefix)?(?=ahead)\d+") == []
+
+    def test_required_repeat_and_group_are_kept(self):
+        assert required_literal_covers(r"(?:abcd)+(?P<x>efgh)") == [frozenset({"abcd"}), frozenset({"efgh"})]
+
+    def test_invalid_pattern_yields_nothing(self):
+        assert required_literal_covers(r"[invalid") == []
