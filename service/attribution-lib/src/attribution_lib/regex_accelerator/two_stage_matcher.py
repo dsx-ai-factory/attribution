@@ -10,7 +10,7 @@ Stage 2: Apply full Python regexes (with capturing groups) only to candidates
 """
 
 import re
-from collections.abc import Hashable, Mapping
+from collections.abc import Callable, Hashable, Mapping
 from dataclasses import dataclass
 from typing import Any, Literal, Optional, overload
 
@@ -19,6 +19,7 @@ import ahocorasick
 from .regex_literal_extractor import (
     extract_best_literals_from_corpus,
     extract_literals_from_regex,
+    required_literal_covers,
 )
 
 AutomatonValue = tuple[str, list[Hashable]]
@@ -148,6 +149,12 @@ class TwoStageMatcher:
                     for literal in good_literals:
                         add_literal(literal, key)
 
+        # The strategies above can keep the literals of only some alternatives
+        # of a branch. A line matching another alternative would then never
+        # reach stage 2, so replace such a selection with one that every match
+        # contains, or check the pattern on every line.
+        unfiltered = self._replace_partial_literals(literal_to_patterns, add_literal, min_literal_length)
+
         # Add literals to Aho-Corasick automaton
         for literal, pattern_keys in literal_to_patterns.items():
             # Store the pattern keys that use this literal
@@ -159,7 +166,46 @@ class TwoStageMatcher:
             self.has_automaton = True
 
         # Patterns with no literal need to be checked on every line
-        self.always_check = [p.key for p in self.patterns.values() if p.literal is None]
+        self.always_check = [p.key for p in self.patterns.values() if p.literal is None or p.key in unfiltered]
+
+    def _replace_partial_literals(
+        self,
+        literal_to_patterns: dict[str, list[Hashable]],
+        add_literal: Callable[[str, Hashable], None],
+        min_literal_length: int,
+    ) -> set[Hashable]:
+        """
+        Make sure each pattern's indexed literals appear in every match of the pattern.
+
+        A selection passes when, for one required literal set of the pattern,
+        each literal of that set contains an indexed literal. Otherwise the
+        selection is dropped and the strongest required set whose literals are
+        all at least min_literal_length long is indexed instead.
+
+        Returns:
+            keys of patterns left with no usable literal, to check on every line
+        """
+        literals_by_key: dict[Hashable, list[str]] = {}
+        for literal, keys in literal_to_patterns.items():
+            for key in keys:
+                literals_by_key.setdefault(key, []).append(literal)
+
+        unfiltered: set[Hashable] = set()
+        for key, literals in literals_by_key.items():
+            covers = required_literal_covers(self.patterns[key].regex_str)
+            if any(all(any(lit in required for lit in literals) for required in cover) for cover in covers):
+                continue
+            for literal in literals:
+                literal_to_patterns[literal].remove(key)
+                if not literal_to_patterns[literal]:
+                    del literal_to_patterns[literal]
+            usable = next((cover for cover in covers if min(len(lit) for lit in cover) >= min_literal_length), None)
+            if usable is None:
+                unfiltered.add(key)
+                continue
+            for literal in sorted(usable):
+                add_literal(literal, key)
+        return unfiltered
 
     def candidates(self, line: str) -> set[Hashable]:
         """
@@ -244,8 +290,9 @@ class TwoStageMatcher:
 
     def debug_info(self) -> dict[str, Any]:
         """Get debugging information about the matcher"""
-        patterns_with_literals = sum(1 for p in self.patterns.values() if p.literal)
-        patterns_without_literals = len(self.patterns) - patterns_with_literals
+        # A pattern without a usable literal set is in always_check, even when it has a best literal.
+        patterns_without_literals = len(self.always_check)
+        patterns_with_literals = len(self.patterns) - patterns_without_literals
 
         # Get what's actually in the automaton (not just pattern.literal)
         automaton_literals: dict[str, list[Hashable]] = {}

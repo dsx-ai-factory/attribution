@@ -27,6 +27,7 @@ from attribution_lib.rule_types.definitions import (
     RuleParameters,
     RuleParamsBase,
 )
+from attribution_lib.rule_types.extractor import ExtractorEngine
 from attribution_lib.rules_engine import RuleLoader
 from attribution_lib.symptoms.declarations import CascadeScope, OutcomePriority, SymptomCategory
 
@@ -289,6 +290,33 @@ def test_explicit_empty_accumulator_source_filters_override_rule_sources(tmp_pat
     assert isinstance(omitted, ExtractorAccumulatorRule)
     assert explicit.source_filters == frozenset()
     assert omitted.source_filters == frozenset({ObservationSource.APPLOG})
+
+
+def test_toml_extractor_with_alternation_reaches_its_case(tmp_path):
+    """A rule whose own case passes at load time must also be a candidate for that line at run time."""
+    (tmp_path / "alternation_rules.toml").write_text(
+        "\n".join(
+            [
+                'author  = "test"',
+                'sources = ["SYSLOG"]',
+                "",
+                "[[extractor]]",
+                'name     = "AlternationTimeout"',
+                "match_re = 'error: (?:timeout|connection reset by peer)'",
+                'emit     = { type = "bad_node", symptom = "alternation timeout" }',
+                "[[extractor.cases]]",
+                'expect  = "bad"',
+                'line    = "error: timeout"',
+                'symptom = "alternation timeout"',
+            ]
+        )
+    )
+
+    engine = RuleLoader.load_all([tmp_path])
+    extractor = next(e for e in engine._engines if isinstance(e, ExtractorEngine))
+    extractor.build_matcher()
+    assert extractor.matcher is not None
+    assert "AlternationTimeout" in extractor.matcher.get_candidates(ObservationSource.SYSLOG, "error: timeout")
 
 
 # Filter priority ordering tests
