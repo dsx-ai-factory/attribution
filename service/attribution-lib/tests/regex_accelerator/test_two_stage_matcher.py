@@ -587,6 +587,23 @@ class TestAlternationPrefilter:
         matcher = TwoStageMatcher({"rule": pattern})
         assert [key for key, _ in matcher.match_line(line)] == ["rule"]
 
+    def test_both_alternatives_are_indexed(self):
+        matcher = TwoStageMatcher({"rule": r"(?:reset|connection dropped by peer)"})
+        usage = matcher.debug_info()["automaton_literal_usage"]
+        assert usage == {"connection dropped by peer": ["rule"], "reset": ["rule"]}
+        assert [key for key, _ in matcher.match_line("link reset")] == ["rule"]
+
+    def test_case_insensitive_prefix_is_not_indexed(self):
+        pattern = r"(?i:warning) (?:reset|connection dropped by peer)"
+        matcher = TwoStageMatcher({"rule": pattern})
+        assert "warning" not in matcher.debug_info()["automaton_literal_usage"]
+        assert [key for key, _ in matcher.match_line("WARNING connection dropped by peer")] == ["rule"]
+
+    def test_debug_info_counts_always_checked_patterns(self):
+        info = TwoStageMatcher({"rule": r"(?:GPU has fallen off the bus|Xid)"}).debug_info()
+        assert info["patterns_without_literals"] == 1
+        assert info["patterns_with_literals"] == 0
+
     def test_short_branch_is_checked_on_every_line(self):
         matcher = TwoStageMatcher({"rule": r"(?:GPU has fallen off the bus|Xid)"})
         assert matcher.always_check == ["rule"]

@@ -2,6 +2,10 @@
 # SPDX-License-Identifier: Apache-2.0
 """Tests for regex literal extraction"""
 
+import re
+
+import pytest
+
 from attribution_lib.regex_accelerator import (
     extract_best_literal,
     extract_best_literals_from_corpus,
@@ -249,5 +253,14 @@ class TestRequiredLiteralCovers:
     def test_required_repeat_and_group_are_kept(self):
         assert required_literal_covers(r"(?:abcd)+(?P<x>efgh)") == [frozenset({"abcd"}), frozenset({"efgh"})]
 
-    def test_invalid_pattern_yields_nothing(self):
-        assert required_literal_covers(r"[invalid") == []
+    def test_case_insensitive_text_yields_nothing(self):
+        assert required_literal_covers(r"(?i)nccl error") == []
+        assert required_literal_covers(r"(?i:warning) (?:reset|connection dropped)") == [
+            frozenset({"reset", "connection dropped"}),
+            frozenset({" "}),
+        ]
+        assert required_literal_covers(r"(?i)(?-i:NCCL) error") == [frozenset({"NCCL"})]
+
+    def test_invalid_pattern_raises(self):
+        with pytest.raises(re.error):
+            required_literal_covers(r"[invalid")

@@ -132,38 +132,43 @@ def required_literal_covers(pattern: str) -> list[frozenset[str]]:
     Unlike extract_literals_from_regex, this keeps the structure of an
     alternation: a branch only yields a set when every alternative has a
     literal, and the set then holds one literal per alternative. Optional
-    parts, lookarounds, and conditional groups yield nothing.
+    parts, lookarounds, conditional groups, and text matched case-insensitively
+    (a global or scoped IGNORECASE flag) yield nothing, because the pre-filter
+    compares literals case-sensitively.
 
     Args:
         pattern: The regex pattern string
 
     Returns:
         list of literal sets, strongest first (longest shortest literal, then
-        fewest literals); empty when no literal is guaranteed or the pattern
-        cannot be parsed
+        fewest literals); empty when no literal is guaranteed
+
+    Raises:
+        re.error: If the pattern is not a valid regex
     """
-    try:
-        parsed = sre_parse.parse(pattern)
-    except re.error:
-        return []
-    return sorted(_covers_from_parsed(parsed), key=_cover_strength, reverse=True)
+    parsed = sre_parse.parse(pattern)
+    ignore_case = bool(parsed.state.flags & re.IGNORECASE)
+    return sorted(_covers_from_parsed(parsed, ignore_case), key=_cover_strength, reverse=True)
 
 
-def _covers_from_parsed(parsed: Any) -> list[frozenset[str]]:
+def _covers_from_parsed(parsed: Any, ignore_case: bool) -> list[frozenset[str]]:
     """Return the literal sets that a match of this parsed sequence must hit."""
     covers: list[frozenset[str]] = []
     current = ""
     for op, av in parsed:
-        if op == sre_constants.LITERAL:
+        if op == sre_constants.LITERAL and not ignore_case:
             current += chr(av)
             continue
         if current:
             covers.append(frozenset({current}))
             current = ""
         if op == sre_constants.SUBPATTERN:
-            covers.extend(_covers_from_parsed(av[-1]))
+            # A group's argument is (group number, flags it adds, flags it removes, body).
+            _group, add_flags, del_flags, body = av
+            group_ignores_case = (ignore_case or bool(add_flags & re.IGNORECASE)) and not del_flags & re.IGNORECASE
+            covers.extend(_covers_from_parsed(body, group_ignores_case))
         elif op == sre_constants.BRANCH:
-            branch_covers = [_covers_from_parsed(branch) for branch in av[1]]
+            branch_covers = [_covers_from_parsed(branch, ignore_case) for branch in av[1]]
             if all(branch_covers):
                 # Each alternative contributes its own strongest set, so the
                 # union is hit by whichever alternative matched.
@@ -171,7 +176,7 @@ def _covers_from_parsed(parsed: Any) -> list[frozenset[str]]:
         elif op in (sre_constants.MAX_REPEAT, sre_constants.MIN_REPEAT):
             min_count, _max_count, subpattern = av
             if min_count > 0:
-                covers.extend(_covers_from_parsed(subpattern))
+                covers.extend(_covers_from_parsed(subpattern, ignore_case))
     if current:
         covers.append(frozenset({current}))
     return covers

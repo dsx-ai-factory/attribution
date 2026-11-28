@@ -290,8 +290,9 @@ class TwoStageMatcher:
 
     def debug_info(self) -> dict[str, Any]:
         """Get debugging information about the matcher"""
-        patterns_with_literals = sum(1 for p in self.patterns.values() if p.literal)
-        patterns_without_literals = len(self.patterns) - patterns_with_literals
+        # A pattern without a usable literal set is in always_check, even when it has a best literal.
+        patterns_without_literals = len(self.always_check)
+        patterns_with_literals = len(self.patterns) - patterns_without_literals
 
         # Get what's actually in the automaton (not just pattern.literal)
         automaton_literals: dict[str, list[Hashable]] = {}
